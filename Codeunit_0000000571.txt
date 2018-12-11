@@ -1,0 +1,401 @@
+OBJECT Codeunit 571 Categ. Generate Acc. Schedules
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:07:59 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            CreateBalanceSheet;
+            CreateIncomeStatement;
+            CreateCashFlowStatement;
+            CreateRetainedEarningsStatement;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      TotalingTxt@1003 : TextConst '@@@="%1 = Account category, e.g. Assets";ENU=Total %1';
+      Totaling2Txt@1015 : TextConst '@@@="%1 and %2 = Account category, e.g. Assets";ENU=Total %1 & %2';
+      GrossProfitTxt@1002 : TextConst 'ENU=Gross Profit';
+      GeneralLedgerSetup@1004 : Record 98;
+      NetIncomeTxt@1005 : TextConst 'ENU=Net Income';
+      AdjustmentsTxt@1006 : TextConst 'ENU=Adjustments to reconcile Net Income to net cash provided by operations:';
+      NetCashProviededTxt@1008 : TextConst '@@@="%1=Operating Activities or Investing Activities";ENU=Net Cash Provided by %1';
+      NetCashIncreaseTxt@1009 : TextConst 'ENU=Net Cash Increase for the Period';
+      CashAtPeriodStartTxt@1010 : TextConst 'ENU=Cash at Beginning of the Period';
+      CashAtPeriodEndTxt@1011 : TextConst 'ENU=Cash at End of the Period';
+      DistribToShareholdersTxt@1012 : TextConst 'ENU=Distributions to Shareholders';
+      RetainedEarningsPrimoTxt@1014 : TextConst 'ENU=Retained Earnings, Period Start';
+      RetainedEarningsUltimoTxt@1013 : TextConst 'ENU=Retained Earnings, Period End';
+
+    LOCAL PROCEDURE CreateBalanceSheet@2();
+    VAR
+      AccScheduleName@1004 : Record 84;
+      AccScheduleLine@1003 : Record 85;
+      GLAccountCategory@1002 : Record 570;
+      GLAccountCategoryMgt@1001 : Codeunit 570;
+      RowNo@1000 : Integer;
+      LiabilitiesRowNo@1005 : Code[10];
+      EquityRowNo@1006 : Code[10];
+    BEGIN
+      GLAccountCategoryMgt.GetGLSetup(GeneralLedgerSetup);
+      GeneralLedgerSetup.TESTFIELD("Acc. Sched. for Balance Sheet");
+      AccScheduleName.GET(GeneralLedgerSetup."Acc. Sched. for Balance Sheet");
+      AccScheduleLine.SETRANGE("Schedule Name",AccScheduleName.Name);
+      AccScheduleLine.DELETEALL;
+      AccScheduleLine."Schedule Name" := AccScheduleName.Name;
+
+      AddAccSchedLineGroup(AccScheduleLine,RowNo,GLAccountCategory."Account Category"::Assets);
+      AddBlankLine(AccScheduleLine,RowNo);
+      AddAccSchedLineGroup(AccScheduleLine,RowNo,GLAccountCategory."Account Category"::Liabilities);
+      LiabilitiesRowNo := AccScheduleLine."Row No.";
+      AddBlankLine(AccScheduleLine,RowNo);
+      AddAccSchedLineGroup(AccScheduleLine,RowNo,GLAccountCategory."Account Category"::Equity);
+      EquityRowNo := AccScheduleLine."Row No.";
+      AddBlankLine(AccScheduleLine,RowNo);
+      AddAccShedLine(
+        AccScheduleLine,RowNo,AccScheduleLine."Totaling Type"::Formula,
+        STRSUBSTNO(Totaling2Txt,GLAccountCategory."Account Category"::Liabilities,GLAccountCategory."Account Category"::Equity),
+        STRSUBSTNO('%1+%2',LiabilitiesRowNo,EquityRowNo),
+        TRUE,TRUE,TRUE,0);
+    END;
+
+    LOCAL PROCEDURE CreateIncomeStatement@7();
+    VAR
+      AccScheduleName@1004 : Record 84;
+      AccScheduleLine@1003 : Record 85;
+      GLAccountCategory@1002 : Record 570;
+      GLAccountCategoryMgt@1001 : Codeunit 570;
+      RowNo@1000 : Integer;
+      TurnoverRownNo@1005 : Integer;
+      COGSRowNo@1006 : Integer;
+      GrossProfitRowNo@1008 : Integer;
+      ExpensesRowNo@1007 : Integer;
+    BEGIN
+      GLAccountCategoryMgt.GetGLSetup(GeneralLedgerSetup);
+      GeneralLedgerSetup.TESTFIELD("Acc. Sched. for Income Stmt.");
+      AccScheduleName.GET(GeneralLedgerSetup."Acc. Sched. for Income Stmt.");
+      AccScheduleLine.SETRANGE("Schedule Name",AccScheduleName.Name);
+      AccScheduleLine.DELETEALL;
+      AccScheduleLine."Schedule Name" := AccScheduleName.Name;
+
+      AddAccSchedLineGroup(AccScheduleLine,RowNo,GLAccountCategory."Account Category"::Income);
+      TurnoverRownNo := RowNo;
+      AddBlankLine(AccScheduleLine,RowNo);
+      AddAccSchedLineGroup(AccScheduleLine,RowNo,GLAccountCategory."Account Category"::"Cost of Goods Sold");
+      COGSRowNo := RowNo;
+      AddBlankLine(AccScheduleLine,RowNo);
+      AddAccShedLine(
+        AccScheduleLine,RowNo,AccScheduleLine."Totaling Type"::Formula,GrossProfitTxt,
+        STRSUBSTNO('%1+%2',FormatRowNo(TurnoverRownNo,TRUE),FormatRowNo(COGSRowNo,TRUE)),
+        TRUE,FALSE,TRUE,0);
+      GrossProfitRowNo := RowNo;
+      AddBlankLine(AccScheduleLine,RowNo);
+      AddAccSchedLineGroup(AccScheduleLine,RowNo,GLAccountCategory."Account Category"::Expense);
+      ExpensesRowNo := RowNo;
+      AddBlankLine(AccScheduleLine,RowNo);
+      AddAccShedLine(
+        AccScheduleLine,RowNo,AccScheduleLine."Totaling Type"::Formula,NetIncomeTxt,
+        STRSUBSTNO('%1+%2',FormatRowNo(GrossProfitRowNo,TRUE),FormatRowNo(ExpensesRowNo,TRUE)),
+        TRUE,TRUE,TRUE,0);
+    END;
+
+    LOCAL PROCEDURE CreateCashFlowStatement@3();
+    VAR
+      AccScheduleName@1004 : Record 84;
+      AccScheduleLine@1003 : Record 85;
+      GLAccountCategory@1002 : Record 570;
+      GLAccountCategoryMgt@1001 : Codeunit 570;
+      PartStartRowNo@1010 : Integer;
+      RowNo@1000 : Integer;
+      OperatingActRowNo@1005 : Code[10];
+      InvestingActRowNo@1006 : Code[10];
+      FinancingActRowNo@1008 : Code[10];
+      NetCashIncreaseRowNo@1009 : Code[10];
+      CashBeginningRowNo@1007 : Code[10];
+    BEGIN
+      GLAccountCategoryMgt.GetGLSetup(GeneralLedgerSetup);
+      GeneralLedgerSetup.TESTFIELD("Acc. Sched. for Cash Flow Stmt");
+      AccScheduleName.GET(GeneralLedgerSetup."Acc. Sched. for Cash Flow Stmt");
+      AccScheduleLine.SETRANGE("Schedule Name",AccScheduleName.Name);
+      AccScheduleLine.DELETEALL;
+      AccScheduleLine."Schedule Name" := AccScheduleName.Name;
+
+      AddAccShedLine(
+        AccScheduleLine,RowNo,AccScheduleLine."Totaling Type"::"Posting Accounts",
+        FORMAT(GLAccountCategory."Additional Report Definition"::"Operating Activities"),'',TRUE,FALSE,TRUE,0);
+      AddAccShedLine(
+        AccScheduleLine,RowNo,AccScheduleLine."Totaling Type"::"Posting Accounts",
+        NetIncomeTxt,GetIncomeStmtAccFilter,FALSE,FALSE,TRUE,0);
+      PartStartRowNo := RowNo;
+      AddAccShedLine(
+        AccScheduleLine,RowNo,AccScheduleLine."Totaling Type"::"Posting Accounts",
+        AdjustmentsTxt,'',FALSE,FALSE,FALSE,0);
+
+      CreateCashFlowActivityPart(AccScheduleLine,RowNo,GLAccountCategory."Additional Report Definition"::"Operating Activities",FALSE);
+      AccScheduleLine.Totaling := STRSUBSTNO('%1+%2',FormatRowNo(PartStartRowNo,FALSE),AccScheduleLine.Totaling);
+      AccScheduleLine.MODIFY;
+      OperatingActRowNo := AccScheduleLine."Row No.";
+
+      AddBlankLine(AccScheduleLine,RowNo);
+
+      CreateCashFlowActivityPart(AccScheduleLine,RowNo,GLAccountCategory."Additional Report Definition"::"Investing Activities",TRUE);
+      InvestingActRowNo := AccScheduleLine."Row No.";
+
+      AddBlankLine(AccScheduleLine,RowNo);
+
+      CreateCashFlowActivityPart(AccScheduleLine,RowNo,GLAccountCategory."Additional Report Definition"::"Financing Activities",TRUE);
+      FinancingActRowNo := AccScheduleLine."Row No.";
+
+      AddBlankLine(AccScheduleLine,RowNo);
+
+      AddAccShedLine(
+        AccScheduleLine,RowNo,AccScheduleLine."Totaling Type"::Formula,
+        NetCashIncreaseTxt,
+        STRSUBSTNO('%1+%2+%3',OperatingActRowNo,InvestingActRowNo,FinancingActRowNo),
+        FALSE,FALSE,TRUE,0);
+      NetCashIncreaseRowNo := AccScheduleLine."Row No.";
+
+      AddAccShedLine(
+        AccScheduleLine,RowNo,AccScheduleLine."Totaling Type"::"Posting Accounts",
+        CashAtPeriodStartTxt,
+        GetAccFilterForReportingDefinition(GLAccountCategory."Additional Report Definition"::"Cash Accounts"),
+        FALSE,TRUE,FALSE,0);
+      AccScheduleLine."Row Type" := AccScheduleLine."Row Type"::"Beginning Balance";
+      AccScheduleLine.MODIFY;
+      CashBeginningRowNo := AccScheduleLine."Row No.";
+
+      AddAccShedLine(
+        AccScheduleLine,RowNo,AccScheduleLine."Totaling Type"::Formula,
+        CashAtPeriodEndTxt,
+        STRSUBSTNO('-%1+%2',NetCashIncreaseRowNo,CashBeginningRowNo),
+        TRUE,TRUE,FALSE,0);
+    END;
+
+    LOCAL PROCEDURE CreateCashFlowActivityPart@17(VAR AccScheduleLine@1000 : Record 85;VAR RowNo@1001 : Integer;AddReportDef@1002 : Option;IncludeHeader@1004 : Boolean);
+    VAR
+      GLAccountCategory@1003 : Record 570;
+      FirstRangeRowNo@1005 : Integer;
+    BEGIN
+      GLAccountCategory."Additional Report Definition" := AddReportDef;
+      IF IncludeHeader THEN
+        AddAccShedLine(
+          AccScheduleLine,RowNo,AccScheduleLine."Totaling Type"::"Posting Accounts",
+          FORMAT(GLAccountCategory."Additional Report Definition"),'',TRUE,FALSE,FALSE,0);
+
+      FirstRangeRowNo := RowNo;
+      IF AddReportDef = GLAccountCategory."Additional Report Definition"::"Financing Activities" THEN
+        GLAccountCategory.SETFILTER(
+          "Additional Report Definition",'%1|%2',
+          GLAccountCategory."Additional Report Definition"::"Financing Activities",
+          GLAccountCategory."Additional Report Definition"::"Distribution to Shareholders")
+      ELSE
+        GLAccountCategory.SETRANGE("Additional Report Definition",AddReportDef);
+      IF GLAccountCategory.FINDSET THEN BEGIN
+        REPEAT
+          AddAccShedLine(
+            AccScheduleLine,RowNo,AccScheduleLine."Totaling Type"::"Posting Accounts",
+            GLAccountCategory.Description,GLAccountCategory.GetTotaling,FALSE,FALSE,FALSE,1);
+        UNTIL GLAccountCategory.NEXT = 0;
+        // Last line in group should be underlined
+        AccScheduleLine.Underline := TRUE;
+        AccScheduleLine.MODIFY;
+
+        AddAccShedLine(
+          AccScheduleLine,RowNo,AccScheduleLine."Totaling Type"::Formula,
+          STRSUBSTNO(NetCashProviededTxt,GLAccountCategory."Additional Report Definition"),
+          STRSUBSTNO('%1..%2',FormatRowNo(FirstRangeRowNo,FALSE),FormatRowNo(RowNo,FALSE)),
+          TRUE,FALSE,FALSE,0);
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateRetainedEarningsStatement@27();
+    VAR
+      AccScheduleName@1004 : Record 84;
+      AccScheduleLine@1003 : Record 85;
+      GLAccountCategory@1002 : Record 570;
+      GLAccountCategoryMgt@1001 : Codeunit 570;
+      RowNo@1000 : Integer;
+      RetainedEarningsPrimoRowNo@1007 : Code[10];
+      GrossRetainedEarningsRowNo@1011 : Code[10];
+      DistributionRowNo@1006 : Code[10];
+    BEGIN
+      GLAccountCategoryMgt.GetGLSetup(GeneralLedgerSetup);
+      GeneralLedgerSetup.TESTFIELD("Acc. Sched. for Retained Earn.");
+      AccScheduleName.GET(GeneralLedgerSetup."Acc. Sched. for Retained Earn.");
+      AccScheduleLine.SETRANGE("Schedule Name",AccScheduleName.Name);
+      AccScheduleLine.DELETEALL;
+      AccScheduleLine."Schedule Name" := AccScheduleName.Name;
+
+      AddAccShedLine(
+        AccScheduleLine,RowNo,AccScheduleLine."Totaling Type"::"Posting Accounts",
+        RetainedEarningsPrimoTxt,
+        GetAccFilterForReportingDefinition(GLAccountCategory."Additional Report Definition"::"Retained Earnings"),
+        FALSE,FALSE,TRUE,0);
+      AccScheduleLine."Row Type" := AccScheduleLine."Row Type"::"Beginning Balance";
+      AccScheduleLine.MODIFY;
+      RetainedEarningsPrimoRowNo := AccScheduleLine."Row No.";
+
+      AddAccShedLine(
+        AccScheduleLine,RowNo,AccScheduleLine."Totaling Type"::"Posting Accounts",
+        NetIncomeTxt,GetIncomeStmtAccFilter,FALSE,TRUE,TRUE,0);
+
+      AddAccShedLine(
+        AccScheduleLine,RowNo,AccScheduleLine."Totaling Type"::Formula,
+        '',
+        STRSUBSTNO('%1+%2',RetainedEarningsPrimoRowNo,AccScheduleLine."Row No."),
+        FALSE,FALSE,TRUE,0);
+      GrossRetainedEarningsRowNo := AccScheduleLine."Row No.";
+
+      AddBlankLine(AccScheduleLine,RowNo);
+
+      AddAccShedLine(
+        AccScheduleLine,RowNo,AccScheduleLine."Totaling Type"::"Posting Accounts",
+        DistribToShareholdersTxt,
+        GetAccFilterForReportingDefinition(GLAccountCategory."Additional Report Definition"::"Distribution to Shareholders"),
+        FALSE,FALSE,FALSE,0);
+      DistributionRowNo := AccScheduleLine."Row No.";
+
+      AddBlankLine(AccScheduleLine,RowNo);
+      AccScheduleLine.Underline := TRUE;
+      AccScheduleLine.MODIFY;
+
+      AddAccShedLine(
+        AccScheduleLine,RowNo,AccScheduleLine."Totaling Type"::Formula,
+        RetainedEarningsUltimoTxt,
+        STRSUBSTNO('%1-%2',GrossRetainedEarningsRowNo,DistributionRowNo),
+        TRUE,TRUE,TRUE,0);
+      AccScheduleLine."Row Type" := AccScheduleLine."Row Type"::"Balance at Date";
+      AccScheduleLine.MODIFY;
+    END;
+
+    LOCAL PROCEDURE AddAccSchedLineGroup@6(VAR AccScheduleLine@1000 : Record 85;VAR RowNo@1003 : Integer;Category@1001 : Option);
+    VAR
+      GLAccountCategory@1002 : Record 570;
+    BEGIN
+      GLAccountCategory.SETRANGE("Account Category",Category);
+      GLAccountCategory.SETRANGE(Indentation,0);
+      GLAccountCategory.SETAUTOCALCFIELDS("Has Children");
+      GLAccountCategory.SETCURRENTKEY("Presentation Order");
+      IF GLAccountCategory.FINDSET THEN
+        REPEAT
+          AddAccSchedLinesDetail(AccScheduleLine,RowNo,GLAccountCategory,0);
+        UNTIL GLAccountCategory.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE AddAccSchedLinesDetail@11(VAR AccScheduleLine@1000 : Record 85;VAR RowNo@1004 : Integer;ParentGLAccountCategory@1001 : Record 570;Indentation@1003 : Integer);
+    VAR
+      GLAccountCategory@1002 : Record 570;
+      FromRowNo@1005 : Integer;
+      TotalingFilter@1008 : Text;
+    BEGIN
+      IF ParentGLAccountCategory."Has Children" THEN BEGIN
+        AddAccShedLine(
+          AccScheduleLine,RowNo,AccScheduleLine."Totaling Type"::"Posting Accounts",
+          ParentGLAccountCategory.Description,ParentGLAccountCategory.GetTotaling,TRUE,FALSE,
+          NOT ParentGLAccountCategory.PositiveNormalBalance,Indentation);
+        FromRowNo := RowNo;
+        GLAccountCategory.SETRANGE("Parent Entry No.",ParentGLAccountCategory."Entry No.");
+        GLAccountCategory.SETCURRENTKEY("Presentation Order");
+        GLAccountCategory.SETAUTOCALCFIELDS("Has Children");
+        IF GLAccountCategory.FINDSET THEN
+          REPEAT
+            AddAccSchedLinesDetail(AccScheduleLine,RowNo,GLAccountCategory,Indentation + 1);
+          UNTIL GLAccountCategory.NEXT = 0;
+        AddAccShedLine(
+          AccScheduleLine,RowNo,AccScheduleLine."Totaling Type"::Formula,
+          STRSUBSTNO(TotalingTxt,ParentGLAccountCategory.Description),
+          STRSUBSTNO('%1..%2',FormatRowNo(FromRowNo,FALSE),FormatRowNo(RowNo,FALSE)),TRUE,FALSE,
+          NOT ParentGLAccountCategory.PositiveNormalBalance,Indentation);
+      END ELSE BEGIN
+        // Retained Earnings element of Equity must include non-closed income statement.
+        TotalingFilter := ParentGLAccountCategory.GetTotaling;
+        IF ParentGLAccountCategory."Additional Report Definition" =
+           ParentGLAccountCategory."Additional Report Definition"::"Retained Earnings"
+        THEN BEGIN
+          IF TotalingFilter <> '' THEN
+            TotalingFilter += '|';
+          TotalingFilter += GetIncomeStmtAccFilter;
+        END;
+
+        AddAccShedLine(
+          AccScheduleLine,RowNo,AccScheduleLine."Totaling Type"::"Posting Accounts",
+          ParentGLAccountCategory.Description,COPYSTR(TotalingFilter,1,250),
+          Indentation = 0,FALSE,NOT ParentGLAccountCategory.PositiveNormalBalance,Indentation);
+        AccScheduleLine.Show := AccScheduleLine.Show::"If Any Column Not Zero";
+        AccScheduleLine.MODIFY;
+      END;
+    END;
+
+    LOCAL PROCEDURE AddAccShedLine@10(VAR AccScheduleLine@1000 : Record 85;VAR RowNo@1006 : Integer;TotalingType@1007 : Option;Description@1001 : Text[80];Totaling@1002 : Text[250];Bold@1003 : Boolean;Underline@1004 : Boolean;ShowOppositeSign@1008 : Boolean;Indentation@1005 : Integer);
+    BEGIN
+      IF AccScheduleLine.FINDLAST THEN;
+      AccScheduleLine.INIT;
+      AccScheduleLine."Line No." += 10000;
+      RowNo += 1;
+      AccScheduleLine."Row No." := FormatRowNo(RowNo,TotalingType = AccScheduleLine."Totaling Type"::Formula);
+      AccScheduleLine."Totaling Type" := TotalingType;
+      AccScheduleLine.Description := Description;
+      AccScheduleLine.Totaling := Totaling;
+      AccScheduleLine."Show Opposite Sign" := ShowOppositeSign;
+      AccScheduleLine.Bold := Bold;
+      AccScheduleLine.Underline := Underline;
+      AccScheduleLine.Indentation := Indentation;
+      AccScheduleLine.INSERT;
+    END;
+
+    LOCAL PROCEDURE FormatRowNo@1(RowNo@1000 : Integer;AddPrefix@1001 : Boolean) : Text[5];
+    VAR
+      Prefix@1002 : Text[1];
+    BEGIN
+      IF AddPrefix THEN
+        Prefix := 'F'
+      ELSE
+        Prefix := 'P';
+      EXIT(Prefix + COPYSTR(FORMAT(10000 + RowNo),2,4));
+    END;
+
+    LOCAL PROCEDURE AddBlankLine@12(VAR AccScheduleLine@1000 : Record 85;VAR RowNo@1001 : Integer);
+    BEGIN
+      AddAccShedLine(
+        AccScheduleLine,RowNo,AccScheduleLine."Totaling Type"::"Posting Accounts",
+        '','',FALSE,FALSE,FALSE,0);
+    END;
+
+    LOCAL PROCEDURE GetAccFilterForReportingDefinition@4(AdditionalReportingDefinition@1000 : Option) : Text[250];
+    VAR
+      GLAccountCategory@1002 : Record 570;
+      Totaling@1004 : Text;
+      AccFilter@1003 : Text;
+    BEGIN
+      GLAccountCategory.SETRANGE("Additional Report Definition",AdditionalReportingDefinition);
+      IF GLAccountCategory.FINDSET THEN
+        REPEAT
+          Totaling := GLAccountCategory.GetTotaling;
+          IF (AccFilter <> '') AND (Totaling <> '') THEN
+            AccFilter += '|';
+          AccFilter += Totaling;
+        UNTIL GLAccountCategory.NEXT = 0;
+      EXIT(COPYSTR(AccFilter,1,250));
+    END;
+
+    LOCAL PROCEDURE GetIncomeStmtAccFilter@5() : Text[250];
+    VAR
+      GLAccount@1000 : Record 15;
+      SelectionFilterManagement@1001 : Codeunit 46;
+    BEGIN
+      GLAccount.RESET;
+      GLAccount.SETRANGE("Income/Balance",GLAccount."Income/Balance"::"Income Statement");
+      EXIT(COPYSTR(SelectionFilterManagement.GetSelectionFilterForGLAccount(GLAccount),1,250));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

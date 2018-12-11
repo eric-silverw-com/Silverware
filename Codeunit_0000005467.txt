@@ -1,0 +1,129 @@
+OBJECT Codeunit 5467 PDF Document Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:23 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      CannotFindDocumentErr@1003 : TextConst '@@@=%1 - Error Message;ENU=The document %1 cannot be found.';
+      CannotOpenFileErr@1002 : TextConst '@@@=%1 - Error Message;ENU=Opening the file failed because of the following error: \%1.';
+      UnpostedCreditMemoErr@1004 : TextConst '@@@=%1 - sales credit memo id;ENU=You must post sales credit memo %1 before generating the PDF document.';
+      UnpostedPurchaseInvoiceErr@1005 : TextConst '@@@=%1 - sales credit memo id;ENU=You must post purchase invoice %1 before generating the PDF document.';
+      CreditMemoTxt@1001 : TextConst 'ENU=Credit Memo';
+      PurchaseInvoiceTxt@1000 : TextConst 'ENU=Purchase Invoice';
+
+    PROCEDURE GeneratePdf@21(DocumentId@1009 : GUID;VAR TempAttachmentEntityBuffer@1013 : TEMPORARY Record 5509) : Boolean;
+    VAR
+      CompanyInformation@1004 : Record 79;
+      SalesInvoiceHeader@1002 : Record 112;
+      SalesCrMemoHeader@1014 : Record 114;
+      SalesHeader@1006 : Record 36;
+      PurchaseHeader@1015 : Record 38;
+      PurchInvHeader@1016 : Record 122;
+      ReportSelections@1005 : Record 77;
+      DocumentMailing@1003 : Codeunit 260;
+      NativeReports@1017 : Codeunit 2822;
+      File@1007 : File;
+      InStream@1008 : InStream;
+      OutStream@1010 : OutStream;
+      Path@1001 : Text[250];
+      Name@1000 : Text[250];
+      ReportId@1012 : Integer;
+      DocumentFound@1011 : Boolean;
+    BEGIN
+      CompanyInformation.GET;
+      SalesHeader.SETRANGE(Id,DocumentId);
+      IF SalesHeader.FINDFIRST THEN BEGIN
+        CASE SalesHeader."Document Type" OF
+          SalesHeader."Document Type"::Invoice:
+            BEGIN
+              ReportId := NativeReports.DraftSalesInvoiceReportId;
+              ReportSelections.GetPdfReport(Path,ReportId,SalesHeader,SalesHeader."Sell-to Customer No.");
+              DocumentMailing.GetAttachmentFileName(Name,SalesHeader."No.",SalesHeader.GetDocTypeTxt,ReportId);
+            END;
+          SalesHeader."Document Type"::Quote:
+            BEGIN
+              ReportId := NativeReports.SalesQuoteReportId;
+              ReportSelections.GetPdfReport(Path,ReportId,SalesHeader,SalesHeader."Sell-to Customer No.");
+              DocumentMailing.GetAttachmentFileName(Name,SalesHeader."No.",SalesHeader.GetDocTypeTxt,ReportId);
+            END;
+          SalesHeader."Document Type"::"Credit Memo":
+            ERROR(UnpostedCreditMemoErr,DocumentId);
+          ELSE
+            ERROR(CannotFindDocumentErr,DocumentId);
+        END;
+        DocumentFound := TRUE;
+      END;
+
+      IF NOT DocumentFound THEN BEGIN
+        SalesInvoiceHeader.SETRANGE(Id,DocumentId);
+        IF SalesInvoiceHeader.FINDFIRST THEN BEGIN
+          ReportId := NativeReports.PostedSalesInvoiceReportId;
+          ReportSelections.GetPdfReport(Path,ReportId,SalesInvoiceHeader,SalesInvoiceHeader."Sell-to Customer No.");
+          DocumentMailing.GetAttachmentFileName(Name,SalesInvoiceHeader."No.",SalesInvoiceHeader.GetDocTypeTxt,ReportId);
+          DocumentFound := TRUE;
+        END;
+      END;
+
+      IF NOT DocumentFound THEN BEGIN
+        SalesCrMemoHeader.SETRANGE(Id,DocumentId);
+        IF SalesCrMemoHeader.FINDFIRST THEN BEGIN
+          ReportId := NativeReports.SalesCreditMemoReportId;
+          ReportSelections.GetPdfReport(Path,ReportId,SalesCrMemoHeader,SalesCrMemoHeader."Sell-to Customer No.");
+          DocumentMailing.GetAttachmentFileName(Name,SalesCrMemoHeader."No.",CreditMemoTxt,ReportId);
+          DocumentFound := TRUE;
+        END;
+      END;
+
+      IF NOT DocumentFound THEN BEGIN
+        PurchaseHeader.SETRANGE(Id,DocumentId);
+        IF PurchaseHeader.FINDFIRST AND (PurchaseHeader."Document Type" = PurchaseHeader."Document Type"::Invoice) THEN
+          ERROR(UnpostedPurchaseInvoiceErr,DocumentId);
+      END;
+
+      IF NOT DocumentFound THEN BEGIN
+        PurchInvHeader.SETRANGE(Id,DocumentId);
+        IF PurchInvHeader.FINDFIRST THEN BEGIN
+          ReportId := NativeReports.PurchaseInvoiceReportId;
+          ReportSelections.GetPdfReport(Path,ReportId,PurchInvHeader,PurchInvHeader."Buy-from Vendor No.");
+          DocumentMailing.GetAttachmentFileName(Name,PurchInvHeader."No.",PurchaseInvoiceTxt,ReportId);
+          DocumentFound := TRUE;
+        END;
+      END;
+
+      IF NOT DocumentFound THEN
+        ERROR(CannotFindDocumentErr,DocumentId);
+
+      IF NOT File.OPEN(Path) THEN
+        ERROR(CannotOpenFileErr,GETLASTERRORTEXT);
+
+      TempAttachmentEntityBuffer.INIT;
+      TempAttachmentEntityBuffer.Id := DocumentId;
+      TempAttachmentEntityBuffer."Document Id" := DocumentId;
+      TempAttachmentEntityBuffer."File Name" := Name;
+      TempAttachmentEntityBuffer.Type := TempAttachmentEntityBuffer.Type::PDF;
+      TempAttachmentEntityBuffer.Content.CREATEOUTSTREAM(OutStream);
+      File.CREATEINSTREAM(InStream);
+      COPYSTREAM(OutStream,InStream);
+      File.CLOSE;
+      IF ERASE(Path) THEN;
+      TempAttachmentEntityBuffer.INSERT(TRUE);
+
+      EXIT(TRUE);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

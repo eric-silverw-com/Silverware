@@ -1,0 +1,662 @@
+OBJECT Codeunit 6503 Item Tracking Doc. Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:39 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      CountingRecordsMsg@1003 : TextConst 'ENU=Counting records...';
+      TableNotSupportedErr@1000 : TextConst 'ENU=Table %1 is not supported.';
+      ItemTrackingMgt@1002 : Codeunit 6500;
+      RetrieveAsmItemTracking@1001 : Boolean;
+
+    LOCAL PROCEDURE AddTempRecordToSet@16(VAR TempItemLedgEntry@1000 : TEMPORARY Record 32;SignFactor@1002 : Integer);
+    VAR
+      TempItemLedgEntry2@1001 : TEMPORARY Record 32;
+    BEGIN
+      IF SignFactor <> 1 THEN BEGIN
+        TempItemLedgEntry.Quantity *= SignFactor;
+        TempItemLedgEntry."Remaining Quantity" *= SignFactor;
+        TempItemLedgEntry."Invoiced Quantity" *= SignFactor;
+      END;
+      ItemTrackingMgt.RetrieveAppliedExpirationDate(TempItemLedgEntry);
+      TempItemLedgEntry2 := TempItemLedgEntry;
+      TempItemLedgEntry.RESET;
+      TempItemLedgEntry.SetTrackingFilter(TempItemLedgEntry2."Serial No.",TempItemLedgEntry2."Lot No.");
+      TempItemLedgEntry.SETRANGE("Warranty Date",TempItemLedgEntry2."Warranty Date");
+      TempItemLedgEntry.SETRANGE("Expiration Date",TempItemLedgEntry2."Expiration Date");
+      IF TempItemLedgEntry.FINDFIRST THEN BEGIN
+        TempItemLedgEntry.Quantity += TempItemLedgEntry2.Quantity;
+        TempItemLedgEntry."Remaining Quantity" += TempItemLedgEntry2."Remaining Quantity";
+        TempItemLedgEntry."Invoiced Quantity" += TempItemLedgEntry2."Invoiced Quantity";
+        TempItemLedgEntry.MODIFY;
+      END ELSE
+        TempItemLedgEntry.INSERT;
+
+      TempItemLedgEntry.RESET;
+    END;
+
+    [External]
+    PROCEDURE CollectItemTrkgPerPostedDocLine@74(VAR TempReservEntry@1000 : TEMPORARY Record 337;VAR TempItemLedgEntry@1001 : TEMPORARY Record 32;FromPurchase@1002 : Boolean;DocNo@1003 : Code[20];LineNo@1004 : Integer);
+    VAR
+      ItemLedgEntry@1006 : Record 32;
+    BEGIN
+      TempItemLedgEntry.RESET;
+      TempItemLedgEntry.DELETEALL;
+
+      WITH TempReservEntry DO BEGIN
+        RESET;
+        SETCURRENTKEY("Source ID","Source Ref. No.");
+        SETRANGE("Source ID",DocNo);
+        SETRANGE("Source Ref. No.",LineNo);
+        IF FINDSET THEN
+          REPEAT
+            ItemLedgEntry.GET("Item Ledger Entry No.");
+            TempItemLedgEntry := ItemLedgEntry;
+            IF "Reservation Status" = "Reservation Status"::Prospect THEN
+              TempItemLedgEntry."Entry No." := -TempItemLedgEntry."Entry No.";
+            IF FromPurchase THEN
+              TempItemLedgEntry."Remaining Quantity" := "Quantity (Base)"
+            ELSE
+              TempItemLedgEntry."Shipped Qty. Not Returned" := "Quantity (Base)";
+            TempItemLedgEntry."Document No." := "Source ID";
+            TempItemLedgEntry."Document Line No." := "Source Ref. No.";
+            TempItemLedgEntry.INSERT;
+          UNTIL NEXT = 0;
+      END;
+    END;
+
+    [External]
+    PROCEDURE CopyItemLedgerEntriesToTemp@72(VAR TempItemLedgEntry@1000 : TEMPORARY Record 32;VAR FromItemLedgEntry@1003 : Record 32);
+    BEGIN
+      TempItemLedgEntry.RESET;
+      TempItemLedgEntry.DELETEALL;
+      IF FromItemLedgEntry.FINDSET THEN
+        REPEAT
+          TempItemLedgEntry := FromItemLedgEntry;
+          AddTempRecordToSet(TempItemLedgEntry,1);
+        UNTIL FromItemLedgEntry.NEXT = 0;
+
+      TempItemLedgEntry.RESET;
+    END;
+
+    LOCAL PROCEDURE FillTrackingSpecBuffer@69(VAR TempTrackingSpecBuffer@1011 : TEMPORARY Record 336;Type@1007 : Integer;Subtype@1006 : Integer;ID@1005 : Code[20];BatchName@1004 : Code[10];ProdOrderLine@1003 : Integer;RefNo@1002 : Integer;Description@1010 : Text[50];ItemNo@1009 : Code[20];LN@1001 : Code[50];SN@1000 : Code[50];Qty@1008 : Decimal;Correction@1013 : Boolean);
+    VAR
+      LastEntryNo@1012 : Integer;
+    BEGIN
+      // creates or sums up a record in TempTrackingSpecBuffer
+
+      TempTrackingSpecBuffer.RESET;
+      IF TempTrackingSpecBuffer.FINDLAST THEN
+        LastEntryNo := TempTrackingSpecBuffer."Entry No.";
+
+      IF ItemTrackingExistsInBuffer(TempTrackingSpecBuffer,Type,Subtype,ID,BatchName,ProdOrderLine,RefNo,LN,SN) THEN BEGIN
+        TempTrackingSpecBuffer."Quantity (Base)" += ABS(Qty);                      // Sum up Qty
+        TempTrackingSpecBuffer.MODIFY;
+      END ELSE BEGIN
+        LastEntryNo += 1;
+        InitTrackingSpecBuffer(TempTrackingSpecBuffer,LastEntryNo,Type,Subtype,ID,BatchName,
+          ProdOrderLine,RefNo,Description,ItemNo,LN,SN,Correction);
+        TempTrackingSpecBuffer."Quantity (Base)" := ABS(Qty);
+        TempTrackingSpecBuffer.INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE FillTrackingSpecBufferFromILE@59(VAR TempItemLedgEntry@1000 : TEMPORARY Record 32;VAR TempTrackingSpecBuffer@1008 : TEMPORARY Record 336;Type@1007 : Integer;Subtype@1006 : Integer;ID@1005 : Code[20];BatchName@1004 : Code[10];ProdOrderLine@1003 : Integer;RefNo@1002 : Integer;Description@1001 : Text[50]);
+    BEGIN
+      // creates a new record in TempTrackingSpecBuffer (used for Posted Shipments/Receipts/Invoices)
+
+      IF TempItemLedgEntry.FINDSET THEN
+        REPEAT
+          IF TempItemLedgEntry.TrackingExists THEN
+            FillTrackingSpecBuffer(TempTrackingSpecBuffer,Type,Subtype,ID,BatchName,
+              ProdOrderLine,RefNo,Description,TempItemLedgEntry."Item No.",TempItemLedgEntry."Lot No.",
+              TempItemLedgEntry."Serial No.",TempItemLedgEntry.Quantity,TempItemLedgEntry.Correction);
+        UNTIL TempItemLedgEntry.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE FindReservEntries@62(VAR TempTrackingSpecBuffer@1002 : TEMPORARY Record 336;Type@1010 : Integer;Subtype@1009 : Integer;ID@1008 : Code[20];BatchName@1007 : Code[10];ProdOrderLine@1006 : Integer;RefNo@1005 : Integer;Description@1004 : Text[50]);
+    VAR
+      ReservEntry@1001 : Record 337;
+    BEGIN
+      // finds Item Tracking for Quote, Order, Invoice, Credit Memo, Return Order
+
+      ReservEntry.SetSourceFilter(Type,Subtype,ID,RefNo,TRUE);
+      ReservEntry.SetSourceFilter2(BatchName,ProdOrderLine);
+      IF ReservEntry.FINDSET THEN
+        REPEAT
+          IF ReservEntry.TrackingExists THEN
+            FillTrackingSpecBuffer(TempTrackingSpecBuffer,Type,Subtype,ID,BatchName,
+              ProdOrderLine,RefNo,Description,ReservEntry."Item No.",ReservEntry."Lot No.",
+              ReservEntry."Serial No.",ReservEntry."Quantity (Base)",ReservEntry.Correction);
+        UNTIL ReservEntry.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE FindTrackingEntries@85(VAR TempTrackingSpecBuffer@1002 : TEMPORARY Record 336;Type@1008 : Integer;Subtype@1007 : Integer;ID@1006 : Code[20];BatchName@1005 : Code[10];ProdOrderLine@1004 : Integer;RefNo@1003 : Integer;Description@1000 : Text[50]);
+    VAR
+      TrackingSpec@1001 : Record 336;
+    BEGIN
+      // finds Item Tracking for Quote, Order, Invoice, Credit Memo, Return Order when shipped/received
+
+      TrackingSpec.SetSourceFilter(Type,Subtype,ID,RefNo,TRUE);
+      TrackingSpec.SetSourceFilter2(BatchName,ProdOrderLine);
+      IF TrackingSpec.FINDSET THEN
+        REPEAT
+          IF TrackingSpec.TrackingExists THEN
+            FillTrackingSpecBuffer(TempTrackingSpecBuffer,Type,Subtype,ID,BatchName,
+              ProdOrderLine,RefNo,Description,TrackingSpec."Item No.",TrackingSpec."Lot No.",
+              TrackingSpec."Serial No.",TrackingSpec."Quantity (Base)",TrackingSpec.Correction);
+        UNTIL TrackingSpec.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE FindShptRcptEntries@83(VAR TempTrackingSpecBuffer@1011 : TEMPORARY Record 336;Type@1005 : Integer;Subtype@1004 : Integer;ID@1003 : Code[20];BatchName@1002 : Code[10];ProdOrderLine@1001 : Integer;RefNo@1000 : Integer;Description@1009 : Text[50]);
+    VAR
+      TempItemLedgEntry@1007 : TEMPORARY Record 32;
+    BEGIN
+      // finds Item Tracking for Posted Shipments/Receipts
+
+      RetrieveEntriesFromShptRcpt(TempItemLedgEntry,Type,Subtype,ID,BatchName,ProdOrderLine,RefNo);
+      FillTrackingSpecBufferFromILE(
+        TempItemLedgEntry,TempTrackingSpecBuffer,Type,Subtype,ID,BatchName,ProdOrderLine,RefNo,Description);
+    END;
+
+    LOCAL PROCEDURE FindInvoiceEntries@84(VAR TempTrackingSpecBuffer@1013 : TEMPORARY Record 336;Type@1008 : Integer;Subtype@1007 : Integer;ID@1006 : Code[20];BatchName@1005 : Code[10];ProdOrderLine@1004 : Integer;RefNo@1003 : Integer;Description@1002 : Text[50]);
+    VAR
+      TempItemLedgEntry@1010 : TEMPORARY Record 32;
+      InvoiceRowID@1000 : Text[250];
+    BEGIN
+      InvoiceRowID := ItemTrackingMgt.ComposeRowID(Type,Subtype,ID,BatchName,ProdOrderLine,RefNo);
+      RetrieveEntriesFromPostedInv(TempItemLedgEntry,InvoiceRowID);
+      FillTrackingSpecBufferFromILE(
+        TempItemLedgEntry,TempTrackingSpecBuffer,Type,Subtype,ID,BatchName,ProdOrderLine,RefNo,Description);
+    END;
+
+    LOCAL PROCEDURE InitTrackingSpecBuffer@64(VAR TempTrackingSpecBuffer@1010 : TEMPORARY Record 336;EntryNo@1011 : Integer;Type@1006 : Integer;Subtype@1005 : Integer;ID@1004 : Code[20];BatchName@1003 : Code[10];ProdOrderLine@1002 : Integer;RefNo@1000 : Integer;Description@1001 : Text[50];ItemNo@1007 : Code[20];LN@1009 : Code[50];SN@1008 : Code[50];Correction@1012 : Boolean);
+    BEGIN
+      // initializes a new record for TempTrackingSpecBuffer
+
+      TempTrackingSpecBuffer.INIT;
+      TempTrackingSpecBuffer."Source Type" := Type;
+      TempTrackingSpecBuffer."Entry No." := EntryNo;
+      TempTrackingSpecBuffer."Item No." := ItemNo;
+      TempTrackingSpecBuffer.Description := Description;
+      TempTrackingSpecBuffer."Source Subtype" := Subtype;
+      TempTrackingSpecBuffer."Source ID" := ID;
+      TempTrackingSpecBuffer."Source Batch Name" := BatchName;
+      TempTrackingSpecBuffer."Source Prod. Order Line" := ProdOrderLine;
+      TempTrackingSpecBuffer."Source Ref. No." := RefNo;
+      TempTrackingSpecBuffer."Lot No." := LN;
+      TempTrackingSpecBuffer."Serial No." := SN;
+      TempTrackingSpecBuffer.Correction := Correction;
+    END;
+
+    LOCAL PROCEDURE ItemTrackingExistsInBuffer@65(VAR TempTrackingSpecBuffer@1008 : TEMPORARY Record 336;Type@1006 : Integer;Subtype@1005 : Integer;ID@1004 : Code[20];BatchName@1003 : Code[10];ProdOrderLine@1002 : Integer;RefNo@1001 : Integer;LotNo@1000 : Code[50];SerialNo@1007 : Code[50]) : Boolean;
+    BEGIN
+      // searches after existing record in TempTrackingSpecBuffer
+      TempTrackingSpecBuffer.SetSourceFilter(Type,Subtype,ID,RefNo,TRUE);
+      TempTrackingSpecBuffer.SetSourceFilter2(BatchName,ProdOrderLine);
+      TempTrackingSpecBuffer.SetTrackingFilter(SerialNo,LotNo);
+      IF NOT TempTrackingSpecBuffer.ISEMPTY THEN BEGIN
+        TempTrackingSpecBuffer.FINDFIRST;
+        EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+    END;
+
+    [External]
+    PROCEDURE RetrieveDocumentItemTracking@82(VAR TempTrackingSpecBuffer@1003 : TEMPORARY Record 336;SourceID@1000 : Code[20];SourceType@1001 : Integer;SourceSubType@1002 : Option) : Integer;
+    VAR
+      Found@1004 : Boolean;
+    BEGIN
+      // retrieves Item Tracking for Purchase Header, Sales Header, Sales Shipment Header, Sales Invoice Header
+      TempTrackingSpecBuffer.DELETEALL;
+      CASE SourceType OF
+        DATABASE::"Purchase Header":
+          RetrieveTrackingPurchase(TempTrackingSpecBuffer,SourceID,SourceSubType);
+        DATABASE::"Sales Header":
+          RetrieveTrackingSales(TempTrackingSpecBuffer,SourceID,SourceSubType);
+        DATABASE::"Service Header":
+          RetrieveTrackingService(TempTrackingSpecBuffer,SourceID,SourceSubType);
+        DATABASE::"Purch. Rcpt. Header":
+          RetrieveTrackingPurchaseReceipt(TempTrackingSpecBuffer,SourceID);
+        DATABASE::"Sales Shipment Header":
+          RetrieveTrackingSalesShipment(TempTrackingSpecBuffer,SourceID);
+        DATABASE::"Sales Invoice Header":
+          RetrieveTrackingSalesInvoice(TempTrackingSpecBuffer,SourceID);
+        DATABASE::"Service Shipment Header":
+          RetrieveTrackingServiceShipment(TempTrackingSpecBuffer,SourceID);
+        DATABASE::"Service Invoice Header":
+          RetrieveTrackingServiceInvoice(TempTrackingSpecBuffer,SourceID);
+        ELSE BEGIN
+          OnRetrieveDocumentItemTracking(TempTrackingSpecBuffer,SourceID,Found);
+          IF NOT Found THEN
+            ERROR(TableNotSupportedErr,SourceType);
+        END;
+      END;
+      TempTrackingSpecBuffer.RESET;
+      EXIT(TempTrackingSpecBuffer.COUNT);
+    END;
+
+    LOCAL PROCEDURE RetrieveEntriesFromShptRcpt@61(VAR TempItemLedgEntry@1010 : TEMPORARY Record 32;Type@1009 : Integer;Subtype@1008 : Integer;ID@1007 : Code[20];BatchName@1006 : Code[10];ProdOrderLine@1005 : Integer;RefNo@1004 : Integer);
+    VAR
+      ItemEntryRelation@1003 : Record 6507;
+      ItemLedgEntry@1002 : Record 32;
+      SignFactor@1000 : Integer;
+    BEGIN
+      // retrieves a data set of Item Ledger Entries (Posted Shipments/Receipts)
+      ItemEntryRelation.SETCURRENTKEY("Source ID","Source Type");
+      ItemEntryRelation.SETRANGE("Source Type",Type);
+      ItemEntryRelation.SETRANGE("Source Subtype",Subtype);
+      ItemEntryRelation.SETRANGE("Source ID",ID);
+      ItemEntryRelation.SETRANGE("Source Batch Name",BatchName);
+      ItemEntryRelation.SETRANGE("Source Prod. Order Line",ProdOrderLine);
+      ItemEntryRelation.SETRANGE("Source Ref. No.",RefNo);
+      IF ItemEntryRelation.FINDSET THEN BEGIN
+        SignFactor := TableSignFactor(Type);
+        REPEAT
+          ItemLedgEntry.GET(ItemEntryRelation."Item Entry No.");
+          TempItemLedgEntry := ItemLedgEntry;
+          AddTempRecordToSet(TempItemLedgEntry,SignFactor);
+        UNTIL ItemEntryRelation.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE RetrieveEntriesFromPostedInv@63(VAR TempItemLedgEntry@1006 : TEMPORARY Record 32;InvoiceRowID@1000 : Text[250]);
+    VAR
+      ValueEntryRelation@1005 : Record 6508;
+      ValueEntry@1004 : Record 5802;
+      ItemLedgEntry@1002 : Record 32;
+      SignFactor@1001 : Integer;
+    BEGIN
+      // retrieves a data set of Item Ledger Entries (Posted Invoices)
+      ValueEntryRelation.SETCURRENTKEY("Source RowId");
+      ValueEntryRelation.SETRANGE("Source RowId",InvoiceRowID);
+      IF ValueEntryRelation.FIND('-') THEN BEGIN
+        SignFactor := TableSignFactor2(InvoiceRowID);
+        REPEAT
+          ValueEntry.GET(ValueEntryRelation."Value Entry No.");
+          ItemLedgEntry.GET(ValueEntry."Item Ledger Entry No.");
+          TempItemLedgEntry := ItemLedgEntry;
+          TempItemLedgEntry.Quantity := ValueEntry."Invoiced Quantity";
+          IF TempItemLedgEntry."Entry Type" IN [TempItemLedgEntry."Entry Type"::Purchase,TempItemLedgEntry."Entry Type"::Sale] THEN
+            IF TempItemLedgEntry.Quantity <> 0 THEN
+              AddTempRecordToSet(TempItemLedgEntry,SignFactor);
+        UNTIL ValueEntryRelation.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE RetrieveTrackingPurchase@100(VAR TempTrackingSpecBuffer@1003 : TEMPORARY Record 336;SourceID@1000 : Code[20];SourceSubType@1002 : Option);
+    VAR
+      PurchaseLine@1005 : Record 39;
+      Item@1006 : Record 27;
+      Descr@1004 : Text[50];
+    BEGIN
+      PurchaseLine.SETRANGE("Document Type",SourceSubType);
+      PurchaseLine.SETRANGE("Document No.",SourceID);
+      IF NOT PurchaseLine.ISEMPTY THEN BEGIN
+        PurchaseLine.FINDSET;
+        REPEAT
+          IF (PurchaseLine.Type = PurchaseLine.Type::Item) AND
+             (PurchaseLine."Quantity (Base)" <> 0)
+          THEN BEGIN
+            IF Item.GET(PurchaseLine."No.") THEN
+              Descr := Item.Description;
+            FindReservEntries(TempTrackingSpecBuffer,DATABASE::"Purchase Line",PurchaseLine."Document Type",
+              PurchaseLine."Document No.",'',0,PurchaseLine."Line No.",Descr);
+            FindTrackingEntries(TempTrackingSpecBuffer,DATABASE::"Purchase Line",PurchaseLine."Document Type",
+              PurchaseLine."Document No.",'',0,PurchaseLine."Line No.",Descr);
+          END;
+        UNTIL PurchaseLine.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE RetrieveTrackingPurchaseReceipt@2(VAR TempTrackingSpecBuffer@1001 : TEMPORARY Record 336;SourceID@1000 : Code[20]);
+    VAR
+      PurchRcptLine@1002 : Record 121;
+      Item@1003 : Record 27;
+      Descr@1004 : Text[50];
+    BEGIN
+      PurchRcptLine.SETRANGE("Document No.",SourceID);
+      IF PurchRcptLine.FINDSET THEN BEGIN
+        REPEAT
+          IF (PurchRcptLine.Type = PurchRcptLine.Type::Item) AND
+             (PurchRcptLine."No." <> '') AND
+             (PurchRcptLine."Quantity (Base)" <> 0)
+          THEN BEGIN
+            IF Item.GET(PurchRcptLine."No.") THEN
+              Descr := Item.Description;
+            FindShptRcptEntries(
+              TempTrackingSpecBuffer,
+              DATABASE::"Purch. Rcpt. Line",0,PurchRcptLine."Document No.",'',0,PurchRcptLine."Line No.",Descr);
+          END;
+        UNTIL PurchRcptLine.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE RetrieveTrackingSales@101(VAR TempTrackingSpecBuffer@1003 : TEMPORARY Record 336;SourceID@1000 : Code[20];SourceSubType@1002 : Option);
+    VAR
+      SalesLine@1007 : Record 37;
+      Item@1006 : Record 27;
+      Descr@1004 : Text[50];
+    BEGIN
+      SalesLine.SETRANGE("Document Type",SourceSubType);
+      SalesLine.SETRANGE("Document No.",SourceID);
+      IF NOT SalesLine.ISEMPTY THEN BEGIN
+        SalesLine.FINDSET;
+        REPEAT
+          IF (SalesLine.Type = SalesLine.Type::Item) AND
+             (SalesLine."No." <> '') AND
+             (SalesLine."Quantity (Base)" <> 0)
+          THEN BEGIN
+            IF Item.GET(SalesLine."No.") THEN
+              Descr := Item.Description;
+            FindReservEntries(TempTrackingSpecBuffer,DATABASE::"Sales Line",SalesLine."Document Type",
+              SalesLine."Document No.",'',0,SalesLine."Line No.",Descr);
+            FindTrackingEntries(TempTrackingSpecBuffer,DATABASE::"Sales Line",SalesLine."Document Type",
+              SalesLine."Document No.",'',0,SalesLine."Line No.",Descr);
+          END;
+        UNTIL SalesLine.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE RetrieveTrackingService@102(VAR TempTrackingSpecBuffer@1003 : TEMPORARY Record 336;SourceID@1000 : Code[20];SourceSubType@1002 : Option);
+    VAR
+      ServLine@1013 : Record 5902;
+      Item@1006 : Record 27;
+      Descr@1004 : Text[50];
+    BEGIN
+      ServLine.SETRANGE("Document Type",SourceSubType);
+      ServLine.SETRANGE("Document No.",SourceID);
+      IF NOT ServLine.ISEMPTY THEN BEGIN
+        ServLine.FINDSET;
+        REPEAT
+          IF (ServLine.Type = ServLine.Type::Item) AND
+             (ServLine."No." <> '') AND
+             (ServLine."Quantity (Base)" <> 0)
+          THEN BEGIN
+            IF Item.GET(ServLine."No.") THEN
+              Descr := Item.Description;
+            FindReservEntries(TempTrackingSpecBuffer,DATABASE::"Service Line",ServLine."Document Type",
+              ServLine."Document No.",'',0,ServLine."Line No.",Descr);
+            FindTrackingEntries(TempTrackingSpecBuffer,DATABASE::"Service Line",ServLine."Document Type",
+              ServLine."Document No.",'',0,ServLine."Line No.",Descr);
+          END;
+        UNTIL ServLine.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE RetrieveTrackingSalesShipment@95(VAR TempTrackingSpecBuffer@1003 : TEMPORARY Record 336;SourceID@1000 : Code[20]);
+    VAR
+      SalesShipmentLine@1009 : Record 111;
+      Item@1006 : Record 27;
+      PostedAsmHeader@1001 : Record 910;
+      PostedAsmLine@1002 : Record 911;
+      Descr@1004 : Text[50];
+    BEGIN
+      SalesShipmentLine.SETRANGE("Document No.",SourceID);
+      IF NOT SalesShipmentLine.ISEMPTY THEN BEGIN
+        SalesShipmentLine.FINDSET;
+        REPEAT
+          IF (SalesShipmentLine.Type = SalesShipmentLine.Type::Item) AND
+             (SalesShipmentLine."No." <> '') AND
+             (SalesShipmentLine."Quantity (Base)" <> 0)
+          THEN BEGIN
+            IF Item.GET(SalesShipmentLine."No.") THEN
+              Descr := Item.Description;
+            FindShptRcptEntries(TempTrackingSpecBuffer,
+              DATABASE::"Sales Shipment Line",0,SalesShipmentLine."Document No.",'',0,SalesShipmentLine."Line No.",Descr);
+            IF RetrieveAsmItemTracking THEN
+              IF SalesShipmentLine.AsmToShipmentExists(PostedAsmHeader) THEN BEGIN
+                PostedAsmLine.SETRANGE("Document No.",PostedAsmHeader."No.");
+                IF PostedAsmLine.FINDSET THEN
+                  REPEAT
+                    Descr := PostedAsmLine.Description;
+                    FindShptRcptEntries(TempTrackingSpecBuffer,
+                      DATABASE::"Posted Assembly Line",0,PostedAsmLine."Document No.",'',0,PostedAsmLine."Line No.",Descr);
+                  UNTIL PostedAsmLine.NEXT = 0;
+              END;
+          END;
+        UNTIL SalesShipmentLine.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE RetrieveTrackingSalesInvoice@107(VAR TempTrackingSpecBuffer@1000 : TEMPORARY Record 336;SourceID@1001 : Code[20]);
+    VAR
+      SalesInvoiceLine@1002 : Record 113;
+      Item@1003 : Record 27;
+      Descr@1004 : Text[50];
+    BEGIN
+      SalesInvoiceLine.SETRANGE("Document No.",SourceID);
+      IF NOT SalesInvoiceLine.ISEMPTY THEN BEGIN
+        SalesInvoiceLine.FINDSET;
+        REPEAT
+          IF (SalesInvoiceLine.Type = SalesInvoiceLine.Type::Item) AND
+             (SalesInvoiceLine."No." <> '') AND
+             (SalesInvoiceLine."Quantity (Base)" <> 0)
+          THEN BEGIN
+            IF Item.GET(SalesInvoiceLine."No.") THEN
+              Descr := Item.Description;
+            FindInvoiceEntries(TempTrackingSpecBuffer,
+              DATABASE::"Sales Invoice Line",0,SalesInvoiceLine."Document No.",'',0,SalesInvoiceLine."Line No.",Descr);
+          END;
+        UNTIL SalesInvoiceLine.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE RetrieveTrackingServiceShipment@96(VAR TempTrackingSpecBuffer@1003 : TEMPORARY Record 336;SourceID@1000 : Code[20]);
+    VAR
+      ServShptLine@1011 : Record 5991;
+      Item@1006 : Record 27;
+      Descr@1004 : Text[50];
+    BEGIN
+      ServShptLine.SETRANGE("Document No.",SourceID);
+      IF NOT ServShptLine.ISEMPTY THEN BEGIN
+        ServShptLine.FINDSET;
+        REPEAT
+          IF (ServShptLine.Type = ServShptLine.Type::Item) AND
+             (ServShptLine."No." <> '') AND
+             (ServShptLine."Quantity (Base)" <> 0)
+          THEN BEGIN
+            IF Item.GET(ServShptLine."No.") THEN
+              Descr := Item.Description;
+            FindShptRcptEntries(TempTrackingSpecBuffer,
+              DATABASE::"Service Shipment Line",0,ServShptLine."Document No.",'',0,ServShptLine."Line No.",Descr);
+          END;
+        UNTIL ServShptLine.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE RetrieveTrackingServiceInvoice@98(VAR TempTrackingSpecBuffer@1003 : TEMPORARY Record 336;SourceID@1000 : Code[20]);
+    VAR
+      ServInvLine@1012 : Record 5993;
+      Item@1006 : Record 27;
+      Descr@1004 : Text[50];
+    BEGIN
+      ServInvLine.SETRANGE("Document No.",SourceID);
+      IF NOT ServInvLine.ISEMPTY THEN BEGIN
+        ServInvLine.FINDSET;
+        REPEAT
+          IF (ServInvLine.Type = ServInvLine.Type::Item) AND
+             (ServInvLine."No." <> '') AND
+             (ServInvLine."Quantity (Base)" <> 0)
+          THEN BEGIN
+            IF Item.GET(ServInvLine."No.") THEN
+              Descr := Item.Description;
+            FindInvoiceEntries(TempTrackingSpecBuffer,
+              DATABASE::"Service Invoice Line",0,ServInvLine."Document No.",'',0,ServInvLine."Line No.",Descr);
+          END;
+        UNTIL ServInvLine.NEXT = 0;
+      END;
+    END;
+
+    [External]
+    PROCEDURE SetRetrieveAsmItemTracking@103(RetrieveAsmItemTracking2@1000 : Boolean);
+    BEGIN
+      RetrieveAsmItemTracking := RetrieveAsmItemTracking2;
+    END;
+
+    [External]
+    PROCEDURE ShowItemTrackingForInvoiceLine@12(InvoiceRowID@1000 : Text[250]) : Boolean;
+    VAR
+      TempItemLedgEntry@1007 : TEMPORARY Record 32;
+    BEGIN
+      RetrieveEntriesFromPostedInv(TempItemLedgEntry,InvoiceRowID);
+      IF NOT TempItemLedgEntry.ISEMPTY THEN BEGIN
+        PAGE.RUNMODAL(PAGE::"Posted Item Tracking Lines",TempItemLedgEntry);
+        EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+    END;
+
+    [External]
+    PROCEDURE ShowItemTrackingForMasterData@25(SourceType@1001 : ' ,Customer,Vendor,Item';SourceNo@1002 : Code[20];ItemNo@1005 : Code[20];VariantCode@1009 : Code[20];SerialNo@1007 : Code[50];LotNo@1008 : Code[50];LocationCode@1010 : Code[10]);
+    VAR
+      ItemLedgEntry@1003 : Record 32;
+      TempItemLedgEntry@1000 : TEMPORARY Record 32;
+      Item@1006 : Record 27;
+      Window@1004 : Dialog;
+    BEGIN
+      // Used when calling Item Tracking from Item, Stockkeeping Unit, Customer, Vendor and information card:
+      Window.OPEN(CountingRecordsMsg);
+
+      IF SourceNo <> '' THEN BEGIN
+        ItemLedgEntry.SETCURRENTKEY("Source Type","Source No.","Item No.","Variant Code");
+        ItemLedgEntry.SETRANGE("Source No.",SourceNo);
+        ItemLedgEntry.SETRANGE("Source Type",SourceType);
+      END ELSE
+        ItemLedgEntry.SETCURRENTKEY("Item No.",Open,"Variant Code");
+
+      IF LocationCode <> '' THEN
+        ItemLedgEntry.SETRANGE("Location Code",LocationCode);
+
+      IF ItemNo <> '' THEN BEGIN
+        Item.GET(ItemNo);
+        Item.TESTFIELD("Item Tracking Code");
+        ItemLedgEntry.SETRANGE("Item No.",ItemNo);
+      END;
+      IF SourceType = 0 THEN
+        ItemLedgEntry.SETRANGE("Variant Code",VariantCode);
+      IF SerialNo <> '' THEN
+        ItemLedgEntry.SETRANGE("Serial No.",SerialNo);
+      IF LotNo <> '' THEN
+        ItemLedgEntry.SETRANGE("Lot No.",LotNo);
+
+      IF ItemLedgEntry.FINDSET THEN
+        REPEAT
+          IF ItemLedgEntry.TrackingExists THEN BEGIN
+            TempItemLedgEntry := ItemLedgEntry;
+            TempItemLedgEntry.INSERT;
+          END
+        UNTIL ItemLedgEntry.NEXT = 0;
+      Window.CLOSE;
+      PAGE.RUNMODAL(PAGE::"Item Tracking Entries",TempItemLedgEntry);
+    END;
+
+    [External]
+    PROCEDURE ShowItemTrackingForProdOrderComp@39(Type@1009 : Integer;ID@1007 : Code[20];ProdOrderLine@1002 : Integer;RefNo@1001 : Integer) : Boolean;
+    VAR
+      ItemLedgEntry@1003 : Record 32;
+      TempItemLedgEntry@1000 : TEMPORARY Record 32;
+      Window@1004 : Dialog;
+    BEGIN
+      Window.OPEN(CountingRecordsMsg);
+      ItemLedgEntry.SETCURRENTKEY("Order Type","Order No.","Order Line No.",
+        "Entry Type","Prod. Order Comp. Line No.");
+      ItemLedgEntry.SETRANGE("Order Type",ItemLedgEntry."Order Type"::Production);
+      ItemLedgEntry.SETRANGE("Order No.",ID);
+      ItemLedgEntry.SETRANGE("Order Line No.",ProdOrderLine);
+      CASE Type OF
+        DATABASE::"Prod. Order Line":
+          BEGIN
+            ItemLedgEntry.SETRANGE("Entry Type",ItemLedgEntry."Entry Type"::Output);
+            ItemLedgEntry.SETRANGE("Prod. Order Comp. Line No.",0);
+          END;
+        DATABASE::"Prod. Order Component":
+          BEGIN
+            ItemLedgEntry.SETRANGE("Entry Type",ItemLedgEntry."Entry Type"::Consumption);
+            ItemLedgEntry.SETRANGE("Prod. Order Comp. Line No.",RefNo);
+          END;
+        ELSE
+          EXIT(FALSE);
+      END;
+      IF ItemLedgEntry.FINDSET THEN
+        REPEAT
+          IF ItemLedgEntry.TrackingExists THEN BEGIN
+            TempItemLedgEntry := ItemLedgEntry;
+            TempItemLedgEntry.INSERT;
+          END
+        UNTIL ItemLedgEntry.NEXT = 0;
+      Window.CLOSE;
+      IF TempItemLedgEntry.ISEMPTY THEN
+        EXIT(FALSE);
+
+      PAGE.RUNMODAL(PAGE::"Posted Item Tracking Lines",TempItemLedgEntry);
+      EXIT(TRUE);
+    END;
+
+    [External]
+    PROCEDURE ShowItemTrackingForShptRcptLine@10(Type@1005 : Integer;Subtype@1004 : Integer;ID@1003 : Code[20];BatchName@1002 : Code[10];ProdOrderLine@1001 : Integer;RefNo@1000 : Integer) : Boolean;
+    VAR
+      TempItemLedgEntry@1007 : TEMPORARY Record 32;
+    BEGIN
+      RetrieveEntriesFromShptRcpt(TempItemLedgEntry,Type,Subtype,ID,BatchName,ProdOrderLine,RefNo);
+      IF NOT TempItemLedgEntry.ISEMPTY THEN BEGIN
+        PAGE.RUNMODAL(PAGE::"Posted Item Tracking Lines",TempItemLedgEntry);
+        EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE TableSignFactor@17(TableNo@1000 : Integer) : Integer;
+    BEGIN
+      IF TableNo IN [
+                     DATABASE::"Sales Line",
+                     DATABASE::"Sales Shipment Line",
+                     DATABASE::"Sales Invoice Line",
+                     DATABASE::"Purch. Cr. Memo Line",
+                     DATABASE::"Prod. Order Component",
+                     DATABASE::"Transfer Shipment Line",
+                     DATABASE::"Return Shipment Line",
+                     DATABASE::"Planning Component",
+                     DATABASE::"Posted Assembly Line",
+                     DATABASE::"Service Line",
+                     DATABASE::"Service Shipment Line",
+                     DATABASE::"Service Invoice Line"]
+      THEN
+        EXIT(-1);
+
+      EXIT(1);
+    END;
+
+    LOCAL PROCEDURE TableSignFactor2@18(RowID@1000 : Text[250]) : Integer;
+    VAR
+      TableNo@1001 : Integer;
+    BEGIN
+      RowID := DELCHR(RowID,'<','"');
+      RowID := COPYSTR(RowID,1,STRPOS(RowID,'"') - 1);
+      IF EVALUATE(TableNo,RowID) THEN
+        EXIT(TableSignFactor(TableNo));
+
+      EXIT(1);
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnRetrieveDocumentItemTracking@1(VAR TempTrackingSpecBuffer@1001 : TEMPORARY Record 336;SourceID@1000 : Code[20];VAR Found@1002 : Boolean);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

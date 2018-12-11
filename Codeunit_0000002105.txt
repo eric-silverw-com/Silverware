@@ -1,0 +1,205 @@
+OBJECT Codeunit 2105 O365 Sales Invoice Payment
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:15 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      PaymentRegistrationMgt@1000 : Codeunit 980;
+      NoDetailedCustomerLedgerEntryForPaymentErr@1002 : TextConst 'ENU=No Detailed Customer Ledger Entry could be found for the payment of the invoice.';
+      MarkedPaidMsg@1003 : TextConst 'ENU=Invoice payment was registered.';
+      MarkedUnpaidMsg@1001 : TextConst 'ENU=Payment registration was removed.';
+      SentInvoiceCategoryLbl@1004 : TextConst '@@@={Locked};ENU=AL Sent Invoice';
+      InvoicePartiallyPaidTelemetryTxt@1005 : TextConst '@@@={Locked};ENU=Invoice has been partially paid.';
+      InvoiceFullyPaidTelemetryTxt@1006 : TextConst '@@@={Locked};ENU=Invoice has been fully paid.';
+      InvoicePaymentRemovedTelemetryTxt@1007 : TextConst '@@@={Locked};ENU=Invoice payment has been removed.';
+
+    [External]
+    PROCEDURE ShowHistory@5(SalesInvoiceDocumentNo@1000 : Code[20]) : Boolean;
+    VAR
+      O365PaymentHistoryList@1001 : Page 2118;
+    BEGIN
+      O365PaymentHistoryList.ShowHistory(SalesInvoiceDocumentNo);
+      IF O365PaymentHistoryList.RUNMODAL <> ACTION::OK THEN
+        EXIT(FALSE);
+
+      // The returned action is OK even when X is selected: find if records have been deleted
+      EXIT(O365PaymentHistoryList.RecordDeleted);
+    END;
+
+    PROCEDURE MarkAsPaid@4(SalesInvoiceDocumentNo@1000 : Code[20]) : Boolean;
+    VAR
+      TempPaymentRegistrationBuffer@1002 : TEMPORARY Record 981;
+      SalesInvoiceHeader@1001 : Record 112;
+      O365MarkAsPaid@1003 : Page 2117;
+    BEGIN
+      IF NOT SalesInvoiceHeader.GET(SalesInvoiceDocumentNo) THEN
+        EXIT(FALSE);
+
+      IF NOT CalculatePaymentRegistrationBuffer(SalesInvoiceDocumentNo,TempPaymentRegistrationBuffer) THEN
+        EXIT(FALSE);
+
+      O365MarkAsPaid.SetPaymentRegistrationBuffer(TempPaymentRegistrationBuffer);
+
+      IF O365MarkAsPaid.RUNMODAL = ACTION::OK THEN BEGIN
+        PaymentRegistrationMgt.Post(TempPaymentRegistrationBuffer,FALSE);
+        SalesInvoiceHeader.CALCFIELDS("Amount Including VAT");
+        IF TempPaymentRegistrationBuffer."Amount Received" <> SalesInvoiceHeader."Amount Including VAT" THEN
+          SENDTRACETAG('0000246',SentInvoiceCategoryLbl,VERBOSITY::Normal,
+            InvoicePartiallyPaidTelemetryTxt,DATACLASSIFICATION::SystemMetadata)
+        ELSE
+          SENDTRACETAG('0000247',SentInvoiceCategoryLbl,VERBOSITY::Normal,
+            InvoiceFullyPaidTelemetryTxt,DATACLASSIFICATION::SystemMetadata);
+
+        MESSAGE(MarkedPaidMsg);
+        EXIT(TRUE);
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE CancelSalesInvoicePayment@3(SalesInvoiceDocumentNo@1000 : Code[20]) : Boolean;
+    VAR
+      TempO365PaymentHistoryBuffer@1001 : TEMPORARY Record 2105;
+    BEGIN
+      TempO365PaymentHistoryBuffer.FillPaymentHistory(SalesInvoiceDocumentNo);
+      CASE TempO365PaymentHistoryBuffer.COUNT OF
+        0:
+          EXIT(TRUE); // All payments for the invoice has already been cancelled :)
+        1:
+          IF TempO365PaymentHistoryBuffer.FINDFIRST THEN
+            EXIT(TempO365PaymentHistoryBuffer.CancelPayment);
+        ELSE
+          // There are multiple payments, so show the history list instead and let the user specify the entries to cancel
+          EXIT(ShowHistory(SalesInvoiceDocumentNo));
+      END;
+    END;
+
+    PROCEDURE CancelCustLedgerEntry@6(CustomerLedgerEntry@1004 : Integer);
+    VAR
+      PaymentCustLedgerEntry@1003 : Record 21;
+      ReversalEntry@1002 : Record 179;
+      DetailedCustLedgEntry@1001 : Record 379;
+      CustEntryApplyPostedEntries@1000 : Codeunit 226;
+    BEGIN
+      IF NOT PaymentCustLedgerEntry.GET(CustomerLedgerEntry) THEN
+        EXIT;
+
+      // Get detailed ledger entry for the payment, making sure it's a payment
+      DetailedCustLedgEntry.SETRANGE("Document Type",DetailedCustLedgEntry."Document Type"::Payment);
+      DetailedCustLedgEntry.SETRANGE("Document No.",PaymentCustLedgerEntry."Document No.");
+      DetailedCustLedgEntry.SETRANGE("Cust. Ledger Entry No.",CustomerLedgerEntry);
+      DetailedCustLedgEntry.SETRANGE(Unapplied,FALSE);
+      IF NOT DetailedCustLedgEntry.FINDLAST THEN
+        ERROR(NoDetailedCustomerLedgerEntryForPaymentErr);
+
+      CustEntryApplyPostedEntries.PostUnApplyCustomerCommit(
+        DetailedCustLedgEntry,DetailedCustLedgEntry."Document No.",DetailedCustLedgEntry."Posting Date",FALSE);
+
+      ReversalEntry.SetHideWarningDialogs;
+      ReversalEntry.ReverseTransaction(PaymentCustLedgerEntry."Transaction No.");
+
+      SENDTRACETAG('0000248',SentInvoiceCategoryLbl,VERBOSITY::Normal,
+        InvoicePaymentRemovedTelemetryTxt,DATACLASSIFICATION::SystemMetadata);
+
+      MESSAGE(MarkedUnpaidMsg);
+    END;
+
+    [External]
+    PROCEDURE GetPaymentCustLedgerEntry@1(VAR PaymentCustLedgerEntry@1001 : Record 21;SalesInvoiceDocumentNo@1002 : Code[20]) : Boolean;
+    VAR
+      InvoiceCustLedgerEntry@1000 : Record 21;
+    BEGIN
+      // Find the customer ledger entry related to the invoice
+      InvoiceCustLedgerEntry.SETRANGE("Document Type",InvoiceCustLedgerEntry."Document Type"::Invoice);
+      InvoiceCustLedgerEntry.SETRANGE("Document No.",SalesInvoiceDocumentNo);
+      IF NOT InvoiceCustLedgerEntry.FINDFIRST THEN
+        EXIT(FALSE); // The invoice does not exist
+
+      // find the customer ledger entry related to the payment of the invoice
+      IF NOT PaymentCustLedgerEntry.GET(InvoiceCustLedgerEntry."Closed by Entry No.") THEN
+        EXIT(FALSE); // The invoice has not been closed
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE CalculatePaymentRegistrationBuffer@7(SalesInvoiceDocumentNo@1000 : Code[20];VAR PaymentRegistrationBuffer@1001 : Record 981) : Boolean;
+    VAR
+      SalesInvoiceHeader@1002 : Record 112;
+    BEGIN
+      // Returns whether the table has been filled
+      IF NOT SalesInvoiceHeader.GET(SalesInvoiceDocumentNo) THEN
+        EXIT(FALSE);
+
+      IF NOT CollectRemainingPayments(SalesInvoiceDocumentNo,PaymentRegistrationBuffer) THEN
+        EXIT(FALSE); // Invoice has already been paid
+
+      PaymentRegistrationBuffer.VALIDATE("Payment Made",TRUE);
+      PaymentRegistrationBuffer.VALIDATE("Limit Amount Received",TRUE);
+      PaymentRegistrationBuffer.MODIFY(TRUE);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE CollectRemainingPayments@159(SalesInvoiceDocumentNo@1003 : Code[20];VAR PaymentRegistrationBuffer@1002 : Record 981) : Boolean;
+    BEGIN
+      PaymentRegistrationBuffer.PopulateTable;
+      PaymentRegistrationBuffer.SETRANGE("Document Type",PaymentRegistrationBuffer."Document Type"::Invoice);
+      PaymentRegistrationBuffer.SETRANGE("Document No.",SalesInvoiceDocumentNo);
+      EXIT(PaymentRegistrationBuffer.FINDFIRST);
+    END;
+
+    PROCEDURE SetPaypalDefault@17();
+    VAR
+      DummyPaymentServiceSetup@1000 : Record 1060;
+      PaypalAccountProxy@1001 : Codeunit 1060;
+    BEGIN
+      DummyPaymentServiceSetup.OnDoNotIncludeAnyPaymentServicesOnAllDocuments;
+      PaypalAccountProxy.SetAlwaysIncludePaypalOnDocuments(TRUE,TRUE);
+      UpdatePaymentServicesForInvoicesQuotesAndOrders;
+    END;
+
+    PROCEDURE SetMspayDefault@22();
+    VAR
+      DummyPaymentServiceSetup@1000 : Record 1060;
+      PaypalAccountProxy@1001 : Codeunit 1060;
+    BEGIN
+      DummyPaymentServiceSetup.OnDoNotIncludeAnyPaymentServicesOnAllDocuments;
+      PaypalAccountProxy.SetAlwaysIncludeMsPayOnDocuments(TRUE,TRUE);
+      UpdatePaymentServicesForInvoicesQuotesAndOrders;
+    END;
+
+    PROCEDURE UpdatePaymentServicesForInvoicesQuotesAndOrders@206();
+    VAR
+      SalesHeader@1005 : Record 36;
+    BEGIN
+      SalesHeader.SETFILTER("Document Type",'%1|%2|%3',SalesHeader."Document Type"::Invoice,
+        SalesHeader."Document Type"::Quote,SalesHeader."Document Type"::Order);
+
+      IF SalesHeader.FINDSET(TRUE,FALSE) THEN
+        REPEAT
+          SalesHeader.SetDefaultPaymentServices;
+          SalesHeader.MODIFY(TRUE);
+        UNTIL SalesHeader.NEXT = 0;
+    END;
+
+    PROCEDURE OnPayPalEmailSetToEmpty@19();
+    BEGIN
+      SetMspayDefault;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

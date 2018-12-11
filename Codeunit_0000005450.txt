@@ -1,0 +1,402 @@
+OBJECT Codeunit 5450 Graph Subscription Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:22 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 2000000199=rimd;
+    OnRun=VAR
+            GraphSyncRunner@1000 : Codeunit 5452;
+            SyncMode@1001 : Option;
+          BEGIN
+            SyncMode := SyncModeOption::Delta;
+            CheckGraphSubscriptions(SyncMode);
+
+            CASE SyncMode OF
+              SyncModeOption::Full:
+                GraphSyncRunner.RunFullSync;
+              SyncModeOption::Delta:
+                GraphSyncRunner.RunDeltaSync;
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ClientTypeManagement@1002 : Codeunit 4;
+      SyncModeOption@1004 : 'Full,Delta';
+      ChangeType@1001 : 'Created,Updated,Deleted,Missed';
+      SubscriptionRefreshTasksTxt@1000 : TextConst '@@@={Locked};ENU=Scheduled %1 future tasks to keep graph subscriptions up to date.';
+
+    [External]
+    PROCEDURE AddOrUpdateGraphSubscription@2(VAR FirstTimeSync@1000 : Boolean;WebhookExists@1001 : Boolean;VAR WebhookSubscription@1002 : Record 2000000199;EntityEndpoint@1004 : Text[250]);
+    VAR
+      GraphSubscription@1003 : Record 5455;
+      WebhookManagement@1005 : Codeunit 5377;
+    BEGIN
+      FirstTimeSync := FirstTimeSync OR NOT WebhookExists;
+      CASE TRUE OF
+        NOT WebhookExists:
+          CreateNewWebhookSubscription(GraphSubscription,WebhookSubscription,EntityEndpoint);
+        NOT GraphSubscription.GET(WebhookSubscription."Subscription ID"):
+          CreateNewGraphSubscription(GraphSubscription,WebhookSubscription,EntityEndpoint);
+        GraphSubscription.NotificationUrl <> WebhookManagement.GetNotificationUrl:
+          BEGIN
+            IF GraphSubscription.DELETE THEN;
+            CreateNewGraphSubscription(GraphSubscription,WebhookSubscription,EntityEndpoint);
+          END;
+        ELSE BEGIN
+          GraphSubscription.ExpirationDateTime := CURRENTDATETIME + GetMaximumExpirationDateTimeOffset;
+          GraphSubscription.Type := GetGraphSubscriptionType;
+          IF GraphSubscription.MODIFY THEN;
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE CleanExistingWebhookSubscription@29(ResourceUrl@1002 : Text[250];CompName@1003 : Text[30]);
+    VAR
+      WebhookSubscription@1001 : Record 2000000199;
+      WebhookSubscription2@1000 : Record 2000000199;
+    BEGIN
+      IF WebhookSubscription.FINDSET THEN
+        REPEAT
+          IF (WebhookSubscription.Endpoint = ResourceUrl) AND
+             (WebhookSubscription."Company Name" = CompName)
+          THEN BEGIN
+            WebhookSubscription2.GET(WebhookSubscription."Subscription ID",WebhookSubscription.Endpoint);
+            WebhookSubscription2.DELETE;
+          END;
+        UNTIL WebhookSubscription.NEXT = 0;
+    END;
+
+    [External]
+    PROCEDURE GetDestinationRecordRef@24(VAR NAVRecordRef@1002 : RecordRef;WebhookNotification@1001 : Record 2000000194;TableID@1000 : Integer) Retrieved : Boolean;
+    VAR
+      GraphIntegrationRecord@1003 : Record 5451;
+      DestinationRecordId@1004 : RecordID;
+    BEGIN
+      IF GraphIntegrationRecord.FindRecordIDFromID(WebhookNotification."Resource ID",TableID,DestinationRecordId) THEN
+        Retrieved := NAVRecordRef.GET(DestinationRecordId);
+    END;
+
+    [External]
+    PROCEDURE GetGraphSubscriptionType@8() : Text[250];
+    BEGIN
+      EXIT('#Microsoft.OutlookServices.PushSubscription');
+    END;
+
+    [External]
+    PROCEDURE GetGraphSubscriptionCreatedChangeType@13() : Text[50];
+    BEGIN
+      EXIT(FORMAT(ChangeType::Created,0,0));
+    END;
+
+    [External]
+    PROCEDURE GetMaximumExpirationDateTimeOffset@12() : Integer;
+    BEGIN
+      // Maximum expiration datetime is 4230 minutes as documented in https://dev.office.com/blogs/Microsoft-Graph-webhooks-update-March-2016
+      EXIT(4230 * 60 * 1000);
+    END;
+
+    [External]
+    PROCEDURE GetSourceRecordRef@21(VAR GraphRecordRef@1000 : RecordRef;WebhookNotification@1001 : Record 2000000194;IntegrationTableID@1003 : Integer) Retrieved : Boolean;
+    BEGIN
+      OnGetSourceRecordRef(GraphRecordRef,WebhookNotification,IntegrationTableID,Retrieved);
+    END;
+
+    [External]
+    PROCEDURE TraceCategory@9() : Text;
+    BEGIN
+      EXIT('AL SyncEngine');
+    END;
+
+    [External]
+    PROCEDURE UpdateGraphOnAfterDelete@5(VAR EntityRecordRef@1000 : RecordRef);
+    VAR
+      IntegrationRecordArchive@1001 : Record 5152;
+      GraphSyncRunner@1004 : Codeunit 5452;
+    BEGIN
+      IF EntityRecordRef.ISTEMPORARY THEN
+        EXIT;
+
+      IF ClientTypeManagement.GetCurrentClientType = CLIENTTYPE::Background THEN
+        EXIT;
+
+      IF NOT GraphSyncRunner.IsGraphSyncEnabled THEN
+        EXIT;
+
+      IF NOT IntegrationRecordArchive.FindByRecordId(EntityRecordRef.RECORDID) THEN
+        EXIT;
+
+      IF CanScheduleSyncTasks THEN
+        TASKSCHEDULER.CREATETASK(CODEUNIT::"Graph Sync. Runner - OnDelete",0,TRUE,COMPANYNAME,0DT,IntegrationRecordArchive.RECORDID)
+      ELSE
+        CODEUNIT.RUN(CODEUNIT::"Graph Sync. Runner - OnDelete",IntegrationRecordArchive);
+    END;
+
+    [External]
+    PROCEDURE UpdateGraphOnAfterInsert@16(VAR EntityRecordRef@1000 : RecordRef);
+    VAR
+      GraphDataSetup@1005 : Codeunit 5455;
+      GraphSyncRunner@1004 : Codeunit 5452;
+    BEGIN
+      IF EntityRecordRef.ISTEMPORARY THEN
+        EXIT;
+
+      IF NOT GraphSyncRunner.IsGraphSyncEnabled THEN
+        EXIT;
+
+      IF NOT CanSyncOnInsert THEN
+        EXIT;
+
+      IF NOT GraphDataSetup.CanSyncRecord(EntityRecordRef) THEN
+        EXIT;
+
+      // When a record is inserted, schedule a sync after a short period of time
+      RescheduleTask(CODEUNIT::"Graph Subscription Management",CODEUNIT::"Graph Delta Sync",0,10000);
+    END;
+
+    [External]
+    PROCEDURE UpdateGraphOnAfterModify@3(VAR EntityRecordRef@1000 : RecordRef);
+    VAR
+      IntegrationRecord@1003 : Record 5151;
+      GraphSyncRunner@1004 : Codeunit 5452;
+    BEGIN
+      IF EntityRecordRef.ISTEMPORARY THEN
+        EXIT;
+
+      IF ClientTypeManagement.GetCurrentClientType = CLIENTTYPE::Background THEN
+        EXIT;
+
+      IF NOT GraphSyncRunner.IsGraphSyncEnabled THEN
+        EXIT;
+
+      IF NOT IntegrationRecord.FindByRecordId(EntityRecordRef.RECORDID) THEN
+        EXIT;
+
+      RescheduleTask(CODEUNIT::"Graph Sync. Runner - OnModify",0,IntegrationRecord.RECORDID,10000);
+      IF NOT CanScheduleSyncTasks THEN
+        CODEUNIT.RUN(CODEUNIT::"Graph Sync. Runner - OnModify",IntegrationRecord);
+    END;
+
+    LOCAL PROCEDURE CanRefreshSubscriptions@23() : Boolean;
+    VAR
+      ScheduledTask@1000 : Record 2000000175;
+    BEGIN
+      IF CURRENTCLIENTTYPE = CLIENTTYPE::Background THEN
+        EXIT(FALSE);
+
+      // Always allow this for UI sessions
+      IF CURRENTCLIENTTYPE IN [CLIENTTYPE::Phone,CLIENTTYPE::Tablet,CLIENTTYPE::Web,CLIENTTYPE::Windows] THEN
+        EXIT(TRUE);
+
+      ScheduledTask.SETRANGE(Company,COMPANYNAME);
+      ScheduledTask.SETRANGE("Run Codeunit",CODEUNIT::"Graph Subscription Management");
+
+      // In other cases (web services), we need to apply a threshold
+      // The maximum number of refresh tasks is around 20. If we are
+      // already at that number, do not schedule more delta syncs.
+      EXIT(ScheduledTask.COUNT < 20);
+    END;
+
+    LOCAL PROCEDURE CanScheduleSyncTasks@20() AllowBackgroundSessions : Boolean;
+    BEGIN
+      IF TASKSCHEDULER.CANCREATETASK THEN BEGIN
+        AllowBackgroundSessions := TRUE;
+        OnBeforeRunGraphSyncBackgroundSession(AllowBackgroundSessions);
+      END;
+    END;
+
+    LOCAL PROCEDURE CanSyncOnInsert@26() CanSync : Boolean;
+    BEGIN
+      CanSync := NOT GUIALLOWED;
+      OnCanSyncOnInsert(CanSync);
+    END;
+
+    LOCAL PROCEDURE CheckGraphSubscriptions@1(VAR SyncMode@1001 : Option);
+    VAR
+      GraphConnectionSetup@1003 : Codeunit 5456;
+      FirstTimeSync@1000 : Boolean;
+    BEGIN
+      GraphConnectionSetup.RegisterConnections;
+      OnBeforeAddOrUpdateGraphSubscriptions(FirstTimeSync);
+      IF FirstTimeSync THEN
+        SyncMode := SyncModeOption::Full
+      ELSE
+        SyncMode := SyncModeOption::Delta;
+    END;
+
+    LOCAL PROCEDURE CreateNewGraphSubscription@10(VAR GraphSubscription@1000 : Record 5455;VAR WebhookSubscription@1001 : Record 2000000199;EntityEndpoint@1002 : Text[250]);
+    BEGIN
+      IF GraphSubscription.CreateGraphSubscription(GraphSubscription,EntityEndpoint) THEN
+        IF WebhookSubscription.DELETE THEN
+          IF GraphSubscription.CreateWebhookSubscription(WebhookSubscription) THEN
+            COMMIT;
+    END;
+
+    LOCAL PROCEDURE CreateNewWebhookSubscription@6(VAR GraphSubscription@1002 : Record 5455;VAR WebhookSubscription@1001 : Record 2000000199;EntityEndpoint@1003 : Text[250]);
+    BEGIN
+      IF GraphSubscription.CreateGraphSubscription(GraphSubscription,EntityEndpoint) THEN
+        IF GraphSubscription.CreateWebhookSubscription(WebhookSubscription) THEN
+          COMMIT;
+    END;
+
+    LOCAL PROCEDURE RescheduleTask@25(CodeunitID@1000 : Integer;FailureCodeunitID@1005 : Integer;RecordID@1001 : Variant;DelayMillis@1002 : Integer);
+    VAR
+      ScheduledTask@1004 : Record 2000000175;
+      NextTask@1003 : DateTime;
+    BEGIN
+      NextTask := CURRENTDATETIME + DelayMillis;
+
+      ScheduledTask.SETRANGE(Company,COMPANYNAME);
+      ScheduledTask.SETRANGE("Run Codeunit",CodeunitID);
+      ScheduledTask.SETFILTER("Not Before",'<%1',NextTask);
+
+      IF RecordID.ISRECORDID THEN
+        ScheduledTask.SETRANGE(Record,RecordID);
+
+      IF ScheduledTask.FINDFIRST THEN
+        TASKSCHEDULER.CANCELTASK(ScheduledTask.ID);
+
+      OnScheduleSyncTask(CodeunitID,FailureCodeunitID,NextTask,RecordID);
+    END;
+
+    LOCAL PROCEDURE ScheduleFutureSubscriptionRefreshes@14();
+    VAR
+      ScheduledTask@1000 : Record 2000000175;
+      DistanceIntoFuture@1007 : BigInteger;
+      MaximumFutureRefresh@1003 : BigInteger;
+      MillisecondsPerDay@1008 : BigInteger;
+      RefreshFrequency@1002 : Decimal;
+      MaximumDaysIntoFuture@1001 : Integer;
+      MaximumNumberOfTasks@1006 : Integer;
+      TasksToCreate@1005 : Integer;
+      i@1004 : Integer;
+      BufferTime@1010 : Integer;
+      LastTaskNotBefore@1009 : DateTime;
+      TasksCreated@1011 : Integer;
+    BEGIN
+      // Refreshes the graph webhook subscriptions every period of (webhook max expiry) / 2
+      // up to 30 days in the future. This is so that users who do not frequently sign in to
+      // the system but may use it through APIs or other means do not get stale data as easily.
+
+      BufferTime := 15000;
+      MaximumDaysIntoFuture := 30;
+      MillisecondsPerDay := 86400000;
+      RefreshFrequency := GetMaximumExpirationDateTimeOffset / 2;
+      MaximumFutureRefresh := MaximumDaysIntoFuture * MillisecondsPerDay;
+      MaximumNumberOfTasks := ROUND(MaximumFutureRefresh / RefreshFrequency,1,'=');
+
+      ScheduledTask.SETRANGE(Company,COMPANYNAME);
+      ScheduledTask.SETRANGE("Run Codeunit",CODEUNIT::"Graph Subscription Management");
+      TasksToCreate := MaximumNumberOfTasks - ScheduledTask.COUNT;
+      FOR i := MaximumNumberOfTasks DOWNTO MaximumNumberOfTasks - TasksToCreate + 1 DO BEGIN
+        DistanceIntoFuture := i * RefreshFrequency + BufferTime;
+        OnScheduleSyncTask(
+          CODEUNIT::"Graph Subscription Management",CODEUNIT::"Graph Delta Sync",CURRENTDATETIME + DistanceIntoFuture,0);
+        TasksCreated += 1;
+      END;
+
+      // Make sure we always have a task scheduled at the end of the period
+      LastTaskNotBefore := CREATEDATETIME(TODAY + MaximumDaysIntoFuture,0T) - RefreshFrequency;
+      ScheduledTask.SETFILTER("Not Before",'>%1',LastTaskNotBefore);
+      IF ScheduledTask.ISEMPTY THEN BEGIN
+        DistanceIntoFuture := MaximumNumberOfTasks * RefreshFrequency;
+        OnScheduleSyncTask(
+          CODEUNIT::"Graph Subscription Management",CODEUNIT::"Graph Delta Sync",CURRENTDATETIME + DistanceIntoFuture,0);
+        TasksCreated += 1;
+      END;
+
+      // Schedule one to happen immediately so that a delta sync will be triggered by the call
+      OnScheduleSyncTask(CODEUNIT::"Graph Subscription Management",CODEUNIT::"Graph Delta Sync",CURRENTDATETIME + BufferTime,0);
+      TasksCreated += 1;
+
+      TasksToCreate := TasksCreated;
+      SENDTRACETAG(
+        '0000170',TraceCategory,VERBOSITY::Normal,STRSUBSTNO(SubscriptionRefreshTasksTxt,TasksToCreate),
+        DATACLASSIFICATION::SystemMetadata);
+    END;
+
+    [EventSubscriber(Codeunit,40,OnAfterCompanyOpen)]
+    LOCAL PROCEDURE AddOrUpdateGraphSubscriptionOnAfterCompanyOpen@7();
+    VAR
+      GraphSyncRunner@1001 : Codeunit 5452;
+      WebhookManagement@1008 : Codeunit 5377;
+    BEGIN
+      IF GETDEFAULTTABLECONNECTION(TABLECONNECTIONTYPE::MicrosoftGraph) <> '' THEN
+        EXIT;
+
+      IF NOT WebhookManagement.IsCurrentClientTypeAllowed THEN
+        EXIT;
+
+      IF NOT WebhookManagement.IsSyncAllowed THEN
+        EXIT;
+
+      IF NOT GraphSyncRunner.IsGraphSyncEnabled THEN
+        EXIT;
+
+      IF CanRefreshSubscriptions THEN
+        ScheduleFutureSubscriptionRefreshes;
+    END;
+
+    [EventSubscriber(Codeunit,5450,OnScheduleSyncTask)]
+    LOCAL PROCEDURE InvokeTaskSchedulerOnScheduleSyncTask@15(CodeunitID@1000 : Integer;FailureCodeunitID@1001 : Integer;NotBefore@1002 : DateTime;RecordID@1003 : Variant);
+    BEGIN
+      IF CanScheduleSyncTasks THEN BEGIN
+        IF RecordID.ISRECORDID THEN
+          TASKSCHEDULER.CREATETASK(CodeunitID,FailureCodeunitID,TRUE,COMPANYNAME,NotBefore,RecordID)
+        ELSE
+          TASKSCHEDULER.CREATETASK(CodeunitID,FailureCodeunitID,TRUE,COMPANYNAME,NotBefore);
+      END;
+    END;
+
+    [EventSubscriber(Table,2000000194,OnAfterInsertEvent)]
+    LOCAL PROCEDURE SyncToNavOnWebhookNotificationInsert@4(VAR Rec@1000 : Record 2000000194;RunTrigger@1001 : Boolean);
+    VAR
+      GraphSyncRunner@1006 : Codeunit 5452;
+    BEGIN
+      IF NOT GraphSyncRunner.IsGraphSyncEnabled THEN
+        EXIT;
+
+      IF CanScheduleSyncTasks THEN
+        TASKSCHEDULER.CREATETASK(CODEUNIT::"Graph Webhook Sync To NAV",0,TRUE,COMPANYNAME,0DT,Rec.RECORDID)
+      ELSE
+        CODEUNIT.RUN(CODEUNIT::"Graph Webhook Sync To NAV",Rec);
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeAddOrUpdateGraphSubscriptions@17(VAR FirstTimeSync@1001 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeRunGraphSyncBackgroundSession@18(VAR AllowBackgroundSessions@1000 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnCanSyncOnInsert@22(VAR CanSync@1000 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnGetSourceRecordRef@19(VAR GraphRecordRef@1000 : RecordRef;WebhookNotification@1001 : Record 2000000194;IntegrationTableID@1002 : Integer;VAR Retrieved@1003 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnScheduleSyncTask@11(CodeunitID@1001 : Integer;FailureCodeunitID@1002 : Integer;NotBefore@1000 : DateTime;RecordID@1003 : Variant);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

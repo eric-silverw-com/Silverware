@@ -1,0 +1,279 @@
+OBJECT Codeunit 1641 Setup Email Logging
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:13 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 1261=rimd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      TempOfficeAdminCredentials@1002 : TEMPORARY Record 1612;
+      ExchangeWebServicesClient@1003 : Codeunit 5320;
+      ExchangePowerShellRunner@1004 : Codeunit 1651;
+      PublicFoldersCreationProgressMsg@1010 : TextConst 'ENU=Public folder creation  @1@@@@@@@@@@@@@@@@@@';
+      Initialized@1000 : Boolean;
+      AdminCredentialsRequiredErr@1001 : TextConst 'ENU=Could not create a public Exchange folder. Check if the credentials of the Exchange administrator are entered correctly.';
+
+    [TryFunction]
+    PROCEDURE InitializeExchangePSConnection@6();
+    VAR
+      NetworkCredential@1000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.NetworkCredential";
+    BEGIN
+      IF NOT Initialized THEN BEGIN
+        IF NOT ExchangePowerShellRunner.PromptForCredentials THEN
+          ERROR(GETLASTERRORTEXT);
+        ExchangePowerShellRunner.GetCredentials(TempOfficeAdminCredentials);
+        ExchangePowerShellRunner.InitializePSRunner;
+
+        NetworkCredential := NetworkCredential.NetworkCredential(TempOfficeAdminCredentials.Email,
+                        TempOfficeAdminCredentials.GetPassword);
+        ExchangeWebServicesClient.InitializeOnServer(
+          TempOfficeAdminCredentials.Email,GetDomainFromEmail(TempOfficeAdminCredentials.Email),NetworkCredential);
+        ExchangeWebServicesClient.ValidateCredentialsOnServer;
+      END;
+      Initialized := TRUE;
+    END;
+
+    [TryFunction]
+    PROCEDURE CreatePublicFolders@4(PublicMailBoxName@1003 : Text;RootFolderName@1000 : Text;QueueFolderName@1001 : Text;StorageFolderName@1002 : Text);
+    VAR
+      Enum@1007 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.IEnumerator";
+      Window@1004 : Dialog;
+      QueueFolderPath@1005 : Text;
+      StorageFolderPath@1006 : Text;
+    BEGIN
+      Window.OPEN(PublicFoldersCreationProgressMsg);
+
+      // Enabling Organization Customization to be able to add new Role Group
+      Window.UPDATE(1,0);
+      ExchangePowerShellRunner.AddCommand('Enable-OrganizationCustomization',TRUE);
+      ExchangePowerShellRunner.Invoke;
+      ExchangePowerShellRunner.AwaitCompletion;
+
+      // Add new Role Group for Public Folders
+      Window.UPDATE(1,2000);
+      ExchangePowerShellRunner.AddCommand('New-RoleGroup',TRUE);
+      ExchangePowerShellRunner.AddParameter('Name','Public Folders Management');
+      ExchangePowerShellRunner.AddParameter('Roles','Public Folders');
+      ExchangePowerShellRunner.Invoke;
+      ExchangePowerShellRunner.AwaitCompletion;
+
+      // Add user as a member of created Role Group
+      Window.UPDATE(1,3000);
+      ExchangePowerShellRunner.AddCommand('Add-RoleGroupMember',TRUE);
+      ExchangePowerShellRunner.AddParameter('Identity','Public Folders Management');
+      ExchangePowerShellRunner.AddParameter('Member',TempOfficeAdminCredentials.Email);
+      ExchangePowerShellRunner.Invoke;
+      ExchangePowerShellRunner.AwaitCompletion;
+
+      // Creation of new Mail Box
+      Window.UPDATE(1,4000);
+      ExchangePowerShellRunner.AddCommand('New-Mailbox',TRUE);
+      ExchangePowerShellRunner.AddParameterFlag('PublicFolder');
+      ExchangePowerShellRunner.AddParameter('Name',PublicMailBoxName);
+      ExchangePowerShellRunner.Invoke;
+      ExchangePowerShellRunner.AwaitCompletion;
+
+      // Creation of new Root public Folder
+      Window.UPDATE(1,5000);
+      ExchangePowerShellRunner.AddCommand('New-PublicFolder',TRUE);
+      ExchangePowerShellRunner.AddParameter('Name',RootFolderName);
+      ExchangePowerShellRunner.AddParameter('Mailbox',PublicMailBoxName);
+      ExchangePowerShellRunner.Invoke;
+      ExchangePowerShellRunner.AwaitCompletion;
+
+      ExchangePowerShellRunner.GetResultEnumerator(Enum);
+
+      // If returned nothing then check if folder already exists
+      IF NOT Enum.MoveNext THEN BEGIN
+        ExchangePowerShellRunner.ClearLog;
+        ExchangePowerShellRunner.AddCommand('Get-PublicFolder',TRUE);
+        ExchangePowerShellRunner.AddParameter('Identity',STRSUBSTNO('\%1\',RootFolderName));
+        ExchangePowerShellRunner.Invoke;
+        ExchangePowerShellRunner.AwaitCompletion;
+
+        ExchangePowerShellRunner.GetResultEnumerator(Enum);
+        // If Public Folder does not exist then user has no admin rights
+        IF NOT Enum.MoveNext THEN BEGIN
+          ClosePSConnection;
+          ERROR(AdminCredentialsRequiredErr);
+        END;
+      END;
+
+      // Creation of new Queue public Folder /Root/Queue
+      Window.UPDATE(1,6000);
+      ExchangePowerShellRunner.AddCommand('New-PublicFolder',TRUE);
+      ExchangePowerShellRunner.AddParameter('Name',QueueFolderName);
+      ExchangePowerShellRunner.AddParameter('Path',STRSUBSTNO('\%1\',RootFolderName));
+      ExchangePowerShellRunner.AddParameter('Mailbox',PublicMailBoxName);
+      ExchangePowerShellRunner.Invoke;
+      ExchangePowerShellRunner.AwaitCompletion;
+
+      // Creation of new Storage public Folder /Root/Storage
+      Window.UPDATE(1,7000);
+      ExchangePowerShellRunner.AddCommand('New-PublicFolder',TRUE);
+      ExchangePowerShellRunner.AddParameter('Name',StorageFolderName);
+      ExchangePowerShellRunner.AddParameter('Path',STRSUBSTNO('\%1\',RootFolderName));
+      ExchangePowerShellRunner.AddParameter('Mailbox',PublicMailBoxName);
+      ExchangePowerShellRunner.Invoke;
+      ExchangePowerShellRunner.AwaitCompletion;
+
+      // Grant Queue public folder Mail Settings (email address)
+      Window.UPDATE(1,8000);
+      QueueFolderPath := STRSUBSTNO('\%1\%2\',RootFolderName,QueueFolderName);
+      StorageFolderPath := STRSUBSTNO('\%1\%2\',RootFolderName,StorageFolderName);
+      ExchangePowerShellRunner.AddCommand('Enable-MailPublicFolder',TRUE);
+      ExchangePowerShellRunner.AddParameter('Identity',QueueFolderPath);
+      ExchangePowerShellRunner.Invoke;
+      ExchangePowerShellRunner.AwaitCompletion;
+
+      // Grant users to send email to mail enabled folder
+      Window.UPDATE(1,9000);
+      ExchangePowerShellRunner.AddCommand('Add-PublicFolderClientPermission',TRUE);
+      ExchangePowerShellRunner.AddParameter('Identity',QueueFolderPath);
+      ExchangePowerShellRunner.AddParameter('AccessRights','CreateItems');
+      ExchangePowerShellRunner.AddParameter('User','Anonymous');
+      ExchangePowerShellRunner.Invoke;
+      ExchangePowerShellRunner.AwaitCompletion;
+
+      ExchangePowerShellRunner.AddCommand('Add-PublicFolderClientPermission',TRUE);
+      ExchangePowerShellRunner.AddParameter('Identity',QueueFolderPath);
+      ExchangePowerShellRunner.AddParameter('AccessRights','Owner');
+      ExchangePowerShellRunner.AddParameter('User',TempOfficeAdminCredentials.Email);
+      ExchangePowerShellRunner.Invoke;
+      ExchangePowerShellRunner.AwaitCompletion;
+
+      ExchangePowerShellRunner.AddCommand('Add-PublicFolderClientPermission',TRUE);
+      ExchangePowerShellRunner.AddParameter('Identity',StorageFolderPath);
+      ExchangePowerShellRunner.AddParameter('AccessRights','Owner');
+      ExchangePowerShellRunner.AddParameter('User',TempOfficeAdminCredentials.Email);
+      ExchangePowerShellRunner.Invoke;
+      ExchangePowerShellRunner.AwaitCompletion;
+
+      Window.CLOSE;
+    END;
+
+    [TryFunction]
+    PROCEDURE CreateEmailLoggingRules@1(QueueEmailAddress@1001 : Text;IncomingRuleName@1000 : Text;OutgoingRuleName@1002 : Text);
+    BEGIN
+      // Create new Transport Rule for Ingoing mail from outside organization
+      IF IncomingRuleName <> '' THEN BEGIN
+        ExchangePowerShellRunner.AddCommand('New-TransportRule',TRUE);
+        ExchangePowerShellRunner.AddParameter('Name',IncomingRuleName);
+        ExchangePowerShellRunner.AddParameter('FromScope','NotInOrganization');
+        ExchangePowerShellRunner.AddParameter('SentToScope','InOrganization');
+        ExchangePowerShellRunner.AddParameter('BlindCopyTo',QueueEmailAddress);
+        ExchangePowerShellRunner.Invoke;
+        ExchangePowerShellRunner.AwaitCompletion;
+      END;
+
+      // Create new Transport Rule for Outgoing mail to outside organization
+      IF OutgoingRuleName <> '' THEN BEGIN
+        ExchangePowerShellRunner.AddCommand('New-TransportRule',TRUE);
+        ExchangePowerShellRunner.AddParameter('Name',OutgoingRuleName);
+        ExchangePowerShellRunner.AddParameter('FromScope','InOrganization');
+        ExchangePowerShellRunner.AddParameter('SentToScope','NotInOrganization');
+        ExchangePowerShellRunner.AddParameter('BlindCopyTo',QueueEmailAddress);
+        ExchangePowerShellRunner.Invoke;
+        ExchangePowerShellRunner.AwaitCompletion;
+      END;
+      ClosePSConnection;
+    END;
+
+    PROCEDURE ClearEmailLoggingSetup@9(VAR MarketingSetup@1000 : Record 5079);
+    VAR
+      ServicePassword@1001 : Record 1261;
+    BEGIN
+      CLEAR(MarketingSetup."Queue Folder Path");
+      IF MarketingSetup."Queue Folder UID".HASVALUE THEN
+        CLEAR(MarketingSetup."Queue Folder UID");
+
+      CLEAR(MarketingSetup."Storage Folder Path");
+      IF MarketingSetup."Storage Folder UID".HASVALUE THEN
+        CLEAR(MarketingSetup."Storage Folder UID");
+
+      CLEAR(MarketingSetup."Exchange Account User Name");
+      CLEAR(MarketingSetup."Exchange Service URL");
+      CLEAR(MarketingSetup."Autodiscovery E-Mail Address");
+      CLEAR(MarketingSetup."Email Batch Size");
+
+      IF NOT ISNULLGUID(MarketingSetup."Exchange Account Password Key") THEN
+        IF ServicePassword.GET(MarketingSetup."Exchange Account Password Key") THEN
+          ServicePassword.DELETE(TRUE);
+      CLEAR(MarketingSetup."Exchange Account Password Key");
+
+      MarketingSetup.MODIFY;
+      COMMIT;
+    END;
+
+    PROCEDURE SetupEmailLoggingFolderMarketingSetup@12(RootFolderName@1002 : Text;QueueFolderName@1003 : Text;StorageFolderName@1004 : Text);
+    VAR
+      MarketingSetup@1000 : Record 5079;
+      TempExchangeFolder@1001 : TEMPORARY Record 5320;
+      TempOfficeAdminCredentials@1005 : TEMPORARY Record 1612;
+      NetworkCredential@1006 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.NetworkCredential";
+    BEGIN
+      IF NOT MarketingSetup.GET THEN
+        EXIT;
+
+      ExchangePowerShellRunner.GetCredentials(TempOfficeAdminCredentials);
+      NetworkCredential := NetworkCredential.NetworkCredential(TempOfficeAdminCredentials.Email,
+                        TempOfficeAdminCredentials.GetPassword);
+      ExchangeWebServicesClient.InitializeOnServer(
+        TempOfficeAdminCredentials.Email,GetDomainFromEmail(TempOfficeAdminCredentials.Email),
+        NetworkCredential);
+      ExchangeWebServicesClient.ValidateCredentialsOnServer;
+      ExchangeWebServicesClient.GetPublicFolders(TempExchangeFolder);
+      TempExchangeFolder.GET(STRSUBSTNO('\%1\',RootFolderName));
+      ExchangeWebServicesClient.GetPublicFolders(TempExchangeFolder);
+      TempExchangeFolder.GET(STRSUBSTNO('\%1\%2\',RootFolderName,QueueFolderName));
+      TempExchangeFolder.CALCFIELDS("Unique ID");
+      MarketingSetup.SetQueueFolder(TempExchangeFolder);
+      TempExchangeFolder.GET(STRSUBSTNO('\%1\%2\',RootFolderName,StorageFolderName));
+      TempExchangeFolder.CALCFIELDS("Unique ID");
+      MarketingSetup.SetStorageFolder(TempExchangeFolder);
+    END;
+
+    [External]
+    PROCEDURE GetDomainFromEmail@2(Email@1000 : Text) : Text;
+    BEGIN
+      EXIT(DELSTR(Email,1,STRPOS(Email,'@')));
+    END;
+
+    [External]
+    PROCEDURE SetDeployCredentials@3(Username@1000 : Text[80];Password@1001 : Text[30]);
+    BEGIN
+      ExchangePowerShellRunner.SetCredentials(Username,Password);
+    END;
+
+    [External]
+    PROCEDURE CreateEmailLoggingJobQueueSetup@26();
+    VAR
+      JobQueueEntry@1001 : Record 472;
+      WorkflowSetup@1000 : Codeunit 1502;
+    BEGIN
+      WorkflowSetup.CreateJobQueueEntry(
+        JobQueueEntry."Object Type to Run"::Codeunit,CODEUNIT::"Email Logging Context Adapter",CREATEDATETIME(TODAY,TIME + 60000),10);
+    END;
+
+    PROCEDURE ClosePSConnection@5();
+    BEGIN
+      IF Initialized THEN
+        ExchangePowerShellRunner.RemoveRemoteConnectionInformation;
+      Initialized := FALSE;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

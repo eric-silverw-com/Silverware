@@ -1,0 +1,120 @@
+OBJECT Codeunit 231 Gen. Jnl.-Post
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:07:52 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    TableNo=81;
+    EventSubscriberInstance=Manual;
+    OnRun=VAR
+            GenJnlLine@1000 : Record 81;
+          BEGIN
+            GenJnlLine.COPY(Rec);
+            Code(GenJnlLine);
+            COPY(GenJnlLine);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=cannot be filtered when posting recurring journals';
+      Text001@1001 : TextConst 'ENU=Do you want to post the journal lines?';
+      Text002@1002 : TextConst 'ENU=There is nothing to post.';
+      Text003@1003 : TextConst 'ENU=The journal lines were successfully posted.';
+      Text004@1004 : TextConst 'ENU=The journal lines were successfully posted. You are now in the %1 journal.';
+      Text005@1009 : TextConst 'ENU=Using %1 for Declining Balance can result in misleading numbers for subsequent years. You should manually check the postings and correct them if necessary. Do you want to continue?';
+      Text006@1010 : TextConst '@@@=Source Code in Genenral Journal Template must not be equal to Job G/L WIP in Source Code Setup.;ENU=%1 in %2 must not be equal to %3 in %4.';
+      PreviewMode@1011 : Boolean;
+
+    LOCAL PROCEDURE Code@1(VAR GenJnlLine@1004 : Record 81);
+    VAR
+      GenJnlTemplate@1005 : Record 80;
+      FALedgEntry@1000 : Record 5601;
+      SourceCodeSetup@1001 : Record 242;
+      GenJnlPostBatch@1002 : Codeunit 13;
+      TempJnlBatchName@1003 : Code[10];
+    BEGIN
+      WITH GenJnlLine DO BEGIN
+        GenJnlTemplate.GET("Journal Template Name");
+        IF GenJnlTemplate.Type = GenJnlTemplate.Type::Jobs THEN BEGIN
+          SourceCodeSetup.GET;
+          IF GenJnlTemplate."Source Code" = SourceCodeSetup."Job G/L WIP" THEN
+            ERROR(Text006,GenJnlTemplate.FIELDCAPTION("Source Code"),GenJnlTemplate.TABLECAPTION,
+              SourceCodeSetup.FIELDCAPTION("Job G/L WIP"),SourceCodeSetup.TABLECAPTION);
+        END;
+        GenJnlTemplate.TESTFIELD("Force Posting Report",FALSE);
+        IF GenJnlTemplate.Recurring AND (GETFILTER("Posting Date") <> '') THEN
+          FIELDERROR("Posting Date",Text000);
+
+        IF (NOT PreviewMode) AND GUIALLOWED THEN
+          IF NOT CONFIRM(Text001,FALSE) THEN
+            EXIT;
+
+        IF "Account Type" = "Account Type"::"Fixed Asset" THEN BEGIN
+          FALedgEntry.SETRANGE("FA No.","Account No.");
+          FALedgEntry.SETRANGE("FA Posting Type","FA Posting Type"::"Acquisition Cost");
+          IF FALedgEntry.FINDFIRST AND "Depr. Acquisition Cost" THEN
+            IF NOT CONFIRM(Text005,FALSE,FIELDCAPTION("Depr. Acquisition Cost")) THEN
+              EXIT;
+        END;
+
+        TempJnlBatchName := "Journal Batch Name";
+
+        GenJnlPostBatch.SetPreviewMode(PreviewMode);
+        GenJnlPostBatch.RUN(GenJnlLine);
+
+        IF PreviewMode THEN
+          EXIT;
+
+        IF "Line No." = 0 THEN
+          MESSAGE(Text002)
+        ELSE
+          IF TempJnlBatchName = "Journal Batch Name" THEN
+            MESSAGE(Text003)
+          ELSE
+            MESSAGE(
+              Text004,
+              "Journal Batch Name");
+
+        IF NOT FIND('=><') OR (TempJnlBatchName <> "Journal Batch Name") THEN BEGIN
+          RESET;
+          FILTERGROUP(2);
+          SETRANGE("Journal Template Name","Journal Template Name");
+          SETRANGE("Journal Batch Name","Journal Batch Name");
+          FILTERGROUP(0);
+          "Line No." := 1;
+        END;
+      END;
+    END;
+
+    PROCEDURE Preview@2(VAR GenJournalLineSource@1003 : Record 81);
+    VAR
+      GenJnlPostPreview@1002 : Codeunit 19;
+      GenJnlPost@1001 : Codeunit 231;
+    BEGIN
+      BINDSUBSCRIPTION(GenJnlPost);
+      GenJnlPostPreview.Preview(GenJnlPost,GenJournalLineSource);
+    END;
+
+    [EventSubscriber(Codeunit,19,OnRunPreview)]
+    LOCAL PROCEDURE OnRunPreview@4(VAR Result@1000 : Boolean;Subscriber@1001 : Variant;RecVar@1002 : Variant);
+    VAR
+      GenJournalLine@1004 : Record 81;
+      GenJnlPost@1003 : Codeunit 231;
+    BEGIN
+      GenJnlPost := Subscriber;
+      GenJournalLine.COPY(RecVar);
+      PreviewMode := TRUE;
+      Result := GenJnlPost.RUN(GenJournalLine);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

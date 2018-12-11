@@ -1,0 +1,188 @@
+OBJECT Page 5511 Attachments Entity
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:11:04 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=[@@@={Locked};
+               ENU=attachments];
+    SourceTable=Table5509;
+    DelayedInsert=Yes;
+    PageType=API;
+    SourceTableTemporary=Yes;
+    EntitySetName=attachments;
+    EntityName=attachments;
+    OnFindRecord=VAR
+                   DocumentIdFilter@1001 : Text;
+                   AttachmentIdFilter@1004 : Text;
+                   FilterView@1000 : Text;
+                   DocumentId@1005 : GUID;
+                 BEGIN
+                   IF NOT AttachmentsLoaded THEN BEGIN
+                     FilterView := GETVIEW;
+                     DocumentIdFilter := GETFILTER("Document Id");
+                     AttachmentIdFilter := GETFILTER(Id);
+                     IF (AttachmentIdFilter <> '') AND (DocumentIdFilter = '') THEN BEGIN
+                       DocumentId := GraphMgtAttachmentBuffer.GetDocumentIdFromAttachmentId(AttachmentIdFilter);
+                       DocumentIdFilter := FORMAT(DocumentId);
+                     END;
+                     IF DocumentIdFilter = '' THEN
+                       ERROR(MissingParentIdErr);
+
+                     GraphMgtAttachmentBuffer.LoadAttachments(Rec,DocumentIdFilter,AttachmentIdFilter);
+                     SETVIEW(FilterView);
+                     AttachmentsFound := FINDFIRST;
+                     IF NOT AttachmentsFound THEN
+                       EXIT(FALSE);
+                     AttachmentsLoaded := TRUE;
+                   END;
+                   EXIT(AttachmentsFound);
+                 END;
+
+    OnInsertRecord=VAR
+                     TypeHelper@1004 : Codeunit 10;
+                     FileManagement@1003 : Codeunit 419;
+                     DocumentIdFilter@1001 : Text;
+                     FilterView@1002 : Text;
+                   BEGIN
+                     IF ISNULLGUID("Document Id") THEN BEGIN
+                       FilterView := GETVIEW;
+                       DocumentIdFilter := GETFILTER("Document Id");
+                       IF DocumentIdFilter <> '' THEN
+                         VALIDATE("Document Id",TypeHelper.GetGuidAsString(DocumentIdFilter));
+                       SETVIEW(FilterView);
+                     END;
+                     IF ISNULLGUID("Document Id") THEN
+                       ERROR(MissingParentIdErr);
+
+                     IF NOT FileManagement.IsValidFileName("File Name") THEN
+                       VALIDATE("File Name",'filename.txt');
+
+                     VALIDATE("Created Date-Time",ROUNDDATETIME(CURRENTDATETIME,1000));
+                     GraphMgtAttachmentBuffer.RegisterFieldSet(FIELDNO("Created Date-Time"),TempFieldBuffer);
+
+                     ByteSizeFromContent;
+
+                     GraphMgtAttachmentBuffer.PropagateInsertAttachmentSafe(Rec,TempFieldBuffer);
+
+                     EXIT(FALSE);
+                   END;
+
+    OnModifyRecord=BEGIN
+                     IF xRec.Id <> Id THEN
+                       ERROR(STRSUBSTNO(CannotModifyKeyFieldErr,'id'));
+                     IF xRec."Document Id" <> "Document Id" THEN
+                       ERROR(STRSUBSTNO(CannotModifyKeyFieldErr,'parentId'));
+
+                     GraphMgtAttachmentBuffer.PropagateModifyAttachment(Rec,TempFieldBuffer);
+                     ByteSizeFromContent;
+                     EXIT(FALSE);
+                   END;
+
+    OnDeleteRecord=BEGIN
+                     GraphMgtAttachmentBuffer.PropagateDeleteAttachment(Rec);
+                     EXIT(FALSE);
+                   END;
+
+    ODataKeyFields=Document Id,Id;
+  }
+  CONTROLS
+  {
+    { 18  ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 17  ;1   ;Group     ;
+                Name=Group;
+                GroupType=Repeater }
+
+    { 16  ;2   ;Field     ;
+                Name=id;
+                CaptionML=[@@@={Locked};
+                           ENU=id];
+                ApplicationArea=#All;
+                SourceExpr=Id;
+                OnValidate=BEGIN
+                             GraphMgtAttachmentBuffer.RegisterFieldSet(FIELDNO(Id),TempFieldBuffer);
+                           END;
+                            }
+
+    { 1   ;2   ;Field     ;
+                Name=parentId;
+                CaptionML=[@@@={Locked};
+                           ENU=parentId];
+                ApplicationArea=#All;
+                SourceExpr="Document Id" }
+
+    { 14  ;2   ;Field     ;
+                Name=fileName;
+                CaptionML=[@@@={Locked};
+                           ENU=fileName];
+                ToolTipML=ENU=Specifies the Description for the Item.;
+                ApplicationArea=#All;
+                SourceExpr="File Name";
+                OnValidate=BEGIN
+                             GraphMgtAttachmentBuffer.RegisterFieldSet(FIELDNO("File Name"),TempFieldBuffer);
+                           END;
+                            }
+
+    { 7   ;2   ;Field     ;
+                Name=byteSize;
+                CaptionML=[@@@={Locked};
+                           ENU=byteSize];
+                ApplicationArea=#All;
+                SourceExpr="Byte Size";
+                OnValidate=BEGIN
+                             GraphMgtAttachmentBuffer.RegisterFieldSet(FIELDNO("Byte Size"),TempFieldBuffer);
+                           END;
+                            }
+
+    { 4   ;2   ;Field     ;
+                Name=content;
+                CaptionML=[@@@={Locked};
+                           ENU=content];
+                ApplicationArea=#All;
+                SourceExpr=Content;
+                OnValidate=BEGIN
+                             IF AttachmentsLoaded THEN
+                               MODIFY;
+                             GraphMgtAttachmentBuffer.RegisterFieldSet(FIELDNO(Content),TempFieldBuffer);
+                           END;
+                            }
+
+    { 19  ;2   ;Field     ;
+                Name=lastModifiedDateTime;
+                CaptionML=[@@@={Locked};
+                           ENU=lastModifiedDateTime];
+                ApplicationArea=#All;
+                SourceExpr="Created Date-Time";
+                Editable=FALSE }
+
+  }
+  CODE
+  {
+    VAR
+      TempFieldBuffer@1005 : TEMPORARY Record 8450;
+      GraphMgtAttachmentBuffer@1004 : Codeunit 5503;
+      AttachmentsLoaded@1003 : Boolean;
+      AttachmentsFound@1001 : Boolean;
+      MissingParentIdErr@1000 : TextConst '@@@={Locked};ENU=You must specify a parentId in the request body.';
+      CannotModifyKeyFieldErr@1002 : TextConst '@@@={Locked};ENU=You cannot change the value of the key field %1.';
+
+    LOCAL PROCEDURE ByteSizeFromContent@15();
+    VAR
+      TempBlob@1001 : Record 99008535;
+      GraphMgtAttachmentBuffer@1000 : Codeunit 5503;
+    BEGIN
+      TempBlob.Blob := Content;
+      "Byte Size" := GraphMgtAttachmentBuffer.GetContentLength(TempBlob);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

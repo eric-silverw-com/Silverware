@@ -1,0 +1,370 @@
+OBJECT Page 2500 Extension Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:10:49 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Editable=No;
+    CaptionML=ENU=Extension Management;
+    ApplicationArea=#Basic,#Suite;
+    InsertAllowed=No;
+    DeleteAllowed=No;
+    ModifyAllowed=No;
+    SourceTable=Table2000000160;
+    SourceTableView=SORTING(Name)
+                    ORDER(Ascending)
+                    WHERE(Name=FILTER(<>_Exclude_*),
+                          Package Type=FILTER(=0|2));
+    PageType=List;
+    UsageCategory=Administration;
+    RefreshOnActivate=Yes;
+    PromotedActionCategoriesML=ENU=New,Process,Report,Details,Manage;
+    OnOpenPage=BEGIN
+                 SetExtensionManagementFilter;
+                 IF NOT (IsOnPremDisplay OR IsSaaSInstallAllowed) THEN
+                   CurrPage.CAPTION(SaaSCaptionTxt);
+                 ActionsEnabled := FALSE;
+               END;
+
+    OnAfterGetRecord=VAR
+                       InstalledStatus@1001 : Text[250];
+                     BEGIN
+                       ActionsEnabled := TRUE;
+                       IsInstalled := NavExtensionInstallationMgmt.IsInstalled("Package ID");
+                       InstalledStatus := NavExtensionInstallationMgmt.GetExtensionInstalledDisplayString("Package ID");
+
+                       VersionDisplay :=
+                         STRSUBSTNO(
+                           VersionFormatTxt,
+                           NavExtensionInstallationMgmt.GetVersionDisplayString("Version Major","Version Minor","Version Build","Version Revision"));
+                       // Currently using the "Tenant ID" field to identify development extensions
+                       IsTenantExtension := Scope = 1;
+
+                       Style := FALSE;
+                       PublisherOrStatus := Publisher;
+
+                       // Set Name styling if on prem display (shows green)
+                       IF IsOnPremDisplay OR IsSaaSInstallAllowed THEN BEGIN
+                         PublisherOrStatus := InstalledStatus;
+                         Style := IsInstalled;
+                       END;
+
+                       // Adding a '- NotInstalled' if in SaaS for PerTenant extensions
+                       IF IsSaaS AND IsTenantExtension AND NOT IsInstalled THEN
+                         VersionDisplay := STRSUBSTNO(PerTenantAppendTxt,VersionDisplay,InstalledStatus);
+                     END;
+
+    ActionList=ACTIONS
+    {
+      { 11      ;    ;ActionContainer;
+                      ActionContainerType=ActionItems }
+      { 13      ;1   ;ActionGroup;
+                      Visible=False;
+                      Enabled=False }
+      { 9       ;2   ;Action    ;
+                      Name=Install;
+                      CaptionML=ENU=Install;
+                      ToolTipML=ENU=Install the extension for the current tenant.;
+                      ApplicationArea=#Basic,#Suite;
+                      Promoted=Yes;
+                      Visible=IsOnPremDisplay OR IsSaaSInstallAllowed;
+                      Enabled=ActionsEnabled AND IsOnPremDisplay;
+                      Image=NewRow;
+                      PromotedCategory=Category5;
+                      Scope=Repeater;
+                      OnAction=BEGIN
+                                 IF NavExtensionInstallationMgmt.IsInstalled("Package ID") THEN BEGIN
+                                   MESSAGE(AlreadyInstalledMsg,Name);
+                                   EXIT;
+                                 END;
+
+                                 RunOldExtensionInstallation;
+                               END;
+                                }
+      { 14      ;2   ;Action    ;
+                      Name=Uninstall;
+                      CaptionML=ENU=Uninstall;
+                      ToolTipML=ENU=Remove the extension from the current tenant.;
+                      ApplicationArea=#Basic,#Suite;
+                      Promoted=Yes;
+                      Enabled=ActionsEnabled AND IsInstalled;
+                      Image=RemoveLine;
+                      PromotedCategory=Category5;
+                      Scope=Repeater;
+                      OnAction=BEGIN
+                                 IF NOT NavExtensionInstallationMgmt.IsInstalled("Package ID") THEN BEGIN
+                                   MESSAGE(AlreadyUninstalledMsg,Name);
+                                   EXIT;
+                                 END;
+
+                                 RunOldExtensionInstallation;
+                               END;
+                                }
+      { 17      ;2   ;Action    ;
+                      Name=Unpublish;
+                      CaptionML=ENU=Unpublish;
+                      ToolTipML=ENU=Unpublish the extension from the tenant.;
+                      ApplicationArea=#Basic,#Suite;
+                      Promoted=Yes;
+                      Visible=IsTenantExtension;
+                      Enabled=ActionsEnabled;
+                      Image=RemoveLine;
+                      PromotedCategory=Category5;
+                      Scope=Repeater;
+                      OnAction=BEGIN
+                                 IF NavExtensionInstallationMgmt.IsInstalled("Package ID") THEN BEGIN
+                                   MESSAGE(CannotUnpublishIfInstalledMsg,Name);
+                                   EXIT;
+                                 END;
+
+                                 NavExtensionInstallationMgmt.UnpublishNavTenantExtension("Package ID");
+                               END;
+                                }
+      { 21      ;2   ;Action    ;
+                      Name=Configure;
+                      CaptionML=ENU=Configure;
+                      ToolTipML=ENU=Configure the extension.;
+                      ApplicationArea=#Basic,#Suite;
+                      RunObject=Page 2511;
+                      RunPageLink=App ID=FIELD(ID);
+                      Promoted=Yes;
+                      Image=Setup;
+                      PromotedCategory=Category5;
+                      Scope=Repeater }
+      { 5       ;2   ;Action    ;
+                      Name=Download Source;
+                      CaptionML=ENU=Download Source;
+                      ToolTipML=ENU=Download the source code for the extension.;
+                      ApplicationArea=#Basic,#Suite;
+                      Promoted=Yes;
+                      Enabled=IsTenantExtension AND "Show My Code";
+                      Image=ExportFile;
+                      PromotedCategory=Category5;
+                      Scope=Repeater;
+                      OnAction=VAR
+                                 TempBlob@1000 : Record 99008535;
+                                 FileManagement@1001 : Codeunit 419;
+                                 DotNet_NavDesignerALFunctions@1003 : Codeunit 3020;
+                                 NvOutStream@1002 : OutStream;
+                                 FileName@1004 : Text;
+                                 VersionString@1005 : Text;
+                                 CleanFileName@1006 : Text;
+                               BEGIN
+                                 TempBlob.Blob.CREATEOUTSTREAM(NvOutStream);
+                                 VersionString :=
+                                   NavExtensionInstallationMgmt.GetVersionDisplayString("Version Major","Version Minor","Version Build","Version Revision");
+
+                                 DotNet_NavDesignerALFunctions.GenerateDesignerPackageZipStreamByVersion(NvOutStream,ID,VersionString);
+                                 FileName := STRSUBSTNO(ExtensionFileNameTxt,Name,Publisher,VersionString);
+                                 CleanFileName := DotNet_NavDesignerALFunctions.SanitizeDesignerFileName(FileName,'_');
+                                 FileManagement.BLOBExport(TempBlob,CleanFileName,TRUE);
+                               END;
+                                }
+      { 16      ;2   ;Action    ;
+                      Name=LearnMore;
+                      CaptionML=ENU=Learn More;
+                      ToolTipML=ENU=View information from the extension provider.;
+                      ApplicationArea=#Basic,#Suite;
+                      Promoted=Yes;
+                      Enabled=ActionsEnabled;
+                      Image=Info;
+                      PromotedCategory=Category5;
+                      Scope=Repeater;
+                      OnAction=BEGIN
+                                 HYPERLINK(Help);
+                               END;
+                                }
+      { 7       ;2   ;Action    ;
+                      Name=Refresh;
+                      CaptionML=ENU=Refresh;
+                      ToolTipML=ENU=Refresh the list of extensions.;
+                      ApplicationArea=#Basic,#Suite;
+                      Promoted=Yes;
+                      Image=RefreshLines;
+                      PromotedCategory=Category5;
+                      OnAction=BEGIN
+                                 ActionsEnabled := FALSE;
+                                 CurrPage.UPDATE(FALSE);
+                               END;
+                                }
+      { 12      ;2   ;Action    ;
+                      Name=Extension Marketplace;
+                      CaptionML=ENU=Extension Marketplace;
+                      ToolTipML=ENU=Browse the extension marketplace for new extensions to install.;
+                      ApplicationArea=#Basic,#Suite;
+                      Promoted=Yes;
+                      Visible=NOT IsOnPremDisplay;
+                      Enabled=IsSaaS;
+                      PromotedIsBig=Yes;
+                      Image=NewItem;
+                      PromotedCategory=Category5;
+                      OnAction=VAR
+                                 DotNet_AppSource@1000 : Codeunit 3021;
+                               BEGIN
+                                 IF DotNet_AppSource.IsAvailable THEN BEGIN
+                                   DotNet_AppSource.Create;
+                                   DotNet_AppSource.ShowAppSource;
+                                 END;
+                               END;
+                                }
+      { 19      ;2   ;Action    ;
+                      Name=Upload Extension;
+                      CaptionML=ENU=Upload Extension;
+                      ToolTipML=ENU=Upload an extension to your application.;
+                      ApplicationArea=#Basic,#Suite;
+                      RunObject=Page 2507;
+                      Promoted=Yes;
+                      Visible=IsSaaS AND NOT IsSandbox;
+                      PromotedIsBig=Yes;
+                      Image=Import;
+                      PromotedCategory=Category5 }
+      { 20      ;2   ;Action    ;
+                      Name=Deployment Status;
+                      CaptionML=ENU=Deployment Status;
+                      ToolTipML=ENU=Check status for upload process for extensions.;
+                      ApplicationArea=#Basic,#Suite;
+                      RunObject=Page 2508;
+                      Promoted=Yes;
+                      Visible=IsSaaS AND NOT IsSandbox;
+                      PromotedIsBig=Yes;
+                      Image=View;
+                      PromotedCategory=Category5 }
+      { 15      ;1   ;ActionGroup;
+                      Name=Manage;
+                      CaptionML=ENU=Manage }
+      { 10      ;2   ;Action    ;
+                      Name=View;
+                      ShortCutKey=Return;
+                      CaptionML=ENU=View;
+                      ToolTipML=ENU=View extension details.;
+                      ApplicationArea=#Basic,#Suite;
+                      Promoted=Yes;
+                      Visible=NOT IsSaaS;
+                      Enabled=ActionsEnabled;
+                      Image=View;
+                      PromotedCategory=Category4;
+                      OnAction=BEGIN
+                                 RunOldExtensionInstallation;
+                               END;
+                                }
+    }
+  }
+  CONTROLS
+  {
+    { 1   ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 2   ;1   ;Group     ;
+                Name=Group;
+                Editable=FALSE;
+                GroupType=Repeater }
+
+    { 6   ;2   ;Field     ;
+                Name=Logo;
+                CaptionML=ENU=Logo;
+                ToolTipML=ENU=Specifies the logo of the extension, such as the logo of the service provider.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=Logo }
+
+    { 4   ;2   ;Field     ;
+                Name=AdditionalInfo;
+                CaptionML=ENU=AdditionalInfo;
+                ToolTipML=ENU=Specifies the person or company that created the extension.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=PublisherOrStatus;
+                Style=Favorable;
+                StyleExpr=Style }
+
+    { 3   ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the name of the extension.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=Name }
+
+    { 18  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies a spacer for 'Brick' view mode.;
+                ApplicationArea=#Basic,#Suite;
+                Visible=NOT IsOnPremDisplay;
+                Enabled=IsSaaS;
+                HideValue=TRUE;
+                Style=Favorable;
+                StyleExpr=TRUE }
+
+    { 8   ;2   ;Field     ;
+                Name=Version;
+                CaptionML=ENU=Version;
+                ToolTipML=ENU=Specifies the version of the extension.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=VersionDisplay }
+
+  }
+  CODE
+  {
+    VAR
+      VersionFormatTxt@1000 : TextConst '@@@="v=version abbr, %1=Version string";ENU=v. %1';
+      NavExtensionInstallationMgmt@1002 : Codeunit 2500;
+      PublisherOrStatus@1004 : Text;
+      VersionDisplay@1009 : Text;
+      ActionsEnabled@1006 : Boolean;
+      IsSaaS@1001 : Boolean;
+      SaaSCaptionTxt@1003 : TextConst '@@@=The caption to display when on SaaS;ENU=Installed Extensions';
+      Style@1005 : Boolean;
+      ExtensionFileNameTxt@1013 : TextConst '@@@="{Locked};%1=Name, %2=Publisher, %3=Version";ENU=%1_%2_%3.zip';
+      AlreadyInstalledMsg@1007 : TextConst '@@@="%1 = name of extension";ENU=The extension %1 is already installed.';
+      AlreadyUninstalledMsg@1008 : TextConst '@@@="%1 = name of extension.";ENU=The extension %1 is not installed.';
+      IsSaaSInstallAllowed@1010 : Boolean;
+      IsTenantExtension@1012 : Boolean;
+      CannotUnpublishIfInstalledMsg@1014 : TextConst '@@@="%1 = name of extension";ENU=The extension %1 cannot be unpublished because it is installed.';
+      IsMarketplaceEnabled@1015 : Boolean;
+      IsOnPremDisplay@1016 : Boolean;
+      PerTenantAppendTxt@1017 : TextConst '@@@="{Locked};%1=formatted version string, %2=not installed constant";ENU=%1 - %2';
+      IsSandbox@1018 : Boolean;
+      IsInstalled@1011 : Boolean;
+
+    LOCAL PROCEDURE RunOldExtensionInstallation@16();
+    VAR
+      ExtensionDetails@1000 : Page 2501;
+    BEGIN
+      ExtensionDetails.SETRECORD(Rec);
+      ExtensionDetails.RUN;
+      IF ExtensionDetails.EDITABLE = FALSE THEN
+        CurrPage.UPDATE;
+    END;
+
+    LOCAL PROCEDURE GetSaaSInstallSetting@1() : Boolean;
+    VAR
+      ServerConfigSettingHandler@1000 : Codeunit 6723;
+      InstallAllowed@1001 : Boolean;
+    BEGIN
+      InstallAllowed := ServerConfigSettingHandler.GetEnableSaaSExtensionInstallSetting;
+      EXIT(InstallAllowed);
+    END;
+
+    LOCAL PROCEDURE SetExtensionManagementFilter@2();
+    VAR
+      PermissionManager@1002 : Codeunit 9002;
+      ExtensionMarketplaceMgmt@1001 : Codeunit 2501;
+    BEGIN
+      IsSaaS := PermissionManager.SoftwareAsAService;
+      IsSandbox := PermissionManager.IsSandboxConfiguration;
+      IsSaaSInstallAllowed := IsSandbox OR GetSaaSInstallSetting;
+      IsMarketplaceEnabled := ExtensionMarketplaceMgmt.IsMarketplaceEnabled;
+
+      // Extension should be displayed as if they were on prem
+      IsOnPremDisplay := (NOT IsMarketplaceEnabled OR NOT IsSaaS);
+
+      // Set installed filter if we are not displaying like on-prem
+      IF NOT (IsOnPremDisplay OR IsSaaSInstallAllowed) THEN
+        SETFILTER("PerTenant Or Installed",'%1',TRUE)
+      ELSE
+        SETFILTER("Tenant Visible",'%1',TRUE);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

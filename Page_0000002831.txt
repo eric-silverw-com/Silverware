@@ -1,0 +1,239 @@
+OBJECT Page 2831 Native - Payments
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:10:51 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=[@@@={Locked};
+               ENU=nativePayments];
+    ModifyAllowed=No;
+    SourceTable=Table2831;
+    DelayedInsert=Yes;
+    PageType=ListPart;
+    SourceTableTemporary=Yes;
+    OnFindRecord=VAR
+                   AppliesToInvoiceIdFilter@1001 : Text;
+                   FilterView@1000 : Text;
+                 BEGIN
+                   IF NOT PaymentsLoaded THEN BEGIN
+                     FilterView := GETVIEW;
+                     AppliesToInvoiceIdFilter := GETFILTER("Applies-to Invoice Id");
+                     IF AppliesToInvoiceIdFilter <> '' THEN
+                       NativePayments.LoadPayments(TempNativePayment,AppliesToInvoiceIdFilter)
+                     ELSE
+                       NativePayments.LoadAllPayments(TempNativePayment);
+                     COPY(TempNativePayment,TRUE);
+
+                     SETVIEW(FilterView);
+                     IF NOT FINDFIRST THEN
+                       EXIT(FALSE);
+                     PaymentsLoaded := TRUE;
+                   END;
+
+                   EXIT(TRUE);
+                 END;
+
+    OnInsertRecord=VAR
+                     GenJournalLine@1000 : Record 81;
+                   BEGIN
+                     CheckNecessaryFields;
+
+                     // It does not get validated automatically
+                     VALIDATE("Applies-to Invoice Id","Applies-to Invoice Id");
+
+                     VerifyPaymentDate("Payment Date","Applies-to Invoice Id");
+                     CheckIfAmountExceedsRemainingAmount(Amount,"Applies-to Invoice No.","Payment Date");
+
+                     NativePayments.InsertJournalLine(Rec,GenJournalLine);
+                     NativePayments.PostJournal(GenJournalLine);
+
+                     NativePayments.LoadPayments(Rec,"Applies-to Invoice Id");
+                     FINDLAST;
+
+                     EXIT(FALSE);
+                   END;
+
+    OnDeleteRecord=BEGIN
+                     IF NOT TempNativePayment.FINDLAST THEN
+                       EXIT(FALSE);
+
+                     IF RECORDID <> TempNativePayment.RECORDID THEN
+                       ERROR(CanOnlyCancelLastPaymentErr);
+
+                     NativePayments.CancelCustLedgerEntry("Ledger Entry No.");
+                   END;
+
+  }
+  CONTROLS
+  {
+    { 1   ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 2   ;1   ;Group     ;
+                Name=Group;
+                GroupType=Repeater }
+
+    { 3   ;2   ;Field     ;
+                Name=paymentNo;
+                CaptionML=[@@@={Locked};
+                           ENU=paymentNo];
+                ApplicationArea=#All;
+                SourceExpr="Payment No.";
+                Editable=False;
+                OnValidate=BEGIN
+                             ERROR(PaymentNoShouldNotBeSpecifiedErr);
+                           END;
+                            }
+
+    { 4   ;2   ;Field     ;
+                Name=customerId;
+                CaptionML=[@@@={Locked};
+                           ENU=customerId];
+                ApplicationArea=#All;
+                SourceExpr="Customer Id";
+                OnValidate=VAR
+                             Customer@1000 : Record 18;
+                           BEGIN
+                             Customer.SETRANGE(Id,"Customer Id");
+                             IF NOT Customer.FINDFIRST THEN
+                               ERROR(CustomerIdDoesNotMatchACustomerErr);
+
+                             "Customer No." := Customer."No.";
+                           END;
+                            }
+
+    { 5   ;2   ;Field     ;
+                Name=paymentDate;
+                CaptionML=[@@@={Locked};
+                           ENU=paymentDate];
+                ApplicationArea=#All;
+                SourceExpr="Payment Date" }
+
+    { 6   ;2   ;Field     ;
+                Name=amount;
+                CaptionML=[@@@={Locked};
+                           ENU=amount];
+                ApplicationArea=#All;
+                SourceExpr=Amount;
+                OnValidate=BEGIN
+                             IF Amount <= 0 THEN
+                               ERROR(AmountShouldBePositiveErr);
+
+                             Amount := -Amount;
+                           END;
+                            }
+
+    { 7   ;2   ;Field     ;
+                Name=appliesToInvoiceId;
+                CaptionML=[@@@={Locked};
+                           ENU=appliesToInvoiceId];
+                ApplicationArea=#All;
+                SourceExpr="Applies-to Invoice Id";
+                OnValidate=VAR
+                             SalesInvoiceHeader@1000 : Record 112;
+                           BEGIN
+                             SalesInvoiceHeader.RESET;
+                             SalesInvoiceHeader.SETRANGE(Id,"Applies-to Invoice Id");
+                             IF NOT SalesInvoiceHeader.FINDFIRST THEN
+                               ERROR(AppliesToInvoiceIdDoesNotMatchAPostedInvoiceErr);
+
+                             "Applies-to Invoice No." := SalesInvoiceHeader."No.";
+
+                             IF "Customer No." = '' THEN BEGIN
+                               IF SalesInvoiceHeader."Bill-to Customer No." <> '' THEN
+                                 "Customer No." := SalesInvoiceHeader."Bill-to Customer No."
+                               ELSE
+                                 "Customer No." := SalesInvoiceHeader."Sell-to Customer No.";
+                             END;
+                           END;
+                            }
+
+    { 8   ;2   ;Field     ;
+                Name=paymentMethodId;
+                CaptionML=[@@@={Locked};
+                           ENU=paymentMethodId];
+                ApplicationArea=#All;
+                SourceExpr="Payment Method Id";
+                OnValidate=VAR
+                             PaymentMethod@1000 : Record 289;
+                           BEGIN
+                             PaymentMethod.SETRANGE(Id,"Payment Method Id");
+                             IF NOT PaymentMethod.FINDFIRST THEN
+                               ERROR(PaymentMethodIdDoesNotMatchAPaymentMethodErr);
+
+                             "Payment Method Code" := PaymentMethod.Code;
+                           END;
+                            }
+
+  }
+  CODE
+  {
+    VAR
+      PaymentNoShouldNotBeSpecifiedErr@1015 : TextConst 'ENU=The paymentNo field must not be specified.';
+      CustomerIdDoesNotMatchACustomerErr@1011 : TextConst '@@@={Locked};ENU=The customerId field does not match an existing customer.';
+      AppliesToInvoiceIdDoesNotMatchAPostedInvoiceErr@1010 : TextConst '@@@={Locked};ENU=The appliesToInvoiceId field must be the ID of an Open, Paid, Corrective, or Canceled Invoice.';
+      PaymentMethodIdDoesNotMatchAPaymentMethodErr@1009 : TextConst '@@@={Locked};ENU=The paymentMethodId field does not match a payment method.';
+      AmountShouldBePositiveErr@1001 : TextConst 'ENU=The amount must be a positive number.';
+      AppliesToInvoiceIdShouldBeSpecifiedErr@1005 : TextConst 'ENU=The appliesToInvoiceId field must be specified.';
+      PaymentMethodIdShouldBeSpecifiedErr@1000 : TextConst 'ENU=The paymentMethodId field must be specified.';
+      AmountExceedsRemainingAmountErr@1003 : TextConst 'ENU=The amount exceeds the remaining amount of the invoice.';
+      AmountExceedsRemainingDiscountAmountErr@1002 : TextConst 'ENU=The amount exceeds the remaining amount after discount of the invoice.';
+      TempNativePayment@1014 : TEMPORARY Record 2831;
+      NativePayments@1017 : Codeunit 2831;
+      PaymentsLoaded@1006 : Boolean;
+      CanOnlyCancelLastPaymentErr@1012 : TextConst 'ENU=Only the last payment can be canceled.';
+      PaymentDateBeforeInvoicePostingDateErr@1004 : TextConst 'ENU=The payment date has to be after the invoice date of the invoice the payment is applied to.';
+
+    LOCAL PROCEDURE CheckNecessaryFields@4();
+    VAR
+      BlankGUID@1000 : GUID;
+    BEGIN
+      IF "Applies-to Invoice Id" = BlankGUID THEN
+        ERROR(AppliesToInvoiceIdShouldBeSpecifiedErr);
+
+      IF "Payment Method Id" = BlankGUID THEN
+        ERROR(PaymentMethodIdShouldBeSpecifiedErr);
+    END;
+
+    PROCEDURE CheckIfAmountExceedsRemainingAmount@1(PaymentAmount@1000 : Decimal;InvoiceNumber@1004 : Code[20];PostingDate@1005 : Date);
+    VAR
+      CustLedgerEntry@1001 : Record 21;
+      OriginalRemainingAmount@1002 : Decimal;
+      RemAmountAfterDiscount@1003 : Decimal;
+      PmtDiscountDate@1006 : Date;
+    BEGIN
+      CustLedgerEntry.SETRANGE("Document No.",InvoiceNumber);
+      CustLedgerEntry.FINDFIRST;
+      CustLedgerEntry.CALCFIELDS("Remaining Amount");
+      OriginalRemainingAmount := CustLedgerEntry."Remaining Amount";
+      RemAmountAfterDiscount := OriginalRemainingAmount - CustLedgerEntry."Remaining Pmt. Disc. Possible";
+      PmtDiscountDate := CustLedgerEntry."Pmt. Discount Date";
+
+      IF ABS(PaymentAmount) > ABS(OriginalRemainingAmount) THEN
+        ERROR(AmountExceedsRemainingAmountErr);
+
+      IF (PostingDate <= PmtDiscountDate) AND
+         (ABS(PaymentAmount) > RemAmountAfterDiscount)
+      THEN
+        ERROR(AmountExceedsRemainingDiscountAmountErr);
+    END;
+
+    LOCAL PROCEDURE VerifyPaymentDate@2(PaymentDate@1000 : Date;InvoiceId@1001 : GUID);
+    VAR
+      SalesInvoiceEntityAggregate@1002 : Record 5475;
+    BEGIN
+      SalesInvoiceEntityAggregate.SETRANGE(Id,InvoiceId);
+      SalesInvoiceEntityAggregate.FINDFIRST;
+      IF PaymentDate < SalesInvoiceEntityAggregate."Document Date" THEN
+        ERROR(PaymentDateBeforeInvoicePostingDateErr);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

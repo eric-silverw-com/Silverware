@@ -1,0 +1,171 @@
+OBJECT Report 9200 Void/Transmit Elec. Pmnts
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:13:25 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Void/Transmit Electronic Payments;
+    ProcessingOnly=Yes;
+    OnPreReport=BEGIN
+                  BankAccount.GET(BankAccount."No.");
+                  BankAccount.TESTFIELD(Blocked,FALSE);
+
+                  IF UsageType <> UsageType::Transmit THEN
+                    IF NOT CONFIRM(ActionConfirmQst,
+                         FALSE,
+                         UsageType,
+                         BankAccount.TABLECAPTION,
+                         BankAccount."No.")
+                    THEN
+                      CurrReport.QUIT;
+                END;
+
+  }
+  DATASET
+  {
+    { 7024;    ;DataItem;                    ;
+               DataItemTable=Table81;
+               DataItemTableView=SORTING(Journal Template Name,Journal Batch Name,Line No.)
+                                 WHERE(Document Type=FILTER(Payment|Refund),
+                                       Bank Payment Type=FILTER(Electronic Payment|Electronic Payment-IAT),
+                                       Exported to Payment File=CONST(Yes),
+                                       Check Transmitted=CONST(No));
+               OnPreDataItem=BEGIN
+                               FirstTime := TRUE;
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  IF SkipReport("Account Type","Bal. Account Type","Account No.","Bal. Account No.",BankAccount."No.") THEN
+                                    CurrReport.SKIP;
+
+                                  IF FirstTime THEN BEGIN
+                                    CASE UsageType OF
+                                      UsageType::Void:
+                                        IF "Check Transmitted" THEN
+                                          ERROR(AlreadyTransmittedNoVoidErr);
+                                      UsageType::Transmit:
+                                        BEGIN
+                                          IF "Check Transmitted" THEN
+                                            ERROR(AlreadyTransmittedErr);
+                                          IF "Document No." = '' THEN
+                                            ERROR(VoidedOrNoDocNoErr);
+                                          IF NOT RTCConfirmTransmit THEN
+                                            EXIT;
+                                        END;
+                                    END;
+                                    FirstTime := FALSE;
+                                  END;
+                                  CheckManagement.ProcessElectronicPayment("Gen. Journal Line",UsageType);
+
+                                  IF UsageType = UsageType::Void THEN BEGIN
+                                    "Exported to Payment File" := FALSE;
+                                    "Check Exported" := FALSE;
+                                    "Check Printed" := FALSE;
+                                    "Document No." := '';
+                                  END ELSE
+                                    "Check Transmitted" := TRUE;
+
+                                  MODIFY;
+                                END;
+                                 }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      SaveValues=No;
+      OnOpenPage=BEGIN
+                   DisplayUsageType := UsageType;
+                   IF DisplayUsageType = 0 THEN
+                     ERROR(OnlyRunFromPaymentJournalErr);
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=ENU=Options }
+
+      { 1   ;2   ;Field     ;
+                  CaptionML=ENU=Bank Account No.;
+                  ToolTipML=ENU=Specifies the bank account that the payment is transmitted to.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=BankAccount."No.";
+                  TableRelation="Bank Account" }
+
+      { 3   ;2   ;Field     ;
+                  CaptionML=ENU=Operation;
+                  ToolTipML=ENU=Specifies if you want to transmit or void the electronic payment file. The Transmit option produces an electronic payment file to be transmitted to your bank for processing. The Void option voids the exported file. Confirm that the correct selection has been made before you process the electronic payment file.;
+                  OptionCaptionML=ENU=,Void,Transmit;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=DisplayUsageType;
+                  Editable=FALSE }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      BankAccount@1000 : Record 270;
+      CheckManagement@1001 : Codeunit 367;
+      FirstTime@1004 : Boolean;
+      UsageType@1005 : ',Void,Transmit';
+      DisplayUsageType@1006 : ',Void,Transmit';
+      ActionConfirmQst@1007 : TextConst '@@@="%1=Action taken., %2=Name of the Bank Account table., %3=Bank Account Number.";ENU=Are you SURE you want to %1 all of the Electronic Payments written against %2 %3?';
+      AlreadyTransmittedNoVoidErr@1008 : TextConst 'ENU=The export file has already been transmitted. You can no longer void these entries.';
+      AlreadyTransmittedErr@1010 : TextConst 'ENU=The export file has already been transmitted.';
+      OnlyRunFromPaymentJournalErr@1003 : TextConst 'ENU=This process can only be run from the Payment Journal.';
+      TransmittedQst@1009 : TextConst 'ENU=Has export file been successfully transmitted?';
+      VoidedOrNoDocNoErr@1002 : TextConst 'ENU=The export file cannot be transmitted if the payment has been voided or is missing a Document No.';
+
+    PROCEDURE SetUsageType@2(NewUsageType@1000 : ',Void,Transmit');
+    BEGIN
+      UsageType := NewUsageType;
+    END;
+
+    PROCEDURE RTCConfirmTransmit@3() : Boolean;
+    BEGIN
+      IF NOT CONFIRM(TransmittedQst,FALSE) THEN
+        EXIT(FALSE);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE SetBankAccountNo@1(AccountNumber@1000 : Code[20]);
+    BEGIN
+      BankAccount.GET(AccountNumber);
+    END;
+
+    LOCAL PROCEDURE SkipReport@4(AccountType@1000 : 'G/L Account,Customer,Vendor,Bank Account,Fixed Asset,IC Partner';BalAccountType@1001 : 'G/L Account,Customer,Vendor,Bank Account,Fixed Asset,IC Partner';AccountNo@1002 : Code[20];BalAccountNo@1003 : Code[20];BankAccountNo@1004 : Code[20]) : Boolean;
+    BEGIN
+      IF AccountType = AccountType::"Bank Account" THEN
+        IF AccountNo <> BankAccountNo THEN
+          EXIT(TRUE);
+
+      IF BalAccountType = BalAccountType::"Bank Account" THEN
+        IF BalAccountNo <> BankAccountNo THEN
+          EXIT(TRUE);
+
+      IF (AccountType <> AccountType::"Bank Account") AND (BalAccountType <> BalAccountType::"Bank Account") THEN
+        EXIT(TRUE);
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

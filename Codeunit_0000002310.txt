@@ -1,0 +1,976 @@
+OBJECT Codeunit 2310 O365 Sales Invoice Mgmt
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:16 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ProcessDraftInvoiceInstructionTxt@1000 : TextConst 'ENU=Do you want to keep the new invoice?';
+      ProcessDraftEstimateInstructionTxt@1010 : TextConst 'ENU=Do you want to keep the new estimate?';
+      AddDiscountTxt@1003 : TextConst 'ENU=Add discount';
+      ChangeDiscountTxt@1002 : TextConst 'ENU=Change discount';
+      AddAttachmentTxt@1005 : TextConst 'ENU=Add attachment';
+      NoOfAttachmentsTxt@1004 : TextConst '@@@="%1=an integer number, starting at 0";ENU=Attachments (%1)';
+      InvoiceDiscountChangedMsg@1007 : TextConst 'ENU=Changing the quantity has cleared the line discount.';
+      AmountOutsideRangeMsg@1008 : TextConst 'ENU=We adjusted the discount to not exceed the line amount.';
+      O365SalesAttachmentMgt@1022 : Codeunit 2112;
+      ConfigValidateManagement@1015 : Codeunit 8617;
+      NotificationLifecycleMgt@1065 : Codeunit 1511;
+      TaxSetupNeededMsg@1020002 : TextConst 'ENU=You haven''t set up tax information for your business.';
+      SetupTaxLbl@1020001 : TextConst 'ENU=Set up tax';
+      TaxNotificationIdTok@1020054 : TextConst '@@@={LOCKED};ENU=6733addd-c3d5-47ce-852a-f66385af5af2';
+      CustomerCreatedMsg@1020 : TextConst '@@@="%1= Customer name";ENU=We added %1 to your customer list.';
+      InvoiceDiscountLbl@1011 : TextConst 'ENU=Invoice Discount';
+      UndoTxt@1013 : TextConst 'ENU=Undo';
+      CustomerBlockedErr@1012 : TextConst 'ENU=This customer has been blocked and cannot be invoiced.';
+      ItemCreatedMsg@1016 : TextConst '@@@="%1= Item description";ENU=We added %1 to your item list.';
+      ItemNotExistErr@1018 : TextConst 'ENU=The item does not exist.';
+      CountryDoesntExistErr@1017 : TextConst 'ENU=Please choose an existing country or region, or add a new one.';
+      CustomerIsBlockedMsg@1021 : TextConst '@@@="%1= Customer name";ENU=The customer %1 has been blocked for any further business.';
+      NotificationShownForBlockedCustomer@1019 : Boolean;
+      InvoiceDiscountNotificationGuidTok@1001 : TextConst '@@@={Locked};ENU=75d7aad4-7009-4f7f-836c-d034596b944b';
+      AmountOutOfBoundsNotificationGuidTok@1006 : TextConst '@@@={Locked};ENU=281dfa97-d2a2-4379-ab39-b70d92cc83f1';
+      CustomerCreatedNotificationGuidTok@1009 : TextConst '@@@={Locked};ENU=f42cd036-ffcd-4fb7-a50a-ba0b8746640e';
+      CustomerBlockedNotificationGuidTok@1014 : TextConst '@@@={Locked};ENU=4f05b604-52b6-4940-a801-8ee0cbf28648';
+      DraftInvoiceCategoryLbl@1023 : TextConst '@@@={Locked};ENU=AL Draft Invoice';
+      InlineItemCreatedTelemetryTxt@1024 : TextConst '@@@={Locked};ENU=Inline item created.';
+
+    [External]
+    PROCEDURE GetCustomerEmail@2(CustomerNo@1001 : Code[20]) : Text[80];
+    VAR
+      Customer@1000 : Record 18;
+    BEGIN
+      IF CustomerNo <> '' THEN
+        IF Customer.GET(CustomerNo) THEN
+          EXIT(Customer."E-Mail");
+      EXIT('');
+    END;
+
+    [External]
+    PROCEDURE ConfirmKeepOrDeleteDocument@3(VAR SalesHeader@1001 : Record 36) : Boolean;
+    VAR
+      InstructionsWithDocumentTypeTxt@1003 : Text;
+    BEGIN
+      IF SalesHeader."Document Type" = SalesHeader."Document Type"::Quote THEN
+        InstructionsWithDocumentTypeTxt := ProcessDraftEstimateInstructionTxt
+      ELSE
+        InstructionsWithDocumentTypeTxt := ProcessDraftInvoiceInstructionTxt;
+
+      IF CONFIRM(InstructionsWithDocumentTypeTxt,TRUE) THEN
+        EXIT(TRUE);
+
+      EXIT(SalesHeader.DELETE(TRUE)); // Delete all invoice lines and invoice header
+    END;
+
+    [External]
+    PROCEDURE IsCustomerCompanyContact@89(CustomerNo@1001 : Code[20]) : Boolean;
+    VAR
+      Customer@1000 : Record 18;
+    BEGIN
+      IF CustomerNo <> '' THEN
+        IF Customer.GET(CustomerNo) THEN
+          EXIT(Customer."Contact Type" = Customer."Contact Type"::Company);
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE FindCountryCodeFromInput@44(UserInput@1000 : Text) : Code[10];
+    VAR
+      CountryRegion@1001 : Record 9;
+    BEGIN
+      IF UserInput = '' THEN
+        EXIT('');
+
+      IF CountryRegion.GET(COPYSTR(UPPERCASE(UserInput),1,10)) THEN
+        EXIT(COPYSTR(UPPERCASE(UserInput),1,10));
+
+      CountryRegion.SETFILTER(
+        Name,
+        '@*' + COPYSTR(UserInput,1,MAXSTRLEN(CountryRegion.Name)) + '*'
+        );
+
+      IF CountryRegion.FINDFIRST THEN
+        EXIT(CountryRegion.Code);
+
+      ERROR(CountryDoesntExistErr);
+    END;
+
+    [External]
+    PROCEDURE UpdateAddress@4(VAR SalesHeader@1001 : Record 36;VAR FullAddress@1002 : Text;VAR CountryRegionCode@1003 : Code[10]);
+    VAR
+      TempStandardAddress@1000 : TEMPORARY Record 730;
+    BEGIN
+      TempStandardAddress.CopyFromSalesHeaderSellTo(SalesHeader);
+      FullAddress := TempStandardAddress.ToString;
+      CountryRegionCode := SalesHeader."Sell-to Country/Region Code";
+
+      SalesHeader."Bill-to Address" := SalesHeader."Sell-to Address";
+      SalesHeader."Bill-to Address 2" := SalesHeader."Sell-to Address 2";
+      SalesHeader."Bill-to Post Code" := SalesHeader."Sell-to Post Code";
+      SalesHeader."Bill-to City" := SalesHeader."Sell-to City";
+      SalesHeader."Bill-to Country/Region Code" := SalesHeader."Sell-to Country/Region Code";
+      SalesHeader."Bill-to County" := SalesHeader."Sell-to County";
+    END;
+
+    PROCEDURE UpdateSellToAddress@1020001(VAR SalesHeader@1000 : Record 36;Customer@1001 : Record 18);
+    BEGIN
+      SalesHeader."Sell-to Address" := Customer.Address;
+      SalesHeader."Sell-to Address 2" := Customer."Address 2";
+      SalesHeader."Sell-to City" := Customer.City;
+      SalesHeader."Sell-to Post Code" := Customer."Post Code";
+      SalesHeader."Sell-to County" := Customer.County;
+      SalesHeader."Sell-to Country/Region Code" := Customer."Country/Region Code";
+    END;
+
+    [External]
+    PROCEDURE CalcInvoiceDiscountAmount@8(VAR SalesHeader@1001 : Record 36;VAR SubTotalAmount@1003 : Decimal;VAR DiscountTxt@1002 : Text;VAR InvoiceDiscountAmount@1005 : Decimal;VAR InvDiscAmountVisible@1006 : Boolean);
+    VAR
+      SalesLine@1000 : Record 37;
+    BEGIN
+      SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+      SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+      SalesLine.CALCSUMS("Inv. Discount Amount","Line Amount");
+      SubTotalAmount := SalesLine."Line Amount";
+      InvoiceDiscountAmount := SalesLine."Inv. Discount Amount";
+      IF SalesHeader."Invoice Discount Value" <> 0 THEN
+        DiscountTxt := ChangeDiscountTxt
+      ELSE
+        DiscountTxt := AddDiscountTxt;
+
+      InvDiscAmountVisible := SalesHeader."Invoice Discount Value" <> 0;
+    END;
+
+    [External]
+    PROCEDURE UpdateNoOfAttachmentsLabel@7(NoOfAttachments@1000 : Integer;VAR NoOfAttachmentsValueTxt@1003 : Text);
+    BEGIN
+      IF NoOfAttachments = 0 THEN
+        NoOfAttachmentsValueTxt := AddAttachmentTxt
+      ELSE
+        NoOfAttachmentsValueTxt := STRSUBSTNO(NoOfAttachmentsTxt,NoOfAttachments);
+    END;
+
+    [External]
+    PROCEDURE OnAfterGetSalesHeaderRecord@1(VAR SalesHeader@1000 : Record 36;VAR CurrencyFormat@1005 : Text;VAR TaxAreaDescription@1007 : Text[50];VAR NoOfAttachmentsValueTxt@1006 : Text;VAR WorkDescription@1008 : Text);
+    VAR
+      Currency@1004 : Record 4;
+      GLSetup@1003 : Record 98;
+      TaxArea@1002 : Record 318;
+      CurrencySymbol@1001 : Text[10];
+    BEGIN
+      SalesHeader.SetDefaultPaymentServices;
+
+      UpdateNoOfAttachmentsLabel(O365SalesAttachmentMgt.GetNoOfAttachments(SalesHeader),NoOfAttachmentsValueTxt);
+      WorkDescription := SalesHeader.GetWorkDescription;
+
+      IF SalesHeader."Currency Code" = '' THEN BEGIN
+        GLSetup.GET;
+        CurrencySymbol := GLSetup.GetCurrencySymbol;
+      END ELSE BEGIN
+        IF Currency.GET(SalesHeader."Currency Code") THEN;
+        CurrencySymbol := Currency.GetCurrencySymbol;
+      END;
+      CurrencyFormat := STRSUBSTNO('%1<precision, 2:2><standard format, 0>',CurrencySymbol);
+
+      TaxAreaDescription := '';
+      IF SalesHeader."Tax Area Code" <> '' THEN
+        IF TaxArea.GET(SalesHeader."Tax Area Code") THEN
+          TaxAreaDescription := TaxArea.GetDescriptionInCurrentLanguage;
+    END;
+
+    [External]
+    PROCEDURE LookupCustomerName@5(VAR SalesHeader@1003 : Record 36;Text@1000 : Text;VAR CustomerName@1005 : Text[50];VAR CustomerEmail@1004 : Text[80]) : Boolean;
+    VAR
+      Customer@1002 : Record 18;
+      BCO365CustomerList@1001 : Page 2316;
+    BEGIN
+      IF Text <> '' THEN BEGIN
+        Customer.SETRANGE(Name,Text);
+        IF Customer.FINDFIRST THEN;
+        Customer.SETRANGE(Name);
+      END;
+
+      BCO365CustomerList.LOOKUPMODE(TRUE);
+      BCO365CustomerList.SETRECORD(Customer);
+
+      IF BCO365CustomerList.RUNMODAL = ACTION::LookupOK THEN BEGIN
+        BCO365CustomerList.GETRECORD(Customer);
+        SalesHeader.SetHideValidationDialog(TRUE);
+        CustomerName := Customer.Name;
+        SalesHeader.VALIDATE("Sell-to Customer No.",Customer."No.");
+        CustomerEmail := GetCustomerEmail(SalesHeader."Sell-to Customer No.");
+        EXIT(TRUE);
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    [External]
+    PROCEDURE UpdateCustomerFields@11(SalesHeader@1000 : Record 36;VAR CustomerName@1002 : Text[50];VAR CustomerEmail@1001 : Text[80];VAR IsCompanyContact@1003 : Boolean);
+    BEGIN
+      CustomerName := SalesHeader."Sell-to Customer Name";
+      CustomerEmail := GetCustomerEmail(SalesHeader."Sell-to Customer No.");
+      IsCompanyContact := IsCustomerCompanyContact(SalesHeader."Sell-to Customer No.");
+    END;
+
+    [External]
+    PROCEDURE ValidateCustomerName@12(VAR SalesHeader@1001 : Record 36;VAR CustomerName@1003 : Text[50];VAR CustomerEmail@1002 : Text[80]);
+    VAR
+      Customer@1000 : Record 18;
+      CompanyInformation@1020000 : Record 79;
+      Contact@1004 : Record 5050;
+    BEGIN
+      IF SalesHeader."Sell-to Customer Name" = '' THEN
+        EXIT;
+
+      // Lookup by contact number
+      IF STRLEN(SalesHeader."Sell-to Customer Name") <= MAXSTRLEN(Contact."No.") THEN
+        IF Contact.GET(COPYSTR(SalesHeader."Sell-to Customer Name",1,MAXSTRLEN(Contact."No."))) THEN
+          IF NOT FindCustomerByContactNo(Contact."No.",Customer) THEN
+            Customer.GET(CreateCustomerFromContact(Contact));
+
+      // Lookup by customer number/name
+      IF Customer."No." = '' THEN
+        IF NOT Customer.GET(Customer.GetCustNoOpenCard(SalesHeader."Sell-to Customer Name",FALSE,FALSE)) THEN
+          // Lookup by contact name
+          IF Contact.GET(Contact.GetContNo(SalesHeader."Sell-to Customer Name")) THEN BEGIN
+            IF FindCustomerByContactNo(Contact."No.",Customer) THEN BEGIN
+              IF Customer.IsBlocked THEN
+                ERROR(CustomerBlockedErr);
+            END ELSE
+              Customer.GET(CreateCustomerFromContact(Contact));
+          END;
+
+      // A customer is found, but it is blocked: silently undo the lookup.
+      // (e.g. a new customer is created from lookup and immediately deleted from customer card)
+      IF (Customer."No." <> '') AND Customer.IsBlocked THEN
+        ERROR('');
+
+      // When no customer or contact is found, create a new and notify the user
+      IF Customer."No." = '' THEN BEGIN
+        IF SalesHeader."No." = '' THEN
+          SalesHeader.INSERT(TRUE);
+        Customer.GET(Customer.CreateNewCustomer(COPYSTR(SalesHeader."Sell-to Customer Name",1,MAXSTRLEN(Customer.Name)),FALSE));
+        SendCustomerCreatedNotification(Customer,SalesHeader);
+      END;
+
+      EnforceCustomerTemplateIntegrity(Customer);
+
+      SalesHeader.VALIDATE("Sell-to Customer No.",Customer."No.");
+      CustomerName := Customer.Name;
+      CustomerEmail := GetCustomerEmail(SalesHeader."Sell-to Customer No.");
+
+      IF SalesHeader."Tax Liable" AND (SalesHeader."Tax Area Code" = '') THEN
+        IF CompanyInformation.GET THEN
+          IF CompanyInformation."Tax Area Code" <> '' THEN
+            SalesHeader.VALIDATE("Tax Area Code",CompanyInformation."Tax Area Code");
+    END;
+
+    [External]
+    PROCEDURE ValidateCustomerEmail@13(VAR SalesHeader@1002 : Record 36;CustomerEmail@1000 : Text[80]);
+    VAR
+      Customer@1003 : Record 18;
+      MailManagement@1001 : Codeunit 9520;
+    BEGIN
+      MailManagement.ValidateEmailAddressField(CustomerEmail);
+
+      IF CustomerEmail <> '' THEN BEGIN
+        Customer.LOCKTABLE;
+        IF (SalesHeader."Sell-to Customer No." <> '') AND Customer.WRITEPERMISSION THEN
+          IF Customer.GET(SalesHeader."Sell-to Customer No.") THEN
+            IF CustomerEmail <> Customer."E-Mail" THEN BEGIN
+              Customer."E-Mail" := CustomerEmail;
+              Customer.MODIFY(TRUE);
+            END;
+      END;
+    END;
+
+    PROCEDURE ValidateCustomerAddress@20(Address@1000 : Text[50];CustomerNo@1002 : Code[20]);
+    VAR
+      Customer@1003 : Record 18;
+    BEGIN
+      IF (Address <> '') AND (CustomerNo <> '') THEN BEGIN
+        Customer.LOCKTABLE;
+        IF Customer.WRITEPERMISSION AND Customer.GET(CustomerNo) THEN
+          IF Customer.Address = '' THEN BEGIN
+            Customer.Address := Address;
+            Customer.MODIFY(TRUE);
+          END;
+      END;
+    END;
+
+    PROCEDURE ValidateCustomerAddress2@21(Address2@1000 : Text[50];CustomerNo@1002 : Code[20]);
+    VAR
+      Customer@1003 : Record 18;
+    BEGIN
+      IF (Address2 <> '') AND (CustomerNo <> '') THEN BEGIN
+        Customer.LOCKTABLE;
+        IF Customer.WRITEPERMISSION AND Customer.GET(CustomerNo) THEN
+          IF Customer."Address 2" = '' THEN BEGIN
+            Customer."Address 2" := Address2;
+            Customer.MODIFY(TRUE);
+          END;
+      END;
+    END;
+
+    PROCEDURE ValidateCustomerCity@24(City@1000 : Text[30];CustomerNo@1002 : Code[20]);
+    VAR
+      Customer@1003 : Record 18;
+    BEGIN
+      IF (City <> '') AND (CustomerNo <> '') THEN BEGIN
+        Customer.LOCKTABLE;
+        IF Customer.WRITEPERMISSION AND Customer.GET(CustomerNo) THEN
+          IF Customer.City = '' THEN BEGIN
+            Customer.City := City;
+            Customer.MODIFY(TRUE);
+          END;
+      END;
+    END;
+
+    PROCEDURE ValidateCustomerPostCode@23(PostCode@1000 : Code[20];CustomerNo@1002 : Code[20]);
+    VAR
+      Customer@1003 : Record 18;
+    BEGIN
+      IF (PostCode <> '') AND (CustomerNo <> '') THEN BEGIN
+        Customer.LOCKTABLE;
+        IF Customer.WRITEPERMISSION AND Customer.GET(CustomerNo) THEN
+          IF Customer."Post Code" = '' THEN BEGIN
+            Customer."Post Code" := PostCode;
+            Customer.MODIFY(TRUE);
+          END;
+      END;
+    END;
+
+    PROCEDURE ValidateCustomerCounty@22(County@1000 : Text[30];CustomerNo@1002 : Code[20]);
+    VAR
+      Customer@1003 : Record 18;
+    BEGIN
+      IF (County <> '') AND (CustomerNo <> '') THEN BEGIN
+        Customer.LOCKTABLE;
+        IF Customer.WRITEPERMISSION AND Customer.GET(CustomerNo) THEN
+          IF Customer.County = '' THEN BEGIN
+            Customer.County := County;
+            Customer.MODIFY(TRUE);
+          END;
+      END;
+    END;
+
+    PROCEDURE ValidateCustomerCountryRegion@25(CountryCode@1000 : Code[10];CustomerNo@1002 : Code[20]);
+    VAR
+      Customer@1003 : Record 18;
+    BEGIN
+      IF (CountryCode <> '') AND (CustomerNo <> '') THEN BEGIN
+        Customer.LOCKTABLE;
+        IF Customer.WRITEPERMISSION AND Customer.GET(CustomerNo) THEN
+          IF Customer."Country/Region Code" = '' THEN BEGIN
+            Customer."Country/Region Code" := CountryCode;
+            Customer.MODIFY(TRUE);
+          END;
+      END;
+    END;
+
+    PROCEDURE EditCustomerCardFromSalesHeader@394(VAR SalesHeader@1000 : Record 36;VAR FullAddress@1003 : Text;VAR CountryRegionCode@1004 : Code[10]);
+    VAR
+      BeforeCustomer@1002 : Record 18;
+      AfterCustomer@1001 : Record 18;
+    BEGIN
+      IF SalesHeader."Sell-to Customer No." = '' THEN
+        EXIT;
+      IF NOT BeforeCustomer.GET(SalesHeader."Sell-to Customer No.") THEN
+        EXIT;
+
+      PAGE.RUNMODAL(PAGE::"BC O365 Sales Customer Card",BeforeCustomer);
+
+      IF NOT AfterCustomer.GET(SalesHeader."Sell-to Customer No.") THEN
+        EXIT;
+      IF NOT BeforeCustomer.HasDifferentAddress(AfterCustomer) THEN
+        EXIT;
+
+      IF SalesHeaderHasAddress(SalesHeader) THEN
+        EXIT;
+
+      UpdateSellToAddress(SalesHeader,AfterCustomer);
+      UpdateAddress(SalesHeader,FullAddress,CountryRegionCode);
+    END;
+
+    LOCAL PROCEDURE SalesHeaderHasAddress@930(SalesHeader@1000 : Record 36) : Boolean;
+    BEGIN
+      CASE TRUE OF
+        SalesHeader."Sell-to Address" <> '':
+          EXIT(TRUE);
+        SalesHeader."Sell-to Address 2" <> '':
+          EXIT(TRUE);
+        SalesHeader."Sell-to City" <> '':
+          EXIT(TRUE);
+        SalesHeader."Sell-to County" <> '':
+          EXIT(TRUE);
+        SalesHeader."Sell-to Post Code" <> '':
+          EXIT(TRUE);
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    [External]
+    PROCEDURE OnQueryCloseForSalesHeader@14(VAR SalesHeader@1001 : Record 36;ForceExit@1000 : Boolean;CustomerName@1002 : Text[50]) : Boolean;
+    BEGIN
+      IF ForceExit THEN
+        EXIT(TRUE);
+
+      IF SalesHeader."No." = '' THEN
+        EXIT(TRUE);
+
+      IF CustomerName = '' THEN BEGIN
+        SalesHeader.DELETE(TRUE);
+        EXIT(TRUE);
+      END;
+
+      IF SalesHeader.SalesLinesExist THEN
+        EXIT(TRUE);
+
+      IF GUIALLOWED THEN
+        EXIT(ConfirmKeepOrDeleteDocument(SalesHeader));
+    END;
+
+    [External]
+    PROCEDURE ShowInvoiceDiscountNotification@18(VAR InvoiceDiscountNotification@1000 : Notification;DocumentRecordId@1002 : RecordID);
+    BEGIN
+      InvoiceDiscountNotification.ID := InvoiceDiscountNotificationGuidTok;
+      InvoiceDiscountNotification.MESSAGE := InvoiceDiscountChangedMsg;
+      InvoiceDiscountNotification.SCOPE := NOTIFICATIONSCOPE::LocalScope;
+      NotificationLifecycleMgt.SendNotification(InvoiceDiscountNotification,DocumentRecordId);
+    END;
+
+    [External]
+    PROCEDURE LookupDescription@17(VAR SalesLine@1003 : Record 37;Text@1000 : Text;VAR DescriptionSelected@1004 : Boolean) : Boolean;
+    VAR
+      Item@1002 : Record 27;
+      BCO365ItemList@1001 : Page 2314;
+    BEGIN
+      IF Text <> '' THEN BEGIN
+        Item.SETRANGE(Description,Text);
+        IF Item.FINDFIRST THEN;
+        Item.SETRANGE(Description);
+      END;
+
+      BCO365ItemList.LOOKUPMODE(TRUE);
+      BCO365ItemList.SETRECORD(Item);
+
+      IF BCO365ItemList.RUNMODAL = ACTION::LookupOK THEN BEGIN
+        BCO365ItemList.GETRECORD(Item);
+        SalesLine.SetHideValidationDialog(TRUE);
+        SalesLine.VALIDATE("No.",Item."No.");
+        DescriptionSelected := SalesLine.Description <> '';
+        EXIT(TRUE);
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    [External]
+    PROCEDURE ConstructCurrencyFormatString@16(VAR SalesLine@1004 : Record 37;VAR CurrencyFormat@1003 : Text);
+    VAR
+      Currency@1002 : Record 4;
+      GLSetup@1001 : Record 98;
+      CurrencySymbol@1000 : Text[10];
+    BEGIN
+      IF SalesLine."Currency Code" = '' THEN BEGIN
+        GLSetup.GET;
+        CurrencySymbol := GLSetup.GetCurrencySymbol;
+      END ELSE BEGIN
+        IF Currency.GET(SalesLine."Currency Code") THEN;
+        CurrencySymbol := Currency.GetCurrencySymbol;
+      END;
+      CurrencyFormat := STRSUBSTNO('%1<precision, 2:2><standard format, 0>',CurrencySymbol);
+    END;
+
+    [External]
+    PROCEDURE GetValueWithinBounds@1027(Value@1000 : Decimal;MinValue@1001 : Decimal;MaxValue@1002 : Decimal;VAR AmountOutsideOfBoundsNotificationSend@1003 : Boolean;DocumentRecordId@1004 : RecordID) : Decimal;
+    BEGIN
+      IF Value < MinValue THEN BEGIN
+        SendOutsideRangeNotification(AmountOutsideOfBoundsNotificationSend,DocumentRecordId);
+        EXIT(MinValue);
+      END;
+      IF Value > MaxValue THEN BEGIN
+        SendOutsideRangeNotification(AmountOutsideOfBoundsNotificationSend,DocumentRecordId);
+        EXIT(MaxValue);
+      END;
+      EXIT(Value);
+    END;
+
+    PROCEDURE OpenNewPaymentInstructionsCard@300() IsDefault : Boolean;
+    VAR
+      BCO365PaymentInstrCard@1000 : Page 2343;
+    BEGIN
+      BCO365PaymentInstrCard.LOOKUPMODE := TRUE;
+      IF BCO365PaymentInstrCard.RUNMODAL = ACTION::LookupOK THEN
+        IsDefault := BCO365PaymentInstrCard.GetIsDefault
+      ELSE
+        IsDefault := FALSE;
+    END;
+
+    PROCEDURE GetPaymentInstructionsName@284(PaymentInstructionsId@1000 : Integer;VAR Name@1001 : Text[20]);
+    VAR
+      O365PaymentInstructions@1002 : Record 2155;
+    BEGIN
+      Name := '';
+      IF O365PaymentInstructions.GET(PaymentInstructionsId) THEN
+        Name := O365PaymentInstructions.GetNameInCurrentLanguage;
+    END;
+
+    PROCEDURE GetDefaultPaymentInstructionsId@344() : Integer;
+    VAR
+      O365PaymentInstructions@1000 : Record 2155;
+    BEGIN
+      O365PaymentInstructions.SETRANGE(Default,TRUE);
+      IF O365PaymentInstructions.FINDFIRST THEN
+        EXIT(O365PaymentInstructions.Id);
+
+      EXIT(0);
+    END;
+
+    PROCEDURE GetPaymentInstructionsFromPostedInvoice@41(SalesInvoiceHeader@1000 : Record 112) : Text;
+    VAR
+      TempBlob@1004 : Record 99008535;
+      CR@1003 : Text[1];
+    BEGIN
+      SalesInvoiceHeader.CALCFIELDS("Payment Instructions");
+      IF NOT SalesInvoiceHeader."Payment Instructions".HASVALUE THEN
+        EXIT('');
+
+      CR[1] := 10;
+      TempBlob.Blob := SalesInvoiceHeader."Payment Instructions";
+
+      EXIT(TempBlob.ReadAsText(CR,TEXTENCODING::Windows));
+    END;
+
+    [External]
+    PROCEDURE SendOutsideRangeNotification@1028(VAR AmountOutsideOfBoundsNotificationSend@1001 : Boolean;DocumentRecordId@1003 : RecordID);
+    VAR
+      AmountOutOfBoundsNotification@1000 : Notification;
+    BEGIN
+      IF AmountOutsideOfBoundsNotificationSend THEN
+        EXIT;
+
+      AmountOutOfBoundsNotification.ID := AmountOutOfBoundsNotificationGuidTok;
+      AmountOutOfBoundsNotification.MESSAGE := AmountOutsideRangeMsg;
+      AmountOutOfBoundsNotification.SCOPE := NOTIFICATIONSCOPE::LocalScope;
+      NotificationLifecycleMgt.SendNotification(AmountOutOfBoundsNotification,DocumentRecordId);
+      AmountOutsideOfBoundsNotificationSend := TRUE;
+    END;
+
+    PROCEDURE LookupContactFromSalesHeader@143(VAR SalesHeader@1004 : Record 36) : Boolean;
+    VAR
+      Customer@1002 : Record 18;
+      Contact@1000 : Record 5050;
+      O365ContactLookup@1001 : Page 2179;
+    BEGIN
+      IF SalesHeader."Sell-to Contact No." <> '' THEN BEGIN
+        Contact.GET(SalesHeader."Sell-to Contact No.");
+        O365ContactLookup.SETRECORD(Contact);
+      END;
+      O365ContactLookup.LOOKUPMODE(TRUE);
+      IF O365ContactLookup.RUNMODAL = ACTION::LookupOK THEN BEGIN
+        O365ContactLookup.GETRECORD(Contact);
+        IF SalesHeader."Sell-to Contact No." <> Contact."No." THEN BEGIN
+          IF NOT FindCustomerByContactNo(Contact."No.",Customer) THEN
+            Customer.GET(CreateCustomerFromContact(Contact));
+          EnforceCustomerTemplateIntegrity(Customer);
+          SalesHeader.VALIDATE("Sell-to Customer No.",Customer."No.");
+        END;
+        EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE FindCustomerByContactNo@144(ContactNo@1001 : Code[20];VAR Customer@1002 : Record 18) : Boolean;
+    VAR
+      ContBusRel@1000 : Record 5054;
+    BEGIN
+      IF NOT ContBusRel.FindByContact(ContBusRel."Link to Table"::Customer,ContactNo) THEN
+        EXIT(FALSE);
+
+      Customer.GET(ContBusRel."No.");
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CreateCustomerFromContact@146(Contact@1000 : Record 5050) : Code[20];
+    VAR
+      MarketingSetup@1003 : Record 5079;
+      Customer@1001 : Record 18;
+    BEGIN
+      MarketingSetup.GET;
+      Contact.SetHideValidationDialog(TRUE);
+      CASE Contact.Type OF
+        Contact.Type::Company:
+          BEGIN
+            MarketingSetup.TESTFIELD("Cust. Template Company Code");
+            Contact.CreateCustomer(MarketingSetup."Cust. Template Company Code");
+          END;
+        Contact.Type::Person:
+          BEGIN
+            MarketingSetup.TESTFIELD("Cust. Template Person Code");
+            Contact.CreateCustomer(MarketingSetup."Cust. Template Person Code");
+          END;
+      END;
+
+      FindCustomerByContactNo(Contact."No.",Customer);
+      EXIT(Customer."No.");
+    END;
+
+    PROCEDURE IsCountryCanada@1020004() : Boolean;
+    VAR
+      CompanyInformation@1020000 : Record 79;
+    BEGIN
+      EXIT(CompanyInformation.IsCanada);
+    END;
+
+    PROCEDURE NotifyTaxSetupNeeded@1020000(SalesHeader@1020000 : Record 36);
+    VAR
+      TaxArea@1020008 : Record 318;
+      O365TaxSettingsManagement@1020002 : Codeunit 10150;
+      TaxSetupNeededNotification@1020001 : Notification;
+      TaxAreaRecordId@1020003 : RecordID;
+    BEGIN
+      IF SalesHeader.IsTest THEN
+        EXIT;
+
+      IF (SalesHeader."Sell-to Customer Name" = '') OR (NOT SalesHeader."Tax Liable") THEN
+        EXIT;
+
+      IF O365TaxSettingsManagement.IsTaxSet(SalesHeader."Tax Area Code") THEN
+        EXIT;
+
+      TaxSetupNeededNotification.ID := TaxNotificationIdTok;
+      TaxSetupNeededNotification.SCOPE(NOTIFICATIONSCOPE::LocalScope);
+      TaxSetupNeededNotification.SETDATA('TaxAreaCode',SalesHeader."Tax Area Code");
+      TaxSetupNeededNotification.MESSAGE(TaxSetupNeededMsg);
+      TaxSetupNeededNotification.ADDACTION(SetupTaxLbl,CODEUNIT::"O365 Sales Invoice Mgmt",'OpenTaxSettingsCard');
+      TaxAreaRecordId := TaxArea.RECORDID;
+      IF TaxArea.GET(SalesHeader."Tax Area Code") THEN
+        TaxAreaRecordId := TaxArea.RECORDID;
+      NotificationLifecycleMgt.SendNotification(TaxSetupNeededNotification,TaxAreaRecordId);
+    END;
+
+    PROCEDURE RecallTaxNotificationIfTaxSetup@1020008(TaxAreaCode@1020002 : Code[20]);
+    VAR
+      O365TaxSettingsManagement@1020001 : Codeunit 10150;
+      TaxSetupNotification@1020000 : Notification;
+    BEGIN
+      IF NOT O365TaxSettingsManagement.IsTaxSet(TaxAreaCode) THEN
+        EXIT;
+
+      TaxSetupNotification.ID := TaxNotificationIdTok;
+      IF TaxSetupNotification.RECALL THEN;
+    END;
+
+    PROCEDURE OpenTaxSettingsCard@28(SenderNotification@1020000 : Notification);
+    VAR
+      TaxArea@1020001 : Record 318;
+    BEGIN
+      IF NOT TaxArea.GET(SenderNotification.GETDATA('TaxAreaCode')) THEN
+        EXIT;
+
+      PAGE.RUN(PAGE::"BC O365 Tax Settings Card",TaxArea);
+    END;
+
+    LOCAL PROCEDURE SendCustomerCreatedNotification@29(Customer@1000 : Record 18;SalesHeader@1001 : Record 36);
+    VAR
+      CustomerCreatedNotification@1002 : Notification;
+      Type@1003 : Integer;
+    BEGIN
+      CustomerCreatedNotification.ID := CustomerCreatedNotificationGuidTok;
+      CustomerCreatedNotification.MESSAGE(STRSUBSTNO(CustomerCreatedMsg,Customer.Name));
+      CustomerCreatedNotification.SCOPE(NOTIFICATIONSCOPE::LocalScope);
+      CustomerCreatedNotification.ADDACTION(UndoTxt,CODEUNIT::"O365 Sales Invoice Mgmt",'UndoCustomerCreation');
+      CustomerCreatedNotification.SETDATA('CustomerNo',Customer."No.");
+      CustomerCreatedNotification.SETDATA('SalesHeaderNo',SalesHeader."No.");
+
+      Type := SalesHeader."Document Type";
+      CustomerCreatedNotification.SETDATA('SalesHeaderType',FORMAT(Type));
+      NotificationLifecycleMgt.SendNotification(CustomerCreatedNotification,SalesHeader.RECORDID);
+    END;
+
+    PROCEDURE SendCustomerHasBeenBlockedNotification@34(CustomerName@1000 : Text[50]);
+    VAR
+      DummyCustomer@1001 : Record 18;
+      NotificationLifecycleMgt@1003 : Codeunit 1511;
+      CustomerBlockedNotification@1002 : Notification;
+    BEGIN
+      IF NOT NotificationShownForBlockedCustomer THEN BEGIN
+        CustomerBlockedNotification.ID := CustomerBlockedNotificationGuidTok;
+        CustomerBlockedNotification.MESSAGE(STRSUBSTNO(CustomerIsBlockedMsg,CustomerName));
+        CustomerBlockedNotification.SCOPE(NOTIFICATIONSCOPE::LocalScope);
+        NotificationLifecycleMgt.SendNotification(CustomerBlockedNotification,DummyCustomer.RECORDID);
+        NotificationShownForBlockedCustomer := TRUE;
+      END;
+    END;
+
+    LOCAL PROCEDURE SendItemCreatedNotification@35(Item@1000 : Record 27;SalesLine@1001 : Record 37);
+    VAR
+      ItemCreatedNotification@1002 : Notification;
+    BEGIN
+      SENDTRACETAG('000023X',DraftInvoiceCategoryLbl,VERBOSITY::Normal,
+        InlineItemCreatedTelemetryTxt,DATACLASSIFICATION::SystemMetadata);
+      ItemCreatedNotification.ID := CREATEGUID;
+      ItemCreatedNotification.MESSAGE(STRSUBSTNO(ItemCreatedMsg,Item.Description));
+      ItemCreatedNotification.SCOPE(NOTIFICATIONSCOPE::LocalScope);
+      ItemCreatedNotification.ADDACTION(UndoTxt,CODEUNIT::"O365 Sales Invoice Mgmt",'UndoItemCreation');
+      ItemCreatedNotification.SETDATA('ItemNo',Item."No.");
+      NotificationLifecycleMgt.SendNotification(ItemCreatedNotification,SalesLine.RECORDID);
+    END;
+
+    PROCEDURE UndoItemCreation@36(VAR CreateItemNotification@1000 : Notification);
+    VAR
+      SalesLine@1003 : Record 37;
+      Item@1002 : Record 27;
+    BEGIN
+      SalesLine.SETRANGE("No.",CreateItemNotification.GETDATA('ItemNo'));
+      IF SalesLine.FINDSET THEN
+        REPEAT
+          SalesLine.DELETE(TRUE);
+        UNTIL SalesLine.NEXT = 0;
+
+      IF Item.GET(CreateItemNotification.GETDATA('ItemNo')) THEN
+        Item.DELETE(TRUE);
+    END;
+
+    PROCEDURE UndoCustomerCreation@31(VAR CreateCustomerNotification@1000 : Notification);
+    VAR
+      Customer@1002 : Record 18;
+      SalesHeader@1003 : Record 36;
+      CustContUpdate@1005 : Codeunit 5056;
+      DocumentType@1001 : Option;
+    BEGIN
+      EVALUATE(DocumentType,CreateCustomerNotification.GETDATA('SalesHeaderType'));
+
+      IF SalesHeader.GET(DocumentType,CreateCustomerNotification.GETDATA('SalesHeaderNo')) THEN BEGIN
+        SalesHeader.INIT;
+        SalesHeader.MODIFY;
+      END;
+
+      IF Customer.GET(CreateCustomerNotification.GETDATA('CustomerNo')) THEN BEGIN
+        CustContUpdate.DeleteCustomerContacts(Customer);
+        Customer.DELETE(TRUE);
+      END;
+    END;
+
+    PROCEDURE GetInvoiceDiscountCaption@19(InvoiceDiscountValue@1000 : Decimal) : Text;
+    BEGIN
+      IF InvoiceDiscountValue = 0 THEN
+        EXIT(InvoiceDiscountLbl);
+      EXIT(STRSUBSTNO('%1 (%2%)',InvoiceDiscountLbl,ROUND(InvoiceDiscountValue,0.1)));
+    END;
+
+    PROCEDURE EnforceCustomerTemplateIntegrity@33(VAR Customer@1000 : Record 18);
+    VAR
+      ConfigTemplateLine@1002 : Record 8619;
+      O365SalesInitialSetup@1003 : Record 2110;
+      IdentityManagement@1001 : Codeunit 9801;
+      CustomerRecRef@1005 : RecordRef;
+      CustomerFieldRef@1006 : FieldRef;
+      CustomerFixed@1004 : Boolean;
+      OriginalLanguageID@1007 : Integer;
+    BEGIN
+      IF NOT IdentityManagement.IsInvAppId THEN
+        EXIT;
+
+      IF NOT O365SalesInitialSetup.GET THEN
+        EXIT;
+
+      ConfigTemplateLine.SETRANGE("Data Template Code",O365SalesInitialSetup."Default Customer Template");
+      ConfigTemplateLine.SETRANGE("Table ID",DATABASE::Customer);
+      // 88 = Gen. Bus. Posting Group
+      // 21 = Customer Posting Group
+      // 80 = Application Method
+      // 104 = Reminder Terms Code
+      // 28 = Fin. Charge Terms Code
+      ConfigTemplateLine.SETFILTER("Field ID",'88|21|80|104|28');
+      IF NOT ConfigTemplateLine.FINDSET THEN
+        EXIT;
+
+      OriginalLanguageID := GLOBALLANGUAGE;
+      CustomerRecRef.GETTABLE(Customer);
+      REPEAT
+        IF CustomerRecRef.FIELDEXIST(ConfigTemplateLine."Field ID") THEN BEGIN
+          IF ConfigTemplateLine."Language ID" <> 0 THEN
+            GLOBALLANGUAGE := ConfigTemplateLine."Language ID"; // When formatting the value, make sure we are using the correct language
+          CustomerFieldRef := CustomerRecRef.FIELD(ConfigTemplateLine."Field ID");
+          IF FORMAT(CustomerFieldRef.VALUE) <> ConfigTemplateLine."Default Value" THEN BEGIN
+            CustomerFieldRef.VALIDATE(ConfigTemplateLine."Default Value");
+            ConfigValidateManagement.ValidateFieldValue(
+              CustomerRecRef,CustomerFieldRef,ConfigTemplateLine."Default Value",FALSE,ConfigTemplateLine."Language ID");
+            CustomerFixed := TRUE;
+          END;
+          GLOBALLANGUAGE := OriginalLanguageID;
+        END;
+      UNTIL ConfigTemplateLine.NEXT = 0;
+
+      IF CustomerFixed THEN
+        IF CustomerRecRef.MODIFY(TRUE) THEN
+          Customer.GET(Customer."No.");
+    END;
+
+    [External]
+    PROCEDURE ValidateItemDescription@27(VAR SalesLine@1003 : Record 37;VAR DescriptionSelected@1004 : Boolean);
+    VAR
+      Item@1002 : Record 27;
+      ItemTemplate@1005 : Record 1301;
+      O365SalesManagement@1006 : Codeunit 2107;
+      ReturnValue@1000 : Text[50];
+      Found@1001 : Boolean;
+    BEGIN
+      IF SalesLine.Description = '' THEN
+        EXIT;
+
+      // Lookup by item number/description
+      IF NOT Item.TryGetItemNoOpenCard(ReturnValue,SalesLine.Description,FALSE,FALSE,FALSE) THEN BEGIN
+        IF ItemTemplate.NewItemFromTemplate(Item) THEN BEGIN
+          Item.VALIDATE(Description,SalesLine.Description);
+          O365SalesManagement.SetItemDefaultValues(Item);
+          SendItemCreatedNotification(Item,SalesLine);
+        END ELSE
+          ERROR(ItemNotExistErr);
+      END ELSE BEGIN
+        Found := FALSE;
+        IF STRLEN(ReturnValue) <= MAXSTRLEN(Item."No.") THEN
+          Found := Item.GET(ReturnValue);
+        IF NOT Found THEN BEGIN
+          Item.SETRANGE(Description,ReturnValue);
+          IF Item.FINDFIRST THEN;
+        END;
+      END;
+      IF (Item."No." <> '') AND (Item."No." <> SalesLine."No.") THEN
+        SalesLine.VALIDATE("No.",Item."No.");
+      DescriptionSelected := SalesLine.Description <> '';
+    END;
+
+    PROCEDURE ValidateItemUnitOfMeasure@50(VAR SalesLine@1000 : Record 37);
+    VAR
+      TempUOM@1001 : TEMPORARY Record 204;
+      Item@1003 : Record 27;
+      OriginalLineDiscount@1002 : Decimal;
+      OriginalUnitPrice@1004 : Decimal;
+    BEGIN
+      TempUOM.CreateListInCurrentLanguage(TempUOM);
+      IF NOT TryFindUnitOfMeasure(TempUOM,SalesLine."Unit of Measure") THEN BEGIN
+        CreateUnitOfMeasure(SalesLine."Unit of Measure",SalesLine."Unit of Measure");
+        TempUOM.Code := SalesLine."Unit of Measure";
+      END;
+
+      IF Item.WRITEPERMISSION THEN
+        IF Item.GET(SalesLine."No.") THEN
+          IF Item."Base Unit of Measure" <> TempUOM.Code THEN BEGIN
+            Item.VALIDATE("Base Unit of Measure",TempUOM.Code);
+            Item.MODIFY
+          END;
+
+      OriginalUnitPrice := SalesLine."Unit Price"; // Changing uom resets the unit price and line discount.
+      OriginalLineDiscount := SalesLine."Line Discount %";
+      SalesLine.VALIDATE("Unit of Measure Code",TempUOM.Code);
+      IF SalesLine."Unit Price" <> OriginalUnitPrice THEN
+        SalesLine.VALIDATE("Unit Price",OriginalUnitPrice);
+      IF OriginalLineDiscount <> 0 THEN
+        SalesLine.VALIDATE("Line Discount %",OriginalLineDiscount);
+    END;
+
+    PROCEDURE CreateUnitOfMeasure@32(CodeToSet@1000 : Code[10];DescriptionToSet@1001 : Text[10]);
+    VAR
+      UOM@1002 : Record 204;
+    BEGIN
+      IF UOM.GET(CodeToSet) THEN
+        EXIT;
+
+      UOM.INIT;
+      UOM.VALIDATE(Code,CodeToSet);
+      UOM.VALIDATE(Description,DescriptionToSet);
+      UOM.INSERT(TRUE);
+    END;
+
+    [TryFunction]
+    PROCEDURE TryFindUnitOfMeasure@48(VAR TempUOM@1000 : TEMPORARY Record 204;Description@1001 : Text[10]);
+    BEGIN
+      TempUOM.SETFILTER(Description,'@' + Description);
+      TempUOM.FINDFIRST;
+    END;
+
+    PROCEDURE ValidateItemPrice@38(VAR SalesLine@1003 : Record 37);
+    VAR
+      Item@1002 : Record 27;
+      SalesHeader@1004 : Record 36;
+      GLSetup@1005 : Record 98;
+      PriceExclVAT@1001 : Decimal;
+    BEGIN
+      IF SalesLine."No." = '' THEN
+        EXIT;
+
+      IF NOT SalesHeader.GET(SalesLine."Document Type",SalesLine."Document No.") THEN
+        EXIT;
+
+      IF NOT GLSetup.GET THEN
+        EXIT;
+
+      IF Item.WRITEPERMISSION THEN
+        IF Item.GET(SalesLine."No.") THEN BEGIN
+          IF SalesHeader."Prices Including VAT" AND NOT Item."Price Includes VAT" THEN BEGIN
+            PriceExclVAT := ROUND(SalesLine."Unit Price" / (1 + (SalesLine."VAT %" / 100)),GLSetup."Unit-Amount Rounding Precision");
+            Item.VALIDATE("Unit Price",PriceExclVAT);
+            Item.MODIFY;
+            EXIT;
+          END;
+          Item.VALIDATE("Unit Price",SalesLine."Unit Price");
+          Item.MODIFY;
+        END;
+    END;
+
+    PROCEDURE ValidateVATRate@37(VAR SalesLine@1003 : Record 37);
+    VAR
+      Item@1002 : Record 27;
+    BEGIN
+      IF SalesLine."No." = '' THEN
+        EXIT;
+
+      IF Item.WRITEPERMISSION THEN
+        IF Item.GET(SalesLine."No.") THEN BEGIN
+          Item.VALIDATE("VAT Prod. Posting Group",SalesLine."VAT Prod. Posting Group");
+          Item.MODIFY;
+        END;
+    END;
+
+    PROCEDURE IsCustomerBlocked@30(CustomerNo@1000 : Code[20]) : Boolean;
+    VAR
+      Customer@1001 : Record 18;
+    BEGIN
+      IF Customer.GET(CustomerNo) THEN
+        EXIT(Customer.IsBlocked);
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE GetCustomerStatus@39(Customer@1001 : Record 18;VAR BlockedStatus@1000 : Text);
+    BEGIN
+      IF Customer.IsBlocked THEN
+        BlockedStatus := Customer.FIELDCAPTION(Blocked)
+      ELSE
+        BlockedStatus := '';
+    END;
+
+    PROCEDURE IsBusinessCenterExperience@40() : Boolean;
+    VAR
+      ClientTypeManagement@1000 : Codeunit 4;
+    BEGIN
+      EXIT(ClientTypeManagement.GetCurrentClientType = CLIENTTYPE::Tablet);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

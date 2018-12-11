@@ -1,0 +1,522 @@
+OBJECT Codeunit 1652 Add-in Manifest Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:13 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      RuleCollectionXPathTxt@1014 : TextConst '@@@={Locked};ENU="x:Rule[@xsi:type=""RuleCollection"" and @Mode=""And""]/x:Rule[@xsi:type=""RuleCollection"" and @Mode=""Or""]"';
+      MissingNodeErr@1013 : TextConst '@@@="%1=XML node name";ENU=Cannot find an XML node that matches %1.';
+      UnsupportedNodeTypeErr@1012 : TextConst '@@@="%1 = The type of XML node.";ENU=You have specified a node of type %1. This type is not supported.';
+      RuleXPathTxt@1005 : TextConst '@@@={Locked};ENU="x:Rule[@xsi:type=""RuleCollection"" and @Mode=""Or""]/x:Rule[@xsi:type=""RuleCollection"" and @Mode=""And""]/x:Rule[@xsi:type=""ItemHasRegularExpressionMatch""]"';
+      WebClientHttpsErr@1004 : TextConst '@@@="%1=product name";ENU=Cannot set up the add-in because the %1 Server instance is not configured to use Secure Sockets Layer (SSL), or the Web Client Base URL is not defined in the server configuration.';
+      MicrosoftTxt@1003 : TextConst 'ENU=Microsoft';
+      PermissionManager@1007 : Codeunit 9002;
+      NodeType@1021 : 'Version,ProviderName,DefaultLocale,DisplayName,Description,DesktopSourceLoc,TabletSourceLoc,PhoneSourceLoc,AppDomain,IconUrl,HighResolutionIconUrl';
+      TestMode@1017 : Boolean;
+      BrandingFolderTxt@1008 : TextConst '@@@={Locked};ENU=ProjectMadeira/';
+
+    PROCEDURE DownloadManifestToClient@1122(VAR NewOfficeAddin@1003 : Record 1610;FileName@1000 : Text) : Boolean;
+    VAR
+      FileManagement@1002 : Codeunit 419;
+      ServerLocation@1001 : Text;
+    BEGIN
+      ServerLocation := SaveManifestToServer(NewOfficeAddin);
+
+      IF TestMode THEN BEGIN
+        FileManagement.CopyServerFile(ServerLocation,FileName,TRUE);
+        EXIT(TRUE);
+      END;
+
+      EXIT(FileManagement.DownloadHandler(ServerLocation,'','','',FileName));
+    END;
+
+    PROCEDURE SaveManifestToServer@1021(VAR NewOfficeAddin@1004 : Record 1610) : Text;
+    VAR
+      TempBlob@1000 : TEMPORARY Record 99008535;
+      FileManagement@1005 : Codeunit 419;
+      FileOutStream@1001 : OutStream;
+      TempFileName@1002 : Text;
+      ManifestText@1006 : Text;
+    BEGIN
+      GenerateManifest(NewOfficeAddin,ManifestText);
+      TempBlob.Blob.CREATEOUTSTREAM(FileOutStream,TEXTENCODING::UTF8);
+      FileOutStream.WRITETEXT(ManifestText);
+      TempFileName := FileManagement.ServerTempFileName('xml');
+      FileManagement.BLOBExportToServerFile(TempBlob,TempFileName);
+      EXIT(TempFileName);
+    END;
+
+    PROCEDURE UploadDefaultManifest@1005(VAR OfficeAddin@1005 : Record 1610;ManifestLocation@1000 : Text);
+    VAR
+      TempBlob@1003 : TEMPORARY Record 99008535;
+      FileManagement@1004 : Codeunit 419;
+      TempInStream@1001 : InStream;
+      ManifestText@1006 : Text;
+    BEGIN
+      FileManagement.BLOBImportFromServerFile(TempBlob,ManifestLocation);
+      TempBlob.Blob.CREATEINSTREAM(TempInStream,TEXTENCODING::UTF8);
+      TempInStream.READ(ManifestText);
+      UploadDefaultManifestText(OfficeAddin,ManifestText);
+    END;
+
+    PROCEDURE UploadDefaultManifestText@1006(VAR OfficeAddin@1005 : Record 1610;ManifestText@1000 : Text);
+    BEGIN
+      WITH OfficeAddin DO BEGIN
+        // Set the AppID from the manifest
+        "Application ID" := GetAppID(ManifestText);
+        IF ISNULLGUID("Application ID") THEN
+          "Application ID" := CREATEGUID;
+        IF Name = '' THEN
+          Name := GetAppName(ManifestText);
+        IF Description = '' THEN
+          Description := GetAppDescription(ManifestText);
+        Version := GetAppVersion(ManifestText);
+
+        SetDefaultManifestText(ManifestText);
+      END;
+    END;
+
+    PROCEDURE CreateAddin@1016(VAR OfficeAddin@1002 : Record 1610;ManifestText@1000 : Text;AddinName@1004 : Text[50];AddinDescription@1005 : Text[250];AddinID@1001 : Text[50];ManifestCodeunit@1003 : Integer);
+    BEGIN
+      OfficeAddin.INIT;
+      OfficeAddin."Application ID" := AddinID;
+      OfficeAddin."Manifest Codeunit" := ManifestCodeunit;
+      OfficeAddin.Name := AddinName;
+      OfficeAddin.Description := AddinDescription;
+      UploadDefaultManifestText(OfficeAddin,ManifestText);
+      OfficeAddin.INSERT(TRUE);
+    END;
+
+    PROCEDURE GenerateManifest@1023(OfficeAddin@1000 : Record 1610;VAR ManifestText@1001 : Text);
+    BEGIN
+      // Uses the current value of Manifest and updates XML nodes to reflect the current values
+      VerifyHttps;
+      IF OfficeAddin."Manifest Codeunit" <> 0 THEN
+        OnGenerateManifest(OfficeAddin,ManifestText,OfficeAddin."Manifest Codeunit")
+      ELSE BEGIN
+        ManifestText := OfficeAddin.GetDefaultManifestText;
+        SetCommonManifestItems(ManifestText);
+      END;
+    END;
+
+    PROCEDURE SetCommonManifestItems@1011(VAR ManifestText@1000 : Text);
+    VAR
+      Thread@1003 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Threading.Thread";
+    BEGIN
+      // Set general metadata
+      SetNodeValue(ManifestText,Thread.CurrentThread.CurrentCulture.Name,NodeType::DefaultLocale,0);
+      SetNodeValue(ManifestText,MicrosoftTxt,NodeType::ProviderName,0);
+      SetNodeValue(ManifestText,GETURL(CLIENTTYPE::Web),NodeType::AppDomain,0);
+      SetNodeValue(ManifestText,GetAppName(ManifestText),NodeType::DisplayName,0);
+      SetNodeValue(ManifestText,XMLEncode(GetAppDescription(ManifestText)),NodeType::Description,0);
+      IF PermissionManager.SoftwareAsAService THEN BEGIN
+        SetNodeValue(ManifestText,GetImageUrl(BrandingFolderTxt + 'Dyn365_64x.png'),NodeType::IconUrl,0);
+        SetNodeValue(ManifestText,GetImageUrl(BrandingFolderTxt + 'Dyn365_80x.png'),NodeType::HighResolutionIconUrl,0);
+      END ELSE BEGIN
+        SetNodeValue(ManifestText,GetImageUrl('Dyn365_64x.png'),NodeType::IconUrl,0);
+        SetNodeValue(ManifestText,GetImageUrl('Dyn365_80x.png'),NodeType::HighResolutionIconUrl,0);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetManifestNamespaceManager@1020(XMLRootNode@1001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";VAR XMLNamespaceManager@1000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager");
+    VAR
+      XMLDomManagement@1002 : Codeunit 6224;
+    BEGIN
+      XMLDomManagement.AddNamespaces(XMLNamespaceManager,XMLRootNode.OwnerDocument);
+
+      // Need to explicitly add the default namespace to a namespace
+      XMLNamespaceManager.AddNamespace('x',XMLNamespaceManager.DefaultNamespace);
+      XMLNamespaceManager.AddNamespace('vOverrides','http://schemas.microsoft.com/office/mailappversionoverrides');
+      XMLNamespaceManager.AddNamespace('vOverrides11','http://schemas.microsoft.com/office/mailappversionoverrides/1.1');
+    END;
+
+    PROCEDURE SetNodeValue@1019(VAR ManifestText@1000 : Text;Value@1009 : Variant;Node@1008 : Option;FormType@1007 : 'ItemRead,ItemEdit');
+    VAR
+      XMLDomManagement@1006 : Codeunit 6224;
+      XMLRootNode@1004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      XMLFoundNodes@1003 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      XMLNamespaceMgr@1002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager";
+    BEGIN
+      XMLDomManagement.LoadXMLNodeFromText(ManifestText,XMLRootNode);
+      GetManifestNamespaceManager(XMLRootNode,XMLNamespaceMgr);
+
+      CASE Node OF
+        NodeType::DefaultLocale:
+          BEGIN
+            IF NOT XMLDomManagement.FindNodesWithNamespaceManager(XMLRootNode,'x:DefaultLocale',XMLNamespaceMgr,XMLFoundNodes) THEN
+              ERROR(MissingNodeErr,FORMAT(Node));
+            XMLFoundNodes.Item(0).InnerText := FORMAT(Value);
+          END;
+        NodeType::Description:
+          BEGIN
+            IF NOT XMLDomManagement.FindNodesWithNamespaceManager(XMLRootNode,'x:Description',XMLNamespaceMgr,XMLFoundNodes) THEN
+              ERROR(MissingNodeErr,FORMAT(Node));
+            XMLFoundNodes.Item(0).Attributes.ItemOf('DefaultValue').Value := FORMAT(Value);
+          END;
+        NodeType::DisplayName:
+          BEGIN
+            IF NOT XMLDomManagement.FindNodesWithNamespaceManager(XMLRootNode,'x:DisplayName',XMLNamespaceMgr,XMLFoundNodes) THEN
+              ERROR(MissingNodeErr,FORMAT(Node));
+            XMLFoundNodes.Item(0).Attributes.ItemOf('DefaultValue').Value := FORMAT(Value);
+          END;
+        NodeType::IconUrl:
+          BEGIN
+            IF NOT XMLDomManagement.FindNodesWithNamespaceManager(XMLRootNode,'x:IconUrl',XMLNamespaceMgr,XMLFoundNodes) THEN
+              ERROR(MissingNodeErr,FORMAT(Node));
+            XMLFoundNodes.Item(0).Attributes.ItemOf('DefaultValue').Value := FORMAT(Value);
+          END;
+        NodeType::HighResolutionIconUrl:
+          BEGIN
+            IF NOT XMLDomManagement.FindNodesWithNamespaceManager(XMLRootNode,'x:HighResolutionIconUrl',XMLNamespaceMgr,XMLFoundNodes) THEN
+              ERROR(MissingNodeErr,FORMAT(Node));
+            XMLFoundNodes.Item(0).Attributes.ItemOf('DefaultValue').Value := FORMAT(Value);
+          END;
+        NodeType::ProviderName:
+          BEGIN
+            IF NOT XMLDomManagement.FindNodesWithNamespaceManager(XMLRootNode,'x:ProviderName',XMLNamespaceMgr,XMLFoundNodes) THEN
+              ERROR(MissingNodeErr,FORMAT(Node));
+            XMLFoundNodes.Item(0).InnerText := FORMAT(Value);
+          END;
+        NodeType::Version:
+          BEGIN
+            IF NOT XMLDomManagement.FindNodesWithNamespaceManager(XMLRootNode,'x:Version',XMLNamespaceMgr,XMLFoundNodes) THEN
+              ERROR(MissingNodeErr,FORMAT(Node));
+            XMLFoundNodes.Item(0).InnerText := FORMAT(Value);
+          END;
+        NodeType::DesktopSourceLoc:
+          BEGIN
+            IF NOT XMLDomManagement.FindNodesWithNamespaceManager(
+                 XMLRootNode,STRSUBSTNO('x:FormSettings/x:Form[@xsi:type="%1"]/x:DesktopSettings/x:SourceLocation',FormType),
+                 XMLNamespaceMgr,XMLFoundNodes)
+            THEN
+              ERROR(MissingNodeErr,FORMAT(Node));
+            XMLFoundNodes.Item(0).Attributes.ItemOf('DefaultValue').Value := FORMAT(Value);
+          END;
+        NodeType::PhoneSourceLoc:
+          BEGIN
+            IF NOT XMLDomManagement.FindNodesWithNamespaceManager(
+                 XMLRootNode,STRSUBSTNO('x:FormSettings/x:Form[@xsi:type="%1"]/x:PhoneSettings/x:SourceLocation',FormType),
+                 XMLNamespaceMgr,XMLFoundNodes)
+            THEN
+              ERROR(MissingNodeErr,FORMAT(Node));
+            XMLFoundNodes.Item(0).Attributes.ItemOf('DefaultValue').Value := STRSUBSTNO('%1&isphone=1',FORMAT(Value));
+          END;
+        NodeType::TabletSourceLoc:
+          BEGIN
+            IF NOT XMLDomManagement.FindNodesWithNamespaceManager(
+                 XMLRootNode,STRSUBSTNO('x:FormSettings/x:Form[@xsi:type="%1"]/x:TabletSettings/x:SourceLocation',FormType),
+                 XMLNamespaceMgr,XMLFoundNodes)
+            THEN
+              ERROR(MissingNodeErr,FORMAT(Node));
+            XMLFoundNodes.Item(0).Attributes.ItemOf('DefaultValue').Value := FORMAT(Value);
+          END;
+        NodeType::AppDomain:
+          BEGIN
+            IF NOT XMLDomManagement.FindNodesWithNamespaceManager(
+                 XMLRootNode,'x:AppDomains/x:AppDomain',XMLNamespaceMgr,XMLFoundNodes)
+            THEN
+              ERROR(MissingNodeErr,FORMAT(Node));
+            XMLFoundNodes.Item(0).InnerText := FORMAT(Value);
+          END;
+        ELSE
+          ERROR(UnsupportedNodeTypeErr,Node);
+      END;
+
+      ReadXMLDocToText(XMLRootNode,ManifestText);
+    END;
+
+    PROCEDURE SetNodeResource@1008(VAR ManifestText@1000 : Text;Id@1001 : Text[32];Value@1009 : Text;Type@1007 : 'Image,Url,ShortString,LongString');
+    VAR
+      XMLDomManagement@1006 : Codeunit 6224;
+      XMLRootNode@1004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      XMLFoundNodes@1003 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      XMLNamespaceMgr@1002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager";
+      NewValue@1010 : Text;
+    BEGIN
+      XMLDomManagement.LoadXMLNodeFromText(ManifestText,XMLRootNode);
+      GetManifestNamespaceManager(XMLRootNode,XMLNamespaceMgr);
+      NewValue := Value;
+      IF SetNodeLocationValue(
+           'vOverrides:VersionOverrides/x:Resources/%1[@id="%2"]',Id,NewValue,Type,XMLFoundNodes,XMLRootNode,XMLNamespaceMgr)
+      THEN
+        XMLFoundNodes.Item(0).Attributes.ItemOf('DefaultValue').Value := NewValue;
+      NewValue := Value;
+      IF SetNodeLocationValue(
+           'vOverrides:VersionOverrides/vOverrides11:VersionOverrides/x:Resources/%1[@id="%2"]',Id,NewValue,Type,XMLFoundNodes,
+           XMLRootNode,XMLNamespaceMgr)
+      THEN
+        XMLFoundNodes.Item(0).Attributes.ItemOf('DefaultValue').Value := NewValue;
+
+      ReadXMLDocToText(XMLRootNode,ManifestText);
+    END;
+
+    LOCAL PROCEDURE ReadXMLDocToText@1029(XMLRootNode@1000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";VAR ManifestText@1001 : Text);
+    VAR
+      TempBlob@1004 : Record 99008535;
+      XMLDomManagement@1005 : Codeunit 6224;
+      ManifestInStream@1003 : InStream;
+      ManifestOutStream@1002 : OutStream;
+    BEGIN
+      TempBlob.Blob.CREATEOUTSTREAM(ManifestOutStream,TEXTENCODING::UTF8);
+      XMLDomManagement.SaveXMLDocumentToOutStream(ManifestOutStream,XMLRootNode);
+      TempBlob.Blob.CREATEINSTREAM(ManifestInStream,TEXTENCODING::UTF8);
+      ManifestInStream.READ(ManifestText);
+    END;
+
+    PROCEDURE RemovePrefix@1017(VAR ManifestText@1000 : Text);
+    VAR
+      InnerText@1001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.String";
+    BEGIN
+      InnerText := ManifestText;
+      InnerText := InnerText.Replace('vOverrides11:','');
+      InnerText := InnerText.Replace(':vOverrides11','');
+      InnerText := InnerText.Replace('vOverrides:','');
+      InnerText := InnerText.Replace(':vOverrides','');
+
+      ManifestText := InnerText;
+    END;
+
+    PROCEDURE RemoveAddInTriggersFromManifest@1044(VAR ManifestText@1001 : Text);
+    VAR
+      XMLDomManagement@1008 : Codeunit 6224;
+      XMLNode@1000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      XMLRootNode@1005 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      XMLFoundNodes@1004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      XMLNamespaceMgr@1003 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager";
+    BEGIN
+      XMLDomManagement.LoadXMLNodeFromText(ManifestText,XMLRootNode);
+      GetManifestNamespaceManager(XMLRootNode,XMLNamespaceMgr);
+
+      // Find the nodes that trigger the add-in and remove them all
+      XMLDomManagement.FindNodesWithNamespaceManager(
+        XMLRootNode,
+        RuleXPathTxt,
+        XMLNamespaceMgr,XMLFoundNodes);
+
+      FOREACH XMLNode IN XMLFoundNodes DO
+        XMLNode.ParentNode.RemoveChild(XMLNode);
+
+      ReadXMLDocToText(XMLRootNode,ManifestText);
+    END;
+
+    PROCEDURE SetSourceLocationNodes@1018(VAR ManifestText@1001 : Text;URL@1000 : Text;FormType@1002 : 'ItemRead,ItemEdit');
+    BEGIN
+      SetNodeValue(ManifestText,URL,NodeType::DesktopSourceLoc,FormType);
+      SetNodeValue(ManifestText,URL,NodeType::PhoneSourceLoc,FormType);
+      SetNodeValue(ManifestText,URL,NodeType::TabletSourceLoc,FormType);
+    END;
+
+    PROCEDURE ConstructURL@1001(HostType@1001 : Text;Command@1003 : Text;Version@1000 : Text) BaseURL : Text;
+    VAR
+      CompanyQueryPos@1002 : Integer;
+    BEGIN
+      BaseURL := GETURL(CLIENTTYPE::Web);
+
+      CompanyQueryPos := STRPOS(LOWERCASE(BaseURL),'?');
+      IF CompanyQueryPos > 0 THEN
+        BaseURL := INSSTR(BaseURL,'/OfficeAddin.aspx',CompanyQueryPos) + '&'
+      ELSE
+        BaseURL := BaseURL + '/OfficeAddin.aspx?';
+
+      BaseURL := BaseURL + 'OfficeContext=' + HostType;
+      IF Command <> '' THEN
+        BaseURL := BaseURL + '&Command=' + Command;
+
+      IF Version <> '' THEN
+        BaseURL := BaseURL + '&Version=' + Version;
+    END;
+
+    PROCEDURE AddRegExRuleNode@1046(VAR ManifestText@1002 : Text;RegExName@1000 : Text;RegExText@1001 : Text);
+    VAR
+      XMLDomManagement@1010 : Codeunit 6224;
+      XMLRootNode@1007 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      XMLRuleNode@1006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      XMLFoundNodes@1005 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      XMLNamespaceMgr@1004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager";
+    BEGIN
+      XMLDomManagement.LoadXMLNodeFromText(ManifestText,XMLRootNode);
+      GetManifestNamespaceManager(XMLRootNode,XMLNamespaceMgr);
+
+      XMLDomManagement.FindNodesWithNamespaceManager(
+        XMLRootNode,RuleCollectionXPathTxt,
+        XMLNamespaceMgr,XMLFoundNodes);
+
+      XMLRuleNode := XMLRootNode.OwnerDocument.CreateNode('element','Rule',
+          'http://schemas.microsoft.com/office/appforoffice/1.1');
+      XMLDomManagement.AddAttributeWithPrefix(
+        XMLRuleNode,'type','xsi','http://www.w3.org/2001/XMLSchema-instance','ItemHasRegularExpressionMatch');
+      XMLDomManagement.AddAttribute(XMLRuleNode,'RegExName',RegExName);
+      XMLDomManagement.AddAttribute(XMLRuleNode,'RegExValue',RegExText);
+      XMLDomManagement.AddAttribute(XMLRuleNode,'PropertyName','BodyAsPlaintext');
+      XMLDomManagement.AddAttribute(XMLRuleNode,'IgnoreCase','true');
+      XMLFoundNodes.Item(0).AppendChild(XMLRuleNode);
+
+      ReadXMLDocToText(XMLRootNode,ManifestText);
+    END;
+
+    PROCEDURE GetImageUrl@1013(ImageName@1001 : Text) : Text;
+    VAR
+      BaseUrl@1000 : Text;
+    BEGIN
+      BaseUrl := GETURL(CLIENTTYPE::Web);
+      IF STRPOS(BaseUrl,'?') > 0 THEN
+        BaseUrl := COPYSTR(BaseUrl,1,STRPOS(BaseUrl,'?') - 1);
+
+      EXIT(STRSUBSTNO('%1/Resources/Images/%2',BaseUrl,ImageName));
+    END;
+
+    PROCEDURE GetAppID@1036(ManifestText@1005 : Text) : Text;
+    VAR
+      XMLFoundNodes@1001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+    BEGIN
+      GetXmlNodes(ManifestText,XMLFoundNodes,'x:Id');
+      EXIT(XMLFoundNodes.Item(0).InnerText)
+    END;
+
+    PROCEDURE GetAppName@1039(ManifestText@1005 : Text) : Text[50];
+    VAR
+      XMLFoundNodes@1001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+    BEGIN
+      GetXmlNodes(ManifestText,XMLFoundNodes,'x:DisplayName');
+      EXIT(XMLFoundNodes.Item(0).Attributes.ItemOf('DefaultValue').Value)
+    END;
+
+    PROCEDURE GetAppDescription@1040(ManifestText@1005 : Text) : Text[250];
+    VAR
+      XMLFoundNodes@1001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+    BEGIN
+      GetXmlNodes(ManifestText,XMLFoundNodes,'x:Description');
+      EXIT(XMLFoundNodes.Item(0).Attributes.ItemOf('DefaultValue').Value)
+    END;
+
+    PROCEDURE GetAppVersion@1003(ManifestText@1005 : Text) : Text[20];
+    VAR
+      XMLFoundNodes@1001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+    BEGIN
+      GetXmlNodes(ManifestText,XMLFoundNodes,'x:Version');
+      EXIT(XMLFoundNodes.Item(0).InnerText)
+    END;
+
+    LOCAL PROCEDURE GetXmlNodes@1004(ManifestText@1006 : Text;VAR XMLFoundNodes@1002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";NodeName@1000 : Text);
+    VAR
+      XMLDomManagement@1005 : Codeunit 6224;
+      XMLRootNode@1003 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      XMLNamespaceMgr@1001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager";
+    BEGIN
+      XMLDomManagement.LoadXMLNodeFromText(ManifestText,XMLRootNode);
+      GetManifestNamespaceManager(XMLRootNode,XMLNamespaceMgr);
+
+      IF NOT XMLDomManagement.FindNodesWithNamespaceManager(XMLRootNode,NodeName,XMLNamespaceMgr,XMLFoundNodes) THEN
+        ERROR(MissingNodeErr,NodeName);
+    END;
+
+    LOCAL PROCEDURE VerifyHttps@1009();
+    VAR
+      WebClientUrl@1000 : Text;
+    BEGIN
+      WebClientUrl := ConstructURL('','','');
+      IF (NOT TestMode) AND (LOWERCASE(COPYSTR(WebClientUrl,1,5)) <> 'https') THEN
+        ERROR(WebClientHttpsErr,PRODUCTNAME.SHORT);
+    END;
+
+    LOCAL PROCEDURE SetNodeLocationValue@2(NodeLocation@1000 : Text;Id@1007 : Text[32];VAR Value@1002 : Text;Type@1003 : 'Image,Url,ShortString,LongString';VAR FoundXMLNodeList@1009 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";VAR XMLRootNode@1008 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";XMLNamespaceMgr@1001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager") : Boolean;
+    VAR
+      XMLDomManagement@1006 : Codeunit 6224;
+    BEGIN
+      CASE Type OF
+        Type::Image:
+          BEGIN
+            NodeLocation := STRSUBSTNO(NodeLocation,'bt:Images/bt:Image',Id);
+            Value := GetImageUrl(Value);
+          END;
+        Type::Url:
+          NodeLocation := STRSUBSTNO(NodeLocation,'bt:Urls/bt:Url',Id);
+        Type::ShortString:
+          NodeLocation := STRSUBSTNO(NodeLocation,'bt:ShortStrings/bt:String',Id);
+        Type::LongString:
+          NodeLocation := STRSUBSTNO(NodeLocation,'bt:LongStrings/bt:String',Id);
+        ELSE
+          ERROR(UnsupportedNodeTypeErr,Type);
+      END;
+
+      IF XMLDomManagement.FindNodesWithNamespaceManager(XMLRootNode,NodeLocation,XMLNamespaceMgr,FoundXMLNodeList) THEN
+        EXIT(TRUE);
+
+      EXIT(FALSE);
+    END;
+
+    [External]
+    PROCEDURE SetTestMode@1010(NewTestMode@1000 : Boolean);
+    BEGIN
+      TestMode := NewTestMode;
+    END;
+
+    [External]
+    PROCEDURE XMLEncode@1007(Value@1000 : Text) Encoded : Text;
+    VAR
+      SystemWebHttpUtility@1001 : DotNet "'System.Web, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Web.HttpUtility";
+    BEGIN
+      SystemWebHttpUtility := SystemWebHttpUtility.HttpUtility;
+      Encoded := SystemWebHttpUtility.HtmlEncode(Value);
+    END;
+
+    [External]
+    PROCEDURE GetAddinByHostType@1002(VAR OfficeAddin@1000 : Record 1610;HostType@1001 : Text);
+    VAR
+      ManifestCodeunit@1002 : Integer;
+    BEGIN
+      GetManifestCodeunit(ManifestCodeunit,HostType);
+      GetAddin(OfficeAddin,ManifestCodeunit);
+    END;
+
+    [Integration]
+    PROCEDURE CreateBasicAddins@1015(VAR OfficeAddin@1000 : Record 1610);
+    BEGIN
+    END;
+
+    [Integration]
+    PROCEDURE CreateDefaultAddins@1014(VAR OfficeAddin@1000 : Record 1610);
+    BEGIN
+    END;
+
+    [Integration]
+    PROCEDURE GetAddin@1028(VAR OfficeAddin@1000 : Record 1610;CodeunitID@1001 : Integer);
+    BEGIN
+    END;
+
+    [Integration]
+    PROCEDURE GetAddinID@1022(VAR ID@1000 : Text;CodeunitID@1001 : Integer);
+    BEGIN
+    END;
+
+    [Integration]
+    PROCEDURE GetAddinVersion@1024(VAR Version@1000 : Text;CodeunitID@1001 : Integer);
+    BEGIN
+    END;
+
+    [Integration]
+    PROCEDURE GetManifestCodeunit@1025(VAR CodeunitID@1002 : Integer;HostType@1000 : Text);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnGenerateManifest@1032(VAR OfficeAddin@1002 : Record 1610;VAR ManifestText@1000 : Text;CodeunitID@1001 : Integer);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

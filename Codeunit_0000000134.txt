@@ -1,0 +1,420 @@
+OBJECT Codeunit 134 Import Attachment - Inc. Doc.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:07:51 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    TableNo=133;
+    OnRun=VAR
+            FileName@1000 : Text;
+          BEGIN
+            UploadFile(Rec,FileName);
+            ImportAttachment(Rec,FileName);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ReplaceContentQst@1000 : TextConst 'ENU=Do you want to replace the file content?';
+      ImportTxt@1001 : TextConst 'ENU=Insert File';
+      FileDialogTxt@1002 : TextConst '@@@="%1=file types, such as *.txt or *.docx";ENU=Attachments (%1)|%1';
+      FilterTxt@1003 : TextConst '@@@={Locked};ENU="*.jpg;*.jpeg;*.bmp;*.png;*.gif;*.tiff;*.tif;*.pdf;*.docx;*.doc;*.xlsx;*.xls;*.pptx;*.ppt;*.msg;*.xml;*.*"';
+      NotSupportedDocTableErr@1004 : TextConst '@@@=%1 is a number (integer).;ENU=Table no. %1 is not supported.';
+      PhotoLbl@1005 : TextConst '@@@="%1 = a number, e.g. 1, 2, 3,...";ENU=Photo %1';
+      EmptyFileMsg@1006 : TextConst 'ENU=You have created an incoming document based on an empty file. Try again with a file that contains data that you want to import.';
+      IsTestMode@1007 : Boolean;
+
+    PROCEDURE UploadFile@2(VAR IncomingDocumentAttachment@1000 : Record 133;VAR FileName@1003 : Text);
+    VAR
+      TempBlob@1002 : Record 99008535;
+      FileManagement@1001 : Codeunit 419;
+    BEGIN
+      IncomingDocumentAttachment.CALCFIELDS(Content);
+      IF IncomingDocumentAttachment.Content.HASVALUE THEN
+        IF NOT CONFIRM(ReplaceContentQst,FALSE) THEN
+          ERROR('');
+
+      FileName := FileManagement.BLOBImportWithFilter(TempBlob,ImportTxt,FileName,STRSUBSTNO(FileDialogTxt,FilterTxt),FilterTxt);
+      IncomingDocumentAttachment.Content := TempBlob.Blob;
+    END;
+
+    PROCEDURE ImportAttachment@6(VAR IncomingDocumentAttachment@1003 : Record 133;FileName@1000 : Text) : Boolean;
+    VAR
+      IncomingDocument@1004 : Record 130;
+      TempBlob@1006 : Record 99008535;
+      FileManagement@1001 : Codeunit 419;
+    BEGIN
+      IF FileName = '' THEN
+        ERROR('');
+
+      WITH IncomingDocumentAttachment DO BEGIN
+        FindOrCreateIncomingDocument(IncomingDocumentAttachment,IncomingDocument);
+        IF IncomingDocument.Status IN [IncomingDocument.Status::"Pending Approval",IncomingDocument.Status::Failed] THEN
+          IncomingDocument.TESTFIELD(Status,IncomingDocument.Status::New);
+        "Incoming Document Entry No." := IncomingDocument."Entry No.";
+        "Line No." := GetIncomingDocumentNextLineNo(IncomingDocument);
+
+        IF NOT Content.HASVALUE THEN BEGIN
+          IF FileManagement.ServerFileExists(FileName) THEN
+            FileManagement.BLOBImportFromServerFile(TempBlob,FileName)
+          ELSE
+            FileManagement.BLOBImportFromServerFile(TempBlob,FileManagement.UploadFileToServer(FileName));
+          Content := TempBlob.Blob;
+        END;
+
+        IF NOT Content.HASVALUE THEN BEGIN
+          MESSAGE(EmptyFileMsg);
+          IF NOT IsTestMode THEN
+            DELETE;
+          EXIT(FALSE);
+        END;
+
+        VALIDATE("File Extension",LOWERCASE(COPYSTR(FileManagement.GetExtension(FileName),1,MAXSTRLEN("File Extension"))));
+        IF Name = '' THEN
+          Name := COPYSTR(FileManagement.GetFileNameWithoutExtension(FileName),1,MAXSTRLEN(Name));
+
+        "Document No." := IncomingDocument."Document No.";
+        "Posting Date" := IncomingDocument."Posting Date";
+        IF IncomingDocument.Description = '' THEN BEGIN
+          IncomingDocument.Description := COPYSTR(Name,1,MAXSTRLEN(IncomingDocument.Description));
+          IncomingDocument.MODIFY;
+        END;
+
+        INSERT(TRUE);
+
+        IF Type IN [Type::Image,Type::PDF] THEN
+          OnAttachBinaryFile;
+      END;
+      EXIT(TRUE);
+    END;
+
+    [External]
+    PROCEDURE CreateNewAttachment@8(VAR IncomingDocumentAttachment@1000 : Record 133);
+    VAR
+      IncomingDocument@1001 : Record 130;
+    BEGIN
+      IncomingDocument.INIT;
+
+      FindOrCreateIncomingDocument(IncomingDocumentAttachment,IncomingDocument);
+
+      IncomingDocumentAttachment."Incoming Document Entry No." := IncomingDocument."Entry No.";
+      IncomingDocumentAttachment."Document No." := IncomingDocument."Document No.";
+      IncomingDocumentAttachment."Posting Date" := IncomingDocument."Posting Date";
+
+      IncomingDocumentAttachment."Line No." := GetIncomingDocumentNextLineNo(IncomingDocument);
+    END;
+
+    LOCAL PROCEDURE FindOrCreateIncomingDocument@4(VAR IncomingDocumentAttachment@1005 : Record 133;VAR IncomingDocument@1000 : Record 130);
+    VAR
+      DocNo@1002 : Code[20];
+      PostingDate@1001 : Date;
+    BEGIN
+      IF FindUsingIncomingDocNoFilter(IncomingDocumentAttachment,IncomingDocument) THEN
+        EXIT;
+      IF FindUsingDocNoFilter(IncomingDocumentAttachment,IncomingDocument,PostingDate,DocNo) THEN
+        EXIT;
+      CreateIncomingDocument(IncomingDocumentAttachment,IncomingDocument,PostingDate,DocNo);
+    END;
+
+    LOCAL PROCEDURE FindInIncomingDocAttachmentUsingIncomingDocNoFilter@25(VAR IncomingDocumentAttachment@1000 : Record 133;VAR IncomingDocument@1005 : Record 130) : Boolean;
+    VAR
+      IncomingDocNo@1004 : Integer;
+    BEGIN
+      IF IncomingDocumentAttachment.GETFILTER("Incoming Document Entry No.") <> '' THEN BEGIN
+        IncomingDocNo := IncomingDocumentAttachment.GETRANGEMIN("Incoming Document Entry No.");
+        IF IncomingDocNo <> 0 THEN
+          EXIT(IncomingDocument.GET(IncomingDocNo));
+      END;
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE FindInGenJournalLineUsingIncomingDocNoFilter@22(VAR IncomingDocumentAttachment@1000 : Record 133;VAR IncomingDocument@1005 : Record 130) : Boolean;
+    VAR
+      IncomingDocNo@1004 : Integer;
+    BEGIN
+      IF IncomingDocumentAttachment.GETFILTER("Journal Batch Name Filter") <> '' THEN BEGIN
+        IncomingDocNo := CreateNewJournalLineIncomingDoc(IncomingDocumentAttachment);
+        IF IncomingDocNo <> 0 THEN
+          EXIT(IncomingDocument.GET(IncomingDocNo));
+      END;
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE FindInSalesPurchUsingIncomingDocNoFilter@26(VAR IncomingDocumentAttachment@1000 : Record 133;VAR IncomingDocument@1005 : Record 130) : Boolean;
+    VAR
+      IncomingDocNo@1004 : Integer;
+    BEGIN
+      IF IncomingDocumentAttachment.GETFILTER("Document Table No. Filter") <> '' THEN BEGIN
+        IncomingDocNo := CreateNewSalesPurchIncomingDoc(IncomingDocumentAttachment);
+        IF IncomingDocNo <> 0 THEN
+          EXIT(IncomingDocument.GET(IncomingDocNo));
+      END;
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE FindUsingIncomingDocNoFilter@9(VAR IncomingDocumentAttachment@1000 : Record 133;VAR IncomingDocument@1005 : Record 130) : Boolean;
+    VAR
+      FilterGroupID@1003 : Integer;
+      Found@1001 : Boolean;
+    BEGIN
+      FOR FilterGroupID := 0 TO 2 DO BEGIN
+        IncomingDocumentAttachment.FILTERGROUP(FilterGroupID * 2);
+        CASE TRUE OF
+          FindInIncomingDocAttachmentUsingIncomingDocNoFilter(IncomingDocumentAttachment,IncomingDocument):
+            Found := TRUE;
+          FindInGenJournalLineUsingIncomingDocNoFilter(IncomingDocumentAttachment,IncomingDocument):
+            Found := TRUE;
+          FindInSalesPurchUsingIncomingDocNoFilter(IncomingDocumentAttachment,IncomingDocument):
+            Found := TRUE;
+        END;
+        IF Found THEN
+          BREAK;
+      END;
+      IncomingDocumentAttachment.FILTERGROUP(0);
+      EXIT(Found);
+    END;
+
+    LOCAL PROCEDURE FindUsingDocNoFilter@10(VAR IncomingDocumentAttachment@1000 : Record 133;VAR IncomingDocument@1004 : Record 130;VAR PostingDate@1001 : Date;VAR DocNo@1006 : Code[20]) : Boolean;
+    VAR
+      FilterGroupID@1003 : Integer;
+    BEGIN
+      FOR FilterGroupID := 0 TO 2 DO BEGIN
+        IncomingDocumentAttachment.FILTERGROUP(FilterGroupID * 2);
+        IF (IncomingDocumentAttachment.GETFILTER("Document No.") <> '') AND
+           (IncomingDocumentAttachment.GETFILTER("Posting Date") <> '')
+        THEN BEGIN
+          DocNo := IncomingDocumentAttachment.GETRANGEMIN("Document No.");
+          PostingDate := IncomingDocumentAttachment.GETRANGEMIN("Posting Date");
+          IF DocNo <> '' THEN
+            BREAK;
+        END;
+      END;
+      IncomingDocumentAttachment.FILTERGROUP(0);
+
+      IF (DocNo = '') OR (PostingDate = 0D) THEN
+        EXIT(FALSE);
+
+      IncomingDocument.SETRANGE("Document No.",DocNo);
+      IncomingDocument.SETRANGE("Posting Date",PostingDate);
+      EXIT(IncomingDocument.FINDFIRST);
+    END;
+
+    LOCAL PROCEDURE CreateNewSalesPurchIncomingDoc@7(VAR IncomingDocumentAttachment@1006 : Record 133) : Integer;
+    VAR
+      IncomingDocument@1005 : Record 130;
+      SalesHeader@1000 : Record 36;
+      PurchaseHeader@1001 : Record 38;
+      DocTableNo@1003 : Integer;
+      DocType@1002 : Option;
+      DocNo@1004 : Code[20];
+    BEGIN
+      WITH IncomingDocumentAttachment DO BEGIN
+        IF GETFILTER("Document Table No. Filter") <> '' THEN
+          DocTableNo := GETRANGEMIN("Document Table No. Filter");
+        IF GETFILTER("Document Type Filter") <> '' THEN
+          DocType := GETRANGEMIN("Document Type Filter");
+        IF GETFILTER("Document No. Filter") <> '' THEN
+          DocNo := GETRANGEMIN("Document No. Filter");
+
+        CASE DocTableNo OF
+          DATABASE::"Sales Header":
+            BEGIN
+              SalesHeader.GET(DocType,DocNo);
+              CreateIncomingDocumentExtended(IncomingDocumentAttachment,IncomingDocument,0D,'',SalesHeader.RECORDID);
+              SalesHeader."Incoming Document Entry No." := IncomingDocument."Entry No.";
+              SalesHeader.MODIFY;
+            END;
+          DATABASE::"Purchase Header":
+            BEGIN
+              PurchaseHeader.GET(DocType,DocNo);
+              CreateIncomingDocumentExtended(IncomingDocumentAttachment,IncomingDocument,0D,'',PurchaseHeader.RECORDID);
+              PurchaseHeader."Incoming Document Entry No." := IncomingDocument."Entry No.";
+              PurchaseHeader.MODIFY;
+            END;
+          ELSE
+            ERROR(NotSupportedDocTableErr,DocTableNo);
+        END;
+
+        EXIT(IncomingDocument."Entry No.");
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateNewJournalLineIncomingDoc@5(VAR IncomingDocumentAttachment@1001 : Record 133) : Integer;
+    VAR
+      IncomingDocument@1005 : Record 130;
+      GenJournalLine@1000 : Record 81;
+      JnlTemplateName@1003 : Code[20];
+      JnlBatchName@1006 : Code[20];
+      JnlLineNo@1004 : Integer;
+    BEGIN
+      WITH IncomingDocumentAttachment DO BEGIN
+        IF GETFILTER("Journal Template Name Filter") <> '' THEN
+          JnlTemplateName := GETRANGEMIN("Journal Template Name Filter");
+        IF GETFILTER("Journal Batch Name Filter") <> '' THEN
+          JnlBatchName := GETRANGEMIN("Journal Batch Name Filter");
+        IF GETFILTER("Journal Line No. Filter") <> '' THEN
+          JnlLineNo := GETRANGEMIN("Journal Line No. Filter");
+
+        GenJournalLine.GET(JnlTemplateName,JnlBatchName,JnlLineNo);
+        CreateIncomingDocumentExtended(IncomingDocumentAttachment,IncomingDocument,0D,'',GenJournalLine.RECORDID);
+        GenJournalLine."Incoming Document Entry No." := IncomingDocument."Entry No.";
+        GenJournalLine.MODIFY;
+
+        EXIT(IncomingDocument."Entry No.");
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateIncomingDocument@11(VAR IncomingDocumentAttachment@1009 : Record 133;VAR IncomingDocument@1001 : Record 130;PostingDate@1000 : Date;DocNo@1002 : Code[20]);
+    VAR
+      DummyRecordID@1005 : RecordID;
+    BEGIN
+      CreateIncomingDocumentExtended(IncomingDocumentAttachment,IncomingDocument,PostingDate,DocNo,DummyRecordID);
+    END;
+
+    LOCAL PROCEDURE CreateIncomingDocumentExtended@24(VAR IncomingDocumentAttachment@1009 : Record 133;VAR IncomingDocument@1001 : Record 130;PostingDate@1000 : Date;DocNo@1002 : Code[20];RelatedRecordID@1006 : RecordID);
+    VAR
+      DataTypeManagement@1004 : Codeunit 701;
+      RelatedRecordRef@1007 : RecordRef;
+      RelatedRecord@1003 : Variant;
+    BEGIN
+      IncomingDocument.CreateIncomingDocument('','');
+      IncomingDocument."Document Type" :=
+        GetDocType(IncomingDocumentAttachment,IncomingDocument,PostingDate,DocNo,IncomingDocument.Posted);
+      IF RelatedRecordID.TABLENO = 0 THEN
+        IF IncomingDocument.GetNAVRecord(RelatedRecord) THEN
+          IF DataTypeManagement.GetRecordRef(RelatedRecord,RelatedRecordRef) THEN
+            RelatedRecordID := RelatedRecordRef.RECORDID;
+      IncomingDocument."Related Record ID" := RelatedRecordID;
+      IF IncomingDocument."Document Type" <> IncomingDocument."Document Type"::" " THEN BEGIN
+        IF IncomingDocument.Posted THEN
+          IncomingDocument.Status := IncomingDocument.Status::Posted
+        ELSE
+          IncomingDocument.Status := IncomingDocument.Status::Created;
+        IncomingDocument.Released := TRUE;
+        IncomingDocument."Released Date-Time" := CURRENTDATETIME;
+        IncomingDocument."Released By User ID" := USERSECURITYID;
+      END;
+      IncomingDocument.MODIFY;
+    END;
+
+    LOCAL PROCEDURE GetDocType@1(VAR IncomingDocumentAttachment@1009 : Record 133;VAR IncomingDocument@1002 : Record 130;PostingDate@1001 : Date;DocNo@1000 : Code[20];VAR Posted@1010 : Boolean) : Integer;
+    BEGIN
+      IF (PostingDate <> 0D) AND (DocNo <> '') THEN BEGIN
+        IncomingDocument.SetPostedDocFields(PostingDate,DocNo);
+        EXIT(IncomingDocument.GetPostedDocType(PostingDate,DocNo,Posted));
+      END;
+      Posted := FALSE;
+      EXIT(GetUnpostedDocType(IncomingDocumentAttachment,IncomingDocument));
+    END;
+
+    LOCAL PROCEDURE GetUnpostedDocType@84(VAR IncomingDocumentAttachment@1009 : Record 133;VAR IncomingDocument@1000 : Record 130) : Integer;
+    BEGIN
+      IF IsJournalRelated(IncomingDocumentAttachment) THEN
+        EXIT(IncomingDocument."Document Type"::Journal);
+
+      IF IsSalesPurhaseRelated(IncomingDocumentAttachment) THEN
+        EXIT(GetUnpostedSalesPurchaseDocType(IncomingDocumentAttachment,IncomingDocument));
+
+      EXIT(IncomingDocument."Document Type"::" ");
+    END;
+
+    LOCAL PROCEDURE GetUnpostedSalesPurchaseDocType@14(VAR IncomingDocumentAttachment@1009 : Record 133;VAR IncomingDocument@1000 : Record 130) : Integer;
+    VAR
+      SalesHeader@1004 : Record 36;
+      PurchaseHeader@1003 : Record 38;
+    BEGIN
+      CASE IncomingDocumentAttachment.GETRANGEMIN("Document Table No. Filter") OF
+        DATABASE::"Sales Header":
+          BEGIN
+            IF IncomingDocumentAttachment.GETRANGEMIN("Document Type Filter") = SalesHeader."Document Type"::"Credit Memo" THEN
+              EXIT(IncomingDocument."Document Type"::"Sales Credit Memo");
+            EXIT(IncomingDocument."Document Type"::"Sales Invoice");
+          END;
+        DATABASE::"Purchase Header":
+          BEGIN
+            IF IncomingDocumentAttachment.GETRANGEMIN("Document Type Filter") = PurchaseHeader."Document Type"::"Credit Memo" THEN
+              EXIT(IncomingDocument."Document Type"::"Purchase Credit Memo");
+            EXIT(IncomingDocument."Document Type"::"Purchase Invoice");
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE IsJournalRelated@12(VAR IncomingDocumentAttachment@1000 : Record 133) : Boolean;
+    VAR
+      Result@1001 : Boolean;
+    BEGIN
+      Result :=
+        (IncomingDocumentAttachment.GETFILTER("Journal Template Name Filter") <> '') AND
+        (IncomingDocumentAttachment.GETFILTER("Journal Batch Name Filter") <> '') AND
+        (IncomingDocumentAttachment.GETFILTER("Journal Line No. Filter") <> '');
+      EXIT(Result);
+    END;
+
+    LOCAL PROCEDURE IsSalesPurhaseRelated@3(VAR IncomingDocumentAttachment@1000 : Record 133) : Boolean;
+    VAR
+      Result@1001 : Boolean;
+    BEGIN
+      Result :=
+        (IncomingDocumentAttachment.GETFILTER("Document Table No. Filter") <> '') AND
+        (IncomingDocumentAttachment.GETFILTER("Document Type Filter") <> '');
+      EXIT(Result);
+    END;
+
+    LOCAL PROCEDURE GetIncomingDocumentNextLineNo@19(IncomingDocument@1000 : Record 130) : Integer;
+    VAR
+      IncomingDocumentAttachment@1001 : Record 133;
+    BEGIN
+      WITH IncomingDocumentAttachment DO BEGIN
+        SETRANGE("Incoming Document Entry No.",IncomingDocument."Entry No.");
+        IF FINDLAST THEN;
+        EXIT("Line No." + LineIncrement);
+      END;
+    END;
+
+    LOCAL PROCEDURE LineIncrement@23() : Integer;
+    BEGIN
+      EXIT(10000);
+    END;
+
+    PROCEDURE ProcessAndUploadPicture@13(PictureFilePath@1001 : Text;VAR IncomingDocumentAttachmentOriginal@1000 : Record 133);
+    VAR
+      IncomingDocumentAttachment@1006 : Record 133;
+      File@1004 : File;
+      InStr@1003 : InStream;
+      OutStr@1002 : OutStream;
+    BEGIN
+      IncomingDocumentAttachment.INIT;
+      IncomingDocumentAttachment.COPYFILTERS(IncomingDocumentAttachmentOriginal);
+
+      CreateNewAttachment(IncomingDocumentAttachment);
+      IncomingDocumentAttachment.Name :=
+        COPYSTR(STRSUBSTNO(PhotoLbl,IncomingDocumentAttachment."Line No." DIV 10000),1,MAXSTRLEN(IncomingDocumentAttachment.Name));
+      IncomingDocumentAttachment.VALIDATE("File Extension",'jpg');
+
+      File.OPEN(PictureFilePath);
+      File.CREATEINSTREAM(InStr);
+      IncomingDocumentAttachment.Content.CREATEOUTSTREAM(OutStr);
+      COPYSTREAM(OutStr,InStr);
+
+      IncomingDocumentAttachment.INSERT(TRUE);
+      COMMIT;
+
+      File.CLOSE;
+      IF ERASE(PictureFilePath) THEN;
+    END;
+
+    PROCEDURE SetTestMode@17();
+    BEGIN
+      IsTestMode := TRUE;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

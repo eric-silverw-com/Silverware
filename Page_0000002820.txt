@@ -1,0 +1,230 @@
+OBJECT Page 2820 Native - Attachments
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:10:50 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=[@@@={Locked};
+               ENU=nativeInvoicingAttachments];
+    SourceTable=Table5509;
+    DelayedInsert=Yes;
+    PageType=List;
+    SourceTableTemporary=Yes;
+    OnFindRecord=VAR
+                   DocumentIdFilter@1001 : Text;
+                   AttachmentIdFilter@1004 : Text;
+                   FilterView@1000 : Text;
+                   DocumentId@1005 : GUID;
+                 BEGIN
+                   IF NOT AttachmentsLoaded THEN BEGIN
+                     FilterView := GETVIEW;
+                     DocumentIdFilter := GETFILTER("Document Id");
+                     AttachmentIdFilter := GETFILTER(Id);
+                     IF (AttachmentIdFilter <> '') AND (DocumentIdFilter = '') THEN BEGIN
+                       DocumentId := GraphMgtAttachmentBuffer.GetDocumentIdFromAttachmentId(AttachmentIdFilter);
+                       DocumentIdFilter := FORMAT(DocumentId);
+                     END;
+                     GraphMgtAttachmentBuffer.LoadAttachments(Rec,DocumentIdFilter,AttachmentIdFilter);
+                     SETVIEW(FilterView);
+                     AttachmentsFound := FINDFIRST;
+                     IF NOT AttachmentsFound THEN
+                       EXIT(FALSE);
+                     AttachmentsLoaded := TRUE;
+                   END;
+                   EXIT(AttachmentsFound);
+                 END;
+
+    OnNewRecord=BEGIN
+                  TempFieldBuffer.RESET;
+                  TempFieldBuffer.DELETEALL;
+                END;
+
+    OnInsertRecord=VAR
+                     FileManagement@1003 : Codeunit 419;
+                   BEGIN
+                     IF NOT FileManagement.IsValidFileName("File Name") THEN
+                       VALIDATE("File Name",'filename.txt');
+
+                     VALIDATE("Created Date-Time",ROUNDDATETIME(CURRENTDATETIME,1000));
+                     GraphMgtAttachmentBuffer.RegisterFieldSet(FIELDNO("Created Date-Time"),TempFieldBuffer);
+
+                     ByteSizeFromContent;
+
+                     GraphMgtAttachmentBuffer.PropagateInsertAttachmentSafe(Rec,TempFieldBuffer);
+
+                     Base64Content := ''; // Cut out base64Content from the response
+                     EXIT(FALSE);
+                   END;
+
+    OnModifyRecord=BEGIN
+                     GraphMgtAttachmentBuffer.PropagateModifyAttachment(Rec,TempFieldBuffer);
+                     ByteSizeFromContent;
+                     Base64Content := ''; // Cut out base64Content from the response
+                     EXIT(FALSE);
+                   END;
+
+    OnDeleteRecord=BEGIN
+                     GraphMgtAttachmentBuffer.PropagateDeleteAttachment(Rec);
+                     EXIT(FALSE);
+                   END;
+
+  }
+  CONTROLS
+  {
+    { 18  ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 17  ;1   ;Group     ;
+                Name=Group;
+                GroupType=Repeater }
+
+    { 16  ;2   ;Field     ;
+                Name=id;
+                CaptionML=[@@@={Locked};
+                           ENU=id];
+                ApplicationArea=#All;
+                SourceExpr=Id;
+                OnValidate=BEGIN
+                             GraphMgtAttachmentBuffer.RegisterFieldSet(FIELDNO(Id),TempFieldBuffer);
+                           END;
+                            }
+
+    { 1   ;2   ;Field     ;
+                Name=documentId;
+                CaptionML=[@@@={Locked};
+                           ENU=documentId];
+                ApplicationArea=#All;
+                SourceExpr="Document Id" }
+
+    { 14  ;2   ;Field     ;
+                Name=fileName;
+                CaptionML=[@@@={Locked};
+                           ENU=fileName];
+                ToolTipML=ENU=Specifies the Description for the Item.;
+                ApplicationArea=#All;
+                SourceExpr="File Name";
+                OnValidate=BEGIN
+                             GraphMgtAttachmentBuffer.RegisterFieldSet(FIELDNO("File Name"),TempFieldBuffer);
+                           END;
+                            }
+
+    { 7   ;2   ;Field     ;
+                Name=byteSize;
+                CaptionML=[@@@={Locked};
+                           ENU=byteSize];
+                ApplicationArea=#All;
+                SourceExpr="Byte Size";
+                OnValidate=BEGIN
+                             GraphMgtAttachmentBuffer.RegisterFieldSet(FIELDNO("Byte Size"),TempFieldBuffer);
+                           END;
+                            }
+
+    { 4   ;2   ;Field     ;
+                Name=content;
+                CaptionML=[@@@={Locked};
+                           ENU=content];
+                ApplicationArea=#All;
+                SourceExpr=Content;
+                OnValidate=BEGIN
+                             IF ContentChanged THEN
+                               ERROR(ContentChangedErr);
+
+                             IF AttachmentsLoaded THEN
+                               MODIFY;
+                             GraphMgtAttachmentBuffer.RegisterFieldSet(FIELDNO(Content),TempFieldBuffer);
+
+                             ContentChanged := TRUE;
+                           END;
+                            }
+
+    { 5   ;2   ;Field     ;
+                Name=base64Content;
+                CaptionML=[@@@={Locked};
+                           ENU=base64Content];
+                ToolTipML=ENU=Specifies base64 encoded content.;
+                ApplicationArea=#All;
+                SourceExpr=Base64Content;
+                OnValidate=BEGIN
+                             IF ContentChanged THEN
+                               ERROR(ContentChangedErr);
+
+                             ContentFromBase64String;
+                             IF AttachmentsLoaded THEN
+                               MODIFY;
+                             GraphMgtAttachmentBuffer.RegisterFieldSet(FIELDNO(Content),TempFieldBuffer);
+
+                             ContentChanged := TRUE;
+                           END;
+                            }
+
+    { 19  ;2   ;Field     ;
+                Name=lastModifiedDateTime;
+                CaptionML=[@@@={Locked};
+                           ENU=lastModifiedDateTime];
+                ApplicationArea=#All;
+                SourceExpr="Created Date-Time";
+                Editable=FALSE }
+
+  }
+  CODE
+  {
+    VAR
+      TempFieldBuffer@1005 : TEMPORARY Record 8450;
+      GraphMgtAttachmentBuffer@1004 : Codeunit 5503;
+      AttachmentsLoaded@1003 : Boolean;
+      AttachmentsFound@1001 : Boolean;
+      ContentChanged@1002 : Boolean;
+      Base64Content@1007 : Text;
+      ContentChangedErr@1006 : TextConst 'ENU=Only one either content or base64Content could be specified.';
+
+    PROCEDURE ContentFromBase64String@23();
+    VAR
+      OutStream@1001 : OutStream;
+      Convert@1003 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Convert";
+      MemoryStream@1002 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.MemoryStream";
+    BEGIN
+      CLEAR(Content);
+      IF Base64Content = '' THEN
+        EXIT;
+      MemoryStream := MemoryStream.MemoryStream(Convert.FromBase64String(Base64Content));
+      Content.CREATEOUTSTREAM(OutStream);
+      MemoryStream.WriteTo(OutStream);
+      MemoryStream.Close;
+    END;
+
+    LOCAL PROCEDURE ByteSizeFromContent@15();
+    VAR
+      TempBlob@1001 : Record 99008535;
+      GraphMgtAttachmentBuffer@1000 : Codeunit 5503;
+    BEGIN
+      TempBlob.Blob := Content;
+      "Byte Size" := GraphMgtAttachmentBuffer.GetContentLength(TempBlob);
+    END;
+
+    LOCAL PROCEDURE SetActionResponse@47(VAR ActionContext@1004 : DotNet "'Microsoft.Dynamics.Nav.Ncl, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.Runtime.WebServiceActionContext";VAR UnlinkedAttachment@1000 : Record 138);
+    VAR
+      ODataActionManagement@1003 : Codeunit 6711;
+    BEGIN
+      ODataActionManagement.AddKey(FIELDNO(Id),UnlinkedAttachment.Id);
+      ODataActionManagement.SetDeleteResponseLocation(ActionContext,PAGE::"Native - Attachments");
+    END;
+
+    [ServiceEnabled]
+    [External]
+    PROCEDURE Copy@17(VAR ActionContext@1000 : DotNet "'Microsoft.Dynamics.Nav.Ncl, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.Runtime.WebServiceActionContext");
+    VAR
+      UnlinkedAttachment@1005 : Record 138;
+    BEGIN
+      GraphMgtAttachmentBuffer.CopyAttachment(Rec,UnlinkedAttachment,TRUE);
+      SetActionResponse(ActionContext,UnlinkedAttachment);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

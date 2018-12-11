@@ -1,0 +1,233 @@
+OBJECT Codeunit 2100 O365 Sales Statistics
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:15 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      OutsideFYErr@1000 : TextConst 'ENU=The date is outside of the current accounting period.';
+
+    [External]
+    PROCEDURE GenerateMonthlyOverview@2(VAR TempNameValueBuffer@1000 : TEMPORARY Record 823);
+    VAR
+      O365SalesCue@1006 : Record 9069;
+      GLSetup@1004 : Record 98;
+      AccountingPeriod@1005 : Record 50;
+      Month@1001 : Integer;
+      TotalMonthsInCurrentFY@1003 : Integer;
+    BEGIN
+      GLSetup.GET;
+      GetCurrentAccountingPeriod(AccountingPeriod);
+
+      TotalMonthsInCurrentFY := GetNumberOfElapsedMonthsInFYByDate(WORKDATE,AccountingPeriod);
+
+      FOR Month := 1 TO TotalMonthsInCurrentFY DO BEGIN
+        // Get transactions for the month
+        O365SalesCue.SETFILTER("CM Date Filter",'%1..%2',
+          CALCDATE(STRSUBSTNO('<%1M>',Month - 1),AccountingPeriod."Starting Date"),
+          CALCDATE(STRSUBSTNO('<%1M-1D>',Month),AccountingPeriod."Starting Date"));
+        O365SalesCue.CALCFIELDS("Invoiced CM");
+
+        // Insert aggregate data
+        TempNameValueBuffer.INIT;
+        TempNameValueBuffer.ID := Month;
+        TempNameValueBuffer.Name := FORMAT(CALCDATE(STRSUBSTNO('<%1M>',Month - 1),AccountingPeriod."Starting Date"),0,'<Month Text>');
+        TempNameValueBuffer.Value := GLSetup.GetCurrencySymbol + ' ' + FORMAT(O365SalesCue."Invoiced CM");
+        TempNameValueBuffer.INSERT;
+      END;
+    END;
+
+    [External]
+    PROCEDURE GenerateWeeklyOverview@3(VAR TempNameValueBuffer@1000 : TEMPORARY Record 823;Month@1005 : Integer);
+    VAR
+      O365SalesCue@1004 : Record 9069;
+      GLSetup@1003 : Record 98;
+      AccountingPeriod@1007 : Record 50;
+      EndDate@1002 : Date;
+      CurrentMonth@1001 : Integer;
+      CurrentWeek@1006 : Integer;
+      MonthOfStartingFY@1008 : Integer;
+    BEGIN
+      GLSetup.GET;
+      GetCurrentAccountingPeriod(AccountingPeriod);
+      CurrentWeek := 0;
+
+      EVALUATE(MonthOfStartingFY,FORMAT(AccountingPeriod."Starting Date",0,'<Month>'));
+      Month := GetNumberOfElapsedMonthsInFY(Month,AccountingPeriod) - 2;
+
+      REPEAT
+        // Ensure the end date is still within the current month
+        EndDate := CALCDATE(STRSUBSTNO('<%1M+%2W>',Month,CurrentWeek + 1),CALCDATE('<CM>',AccountingPeriod."Starting Date"));
+        IF EndDate > CALCDATE(STRSUBSTNO('<%1M>',Month + 1),CALCDATE('<CM>',AccountingPeriod."Starting Date")) THEN
+          EndDate := CALCDATE(STRSUBSTNO('<%1M>',Month + 1),CALCDATE('<CM>',AccountingPeriod."Starting Date"));
+
+        O365SalesCue.SETFILTER("CM Date Filter",'%1..%2',
+          CALCDATE(STRSUBSTNO('<%1M+%2W+1D>',Month,CurrentWeek),CALCDATE('<CM>',AccountingPeriod."Starting Date")),
+          EndDate);
+        O365SalesCue.CALCFIELDS("Invoiced CM");
+
+        TempNameValueBuffer.INIT;
+        TempNameValueBuffer.ID := CurrentWeek;
+        TempNameValueBuffer.Name :=
+          FORMAT(CALCDATE(STRSUBSTNO('<%1M+%2W+1D>',Month,CurrentWeek),CALCDATE('<CM>',AccountingPeriod."Starting Date")));
+        TempNameValueBuffer.Value := GLSetup.GetCurrencySymbol + ' ' + FORMAT(O365SalesCue."Invoiced CM");
+        TempNameValueBuffer.INSERT;
+
+        // Ensure next week is still the same month
+        CurrentWeek += 1;
+        EVALUATE(
+          CurrentMonth,
+          FORMAT(CALCDATE(STRSUBSTNO('<%1M+%2W+1D>',Month,CurrentWeek),CALCDATE('<CM>',AccountingPeriod."Starting Date")),0,'<Month>'));
+        CurrentMonth -= MonthOfStartingFY;
+      UNTIL CurrentMonth <> Month + 1;
+    END;
+
+    PROCEDURE GenerateChart@1(Chart@1003 : DotNet "'Microsoft.Dynamics.Nav.Client.BusinessChart, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.Client.BusinessChart.BusinessChartAddIn";VAR TempNameValueBuffer@1001 : TEMPORARY Record 823;XCaption@1002 : Text;YCaption@1006 : Text);
+    VAR
+      TempBusinessChartBuffer@1000 : TEMPORARY Record 485;
+      GLSetup@1007 : Record 98;
+      Amount@1005 : Decimal;
+      I@1004 : Integer;
+    BEGIN
+      GLSetup.GET;
+
+      TempBusinessChartBuffer.Initialize;
+      TempBusinessChartBuffer.SetXAxis(XCaption,TempBusinessChartBuffer."Data Type"::String);
+      TempBusinessChartBuffer.AddMeasure(
+        YCaption,1,TempBusinessChartBuffer."Data Type"::Decimal,TempBusinessChartBuffer."Chart Type"::Column);
+
+      TempNameValueBuffer.FINDSET;
+      FOR I := 0 TO TempNameValueBuffer.COUNT - 1 DO BEGIN
+        TempBusinessChartBuffer.AddColumn(TempNameValueBuffer.Name);
+        EVALUATE(Amount,COPYSTR(TempNameValueBuffer.Value,STRLEN(GLSetup.GetCurrencySymbol) + 1));
+        TempBusinessChartBuffer.SetValueByIndex(0,I,Amount);
+        TempNameValueBuffer.NEXT;
+      END;
+
+      TempBusinessChartBuffer.Update(Chart);
+    END;
+
+    [External]
+    PROCEDURE GenerateMonthlyCustomers@4(Month@1000 : Integer;VAR ResultingCustomer@1001 : Record 18) : Boolean;
+    VAR
+      AccountingPeriod@1004 : Record 50;
+      SalesInvoiceEntityAggregate@1003 : Record 5475;
+    BEGIN
+      GetCurrentAccountingPeriod(AccountingPeriod);
+
+      Month := GetNumberOfElapsedMonthsInFY(Month,AccountingPeriod) - 1;
+      SalesInvoiceEntityAggregate.SETFILTER(Status,'%1|%2|%3',
+        SalesInvoiceEntityAggregate.Status::Open,
+        SalesInvoiceEntityAggregate.Status::Paid,
+        SalesInvoiceEntityAggregate.Status::"In Review");
+      SalesInvoiceEntityAggregate.SETRANGE(Posted,TRUE);
+      SalesInvoiceEntityAggregate.SETRANGE("Document Date",
+        CALCDATE(STRSUBSTNO('<%1M+1D>',Month - 1),CALCDATE('<CM>',AccountingPeriod."Starting Date")),
+        CALCDATE(STRSUBSTNO('<%1M>',Month),CALCDATE('<CM>',AccountingPeriod."Starting Date")));
+
+      EXIT(GetCustomersFromSalesInvoiceEntityAggregates(SalesInvoiceEntityAggregate,ResultingCustomer));
+    END;
+
+    [External]
+    PROCEDURE GetCurrentAccountingPeriod@5(VAR AccountingPeriod@1000 : Record 50);
+    VAR
+      AccountingPeriodMgt@1001 : Codeunit 360;
+    BEGIN
+      IF IsEmptyAccountingPeriod THEN BEGIN
+        AccountingPeriod.RESET;
+        AccountingPeriodMgt.InitStartYearAccountingPeriod(AccountingPeriod,WORKDATE);
+        EXIT;
+      END;
+
+      AccountingPeriod.SETRANGE("New Fiscal Year",TRUE);
+      AccountingPeriod.SETFILTER("Starting Date",'..%1',WORKDATE);
+
+      IF NOT AccountingPeriod.FINDLAST THEN BEGIN
+        AccountingPeriod.SETRANGE("New Fiscal Year");
+        IF AccountingPeriod.FINDFIRST THEN;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetNumberOfElapsedMonthsInFYByDate@6(Date@1000 : Date;AccountingPeriod@1004 : Record 50) : Integer;
+    VAR
+      Month@1001 : Integer;
+    BEGIN
+      IF AccountingPeriod."Starting Date" = 0D THEN
+        ERROR(OutsideFYErr);
+
+      IF (Date >= CALCDATE('<1Y>',AccountingPeriod."Starting Date")) OR
+         (Date < AccountingPeriod."Starting Date")
+      THEN
+        ERROR(OutsideFYErr);
+
+      EVALUATE(Month,FORMAT(Date,0,'<Month>'));
+      EXIT(GetNumberOfElapsedMonthsInFY(Month,AccountingPeriod));
+    END;
+
+    LOCAL PROCEDURE GetNumberOfElapsedMonthsInFY@27(Month@1000 : Integer;AccountingPeriod@1004 : Record 50) : Integer;
+    VAR
+      MonthOfStartingFY@1002 : Integer;
+      Result@1001 : Integer;
+    BEGIN
+      Result := Month;
+      EVALUATE(MonthOfStartingFY,FORMAT(AccountingPeriod."Starting Date",0,'<Month>'));
+
+      // Ensure that the month is after the starting month of the FY
+      IF Result < MonthOfStartingFY THEN
+        Result += 12;
+
+      // Find the difference
+      Result -= MonthOfStartingFY - 1;
+
+      EXIT(Result);
+    END;
+
+    [External]
+    PROCEDURE GetCustomersFromSalesInvoiceEntityAggregates@7(VAR SalesInvoiceEntityAggregate@1000 : Record 5475;VAR ResultingCustomer@1001 : Record 18) : Boolean;
+    BEGIN
+      IF SalesInvoiceEntityAggregate.ISEMPTY THEN
+        EXIT(FALSE);
+
+      SalesInvoiceEntityAggregate.SETFILTER("Sell-to Customer No.",'<>''''');
+      IF NOT SalesInvoiceEntityAggregate.FINDSET THEN
+        EXIT(FALSE);
+
+      REPEAT
+        IF ResultingCustomer.GET(SalesInvoiceEntityAggregate."Sell-to Customer No.") THEN
+          ResultingCustomer.MARK(TRUE);
+      UNTIL SalesInvoiceEntityAggregate.NEXT = 0;
+
+      EXIT(ResultingCustomer.MARKEDONLY(TRUE));
+    END;
+
+    [External]
+    PROCEDURE GetRelativeMonthToFY@8() : Integer;
+    VAR
+      AccountingPeriod@1000 : Record 50;
+    BEGIN
+      GetCurrentAccountingPeriod(AccountingPeriod);
+      EXIT(GetNumberOfElapsedMonthsInFYByDate(WORKDATE,AccountingPeriod));
+    END;
+
+    LOCAL PROCEDURE IsEmptyAccountingPeriod@9() : Boolean;
+    VAR
+      AccountingPeriod@1000 : Record 50;
+    BEGIN
+      EXIT(AccountingPeriod.ISEMPTY);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

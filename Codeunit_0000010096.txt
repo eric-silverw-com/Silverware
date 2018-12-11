@@ -1,0 +1,317 @@
+OBJECT Codeunit 10096 Export EFT (Cecoban)
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:55 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      BankAccount@1020025 : Record 270;
+      CompanyInformation@1020024 : Record 79;
+      FileManagement@1020013 : Codeunit 419;
+      EFTValues@1020000 : Codeunit 10340;
+      FileHashTotal@1020010 : Decimal;
+      BatchHashTotal@1020009 : Decimal;
+      FileName@1020008 : Text;
+      FileDate@1020005 : Date;
+      PayeeAcctType@1020004 : Integer;
+      BatchDay@1020002 : Integer;
+      AlreadyExistsErr@1020007 : TextConst 'ENU=The file already exists. Check the "Last E-Pay Export File Name" field in the bank account.';
+      VendorBankAccErr@1020039 : TextConst 'ENU=The vendor has no bank account setup for electronic payments.';
+      VendorMoreThanOneBankAccErr@1020038 : TextConst 'ENU=The vendor has more than one bank account setup for electronic payments.';
+      CustomerBankAccErr@1020037 : TextConst 'ENU=The customer has no bank account setup for electronic payments.';
+      CustomerMoreThanOneBankAccErr@1020036 : TextConst 'ENU=The customer has more than one bank account setup for electronic payments.';
+      ReferErr@1020029 : TextConst 'ENU=Either Account type or balance account type must refer to either a vendor or a customer for an electronic payment.';
+      IsBlockedErr@1020028 : TextConst 'ENU=Account type is blocked for processing.';
+      PrivacyBlockedErr@1234567 : TextConst 'ENU=Account type is blocked for privacy.';
+      TransitNoErr@1020026 : TextConst 'ENU=is not valid. Bank Account number must be either the 18 character CLABE format for checking, or 16 characters for Debit Card';
+      OpCode@1020006 : Integer;
+
+    PROCEDURE StartExportFile@6(BankAccountNo@1000 : Code[20]);
+    BEGIN
+      CompanyInformation.GET;
+      CompanyInformation.TESTFIELD("Federal ID No.");
+
+      WITH BankAccount DO BEGIN
+        LOCKTABLE;
+        GET(BankAccountNo);
+        TESTFIELD("Export Format","Export Format"::MX);
+        TESTFIELD("Transit No.");
+        TESTFIELD("Bank Acc. Posting Group");
+        TESTFIELD(Blocked,FALSE);
+
+        FileName := '';
+        "Last E-Pay Export File Name" := INCSTR("Last E-Pay Export File Name");
+        FileName := FileManagement.ServerTempFileName('');
+        "Last E-Pay File Creation No." := "Last E-Pay File Creation No." + 1;
+        MODIFY;
+
+        IF EXISTS(FileName) THEN
+          ERROR(AlreadyExistsErr);
+
+        FileDate := TODAY;
+        FileHashTotal := 0;
+        EFTValues.SetFileHashTotal(FileHashTotal);
+        EFTValues.SetTotalFileDebit(0);
+        EFTValues.SetTotalFileCredit(0);
+        EFTValues.SetFileEntryAddendaCount(0);
+        EFTValues.SetBatchCount(0);
+        EFTValues.SetBatchNo(0);
+      END;
+    END;
+
+    PROCEDURE StartExportBatch@7(SettleDate@1003 : Date;DataExchEntryNo@1020000 : Integer);
+    VAR
+      ACHCecobanHeader@1020001 : Record 10306;
+    BEGIN
+      EFTValues.SetBatchNo(EFTValues.GetBatchNo + 1);
+      BatchHashTotal := 0;
+      EFTValues.SetBatchHashTotal(BatchHashTotal);
+      EFTValues.SetTotalBatchDebit(0);
+      EFTValues.SetTotalBatchCredit(0);
+      EFTValues.SetEntryAddendaCount(0);
+      EFTValues.SetTraceNo(0);
+      EFTValues.SetSequenceNo(EFTValues.GetSequenceNo + 1);
+
+      EVALUATE(BatchDay,FORMAT(TODAY,2,'<Day>'));
+
+      // Cecoban layout
+      ACHCecobanHeader.GET(DataExchEntryNo);
+      ACHCecobanHeader."Record Type" := '1';
+      ACHCecobanHeader."Sequence No" := EFTValues.GetSequenceNo;
+      ACHCecobanHeader."Operation Code" := 0;
+      ACHCecobanHeader."Bank Account No" := BankAccount."Bank Account No.";
+      ACHCecobanHeader."Export Type" := 'E';
+      ACHCecobanHeader.Service := 2;
+      ACHCecobanHeader."Batch Day" := BatchDay;
+      ACHCecobanHeader."Batch No" := EFTValues.GetBatchNo;
+      ACHCecobanHeader."Settlement Date" := SettleDate;
+      ACHCecobanHeader."Rejection Code" := 0;
+      ACHCecobanHeader.System := 2;
+      ACHCecobanHeader."Future Cecoban Use" := ' ';
+      ACHCecobanHeader."Future Bank Use" := ' ';
+      ACHCecobanHeader."Currency Code" := '01';
+      ACHCecobanHeader.MODIFY;
+    END;
+
+    PROCEDURE ExportElectronicPayment@17(VAR TempEFTExportWorkset@1020000 : TEMPORARY Record 10811;PaymentAmount@1001 : Decimal;SettleDate@1014 : Date;DataExchEntryNo@1020001 : Integer;DataExchLineDefCode@1020003 : Code[20]) : Code[30];
+    VAR
+      ACHCecobanDetail@1020002 : Record 10307;
+      Vendor@1002 : Record 23;
+      VendorBankAccount@1003 : Record 288;
+      Customer@1004 : Record 18;
+      CustomerBankAccount@1005 : Record 287;
+      ExportEFTACH@1020004 : Codeunit 10094;
+      AcctType@1006 : Text[1];
+      AcctNo@1007 : Code[20];
+      AcctName@1008 : Text[40];
+      BankAcctNo@1009 : Text[30];
+      TransitNo@1010 : Text[20];
+      RFCNo@1013 : Text[20];
+      DemandCredit@1012 : Boolean;
+    BEGIN
+      // NOTE:  If PaymentAmount is Positive, then we are Receiving money.
+      // If PaymentAmount is Negative, then we are Sending money.
+      IF PaymentAmount = 0 THEN
+        EXIT('');
+      DemandCredit := (PaymentAmount < 0);
+      PaymentAmount := ABS(PaymentAmount);
+      OpCode := 30;
+
+      WITH TempEFTExportWorkset DO BEGIN
+        IF "Account Type" = "Account Type"::Vendor THEN BEGIN
+          AcctType := 'V';
+          AcctNo := "Account No.";
+        END ELSE
+          IF "Account Type" = "Account Type"::Customer THEN BEGIN
+            AcctType := 'C';
+            AcctNo := "Account No.";
+          END ELSE
+            IF "Bal. Account Type" = "Bal. Account Type"::Vendor THEN BEGIN
+              AcctType := 'V';
+              AcctNo := "Bal. Account No.";
+            END ELSE
+              IF "Bal. Account Type" = "Bal. Account Type"::Customer THEN BEGIN
+                AcctType := 'C';
+                AcctNo := "Bal. Account No.";
+              END ELSE
+                ERROR(ReferErr);
+
+        IF AcctType = 'V' THEN BEGIN
+          Vendor.GET(AcctNo);
+          Vendor.TESTFIELD(Blocked,Vendor.Blocked::" ");
+          Vendor.TESTFIELD("Privacy Blocked",FALSE);
+          AcctName := COPYSTR(Vendor.Name,1,MAXSTRLEN(AcctName));
+          RFCNo := Vendor."VAT Registration No.";
+
+          VendorBankAccount.SETRANGE("Vendor No.",AcctNo);
+          VendorBankAccount.SETRANGE("Use for Electronic Payments",TRUE);
+          VendorBankAccount.FINDFIRST;
+
+          IF VendorBankAccount.COUNT < 1 THEN
+            ERROR(VendorBankAccErr);
+          IF VendorBankAccount.COUNT > 1 THEN
+            ERROR(VendorMoreThanOneBankAccErr);
+          IF NOT PayeeCheckDigit(VendorBankAccount."Transit No.") THEN
+            VendorBankAccount.FIELDERROR("Transit No.",TransitNoErr);
+
+          VendorBankAccount.TESTFIELD("Bank Account No.");
+          TransitNo := VendorBankAccount."Transit No.";
+          BankAcctNo := VendorBankAccount."Bank Account No.";
+        END ELSE
+          IF AcctType = 'C' THEN BEGIN
+            Customer.GET(AcctNo);
+            IF Customer."Privacy Blocked" THEN
+              ERROR(PrivacyBlockedErr);
+            IF Customer.Blocked IN [Customer.Blocked::All] THEN
+              ERROR(IsBlockedErr);
+            AcctName := COPYSTR(Customer.Name,1,MAXSTRLEN(AcctName));
+            RFCNo := Customer."VAT Registration No.";
+
+            CustomerBankAccount.SETRANGE("Customer No.",AcctNo);
+            CustomerBankAccount.SETRANGE("Use for Electronic Payments",TRUE);
+            CustomerBankAccount.FINDFIRST;
+
+            IF CustomerBankAccount.COUNT < 1 THEN
+              ERROR(CustomerBankAccErr);
+            IF CustomerBankAccount.COUNT > 1 THEN
+              ERROR(CustomerMoreThanOneBankAccErr);
+            IF NOT PayeeCheckDigit(CustomerBankAccount."Transit No.") THEN
+              CustomerBankAccount.FIELDERROR("Transit No.",TransitNoErr);
+            CustomerBankAccount.TESTFIELD("Bank Account No.");
+            TransitNo := CustomerBankAccount."Transit No.";
+            BankAcctNo := CustomerBankAccount."Bank Account No.";
+          END;
+
+        EFTValues.SetSequenceNo(EFTValues.GetSequenceNo + 1);
+        EFTValues.SetTraceNo(EFTValues.GetTraceNo + 1);
+        EFTValues.SetEntryAddendaCount(EFTValues.GetEntryAddendaCount + 1);
+
+        IF DemandCredit THEN
+          EFTValues.SetTotalBatchCredit(EFTValues.GetTotalBatchCredit + PaymentAmount)
+        ELSE
+          EFTValues.SetTotalBatchDebit(EFTValues.GetTotalBatchDebit + PaymentAmount);
+
+        IncrementHashTotal(BatchHashTotal,MakeHash(COPYSTR(TransitNo,1,8)));
+        EFTValues.SetBatchHashTotal(BatchHashTotal);
+      END;
+
+      BankAccount.GET(TempEFTExportWorkset."Bank Account No.");
+      // Cecoban Detail rec
+      ACHCecobanDetail.GET(DataExchEntryNo,DataExchLineDefCode);
+      ACHCecobanDetail."Record Type" := '02';
+      ACHCecobanDetail."Sequence Number" := EFTValues.GetSequenceNo;
+      ACHCecobanDetail."Operation Code" := OpCode;
+      ACHCecobanDetail."Currency Code" := '01';
+      ACHCecobanDetail."Transfer Date" := TODAY;
+      ACHCecobanDetail.ODFI := BankAccount."Bank Account No.";
+      ACHCecobanDetail.RDFI := BankAcctNo;
+      ACHCecobanDetail."Operation Fee" := PaymentAmount;
+      ACHCecobanDetail."Future Use" := '';
+      ACHCecobanDetail."Operation Code" := OpCode;
+      ACHCecobanDetail."Date Entered" := SettleDate;
+      ACHCecobanDetail."Originator Account Type" := 1;
+      ACHCecobanDetail."Originator Account no." := BankAccount."Transit No.";
+      ACHCecobanDetail."Originator Account Name" := AcctName;
+      ACHCecobanDetail."Originator RFC/CURP" := ' ';
+      ACHCecobanDetail."Payee Account Type" := PayeeAcctType;
+      ACHCecobanDetail."Payee Account No." := TransitNo;
+      ACHCecobanDetail."Payee Account Name" := AcctName;
+      ACHCecobanDetail."Payee RFC/CURP" := RFCNo;
+      ACHCecobanDetail."Transmitter Service Reference" := '';
+      ACHCecobanDetail."Service Owner" := '';
+      ACHCecobanDetail."Operation Tax Cost" := 0;
+      ACHCecobanDetail."Originator Numeric Reference" := 0;
+      ACHCecobanDetail."Originator Alpha Reference" := '';
+      ACHCecobanDetail."Tracking Code" := ExportEFTACH.GenerateTraceNoCode(EFTValues.GetTraceNo,BankAccount."Transit No.");
+      ACHCecobanDetail."Return Reason" := 0;
+      ACHCecobanDetail."Initial Presentation Date" := TODAY;
+      ACHCecobanDetail.MODIFY;
+
+      EXIT(GenerateFullTraceNoCode(EFTValues.GetTraceNo));
+    END;
+
+    PROCEDURE EndExportBatch@9(DataExchEntryNo@1020001 : Integer);
+    VAR
+      ACHCecobanFooter@1020000 : Record 10308;
+    BEGIN
+      EFTValues.SetSequenceNo(EFTValues.GetSequenceNo + 1);
+
+      // cecoban batch summary
+      ACHCecobanFooter.GET(DataExchEntryNo);
+      ACHCecobanFooter."Record Type" := '9';
+      ACHCecobanFooter."Sequence Number" := EFTValues.GetSequenceNo;
+      ACHCecobanFooter."Op Code" := OpCode;
+      ACHCecobanFooter."Batch Number day of month" := BatchDay;
+      ACHCecobanFooter."Batch Number sequence part" := EFTValues.GetBatchNo;
+      ACHCecobanFooter."Operation Number" := EFTValues.GetSequenceNo;
+      ACHCecobanFooter.TCO := EFTValues.GetBatchHashTotal;
+      ACHCecobanFooter.MODIFY;
+
+      EFTValues.SetBatchCount(EFTValues.GetBatchCount + 1);
+      IncrementHashTotal(FileHashTotal,EFTValues.GetBatchHashTotal);
+      EFTValues.SetFileHashTotal(FileHashTotal);
+      EFTValues.SetTotalFileDebit(EFTValues.GetTotalFileDebit + EFTValues.GetTotalBatchDebit);
+      EFTValues.SetTotalFileCredit(EFTValues.GetTotalFileCredit + EFTValues.GetTotalBatchCredit);
+      EFTValues.SetFileEntryAddendaCount(EFTValues.GetFileEntryAddendaCount + EFTValues.GetEntryAddendaCount);
+    END;
+
+    LOCAL PROCEDURE GenerateFullTraceNoCode@14(TraceNo@1000 : Integer) : Code[30];
+    VAR
+      TraceCode@1001 : Text;
+    BEGIN
+      TraceCode := '';
+      TraceCode := FORMAT(FileDate,0,'<Year,2><Month,2><Day,2>') + BankAccount."Last ACH File ID Modifier" +
+        FORMAT(EFTValues.GetBatchNo) + FORMAT(TraceNo);
+      EXIT(TraceCode);
+    END;
+
+    PROCEDURE PayeeCheckDigit@2(DigitString@1000 : Code[20]) : Boolean;
+    BEGIN
+      IF STRLEN(DigitString) = 18 THEN BEGIN
+        PayeeAcctType := 1;
+        EXIT(TRUE);                                   // checking Account
+      END;
+      IF STRLEN(DigitString) = 16 THEN BEGIN
+        PayeeAcctType := 3;                                   // debit card
+        EXIT(TRUE);                                   // checking Account
+      END;
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE IncrementHashTotal@13(VAR HashTotal@1000 : Decimal;HashIncrement@1001 : Decimal) : Decimal;
+    VAR
+      SubTotal@1002 : Decimal;
+    BEGIN
+      SubTotal := HashTotal + HashIncrement;
+      IF SubTotal < 10000000000.0 THEN
+        HashTotal := SubTotal
+      ELSE
+        HashTotal := SubTotal - 10000000000.0;
+    END;
+
+    LOCAL PROCEDURE MakeHash@21(InputString@1000 : Text[30]) : Decimal;
+    VAR
+      HashAmt@1001 : Decimal;
+    BEGIN
+      InputString := DELCHR(InputString,'=','.,- ');
+      IF EVALUATE(HashAmt,InputString) THEN
+        EXIT(HashAmt);
+
+      EXIT(0);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,179 @@
+OBJECT Table 1877 VAT Setup Posting Groups
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:14:35 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Tax Setup Posting Groups;
+  }
+  FIELDS
+  {
+    { 2   ;   ;VAT Prod. Posting Group;Code20     ;CaptionML=ENU=Tax Prod. Posting Group;
+                                                   NotBlank=Yes }
+    { 4   ;   ;VAT %               ;Decimal       ;CaptionML=ENU=Tax %;
+                                                   DecimalPlaces=0:5;
+                                                   MinValue=0;
+                                                   MaxValue=100 }
+    { 7   ;   ;Sales VAT Account   ;Code20        ;TableRelation="G/L Account";
+                                                   CaptionML=ENU=Sales Tax Account }
+    { 9   ;   ;Purchase VAT Account;Code20        ;TableRelation="G/L Account";
+                                                   CaptionML=ENU=Purchase Tax Account }
+    { 11  ;   ;Reverse Chrg. VAT Acc.;Code20      ;TableRelation="G/L Account";
+                                                   CaptionML=ENU=Reverse Chrg. Tax Acc. }
+    { 18  ;   ;VAT Prod. Posting Grp Desc.;Text50 ;CaptionML=ENU=Tax Prod. Posting Grp Desc. }
+    { 19  ;   ;VAT Clause Desc     ;Text250       ;CaptionML=ENU=Tax Clause Desc }
+    { 22  ;   ;Selected            ;Boolean       ;FieldClass=Normal;
+                                                   CaptionML=ENU=Selected }
+    { 23  ;   ;Application Type    ;Option        ;CaptionML=ENU=Application Type;
+                                                   OptionCaptionML=ENU=,Items,Services;
+                                                   OptionString=,Items,Services }
+    { 24  ;   ;Default             ;Boolean       ;CaptionML=ENU=Default }
+  }
+  KEYS
+  {
+    {    ;VAT Prod. Posting Group,Default         ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      FULLNORMTok@1601 : TextConst '@@@=the same as values in Product posting group;ENU=FULL NORM';
+      FULLREDTok@1602 : TextConst '@@@=the same as values in Product posting group;ENU=FULL RED';
+      REDUCEDTok@1603 : TextConst '@@@=the same as values in Product posting group;ENU=REDUCED';
+      SERVNORMTok@1604 : TextConst '@@@=the same as values in Product posting group;ENU=SERV NORM';
+      SERVREDTok@1605 : TextConst '@@@=the same as values in Product posting group;ENU=SERV RED';
+      STANDARDTok@1606 : TextConst '@@@=the same as values in Product posting group;ENU=STANDARD';
+      ZEROTok@1607 : TextConst '@@@=the same as values in Product posting group;ENU=ZERO';
+      FULLNORMTxt@1608 : TextConst 'ENU=Tax Only Invoices 25%';
+      FULLREDTxt@1609 : TextConst 'ENU=Tax Only Invoices 10%';
+      REDUCEDTxt@1610 : TextConst 'ENU=Reduced Tax (10%)';
+      SERVNORMTxt@1611 : TextConst 'ENU=Miscellaneous 25% Tax';
+      SERVREDTxt@1612 : TextConst 'ENU=Miscellaneous 10% Tax';
+      STANDARDTxt@1613 : TextConst 'ENU=Standard Tax (25%)';
+      ZEROTxt@1614 : TextConst 'ENU=No Tax';
+      InvalidGLAccountsTxt@1000 : TextConst '@@@=%1 is placeholder for the invalid gl account code;ENU=%1 is not valid G/L Account.';
+      VATAssistedAccountsMsg@1001 : TextConst 'ENU=You have not assigned general ledger accounts for sales and purchases for all Tax amounts. You won''t be able to calculate and post Tax for the missing accounts. If you''re skipping this step on purpose, you can manually assign accounts later in the Tax Posting Setup page.';
+
+    PROCEDURE ValidateVATRates@1() : Boolean;
+    VAR
+      VATSetupPostingGroups@1000 : Record 1877;
+    BEGIN
+      VATSetupPostingGroups.RESET;
+      VATSetupPostingGroups.SETRANGE(Selected,TRUE);
+      VATSetupPostingGroups.SETRANGE(Default,FALSE);
+      EXIT(NOT VATSetupPostingGroups.ISEMPTY);
+    END;
+
+    PROCEDURE PopulateVATProdGroups@37();
+    VAR
+      VATSetupPostingGroups@1000 : Record 1877;
+    BEGIN
+      SETRANGE(Default,FALSE);
+      DELETEALL;
+
+      SETRANGE(Default,TRUE);
+      IF NOT FINDSET THEN BEGIN
+        InitWithStandardValues;
+        FINDSET;
+      END;
+
+      REPEAT
+        VATSetupPostingGroups.TRANSFERFIELDS(Rec);
+        VATSetupPostingGroups.Default := FALSE;
+        VATSetupPostingGroups.INSERT;
+      UNTIL NEXT = 0;
+    END;
+
+    PROCEDURE AddOrUpdateProdPostingGrp@2(ProdGrpCode@1001 : Code[20];GrpDesc@1002 : Text[50];VatRate@1003 : Decimal;SalesAccount@1004 : Code[20];PurchAccount@1005 : Code[20];IsService@1006 : Boolean;IsDefault@1007 : Boolean) : Boolean;
+    VAR
+      GLAccount@1000 : Record 15;
+    BEGIN
+      IF NOT GET(ProdGrpCode,IsDefault) THEN BEGIN
+        INIT;
+        "VAT Prod. Posting Group" := ProdGrpCode;
+        Default := IsDefault;
+        INSERT;
+      END;
+
+      "VAT Prod. Posting Grp Desc." := GrpDesc;
+      IF VatRate <> 0 THEN
+        "VAT %" := VatRate;
+      IF GLAccount.GET(SalesAccount) THEN
+        "Sales VAT Account" := SalesAccount;
+      IF GLAccount.GET(PurchAccount) THEN
+        "Purchase VAT Account" := PurchAccount;
+      "Application Type" := "Application Type"::Items;
+      IF IsService THEN
+        "Application Type" := "Application Type"::Services;
+      Selected := TRUE;
+      EXIT(MODIFY);
+    END;
+
+    PROCEDURE CheckExistingItemAndServiceWithVAT@20(VATProdPostingGroupCode@1002 : Code[20];IsService@1001 : Boolean) : Boolean;
+    VAR
+      Item@1003 : Record 27;
+      ServiceLine@1000 : Record 5902;
+    BEGIN
+      IF IsService THEN BEGIN
+        ServiceLine.SETRANGE("VAT Prod. Posting Group",VATProdPostingGroupCode);
+        EXIT(NOT ServiceLine.ISEMPTY);
+      END;
+      Item.SETRANGE("VAT Prod. Posting Group",VATProdPostingGroupCode);
+      EXIT(NOT Item.ISEMPTY);
+    END;
+
+    PROCEDURE ValidateGLAccountsExist@3(VAR ErrorMessage@1000 : Text) : Boolean;
+    VAR
+      VATSetupPostingGroups@1001 : Record 1877;
+      GLAccount@1002 : Record 15;
+    BEGIN
+      IF ValidateVATRates = FALSE THEN
+        EXIT(FALSE);
+      VATSetupPostingGroups.SETRANGE(Selected,TRUE);
+      IF NOT VATSetupPostingGroups.FINDSET THEN
+        EXIT;
+
+      REPEAT
+        IF
+           (DELCHR(VATSetupPostingGroups."Sales VAT Account",'<>') = '') OR
+           (DELCHR(VATSetupPostingGroups."Purchase VAT Account",'<>') = '')
+        THEN BEGIN
+          ErrorMessage := VATAssistedAccountsMsg;
+          EXIT(FALSE);
+        END;
+
+        IF NOT GLAccount.GET(VATSetupPostingGroups."Sales VAT Account") THEN BEGIN
+          ErrorMessage := STRSUBSTNO(InvalidGLAccountsTxt,VATSetupPostingGroups."Sales VAT Account");
+          EXIT(FALSE);
+        END;
+        IF NOT GLAccount.GET(VATSetupPostingGroups."Purchase VAT Account") THEN BEGIN
+          ErrorMessage := STRSUBSTNO(InvalidGLAccountsTxt,VATSetupPostingGroups."Purchase VAT Account");
+          EXIT(FALSE);
+        END;
+      UNTIL VATSetupPostingGroups.NEXT = 0;
+      ErrorMessage := '';
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE InitWithStandardValues@4();
+    BEGIN
+      AddOrUpdateProdPostingGrp(FULLNORMTok,FULLNORMTxt,100,'','',FALSE,TRUE);
+      AddOrUpdateProdPostingGrp(FULLREDTok,FULLREDTxt,100,'','',FALSE,TRUE);
+      AddOrUpdateProdPostingGrp(REDUCEDTok,REDUCEDTxt,10,'5611','5631',FALSE,TRUE);
+      AddOrUpdateProdPostingGrp(SERVNORMTok,SERVNORMTxt,25,'5611','5631',TRUE,TRUE);
+      AddOrUpdateProdPostingGrp(SERVREDTok,SERVREDTxt,10,'5611','5631',TRUE,TRUE);
+      AddOrUpdateProdPostingGrp(STANDARDTok,STANDARDTxt,25,'5610','5630',FALSE,TRUE);
+      AddOrUpdateProdPostingGrp(ZEROTok,ZEROTxt,0,'5610','5630',FALSE,TRUE);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

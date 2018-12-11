@@ -1,0 +1,369 @@
+OBJECT Codeunit 260 Document-Mailing
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:07:52 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    TableNo=472;
+    OnRun=VAR
+            ReportSelections@1005 : Record 77;
+            O365DocumentSentHistory@1007 : Record 2158;
+          BEGIN
+            O365DocumentSentHistory.NewInProgressFromJobQueue(Rec);
+
+            ReportSelections.SendEmailInBackground(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      EmailSubjectCapTxt@1001 : TextConst '@@@="%1 = Customer Name. %2 = Document Type %3 = Invoice No.";ENU=%1 - %2 %3';
+      ReportAsPdfFileNameMsg@1000 : TextConst '@@@="%1 = Document Type %2 = Invoice No.";ENU=Sales %1 %2.pdf';
+      EmailSubjectPluralCapTxt@1003 : TextConst '@@@="%1 = Customer Name. %2 = Document Type in plural form";ENU=%1 - %2';
+      ReportAsPdfFileNamePluralMsg@1002 : TextConst '@@@="%1 = Document Type in plural form";ENU=Sales %1.pdf';
+      JobsReportAsPdfFileNameMsg@1004 : TextConst '@@@="%1 = Document Type %2 = Job Number";ENU=%1 %2.pdf';
+      PdfFileNamePluralMsg@1005 : TextConst '@@@="%1 = Document Type in plural form";ENU=%1.pdf';
+      IdentityManagement@1006 : Codeunit 9801;
+      InvoiceEmailSubjectTxt@1008 : TextConst '@@@="%1 = name of the company";ENU=Invoice from %1';
+      TestInvoiceEmailSubjectTxt@1010 : TextConst '@@@="%1 = name of the company";ENU=Test invoice from %1';
+      QuoteEmailSubjectTxt@1007 : TextConst '@@@="%1 = name of the company";ENU=Estimate from %1';
+      CustomerLbl@1009 : TextConst 'ENU=<Customer>';
+
+    PROCEDURE EmailFile@3(AttachmentFilePath@1001 : Text[250];AttachmentFileName@1005 : Text[250];HtmlBodyFilePath@1007 : Text[250];PostedDocNo@1000 : Code[20];ToEmailAddress@1006 : Text[250];EmailDocName@1008 : Text[250];HideDialog@1003 : Boolean;ReportUsage@1010 : Integer) : Boolean;
+    VAR
+      TempEmailItem@1002 : TEMPORARY Record 9500;
+    BEGIN
+      EXIT(EmailFileInternal(
+          TempEmailItem,
+          AttachmentFilePath,
+          AttachmentFileName,
+          HtmlBodyFilePath,
+          '',
+          ToEmailAddress,
+          PostedDocNo,
+          EmailDocName,
+          HideDialog,
+          ReportUsage,
+          TRUE));
+    END;
+
+    PROCEDURE EmailFileWithSubject@1(AttachmentFilePath@1001 : Text;AttachmentFileName@1005 : Text;HtmlBodyFilePath@1007 : Text;EmailSubject@1000 : Text;ToEmailAddress@1006 : Text;HideDialog@1003 : Boolean) : Boolean;
+    VAR
+      TempEmailItem@1002 : TEMPORARY Record 9500;
+    BEGIN
+      EXIT(EmailFileInternal(
+          TempEmailItem,
+          COPYSTR(AttachmentFilePath,1,MAXSTRLEN(TempEmailItem."Attachment File Path")),
+          COPYSTR(AttachmentFileName,1,MAXSTRLEN(TempEmailItem."Attachment Name")),
+          COPYSTR(HtmlBodyFilePath,1,MAXSTRLEN(TempEmailItem."Body File Path")),
+          COPYSTR(EmailSubject,1,MAXSTRLEN(TempEmailItem.Subject)),
+          COPYSTR(ToEmailAddress,1,MAXSTRLEN(TempEmailItem."Send to")),
+          '',
+          '',
+          HideDialog,
+          0,
+          FALSE));
+    END;
+
+    PROCEDURE EmailFileWithSubjectAndReportUsage@11(AttachmentFilePath@1001 : Text[250];AttachmentFileName@1005 : Text[250];HtmlBodyFilePath@1007 : Text[250];EmailSubject@1004 : Text[250];PostedDocNo@1000 : Code[20];ToEmailAddress@1006 : Text[250];EmailDocName@1008 : Text[250];HideDialog@1003 : Boolean;ReportUsage@1010 : Integer) : Boolean;
+    VAR
+      TempEmailItem@1002 : TEMPORARY Record 9500;
+    BEGIN
+      EXIT(EmailFileInternal(
+          TempEmailItem,
+          AttachmentFilePath,
+          AttachmentFileName,
+          HtmlBodyFilePath,
+          EmailSubject,
+          ToEmailAddress,
+          PostedDocNo,
+          EmailDocName,
+          HideDialog,
+          ReportUsage,
+          FALSE));
+    END;
+
+    [External]
+    PROCEDURE GetToAddressFromCustomer@16(BillToCustomerNo@1000 : Code[20]) : Text[250];
+    VAR
+      Customer@1002 : Record 18;
+      ToAddress@1001 : Text;
+    BEGIN
+      IF Customer.GET(BillToCustomerNo) THEN
+        ToAddress := Customer."E-Mail";
+
+      EXIT(ToAddress);
+    END;
+
+    [External]
+    PROCEDURE GetToAddressFromVendor@2(BuyFromVendorNo@1000 : Code[20]) : Text[250];
+    VAR
+      Vendor@1002 : Record 23;
+      ToAddress@1001 : Text;
+    BEGIN
+      IF Vendor.GET(BuyFromVendorNo) THEN
+        ToAddress := Vendor."E-Mail";
+
+      EXIT(ToAddress);
+    END;
+
+    [External]
+    PROCEDURE GetAttachmentFileName@4(VAR AttachmentFileName@1000 : Text[250];PostedDocNo@1001 : Code[20];EmailDocumentName@1004 : Text[250];ReportUsage@1002 : Integer);
+    VAR
+      ReportSelections@1003 : Record 77;
+    BEGIN
+      IF AttachmentFileName = '' THEN
+        IF PostedDocNo = '' THEN BEGIN
+          IF ReportUsage = ReportSelections.Usage::"P.Order" THEN
+            AttachmentFileName := STRSUBSTNO(PdfFileNamePluralMsg,EmailDocumentName)
+          ELSE
+            AttachmentFileName := STRSUBSTNO(ReportAsPdfFileNamePluralMsg,EmailDocumentName);
+        END ELSE
+          CASE ReportUsage OF
+            ReportSelections.Usage::JQ,ReportSelections.Usage::"P.Order":
+              AttachmentFileName := STRSUBSTNO(JobsReportAsPdfFileNameMsg,EmailDocumentName,PostedDocNo);
+            ELSE
+              AttachmentFileName := STRSUBSTNO(ReportAsPdfFileNameMsg,EmailDocumentName,PostedDocNo)
+          END;
+    END;
+
+    PROCEDURE GetEmailBody@27(PostedDocNo@1000 : Code[20];ReportUsage@1001 : Integer;CustomerNo@1006 : Code[20]) : Text;
+    VAR
+      O365DefaultEmailMessage@1009 : Record 2170;
+      EmailParameter@1002 : Record 9510;
+      Customer@1007 : Record 18;
+      String@1011 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.String";
+      DocumentType@1005 : Option;
+    BEGIN
+      IF Customer.GET(CustomerNo) THEN;
+
+      IF EmailParameter.GetEntryWithReportUsage(PostedDocNo,ReportUsage,EmailParameter."Parameter Type"::Body) THEN BEGIN
+        String := EmailParameter.GetParameterValue;
+        EXIT(String.Replace(CustomerLbl,Customer.Name));
+      END;
+
+      IF IdentityManagement.IsInvAppId THEN BEGIN
+        O365DefaultEmailMessage.ReportUsageToDocumentType(DocumentType,ReportUsage);
+        String := O365DefaultEmailMessage.GetMessage(DocumentType);
+        EXIT(String.Replace(CustomerLbl,Customer.Name));
+      END;
+    END;
+
+    PROCEDURE ReplaceCustomerNameWithPlaceholder@22(CustomerNo@1002 : Code[20];BodyText@1001 : Text) : Text;
+    VAR
+      Customer@1003 : Record 18;
+      BodyTextString@1000 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.String";
+    BEGIN
+      BodyTextString := BodyText;
+      IF NOT Customer.GET(CustomerNo) THEN
+        EXIT(BodyText);
+
+      EXIT(BodyTextString.Replace(Customer.Name,CustomerLbl));
+    END;
+
+    [External]
+    PROCEDURE GetEmailSubject@5(PostedDocNo@1000 : Code[20];EmailDocumentName@1001 : Text[250];ReportUsage@1004 : Integer) Subject : Text[250];
+    VAR
+      EmailParameter@1003 : Record 9510;
+      CompanyInformation@1002 : Record 79;
+      ReportSelections@1005 : Record 77;
+      SalesHeader@1007 : Record 36;
+      DocumentType@1006 : Option;
+    BEGIN
+      IF EmailParameter.GetEntryWithReportUsage(PostedDocNo,ReportUsage,EmailParameter."Parameter Type"::Subject) THEN
+        EXIT(EmailParameter.GetParameterValue);
+      CompanyInformation.GET;
+      IF IdentityManagement.IsInvAppId THEN BEGIN
+        ReportSelections.ReportUsageToDocumentType(DocumentType,ReportUsage);
+        CASE DocumentType OF
+          SalesHeader."Document Type"::Invoice:
+            EXIT(STRSUBSTNO(InvoiceEmailSubjectTxt,CompanyInformation.Name));
+          SalesHeader."Document Type"::Quote:
+            EXIT(STRSUBSTNO(QuoteEmailSubjectTxt,CompanyInformation.Name));
+        END;
+      END;
+      IF PostedDocNo = '' THEN
+        Subject := COPYSTR(
+            STRSUBSTNO(EmailSubjectPluralCapTxt,CompanyInformation.Name,EmailDocumentName),1,MAXSTRLEN(Subject))
+      ELSE
+        Subject := COPYSTR(
+            STRSUBSTNO(EmailSubjectCapTxt,CompanyInformation.Name,EmailDocumentName,PostedDocNo),1,MAXSTRLEN(Subject))
+    END;
+
+    PROCEDURE GetTestInvoiceEmailBody@12(CustomerNo@1000 : Code[20]) : Text;
+    VAR
+      O365DefaultEmailMessage@1009 : Record 2170;
+      Customer@1007 : Record 18;
+      String@1011 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.String";
+    BEGIN
+      IF Customer.GET(CustomerNo) THEN;
+      String := O365DefaultEmailMessage.GetTestInvoiceMessage;
+      EXIT(String.Replace(CustomerLbl,Customer.Name));
+    END;
+
+    PROCEDURE GetTestInvoiceEmailSubject@9() : Text[250];
+    VAR
+      CompanyInformation@1002 : Record 79;
+    BEGIN
+      IF CompanyInformation.GET THEN;
+      EXIT(STRSUBSTNO(TestInvoiceEmailSubjectTxt,CompanyInformation.Name));
+    END;
+
+    PROCEDURE SendQuoteInForeground@6(SalesHeader@1002 : Record 36) : Boolean;
+    VAR
+      O365DocumentSentHistory@1000 : Record 2158;
+      ReportSelections@1001 : Record 77;
+      O365SalesEmailManagement@1026 : Codeunit 2151;
+    BEGIN
+      IF NOT O365SalesEmailManagement.ShowEmailDialog(SalesHeader."No.") THEN
+        EXIT;
+
+      O365DocumentSentHistory.NewInProgressFromSalesHeader(SalesHeader);
+      // 0 is the option number for ReportSelections.Usage::"S.Quote", which is renamed in RU
+      IF ReportSelections.SendEmailInForeground(
+           SalesHeader.RECORDID,SalesHeader."No.",SalesHeader.GetDocTypeTxt,0,
+           TRUE,SalesHeader."Bill-to Customer No.")
+      THEN BEGIN
+        O365DocumentSentHistory.SetStatusAsSuccessfullyFinished;
+        EXIT(TRUE);
+      END;
+
+      O365DocumentSentHistory.SetStatusAsFailed;
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE SendPostedInvoiceInForeground@8(SalesInvoiceHeader@1002 : Record 112) : Boolean;
+    VAR
+      O365DocumentSentHistory@1000 : Record 2158;
+      ReportSelections@1001 : Record 77;
+      O365SalesEmailManagement@1028 : Codeunit 2151;
+    BEGIN
+      IF NOT O365SalesEmailManagement.ShowEmailDialog(SalesInvoiceHeader."No.") THEN
+        EXIT;
+
+      O365DocumentSentHistory.NewInProgressFromSalesInvoiceHeader(SalesInvoiceHeader);
+      // 2 is the option number for ReportSelections.Usage::"S.Invoice", which is renamed in RU
+      IF ReportSelections.SendEmailInForeground(
+           SalesInvoiceHeader.RECORDID,SalesInvoiceHeader."No.",'Invoice',2,
+           TRUE,SalesInvoiceHeader."Bill-to Customer No.")
+      THEN BEGIN
+        O365DocumentSentHistory.SetStatusAsSuccessfullyFinished;
+        EXIT(TRUE);
+      END;
+
+      O365DocumentSentHistory.SetStatusAsFailed;
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE EmailFileInternal@7(VAR TempEmailItem@1000 : TEMPORARY Record 9500;AttachmentFilePath@1008 : Text[250];AttachmentFileName@1007 : Text[250];HtmlBodyFilePath@1006 : Text[250];EmailSubject@1002 : Text[250];ToEmailAddress@1001 : Text[250];PostedDocNo@1005 : Code[20];EmailDocName@1003 : Text[250];HideDialog@1004 : Boolean;ReportUsage@1010 : Integer;IsFromPostedDoc@1011 : Boolean) : Boolean;
+    VAR
+      OfficeMgt@1009 : Codeunit 1630;
+      EmailSentSuccesfully@1012 : Boolean;
+    BEGIN
+      WITH TempEmailItem DO BEGIN
+        "Send to" := ToEmailAddress;
+
+        // If true, that means we came from "EmailFile" call and need to get data from the document
+        IF IsFromPostedDoc THEN BEGIN
+          GetAttachmentFileName(AttachmentFileName,PostedDocNo,EmailDocName,ReportUsage);
+          EmailSubject := GetEmailSubject(PostedDocNo,EmailDocName,ReportUsage);
+          AttachIncomingDocuments(PostedDocNo);
+        END;
+        AddCcBcc;
+        "Attachment File Path" := AttachmentFilePath;
+        "Attachment Name" := AttachmentFileName;
+        Subject := EmailSubject;
+
+        IF HtmlBodyFilePath <> '' THEN BEGIN
+          VALIDATE("Plaintext Formatted",FALSE);
+          VALIDATE("Body File Path",HtmlBodyFilePath);
+        END;
+
+        OnBeforeSendEmail(TempEmailItem,IsFromPostedDoc,PostedDocNo,HideDialog,ReportUsage);
+
+        IF OfficeMgt.AttachAvailable THEN
+          OfficeMgt.AttachDocument(AttachmentFilePath,AttachmentFileName,GetBodyText,Subject)
+        ELSE BEGIN
+          EmailSentSuccesfully := Send(HideDialog);
+          IF EmailSentSuccesfully THEN
+            OnAfterEmailSentSuccesfully(TempEmailItem,PostedDocNo,ReportUsage);
+          EXIT(EmailSentSuccesfully);
+        END;
+      END;
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeSendEmail@51(VAR TempEmailItem@1000 : TEMPORARY Record 9500;VAR IsFromPostedDoc@1004 : Boolean;VAR PostedDocNo@1001 : Code[20];VAR HideDialog@1002 : Boolean;VAR ReportUsage@1003 : Integer);
+    BEGIN
+    END;
+
+    [External]
+    PROCEDURE EmailFileFromStream@24(AttachementStream@1001 : InStream;AttachmentName@1006 : Text;Body@1007 : Text;Subject@1008 : Text;MailTo@1009 : Text;HideDialog@1011 : Boolean;ReportUsage@1012 : Integer) : Boolean;
+    VAR
+      TempEmailItem@1010 : TEMPORARY Record 9500;
+      FileManagement@1004 : Codeunit 419;
+      TempFile@1003 : File;
+      OutStream@1002 : OutStream;
+      TempFileName@1005 : Text;
+    BEGIN
+      TempFileName := FileManagement.ServerTempFileName('');
+      TempFile.CREATE(TempFileName);
+
+      TempFile.CREATEOUTSTREAM(OutStream);
+      COPYSTREAM(OutStream,AttachementStream);
+      TempFile.CLOSE;
+
+      TempEmailItem.VALIDATE("Plaintext Formatted",TRUE);
+      TempEmailItem.SetBodyText(Body);
+
+      EXIT(EmailFileInternal(
+          TempEmailItem,
+          COPYSTR(TempFileName,1,MAXSTRLEN(TempEmailItem."Attachment File Path")),
+          COPYSTR(AttachmentName,1,MAXSTRLEN(TempEmailItem."Attachment Name")),
+          '',
+          COPYSTR(Subject,1,MAXSTRLEN(TempEmailItem.Subject)),
+          COPYSTR(MailTo,1,MAXSTRLEN(TempEmailItem."Send to")),
+          '',
+          '',
+          HideDialog,
+          ReportUsage,
+          FALSE));
+    END;
+
+    [External]
+    PROCEDURE EmailHtmlFromStream@10(MailInStream@1000 : InStream;ToEmailAddress@1006 : Text[250];Subject@1008 : Text;HideDialog@1003 : Boolean;ReportUsage@1010 : Integer) : Boolean;
+    VAR
+      TempEmailItem@1002 : TEMPORARY Record 9500;
+      FileManagement@1011 : Codeunit 419;
+      FileName@1005 : Text;
+    BEGIN
+      FileName := FileManagement.InstreamExportToServerFile(MailInStream,'html');
+      EXIT(EmailFileInternal(
+          TempEmailItem,
+          '',
+          '',
+          COPYSTR(FileName,1,MAXSTRLEN(TempEmailItem."Body File Path")),
+          COPYSTR(Subject,1,MAXSTRLEN(TempEmailItem.Subject)),
+          COPYSTR(ToEmailAddress,1,MAXSTRLEN(TempEmailItem."Send to")),
+          '',
+          '',
+          HideDialog,
+          ReportUsage,
+          FALSE));
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterEmailSentSuccesfully@13(VAR TempEmailItem@1002 : TEMPORARY Record 9500;PostedDocNo@1001 : Code[20];ReportUsage@1000 : Integer);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,139 @@
+OBJECT Page 6302 Azure AD Access Dialog
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:11:27 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=AZURE ACTIVE DIRECTORY SERVICE PERMISSIONS;
+    PageType=NavigatePage;
+  }
+  CONTROLS
+  {
+    { 1   ;    ;Container ;
+                Name=Azure AD Access Dialog;
+                ContainerType=ContentArea }
+
+    { 4   ;1   ;Field     ;
+                Name=Para0;
+                CaptionML=ENU=The functionality you have selected to use requires services from Azure Active Directory to access your system.;
+                ApplicationArea=#Basic,#Suite }
+
+    { 2   ;1   ;Field     ;
+                Name=Para1;
+                CaptionML=ENU=Before you can begin using this functionality, you must first grant access to these services.  To grant access, choose the 'Authorize Azure Services'  link.;
+                ApplicationArea=#Basic,#Suite }
+
+    { 6   ;1   ;Field     ;
+                Name=OAuthIntegration;
+                ApplicationArea=#Basic,#Suite;
+                HideValue=TRUE;
+                ControlAddIn=[Microsoft.Dynamics.Nav.Client.OAuthIntegration;PublicKeyToken=31bf3856ad364e35];
+                ShowCaption=No }
+
+    { 3   ;1   ;Field     ;
+                Name=Para2;
+                CaptionML=ENU="";
+                ApplicationArea=#Basic,#Suite;
+                ShowCaption=No }
+
+    { 7   ;1   ;Field     ;
+                Name=Para3;
+                CaptionML=ENU=Azure Active Directory Services:;
+                ApplicationArea=#Basic,#Suite;
+                Style=Strong;
+                StyleExpr=TRUE }
+
+    { 8   ;1   ;Field     ;
+                Name=Para4;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=ResourceFriendlyName;
+                Visible=ResourceFriendlyName <> '';
+                Editable=FALSE;
+                ShowCaption=No }
+
+  }
+  CODE
+  {
+    VAR
+      AzureAdMgt@1001 : Codeunit 6300;
+      FileManagement@1006 : Codeunit 419;
+      AuthCode@1002 : Text;
+      ResourceUrl@1000 : Text;
+      AuthorizationTxt@1003 : TextConst 'ENU=Error occurred while trying to authorize with Azure Active Directory. Please try again or contact your system administrator if error persist.';
+      ResourceFriendlyName@1004 : Text;
+      CloseWindowMsg@1005 : TextConst 'ENU=Authorization sucessful. Close the window to proceed.';
+      LinkNameTxt@1007 : TextConst 'ENU=Authorize Azure Services';
+      LinkTooltipTxt@1008 : TextConst 'ENU=You will be redirected to the authorization provider in a different browser instance.';
+
+    [External]
+    PROCEDURE GetAuthorizationCode@1(Resource@1000 : Text;ResourceName@1001 : Text) : Text;
+    BEGIN
+      ResourceUrl := Resource;
+      ResourceFriendlyName := ResourceName;
+      CurrPage.UPDATE;
+      IF NOT AzureAdMgt.IsAzureADAppSetupDone THEN BEGIN
+        PAGE.RUNMODAL(PAGE::"Azure AD App Setup Wizard");
+        IF NOT AzureAdMgt.IsAzureADAppSetupDone THEN
+          EXIT('');
+      END;
+
+      CurrPage.RUNMODAL;
+      EXIT(AuthCode);
+    END;
+
+    LOCAL PROCEDURE ThrowError@3();
+    BEGIN
+      IF FileManagement.IsWindowsClient THEN
+        MESSAGE(AuthorizationTxt)
+      ELSE
+        ERROR(AuthorizationTxt)
+    END;
+
+    [Integration]
+    PROCEDURE OnOAuthAccessDenied@2(description@1000 : Text;resourceFriendlyName@1001 : Text);
+    BEGIN
+    END;
+
+    EVENT OAuthIntegration@-6::ControlAddInReady@1();
+    BEGIN
+      CurrPage.OAuthIntegration.Authorize(AzureAdMgt.GetAuthCodeUrl(ResourceUrl),LinkNameTxt,LinkTooltipTxt);
+    END;
+
+    EVENT OAuthIntegration@-6::AuthorizationCodeRetrieved@2(authorizationCode@1000 : Text);
+    BEGIN
+      AuthCode := authorizationCode;
+      CurrPage.CLOSE;
+      IF FileManagement.IsWindowsClient THEN
+        MESSAGE(CloseWindowMsg);
+    END;
+
+    EVENT OAuthIntegration@-6::AuthorizationErrorOccurred@3(error@1001 : Text;description@1000 : Text);
+    VAR
+      ActivityLog@1002 : Record 710;
+      AzureAdAppSetup@1003 : Record 6300;
+    BEGIN
+      // OnOAuthAccessDenied event is raised if Auth fails because access is denied
+      // Subcribe to this event if you want to respond to it
+      // description contains AADSTS65004 error code if user denied the request and AADSTS65005 if the client
+      // has not set up required permissions for the resource being requested
+      IF error = 'access_denied' THEN
+        OnOAuthAccessDenied(description,ResourceFriendlyName)
+      ELSE BEGIN
+        IF NOT AzureAdAppSetup.ISEMPTY THEN BEGIN
+          AzureAdAppSetup.FINDFIRST;
+          ActivityLog.LogActivityForUser(
+            AzureAdAppSetup.RECORDID,ActivityLog.Status::Failed,'Azure Authorization',description,error,USERID);
+        END;
+        ThrowError;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

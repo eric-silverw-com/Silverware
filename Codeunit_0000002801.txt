@@ -1,0 +1,596 @@
+OBJECT Codeunit 2801 Native - EDM Types
+{
+  OBJECT-PROPERTIES
+  {
+    Date=;
+    Time=;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            UpdateEDMTypes;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      DummySalesLine@1000 : Record 37;
+
+    PROCEDURE UpdateEDMTypes@5();
+    VAR
+      DummySalesLine@1001 : Record 37;
+      GraphMgtGeneralTools@1000 : Codeunit 5465;
+    BEGIN
+      GraphMgtGeneralTools.InsertOrUpdateODataType(
+        'NATIVE-SALESINVOICE-LINE','Native Sales Invoice Lines',GetSalesLineEDM(DummySalesLine."Document Type"::Invoice));
+      GraphMgtGeneralTools.InsertOrUpdateODataType(
+        'NATIVE-SALESQUOTE-LINE','Native Sales Quote Lines',GetSalesLineEDM(DummySalesLine."Document Type"::Quote));
+      GraphMgtGeneralTools.InsertOrUpdateODataType(
+        'NATIVE-SALESDOCUMENT-COUPON','Native Sales Document Coupons',GetSalesCouponEDM);
+      GraphMgtGeneralTools.InsertOrUpdateODataType(
+        'NATIVE-ATTACHMENT','Native Attachments',GetAttachmentEDM);
+    END;
+
+    PROCEDURE GetSalesLineEDM@2(DocumentType@1001 : Option) : Text;
+    VAR
+      NativeSetupAPIs@1000 : Codeunit 2800;
+      EDM@1003 : Text;
+    BEGIN
+      CASE DocumentType OF
+        DummySalesLine."Document Type"::Invoice:
+          EDM := '<ComplexType Name="' + NativeSetupAPIs.GetAPIPrefix + 'SalesInvoiceLines">';
+        DummySalesLine."Document Type"::Quote:
+          EDM := '<ComplexType Name="' + NativeSetupAPIs.GetAPIPrefix + 'SalesQuoteLines">';
+      END;
+
+      EDM += '<Property Name="sequence" Type="Edm.Int32" Nullable="false" />' +
+        '<Property Name="itemId" Type="Edm.Guid" Nullable="false" />' +
+        '<Property Name="description" Type="Edm.String" MaxLength="' +
+        FORMAT(MAXSTRLEN(DummySalesLine.Description)) + '" Nullable="false" />' +
+        '<Property Name="quantity" Type="Edm.Decimal" Nullable="false" />' +
+        '<Property Name="unitPrice" Type="Edm.Decimal" Nullable="false" />' +
+        '<Property Name="lineDiscountCalculation" Type="Edm.String" Nullable="true" />' +
+        '<Property Name="lineDiscountValue" Type="Edm.Decimal" Nullable="false" />' +
+        '<Property Name="taxable" Type="Edm.Boolean" Nullable="false" />' +
+        '<Property Name="taxGroupId" Type="Edm.Guid" Nullable="false" />' +
+        '<Property Name="lineAmount" Type="Edm.Decimal" Nullable="false" />' +
+        '<Property Name="amountExcludingTax" Type="Edm.Decimal" Nullable="false" />' +
+        '<Property Name="amountIncludingTax" Type="Edm.Decimal" Nullable="false" />' +
+        '<Property Name="invoiceDiscountAmount" Type="Edm.Decimal" Nullable="false" />' +
+        '<Property Name="taxPercent" Type="Edm.Decimal" Nullable="false" />' +
+        '<Property Name="totalTaxAmount" Type="Edm.Decimal" Nullable="false" />' +
+        '</ComplexType>';
+
+      EXIT(EDM);
+    END;
+
+    PROCEDURE ParseSalesLinesJSON@9(DocumentType@1004 : Option;SalesLinesCollectionJSON@1000 : Text;VAR TempSalesInvoiceLineAggregate@1001 : TEMPORARY Record 5476;DocumentId@1010 : GUID);
+    VAR
+      JSONManagement@1002 : Codeunit 5459;
+      LineJsonObject@1008 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";
+      I@1005 : Integer;
+      NumberOfLines@1006 : Integer;
+    BEGIN
+      TempSalesInvoiceLineAggregate.RESET;
+      TempSalesInvoiceLineAggregate.DELETEALL;
+      JSONManagement.InitializeCollection(SalesLinesCollectionJSON);
+      NumberOfLines := JSONManagement.GetCollectionCount;
+
+      FOR I := 1 TO NumberOfLines DO BEGIN
+        JSONManagement.GetJObjectFromCollectionByIndex(LineJsonObject,I - 1);
+        ParseSalesLineJSON(DocumentType,LineJsonObject,TempSalesInvoiceLineAggregate);
+        TempSalesInvoiceLineAggregate."Document Id" := DocumentId;
+        TempSalesInvoiceLineAggregate.INSERT(TRUE);
+      END;
+    END;
+
+    PROCEDURE WriteSalesLinesJSON@20(VAR TempSalesInvoiceLineAggregate@1000 : TEMPORARY Record 5476) : Text;
+    VAR
+      SalesLineJSON@1001 : Text;
+      SalesLinesArrayJSON@1002 : Text;
+    BEGIN
+      IF TempSalesInvoiceLineAggregate.FINDSET THEN
+        REPEAT
+          SalesLineJSON := SalesLineToJSON(TempSalesInvoiceLineAggregate);
+
+          IF SalesLinesArrayJSON <> '' THEN
+            SalesLinesArrayJSON := STRSUBSTNO('%1,%2',SalesLinesArrayJSON,SalesLineJSON)
+          ELSE
+            SalesLinesArrayJSON := STRSUBSTNO('%1',SalesLineJSON);
+        UNTIL TempSalesInvoiceLineAggregate.NEXT = 0;
+
+      EXIT(STRSUBSTNO('[%1]',SalesLinesArrayJSON));
+    END;
+
+    PROCEDURE ParseSalesLineJSON@3(DocumentType@1009 : Option;JsonObject@1006 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";VAR TempSalesInvoiceLineAggregate@1001 : TEMPORARY Record 5476);
+    VAR
+      Item@1004 : Record 27;
+      SalesLineRecordRef@1005 : RecordRef;
+      TargetFieldRef@1000 : FieldRef;
+      SourceFieldRef@1008 : FieldRef;
+    BEGIN
+      CLEAR(TempSalesInvoiceLineAggregate);
+      SalesLineRecordRef.GETTABLE(TempSalesInvoiceLineAggregate);
+
+      GetFieldFromJSONAndRegisterFieldSet(
+        JsonObject,'sequence',TempSalesInvoiceLineAggregate.FIELDNO("Line No."),SalesLineRecordRef);
+      IF GetFieldFromJSON(JsonObject,'itemId',TempSalesInvoiceLineAggregate.FIELDNO("Item Id"),SalesLineRecordRef) THEN BEGIN
+        TargetFieldRef := SalesLineRecordRef.FIELD(TempSalesInvoiceLineAggregate.FIELDNO(Type));
+        TargetFieldRef.VALUE := TempSalesInvoiceLineAggregate.Type::Item;
+
+        SourceFieldRef := SalesLineRecordRef.FIELD(TempSalesInvoiceLineAggregate.FIELDNO("Item Id"));
+        Item.SETRANGE(Id,FORMAT(SourceFieldRef.VALUE));
+        Item.FINDFIRST;
+        TargetFieldRef := SalesLineRecordRef.FIELD(TempSalesInvoiceLineAggregate.FIELDNO("No."));
+        TargetFieldRef.VALUE := Item."No.";
+      END;
+
+      GetFieldFromJSONAndRegisterFieldSet(
+        JsonObject,'description',TempSalesInvoiceLineAggregate.FIELDNO(Description),SalesLineRecordRef);
+      GetFieldFromJSONAndRegisterFieldSet(
+        JsonObject,'quantity',TempSalesInvoiceLineAggregate.FIELDNO(Quantity),SalesLineRecordRef);
+      GetFieldFromJSONAndRegisterFieldSet(
+        JsonObject,'unitPrice',TempSalesInvoiceLineAggregate.FIELDNO("Unit Price"),SalesLineRecordRef);
+
+      IF NOT ProcessTaxableProperty(JsonObject,TempSalesInvoiceLineAggregate.FIELDNO("Tax Id"),SalesLineRecordRef) THEN
+        GetFieldFromJSONAndRegisterFieldSet(
+          JsonObject,'taxGroupId',TempSalesInvoiceLineAggregate.FIELDNO("Tax Id"),SalesLineRecordRef);
+
+      GetFieldFromJSONAndRegisterFieldSet(
+        JsonObject,'lineDiscountCalculation',TempSalesInvoiceLineAggregate.FIELDNO("Line Discount Calculation"),SalesLineRecordRef);
+      GetFieldFromJSONAndRegisterFieldSet(
+        JsonObject,'lineDiscountValue',TempSalesInvoiceLineAggregate.FIELDNO("Line Discount Value"),SalesLineRecordRef);
+      CASE DocumentType OF
+        DummySalesLine."Document Type"::Quote:
+          GetFieldFromJSONAndRegisterFieldSet(
+            JsonObject,'shipmentDate',TempSalesInvoiceLineAggregate.FIELDNO("Shipment Date"),SalesLineRecordRef);
+      END;
+
+      // Get Read Only Fields
+      GetFieldFromJSON(
+        JsonObject,'lineAmount',TempSalesInvoiceLineAggregate.FIELDNO("Line Amount"),SalesLineRecordRef);
+      GetFieldFromJSON(
+        JsonObject,'amountIncludingTax',TempSalesInvoiceLineAggregate.FIELDNO("Line Amount Including Tax"),SalesLineRecordRef);
+      GetFieldFromJSON(
+        JsonObject,'amountExcludingTax',TempSalesInvoiceLineAggregate.FIELDNO("Line Amount Excluding Tax"),SalesLineRecordRef);
+      GetFieldFromJSON(
+        JsonObject,'invoiceDiscountAmount',TempSalesInvoiceLineAggregate.FIELDNO("Inv. Discount Amount"),SalesLineRecordRef);
+      GetFieldFromJSON(JsonObject,'totalTaxAmount',TempSalesInvoiceLineAggregate.FIELDNO("Tax Amount"),SalesLineRecordRef);
+      GetFieldFromJSON(JsonObject,'taxPercent',TempSalesInvoiceLineAggregate.FIELDNO("VAT %"),SalesLineRecordRef);
+
+      SalesLineRecordRef.SETTABLE(TempSalesInvoiceLineAggregate);
+      TempSalesInvoiceLineAggregate.UpdateLineDiscounts;
+    END;
+
+    PROCEDURE SalesLineToJSON@4(VAR TempSalesInvoiceLineAggregate@1003 : TEMPORARY Record 5476) : Text;
+    VAR
+      JSONManagement@1002 : Codeunit 5459;
+      SalesLineRecordRef@1001 : RecordRef;
+      JsonObject@1000 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";
+    BEGIN
+      JSONManagement.InitializeEmptyObject;
+      JSONManagement.GetJSONObject(JsonObject);
+      SalesLineRecordRef.GETTABLE(TempSalesInvoiceLineAggregate);
+      WriteFieldToJSON(JsonObject,'sequence',TempSalesInvoiceLineAggregate.FIELDNO("Line No."),SalesLineRecordRef);
+      WriteFieldToJSON(JsonObject,'itemId',TempSalesInvoiceLineAggregate.FIELDNO("Item Id"),SalesLineRecordRef);
+      WriteFieldToJSON(JsonObject,'description',TempSalesInvoiceLineAggregate.FIELDNO(Description),SalesLineRecordRef);
+      WriteFieldToJSON(JsonObject,'unitOfMeasureId',TempSalesInvoiceLineAggregate.FIELDNO("Unit of Measure Id"),SalesLineRecordRef);
+      WriteFieldToJSON(JsonObject,'quantity',TempSalesInvoiceLineAggregate.FIELDNO(Quantity),SalesLineRecordRef);
+      WriteFieldToJSON(JsonObject,'unitPrice',TempSalesInvoiceLineAggregate.FIELDNO("Unit Price"),SalesLineRecordRef);
+      WriteFieldToJSON(
+        JsonObject,'lineDiscountCalculation',TempSalesInvoiceLineAggregate.FIELDNO("Line Discount Calculation"),SalesLineRecordRef);
+      WriteFieldToJSON(JsonObject,'lineDiscountValue',TempSalesInvoiceLineAggregate.FIELDNO("Line Discount Value"),SalesLineRecordRef);
+
+      JSONManagement.AddJPropertyToJObject(JsonObject,'taxable',GetTaxableFromTaxGroup(TempSalesInvoiceLineAggregate."Tax Id"));
+      WriteFieldToJSON(JsonObject,'taxGroupId',TempSalesInvoiceLineAggregate.FIELDNO("Tax Id"),SalesLineRecordRef);
+      WriteFieldToJSON(JsonObject,'taxPercent',TempSalesInvoiceLineAggregate.FIELDNO("VAT %"),SalesLineRecordRef);
+      WriteFieldToJSON(JsonObject,'lineAmount',TempSalesInvoiceLineAggregate.FIELDNO("Line Amount"),SalesLineRecordRef);
+      WriteFieldToJSON(
+        JsonObject,'amountIncludingTax',TempSalesInvoiceLineAggregate.FIELDNO("Line Amount Including Tax"),SalesLineRecordRef);
+      WriteFieldToJSON(
+        JsonObject,'amountExcludingTax',TempSalesInvoiceLineAggregate.FIELDNO("Line Amount Excluding Tax"),SalesLineRecordRef);
+      WriteFieldToJSON(
+        JsonObject,'invoiceDiscountAmount',TempSalesInvoiceLineAggregate.FIELDNO("Inv. Discount Amount"),SalesLineRecordRef);
+      WriteFieldToJSON(JsonObject,'totalTaxAmount',TempSalesInvoiceLineAggregate.FIELDNO("Tax Amount"),SalesLineRecordRef);
+      EXIT(JsonObject.ToString);
+    END;
+
+    PROCEDURE GetSalesCouponEDM@6() : Text;
+    VAR
+      DummyO365CouponClaim@1001 : Record 2115;
+      NativeSetupAPIs@1000 : Codeunit 2800;
+    BEGIN
+      EXIT(
+        '<ComplexType Name="' + NativeSetupAPIs.GetAPIPrefix + 'SalesDocumentCoupons">' +
+        '<Property Name="claimId" Type="Edm.String" Nullable="false" />' +
+        '<Property Name="usage" Type="Edm.String" Nullable="true" />' +
+        '<Property Name="offer" Type="Edm.String" MaxLength="' +
+        FORMAT(MAXSTRLEN(DummyO365CouponClaim.Offer)) + '" Nullable="true" />' +
+        '<Property Name="terms" Type="Edm.String" MaxLength="' +
+        FORMAT(MAXSTRLEN(DummyO365CouponClaim.Terms)) + '" Nullable="true" />' +
+        '<Property Name="code" Type="Edm.String" MaxLength="' +
+        FORMAT(MAXSTRLEN(DummyO365CouponClaim.Code)) + '" Nullable="true" />' +
+        '<Property Name="expiration" Type="Edm.Date" Nullable="true" />' +
+        '<Property Name="discountValue" Type="Edm.Decimal" Nullable="true" />' +
+        '<Property Name="discountType" Type="Edm.String" Nullable="true" />' +
+        '<Property Name="amount" Type="Edm.String" Nullable="true" />' +
+        '</ComplexType>');
+    END;
+
+    PROCEDURE ParseCouponsJSON@24(ContactGraphId@1009 : Text[250];DocumentType@1004 : Option;DocumentNo@1000 : Code[20];CouponsJSON@1001 : Text);
+    VAR
+      O365CouponClaimDocLink@1003 : Record 2116;
+      JSONManagement@1002 : Codeunit 5459;
+      NativeCoupons@1007 : Codeunit 2815;
+      LineJsonObject@1008 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";
+      I@1005 : Integer;
+      NumberOfLines@1006 : Integer;
+    BEGIN
+      O365CouponClaimDocLink.SETRANGE("Document Type",DocumentType);
+      O365CouponClaimDocLink.SETRANGE("Document No.",DocumentNo);
+      O365CouponClaimDocLink.DELETEALL;
+      JSONManagement.InitializeCollection(CouponsJSON);
+      NumberOfLines := JSONManagement.GetCollectionCount;
+
+      IF NumberOfLines = 0 THEN
+        EXIT;
+
+      FOR I := 1 TO NumberOfLines DO BEGIN
+        JSONManagement.GetJObjectFromCollectionByIndex(LineJsonObject,I - 1);
+        O365CouponClaimDocLink.RESET;
+        ParseCouponJSON(LineJsonObject,O365CouponClaimDocLink);
+        O365CouponClaimDocLink."Graph Contact ID" := ContactGraphId;
+        O365CouponClaimDocLink."Document Type" := DocumentType;
+        O365CouponClaimDocLink."Document No." := DocumentNo;
+
+        NativeCoupons.CheckThatCouponCanBeAppliedToInvoice(O365CouponClaimDocLink);
+        NativeCoupons.CheckIfCouponCanBeUsed(O365CouponClaimDocLink);
+
+        O365CouponClaimDocLink.INSERT(TRUE);
+      END;
+    END;
+
+    PROCEDURE ParseCouponJSON@1(JsonObject@1006 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";VAR O365CouponClaimDocLink@1001 : Record 2116);
+    VAR
+      CouponLinkRecordRef@1002 : RecordRef;
+    BEGIN
+      CouponLinkRecordRef.GETTABLE(O365CouponClaimDocLink);
+      GetFieldFromJSON(JsonObject,'claimId',O365CouponClaimDocLink.FIELDNO("Claim ID"),CouponLinkRecordRef);
+      CouponLinkRecordRef.SETTABLE(O365CouponClaimDocLink);
+    END;
+
+    PROCEDURE WriteCouponsJSON@23(DocumentType@1001 : Option;DocumentNo@1000 : Code[20]) : Text;
+    VAR
+      O365CouponClaimDocLink@1002 : Record 2116;
+      O365CouponClaim@1007 : Record 2115;
+      JSONManagement@1003 : Codeunit 5459;
+      JsonObject@1004 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";
+      JsonArray@1005 : DotNet "'Newtonsoft.Json, Version=9.0.0.0, Culture=neutral, PublicKeyToken=30ad4fe6b2a6aeed'.Newtonsoft.Json.Linq.JArray";
+      O365CouponClaimDocLinkRecordRef@1006 : RecordRef;
+    BEGIN
+      JSONManagement.InitializeEmptyCollection;
+      JSONManagement.GetJsonArray(JsonArray);
+
+      O365CouponClaimDocLink.SETRANGE("Document Type",DocumentType);
+      O365CouponClaimDocLink.SETRANGE("Document No.",DocumentNo);
+      IF O365CouponClaimDocLink.FINDSET THEN
+        REPEAT
+          O365CouponClaim.GET(O365CouponClaimDocLink."Claim ID",O365CouponClaimDocLink."Graph Contact ID");
+          O365CouponClaimDocLinkRecordRef.GETTABLE(O365CouponClaim);
+          CouponToJSON(O365CouponClaimDocLinkRecordRef,JsonObject);
+          JSONManagement.AddJObjectToJArray(JsonArray,JsonObject);
+        UNTIL O365CouponClaimDocLink.NEXT = 0;
+
+      EXIT(JSONManagement.WriteCollectionToString);
+    END;
+
+    PROCEDURE WritePostedCouponsJSON@7(PostedInvoiceNo@1000 : Code[20]) : Text;
+    VAR
+      O365PostedCouponClaim@1004 : Record 2117;
+      JSONManagement@1003 : Codeunit 5459;
+      JsonObject@1002 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";
+      JsonArray@1001 : DotNet "'Newtonsoft.Json, Version=9.0.0.0, Culture=neutral, PublicKeyToken=30ad4fe6b2a6aeed'.Newtonsoft.Json.Linq.JArray";
+      O365PostedCouponClaimRecordRef@1005 : RecordRef;
+    BEGIN
+      JSONManagement.InitializeEmptyCollection;
+      JSONManagement.GetJsonArray(JsonArray);
+
+      O365PostedCouponClaim.SETRANGE("Sales Invoice No.",PostedInvoiceNo);
+      IF O365PostedCouponClaim.FINDSET THEN
+        REPEAT
+          O365PostedCouponClaimRecordRef.GETTABLE(O365PostedCouponClaim);
+          CouponToJSON(O365PostedCouponClaimRecordRef,JsonObject);
+          JSONManagement.AddJObjectToJArray(JsonArray,JsonObject);
+        UNTIL O365PostedCouponClaim.NEXT = 0;
+
+      EXIT(JSONManagement.WriteCollectionToString);
+    END;
+
+    PROCEDURE CouponToJSON@12(VAR CouponRecordRef@1004 : RecordRef;VAR JsonObject@1000 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject");
+    VAR
+      DummyO365CouponClaim@1001 : Record 2115;
+      JSONManagement@1002 : Codeunit 5459;
+    BEGIN
+      JSONManagement.InitializeEmptyObject;
+      JSONManagement.GetJSONObject(JsonObject);
+      WriteFieldToJSON(JsonObject,'claimId',DummyO365CouponClaim.FIELDNO("Claim ID"),CouponRecordRef);
+      WriteFieldToJSON(JsonObject,'graphContactId',DummyO365CouponClaim.FIELDNO("Graph Contact ID"),CouponRecordRef);
+      WriteFieldToJSON(JsonObject,'usage',DummyO365CouponClaim.FIELDNO(Usage),CouponRecordRef);
+      WriteFieldToJSON(JsonObject,'offer',DummyO365CouponClaim.FIELDNO(Offer),CouponRecordRef);
+      WriteFieldToJSON(JsonObject,'terms',DummyO365CouponClaim.FIELDNO(Terms),CouponRecordRef);
+      WriteFieldToJSON(JsonObject,'code',DummyO365CouponClaim.FIELDNO(Code),CouponRecordRef);
+      WriteFieldToJSON(JsonObject,'expiration',DummyO365CouponClaim.FIELDNO(Expiration),CouponRecordRef);
+      WriteFieldToJSON(JsonObject,'discountValue',DummyO365CouponClaim.FIELDNO("Discount Value"),CouponRecordRef);
+      WriteFieldToJSON(JsonObject,'discountType',DummyO365CouponClaim.FIELDNO("Discount Type"),CouponRecordRef);
+      WriteFieldToJSON(JsonObject,'amount',DummyO365CouponClaim.FIELDNO("Amount Text"),CouponRecordRef);
+    END;
+
+    PROCEDURE GetAttachmentEDM@8() : Text;
+    VAR
+      DummyAttachmentEntityBuffer@1001 : Record 5509;
+      NativeSetupAPIs@1000 : Codeunit 2800;
+    BEGIN
+      EXIT(
+        '<ComplexType Name="' + NativeSetupAPIs.GetAPIPrefix + 'DocumentAttachments">' +
+        '<Property Name="id" Type="Edm.Guid" Nullable="false" />' +
+        '<Property Name="fileName" Type="Edm.String" MaxLength="' +
+        FORMAT(MAXSTRLEN(DummyAttachmentEntityBuffer."File Name")) + '" Nullable="true" />' +
+        '<Property Name="byteSize" Type="Edm.Int32" Nullable="true" />' +
+        '</ComplexType>');
+    END;
+
+    PROCEDURE ParseAttachmentsJSON@14(AttachmentsCollectionJSON@1000 : Text;VAR TempAttachmentEntityBuffer@1001 : TEMPORARY Record 5509;DocumentId@1003 : GUID);
+    VAR
+      JSONManagement@1002 : Codeunit 5459;
+      LineJsonObject@1008 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";
+      JsonLineIndex@1005 : Integer;
+      NumberOfLines@1006 : Integer;
+    BEGIN
+      TempAttachmentEntityBuffer.RESET;
+      TempAttachmentEntityBuffer.DELETEALL;
+      JSONManagement.InitializeCollection(AttachmentsCollectionJSON);
+      NumberOfLines := JSONManagement.GetCollectionCount;
+
+      FOR JsonLineIndex := 1 TO NumberOfLines DO BEGIN
+        JSONManagement.GetJObjectFromCollectionByIndex(LineJsonObject,JsonLineIndex - 1);
+        ParseAttachmentJSON(LineJsonObject,TempAttachmentEntityBuffer);
+        TempAttachmentEntityBuffer."Document Id" := DocumentId;
+        IF ISNULLGUID(TempAttachmentEntityBuffer.Id) THEN
+          TempAttachmentEntityBuffer.Id := CREATEGUID;
+        TempAttachmentEntityBuffer.INSERT(TRUE);
+      END;
+    END;
+
+    PROCEDURE WriteAttachmentsJSON@16(VAR TempAttachmentEntityBuffer@1000 : TEMPORARY Record 5509) : Text;
+    VAR
+      JSONManagement@1003 : Codeunit 5459;
+      JsonObject@1004 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";
+      JsonArray@1005 : DotNet "'Newtonsoft.Json, Version=9.0.0.0, Culture=neutral, PublicKeyToken=30ad4fe6b2a6aeed'.Newtonsoft.Json.Linq.JArray";
+    BEGIN
+      JSONManagement.InitializeEmptyCollection;
+      JSONManagement.GetJsonArray(JsonArray);
+
+      IF TempAttachmentEntityBuffer.FINDSET THEN
+        REPEAT
+          AttachmentToJSON(TempAttachmentEntityBuffer,JsonObject);
+          JSONManagement.AddJObjectToJArray(JsonArray,JsonObject);
+        UNTIL TempAttachmentEntityBuffer.NEXT = 0;
+
+      EXIT(JSONManagement.WriteCollectionToString);
+    END;
+
+    PROCEDURE ParseAttachmentJSON@18(JsonObject@1006 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";VAR TempAttachmentEntityBuffer@1001 : TEMPORARY Record 5509);
+    VAR
+      AttachmentRecordRef@1005 : RecordRef;
+    BEGIN
+      CLEAR(TempAttachmentEntityBuffer);
+      AttachmentRecordRef.GETTABLE(TempAttachmentEntityBuffer);
+
+      GetFieldFromJSONAndRegisterFieldSet(
+        JsonObject,'id',TempAttachmentEntityBuffer.FIELDNO(Id),AttachmentRecordRef);
+
+      // Get read only fields
+      GetFieldFromJSON(
+        JsonObject,'fileName',TempAttachmentEntityBuffer.FIELDNO("File Name"),AttachmentRecordRef);
+      GetFieldFromJSON(
+        JsonObject,'byteSize',TempAttachmentEntityBuffer.FIELDNO("Byte Size"),AttachmentRecordRef);
+
+      AttachmentRecordRef.SETTABLE(TempAttachmentEntityBuffer);
+    END;
+
+    PROCEDURE AttachmentToJSON@19(VAR TempAttachmentEntityBuffer@1003 : TEMPORARY Record 5509;VAR JsonObject@1000 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject");
+    VAR
+      JSONManagement@1002 : Codeunit 5459;
+      AttachmentRecordRef@1001 : RecordRef;
+    BEGIN
+      JSONManagement.InitializeEmptyObject;
+      JSONManagement.GetJSONObject(JsonObject);
+      AttachmentRecordRef.GETTABLE(TempAttachmentEntityBuffer);
+      WriteFieldToJSON(JsonObject,'id',TempAttachmentEntityBuffer.FIELDNO(Id),AttachmentRecordRef);
+      WriteFieldToJSON(JsonObject,'fileName',TempAttachmentEntityBuffer.FIELDNO("File Name"),AttachmentRecordRef);
+      WriteFieldToJSON(JsonObject,'byteSize',TempAttachmentEntityBuffer.FIELDNO("Byte Size"),AttachmentRecordRef);
+    END;
+
+    LOCAL PROCEDURE GetFieldFromJSONAndRegisterFieldSet@15(JsonObject@1000 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";propertyName@1003 : Text;TargetFieldNumber@1002 : Integer;VAR TargetRecordRef@1007 : RecordRef) : Boolean;
+    BEGIN
+      IF NOT GetFieldFromJSON(JsonObject,propertyName,TargetFieldNumber,TargetRecordRef) THEN
+        EXIT(FALSE);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE GetFieldFromJSON@10(JsonObject@1000 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";propertyName@1003 : Text;TargetFieldNumber@1002 : Integer;VAR TargetRecordRef@1007 : RecordRef) : Boolean;
+    VAR
+      JSONManagement@1001 : Codeunit 5459;
+      TargetFieldRef@1006 : FieldRef;
+      OriginalValue@1005 : Variant;
+      CurrentValue@1008 : Variant;
+    BEGIN
+      TargetFieldRef := TargetRecordRef.FIELD(TargetFieldNumber);
+
+      OriginalValue := TargetFieldRef.VALUE;
+
+      IF NOT JSONManagement.GetPropertyValueFromJObjectByPathSetToFieldRef(JsonObject,propertyName,TargetFieldRef) THEN
+        EXIT(FALSE);
+
+      CurrentValue := TargetFieldRef.VALUE;
+      TargetFieldRef.VALUE := OriginalValue;
+      TargetFieldRef.VALIDATE(CurrentValue);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GetFieldSetBufferWithAllFieldsSet@13(VAR TempFieldBuffer@1000 : TEMPORARY Record 8450);
+    VAR
+      DummySalesInvoiceLineAggregate@1001 : Record 5476;
+      GeneralLedgerSetup@1002 : Record 98;
+    BEGIN
+      RegisterFieldSet(DummySalesInvoiceLineAggregate.FIELDNO("Line No."),TempFieldBuffer);
+      RegisterFieldSet(DummySalesInvoiceLineAggregate.FIELDNO(Type),TempFieldBuffer);
+      RegisterFieldSet(DummySalesInvoiceLineAggregate.FIELDNO("Item Id"),TempFieldBuffer);
+      RegisterFieldSet(DummySalesInvoiceLineAggregate.FIELDNO("No."),TempFieldBuffer);
+      RegisterFieldSet(DummySalesInvoiceLineAggregate.FIELDNO(Description),TempFieldBuffer);
+      RegisterFieldSet(DummySalesInvoiceLineAggregate.FIELDNO("Tax Id"),TempFieldBuffer);
+
+      IF GeneralLedgerSetup.UseVat THEN
+        RegisterFieldSet(DummySalesInvoiceLineAggregate.FIELDNO("VAT Prod. Posting Group"),TempFieldBuffer)
+      ELSE
+        RegisterFieldSet(DummySalesInvoiceLineAggregate.FIELDNO("Tax Group Code"),TempFieldBuffer);
+
+      RegisterFieldSet(DummySalesInvoiceLineAggregate.FIELDNO(Quantity),TempFieldBuffer);
+      RegisterFieldSet(DummySalesInvoiceLineAggregate.FIELDNO("Unit Price"),TempFieldBuffer);
+      RegisterFieldSet(DummySalesInvoiceLineAggregate.FIELDNO("Line Discount Calculation"),TempFieldBuffer);
+      RegisterFieldSet(DummySalesInvoiceLineAggregate.FIELDNO("Line Discount Value"),TempFieldBuffer);
+      RegisterFieldSet(DummySalesInvoiceLineAggregate.FIELDNO("Line Discount Amount"),TempFieldBuffer);
+      RegisterFieldSet(DummySalesInvoiceLineAggregate.FIELDNO("Line Discount %"),TempFieldBuffer);
+      RegisterFieldSet(DummySalesInvoiceLineAggregate.FIELDNO("Shipment Date"),TempFieldBuffer);
+    END;
+
+    LOCAL PROCEDURE WriteFieldToJSON@17(JsonObject@1000 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";propertyName@1003 : Text;TargetFieldNumber@1002 : Integer;VAR TargetRecordRef@1007 : RecordRef) : Boolean;
+    VAR
+      JSONManagement@1001 : Codeunit 5459;
+      IntegrationManagement@1005 : Codeunit 5150;
+      ValueVariant@1004 : Variant;
+      TargetFieldRef@1006 : FieldRef;
+      GuidValue@1008 : GUID;
+      OptionNumber@1009 : Integer;
+      IsNullValue@1010 : Boolean;
+      DateTimeValue@1011 : DateTime;
+    BEGIN
+      TargetFieldRef := TargetRecordRef.FIELD(TargetFieldNumber);
+      ValueVariant := TargetFieldRef.VALUE;
+
+      CASE LOWERCASE(FORMAT(TargetFieldRef.TYPE)) OF
+        'guid':
+          BEGIN
+            GuidValue := TargetFieldRef.VALUE;
+            ValueVariant := LOWERCASE(IntegrationManagement.GetIdWithoutBrackets(GuidValue));
+          END;
+        'option':
+          BEGIN
+            OptionNumber := TargetFieldRef.VALUE;
+            OptionNumber += 1;
+            ValueVariant := SELECTSTR(OptionNumber,TargetFieldRef.OPTIONSTRING);
+          END;
+        'datetime':
+          BEGIN
+            DateTimeValue := TargetFieldRef.VALUE;
+            IsNullValue := DateTimeValue = 0DT;
+          END;
+      END;
+
+      IF IsNullValue THEN
+        JSONManagement.AddNullJPropertyToJObject(JsonObject,propertyName)
+      ELSE
+        JSONManagement.AddJPropertyToJObject(JsonObject,propertyName,ValueVariant);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE RegisterFieldSet@11(FieldNo@1000 : Integer;VAR TempFieldBuffer@1002 : TEMPORARY Record 8450);
+    VAR
+      LastOrderNo@1001 : Integer;
+    BEGIN
+      LastOrderNo := 1;
+      IF TempFieldBuffer.FINDLAST THEN
+        LastOrderNo := TempFieldBuffer.Order + 1;
+
+      CLEAR(TempFieldBuffer);
+      TempFieldBuffer.Order := LastOrderNo;
+      TempFieldBuffer."Table ID" := DATABASE::"Sales Invoice Line Aggregate";
+      TempFieldBuffer."Field ID" := FieldNo;
+      TempFieldBuffer.INSERT;
+    END;
+
+    LOCAL PROCEDURE ProcessTaxableProperty@27(VAR JsonObject@1002 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";TargetFieldNumber@1005 : Integer;VAR TargetRecordRef@1004 : RecordRef) : Boolean;
+    VAR
+      GeneralLedgerSetup@1000 : Record 98;
+      JSONManagement@1001 : Codeunit 5459;
+      Taxable@1003 : Boolean;
+    BEGIN
+      IF GeneralLedgerSetup.UseVat THEN
+        EXIT(FALSE);
+
+      IF NOT JSONManagement.GetBoolPropertyValueFromJObjectByName(JsonObject,'taxable',Taxable) THEN
+        EXIT(FALSE);
+
+      ValidateTaxable(Taxable,TargetFieldNumber,TargetRecordRef);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE ValidateTaxable@21(Taxable@1001 : Boolean;TargetFieldNumber@1005 : Integer;VAR TargetRecordRef@1004 : RecordRef) : Boolean;
+    VAR
+      TaxGroup@1002 : Record 321;
+      TaxGroupIdFieldRef@1003 : FieldRef;
+    BEGIN
+      IF NOT GetTaxGroupFromTaxable(Taxable,TaxGroup) THEN
+        EXIT(FALSE);
+
+      TaxGroupIdFieldRef := TargetRecordRef.FIELD(TargetFieldNumber);
+      TaxGroupIdFieldRef.VALIDATE(TaxGroup.Id);
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GetTaxGroupFromTaxable@37(Taxable@1000 : Boolean;VAR TaxGroup@1001 : Record 321) : Boolean;
+    VAR
+      TaxSetup@1002 : Record 326;
+    BEGIN
+      IF TaxSetup.GET THEN
+        IF TaxSetup."Non-Taxable Tax Group Code" <> '' THEN BEGIN
+          IF Taxable THEN
+            TaxGroup.SETFILTER(Code,'<>%1',TaxSetup."Non-Taxable Tax Group Code")
+          ELSE
+            TaxGroup.SETFILTER(Code,'%1',TaxSetup."Non-Taxable Tax Group Code");
+        END;
+
+      EXIT(TaxGroup.FINDFIRST);
+    END;
+
+    LOCAL PROCEDURE GetTaxableFromTaxGroup@45(TaxGroupID@1000 : GUID) : Boolean;
+    VAR
+      GeneralLedgerSetup@1001 : Record 98;
+      TaxableTaxGroup@1002 : Record 321;
+      NonTaxableTaxGroup@1003 : Record 321;
+    BEGIN
+      IF GeneralLedgerSetup.UseVat THEN
+        EXIT(FALSE);
+
+      IF ISNULLGUID(TaxGroupID) THEN
+        EXIT(TRUE);
+
+      GetTaxGroupFromTaxable(TRUE,TaxableTaxGroup);
+      IF TaxableTaxGroup.Id = TaxGroupID THEN
+        EXIT(TRUE);
+
+      GetTaxGroupFromTaxable(FALSE,NonTaxableTaxGroup);
+      EXIT(NOT (NonTaxableTaxGroup.Id = TaxGroupID));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

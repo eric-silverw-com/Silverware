@@ -1,0 +1,400 @@
+OBJECT Codeunit 5457 Graph Sync. - Contact
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:22 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      IntegrationMappingCodeTxt@1001 : TextConst '@@@={Locked};ENU=SyncGraphContact';
+      InboundConnectionNameTxt@1002 : TextConst '@@@={Locked};ENU=InboundContact';
+      SubscriptionConnectionNameTxt@1003 : TextConst '@@@={Locked};ENU=SubscribeContact';
+      SynchronizeConnectionNameTxt@1000 : TextConst '@@@={Locked};ENU=SynchronizeContact';
+      RegisterConnectionsTxt@1005 : TextConst '@@@={Locked};ENU=Registering connections for Contact.';
+      FoundWebhookTxt@1006 : TextConst '@@@={Locked};ENU=Found webhook subscription for Contact with id %1.';
+      MissingWebhookTxt@1007 : TextConst '@@@={Locked};ENU=Could not find webhook subscription for Contact with id %1.';
+      FoundUncoupledGraphRecordTxt@1008 : TextConst '@@@={Locked};ENU=Found and coupled uncoupled Contact record.';
+      MissingUncoupledGraphRecordTxt@1009 : TextConst '@@@={Locked};ENU=Could not locate Graph record for uncoupled Contact record.';
+      GraphSubscriptionManagement@1010 : Codeunit 5450;
+      UpdatingGraphRecordTxt@1011 : TextConst '@@@={Locked};ENU=Updating record for table %1 in Graph.';
+      DeletingGraphRecordTxt@1004 : TextConst '@@@={Locked};ENU=Deleting record for table %1 in Graph.';
+      InsertingGraphRecordTxt@1014 : TextConst '@@@={Locked};ENU=Inserting record for table %1 in Graph.';
+      FullSyncTxt@1013 : TextConst '@@@={Locked};ENU=Starting full Graph sync for Contact.';
+      DeltaSyncTxt@1012 : TextConst '@@@={Locked};ENU=Starting delta Graph sync for Contact.';
+
+    LOCAL PROCEDURE CanHandleMapping@13(MappingCode@1000 : Code[20]) : Boolean;
+    BEGIN
+      EXIT(UPPERCASE(MappingCode) = UPPERCASE(IntegrationMappingCodeTxt));
+    END;
+
+    LOCAL PROCEDURE EntityEndpoint@17() : Text[250];
+    BEGIN
+      EXIT('https://outlook.office365.com/api/beta/users(''{SHAREDCONTACTS}'')/contacts');
+    END;
+
+    LOCAL PROCEDURE EntityListEndpoint@18() : Text[250];
+    BEGIN
+      EXIT('https://outlook.office365.com/api/beta/users(''{SHAREDCONTACTS}'')/contactfolders(''sharedbusinesscontacts'')/contacts');
+    END;
+
+    LOCAL PROCEDURE GetEntityTableID@35() : Integer;
+    BEGIN
+      EXIT(DATABASE::Contact);
+    END;
+
+    LOCAL PROCEDURE GetInboundConnectionString@16() : Text;
+    VAR
+      GraphConnectionSetup@1000 : Codeunit 5456;
+    BEGIN
+      EXIT(GraphConnectionSetup.ConstructConnectionString(EntityEndpoint,EntityListEndpoint,ResourceUri,''));
+    END;
+
+    LOCAL PROCEDURE GetSubscriptionConnectionString@20() : Text;
+    VAR
+      GraphConnectionSetup@1000 : Codeunit 5456;
+    BEGIN
+      EXIT(GraphConnectionSetup.ConstructConnectionString(SubscriptionEndpoint,SubscriptionEndpoint,ResourceUri,''));
+    END;
+
+    LOCAL PROCEDURE GetSynchronizeConnectionString@21() : Text;
+    VAR
+      GraphConnectionSetup@1000 : Codeunit 5456;
+    BEGIN
+      EXIT(GraphConnectionSetup.ConstructConnectionString(EntityEndpoint,EntityListEndpoint,ResourceUri,''));
+    END;
+
+    LOCAL PROCEDURE GetWebhookSubscription@5(VAR WebhookSubscription@1000 : Record 2000000199) : Boolean;
+    VAR
+      WebhookManagement@1007 : Codeunit 5377;
+      EndpointRegex@1001 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Regex";
+    BEGIN
+      GetWebhookSubscriptionEndpointRegex(EndpointRegex);
+      EXIT(WebhookManagement.FindMatchingWebhookSubscriptionRegex(WebhookSubscription,EndpointRegex));
+    END;
+
+    LOCAL PROCEDURE GetWebhookSubscriptionEndpointRegex@31(EndpointRegex@1002 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Regex");
+    VAR
+      EndpointSearchString@1000 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.String";
+    BEGIN
+      EndpointSearchString := EndpointRegex.Escape(EntityListEndpoint);
+      EndpointSearchString := EndpointSearchString.Replace('\{SHAREDCONTACTS}','.*');
+      EndpointSearchString := EndpointSearchString.Replace('/','\/');
+      EndpointSearchString := EndpointSearchString.Replace('''','\''');
+
+      EndpointRegex := EndpointRegex.Regex(FORMAT(EndpointSearchString));
+    END;
+
+    LOCAL PROCEDURE ResourceUri@29() : Text;
+    BEGIN
+      EXIT('https://outlook.office365.com');
+    END;
+
+    LOCAL PROCEDURE SubscriptionEndpoint@19() : Text[250];
+    BEGIN
+      EXIT('https://outlook.office365.com/api/beta/users(''{SHAREDCONTACTS}'')/subscriptions');
+    END;
+
+    LOCAL PROCEDURE SyncEnabled@30() : Boolean;
+    VAR
+      MarketingSetup@1000 : Record 5079;
+    BEGIN
+      EXIT(MarketingSetup.GET AND MarketingSetup."Sync with Microsoft Graph");
+    END;
+
+    [EventSubscriber(Codeunit,5455,OnAddIntegrationMapping)]
+    LOCAL PROCEDURE OnAddContactIntegrationMapping@4(MappingCode@1000 : Code[20]);
+    VAR
+      Contact@1002 : Record 5050;
+      TempGraphContact@1003 : TEMPORARY Record 5450;
+      GraphDataSetup@1001 : Codeunit 5455;
+    BEGIN
+      IF NOT CanHandleMapping(MappingCode) THEN
+        EXIT;
+
+      // Add Graph Contact <=> Contact table mapping
+      GraphDataSetup.AddIntegrationTableMapping(MappingCode,DATABASE::Contact,DATABASE::"Graph Contact",
+        TempGraphContact.FIELDNO(Id),TempGraphContact.FIELDNO(LastModifiedDateTime),'',TempGraphContact.FIELDNO(DeltaToken),
+        TempGraphContact.FIELDNO(ChangeKey),TempGraphContact.FIELDNO(IsNavCreated));
+
+      // Add Graph Contact <=> Contact field mapping
+      GraphDataSetup.AddIntgrationFieldMapping(MappingCode,Contact.FIELDNO("First Name"),TempGraphContact.FIELDNO(GivenName),FALSE);
+      GraphDataSetup.AddIntgrationFieldMapping(MappingCode,Contact.FIELDNO("Middle Name"),TempGraphContact.FIELDNO(MiddleName),FALSE);
+      GraphDataSetup.AddIntgrationFieldMapping(MappingCode,Contact.FIELDNO(Surname),TempGraphContact.FIELDNO(Surname),FALSE);
+      GraphDataSetup.AddIntgrationFieldMapping(MappingCode,Contact.FIELDNO(Initials),TempGraphContact.FIELDNO(Initials),FALSE);
+      GraphDataSetup.AddIntgrationFieldMapping(MappingCode,Contact.FIELDNO("Job Title"),TempGraphContact.FIELDNO(JobTitle),FALSE);
+      GraphDataSetup.AddIntgrationFieldMapping(MappingCode,Contact.FIELDNO("Company Name"),
+        TempGraphContact.FIELDNO(CompanyName),FALSE);
+    END;
+
+    [EventSubscriber(Codeunit,5450,OnBeforeAddOrUpdateGraphSubscriptions)]
+    LOCAL PROCEDURE OnBeforeAddOrUpdateGraphSubscription@2(VAR FirstTimeSync@1000 : Boolean);
+    VAR
+      WebhookSubscription@1001 : Record 2000000199;
+      GraphSubscriptionMgt@1003 : Codeunit 5450;
+      WebhookExists@1004 : Boolean;
+    BEGIN
+      SETDEFAULTTABLECONNECTION(TABLECONNECTIONTYPE::MicrosoftGraph,SubscriptionConnectionNameTxt,TRUE);
+      WebhookExists := GetWebhookSubscription(WebhookSubscription);
+      GraphSubscriptionMgt.AddOrUpdateGraphSubscription(FirstTimeSync,WebhookExists,WebhookSubscription,EntityListEndpoint);
+    END;
+
+    [EventSubscriber(Codeunit,5455,OnCheckCanSyncRecord)]
+    LOCAL PROCEDURE OnCheckCanSyncRecord@33(EntityRecordRef@1000 : RecordRef;VAR CanSyncRecord@1001 : Boolean;VAR Handled@1003 : Boolean);
+    VAR
+      Contact@1002 : Record 5050;
+    BEGIN
+      IF EntityRecordRef.NUMBER <> GetEntityTableID THEN
+        EXIT;
+
+      IF NOT SyncEnabled THEN
+        EXIT;
+
+      EntityRecordRef.SETTABLE(Contact);
+      CanSyncRecord := NOT (Contact.Name IN ['',' ']);
+      Handled := TRUE;
+    END;
+
+    [EventSubscriber(Codeunit,5455,OnCreateIntegrationMappings)]
+    LOCAL PROCEDURE OnCreateContactIntegrationMappings@6();
+    VAR
+      GraphDataSetup@1000 : Codeunit 5455;
+    BEGIN
+      GraphDataSetup.CreateIntegrationMapping(IntegrationMappingCodeTxt);
+    END;
+
+    [EventSubscriber(Codeunit,5446,OnFindWebhookSubscription)]
+    LOCAL PROCEDURE OnFindWebhookSubscription@7(VAR WebhookSubscription@1000 : Record 2000000199;SubscriptionID@1001 : Text[150];VAR IntegrationMappingCode@1002 : Code[20]);
+    BEGIN
+      IF IntegrationMappingCode = '' THEN BEGIN
+        WebhookSubscription.SETRANGE("Subscription ID",SubscriptionID);
+        IF GetWebhookSubscription(WebhookSubscription) THEN BEGIN
+          SENDTRACETAG(
+            '00001BF',GraphSubscriptionManagement.TraceCategory,VERBOSITY::Normal,FoundWebhookTxt,DATACLASSIFICATION::SystemMetadata);
+          IntegrationMappingCode := IntegrationMappingCodeTxt
+        END ELSE BEGIN
+          SENDTRACETAG(
+            '00001BG',GraphSubscriptionManagement.TraceCategory,VERBOSITY::Normal,
+            MissingWebhookTxt,DATACLASSIFICATION::SystemMetadata);
+          WebhookSubscription.SETRANGE("Subscription ID");
+        END;
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,5455,OnGetGraphRecord)]
+    LOCAL PROCEDURE OnGetGraphRecord@11(VAR GraphRecordRef@1000 : RecordRef;DestinationGraphID@1001 : Text[250];TableID@1002 : Integer;VAR Found@1004 : Boolean);
+    VAR
+      GraphContact@1003 : Record 5450;
+    BEGIN
+      IF Found THEN
+        EXIT;
+      IF TableID <> GetEntityTableID THEN
+        EXIT;
+
+      IF GraphContact.GET(DestinationGraphID) THEN BEGIN
+        GraphRecordRef.GETTABLE(GraphContact);
+        Found := GraphContact.Id <> '';
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,5456,OnGetInboundConnectionName)]
+    LOCAL PROCEDURE OnGetInboundConnectionName@10(TableID@1000 : Integer;VAR ConnectionName@1001 : Text);
+    BEGIN
+      IF TableID = GetEntityTableID THEN
+        ConnectionName := InboundConnectionNameTxt;
+    END;
+
+    [EventSubscriber(Codeunit,5456,OnGetInboundConnectionString)]
+    LOCAL PROCEDURE OnGetInboundConnectionString@24(TableID@1000 : Integer;VAR ConnectionString@1001 : Text);
+    BEGIN
+      IF TableID = GetEntityTableID THEN
+        ConnectionString := GetInboundConnectionString;
+    END;
+
+    [EventSubscriber(Codeunit,5455,OnGetInboundTableID)]
+    LOCAL PROCEDURE OnGetInboundTableID@14(MappingCode@1000 : Code[20];VAR TableID@1001 : Integer);
+    BEGIN
+      IF CanHandleMapping(MappingCode) THEN
+        TableID := DATABASE::Contact;
+    END;
+
+    [EventSubscriber(Codeunit,5455,OnGetMappingCodeForTable)]
+    LOCAL PROCEDURE OnGetMappingCode@12(TableID@1000 : Integer;VAR MappingCode@1001 : Code[20]);
+    BEGIN
+      IF TableID = GetEntityTableID THEN
+        MappingCode := IntegrationMappingCodeTxt;
+    END;
+
+    [EventSubscriber(Codeunit,5450,OnGetSourceRecordRef)]
+    LOCAL PROCEDURE OnGetSourceRecordRef@26(VAR GraphRecordRef@1000 : RecordRef;WebhookNotification@1001 : Record 2000000194;IntegrationTableID@1002 : Integer;VAR Retrieved@1003 : Boolean);
+    VAR
+      GraphContact@1004 : Record 5450;
+    BEGIN
+      IF IntegrationTableID = DATABASE::"Graph Contact" THEN
+        IF GraphContact.GET(WebhookNotification."Resource ID") THEN BEGIN
+          GraphRecordRef.GETTABLE(GraphContact);
+          Retrieved := TRUE;
+        END;
+    END;
+
+    [EventSubscriber(Codeunit,5456,OnGetSubscriptionConnectionName)]
+    LOCAL PROCEDURE OnGetSubscriptionConnectionName@27(TableID@1000 : Integer;VAR ConnectionName@1001 : Text);
+    BEGIN
+      IF TableID = GetEntityTableID THEN
+        ConnectionName := SubscriptionConnectionNameTxt;
+    END;
+
+    [EventSubscriber(Codeunit,5456,OnGetSubscriptionConnectionString)]
+    LOCAL PROCEDURE OnGetSubscriptionConnectionString@28(TableID@1000 : Integer;VAR ConnectionString@1001 : Text);
+    BEGIN
+      IF TableID = GetEntityTableID THEN
+        ConnectionString := GetSubscriptionConnectionString;
+    END;
+
+    [EventSubscriber(Codeunit,5456,OnGetSynchronizeConnectionName)]
+    LOCAL PROCEDURE OnGetSynchronizeConnectionName@9(TableID@1000 : Integer;VAR ConnectionName@1001 : Text);
+    BEGIN
+      IF TableID = GetEntityTableID THEN
+        ConnectionName := SynchronizeConnectionNameTxt;
+    END;
+
+    [EventSubscriber(Codeunit,5456,OnGetSynchronizeConnectionString)]
+    LOCAL PROCEDURE OnGetSynchronizeConnectionString@25(TableID@1000 : Integer;VAR ConnectionString@1001 : Text);
+    BEGIN
+      IF TableID = GetEntityTableID THEN
+        ConnectionString := GetSynchronizeConnectionString;
+    END;
+
+    [EventSubscriber(Codeunit,5456,OnRegisterConnections)]
+    LOCAL PROCEDURE OnRegisterConnections@15();
+    VAR
+      GraphConnectionSetup@1000 : Codeunit 5456;
+    BEGIN
+      SENDTRACETAG(
+        '00001BH',GraphSubscriptionManagement.TraceCategory,VERBOSITY::Normal,
+        RegisterConnectionsTxt,DATACLASSIFICATION::SystemMetadata);
+
+      GraphConnectionSetup.RegisterConnectionForEntity(
+        InboundConnectionNameTxt,GetInboundConnectionString,
+        SubscriptionConnectionNameTxt,GetSubscriptionConnectionString,
+        SynchronizeConnectionNameTxt,GetSynchronizeConnectionString);
+    END;
+
+    [EventSubscriber(Codeunit,5452,OnRunGraphDeltaSync)]
+    LOCAL PROCEDURE OnRunContactDeltaSync@1();
+    VAR
+      GraphSyncRunner@1000 : Codeunit 5452;
+    BEGIN
+      IF SyncEnabled THEN BEGIN
+        SENDTRACETAG(
+          '00001BI',GraphSubscriptionManagement.TraceCategory,VERBOSITY::Normal,DeltaSyncTxt,DATACLASSIFICATION::SystemMetadata);
+        GraphSyncRunner.RunDeltaSyncForEntity(DATABASE::Contact);
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,5452,OnRunGraphFullSync)]
+    LOCAL PROCEDURE OnRunContactFullSync@3();
+    VAR
+      GraphSyncRunner@1000 : Codeunit 5452;
+    BEGIN
+      IF SyncEnabled THEN BEGIN
+        SENDTRACETAG(
+          '00001BJ',GraphSubscriptionManagement.TraceCategory,VERBOSITY::Normal,FullSyncTxt,DATACLASSIFICATION::SystemMetadata);
+        GraphSyncRunner.RunFullSyncForEntity(DATABASE::Contact);
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,5345,OnFindUncoupledDestinationRecord)]
+    LOCAL PROCEDURE OnFindUncoupledDestinationRecord@23(IntegrationTableMapping@1000 : Record 5335;SourceRecordRef@1001 : RecordRef;VAR DestinationRecordRef@1002 : RecordRef;VAR DestinationIsDeleted@1003 : Boolean;VAR DestinationFound@1004 : Boolean);
+    VAR
+      GraphContact@1005 : Record 5450;
+      IntegrationRecord@1007 : Record 5151;
+      GraphCollectionMgtContact@1011 : Codeunit 5458;
+      GraphIntegrationId@1006 : GUID;
+      GraphIntegrationIdValue@1010 : Text;
+    BEGIN
+      IF NOT CanHandleMapping(IntegrationTableMapping.Name) THEN
+        EXIT;
+
+      IF NOT IntegrationRecord.FindByRecordId(SourceRecordRef.RECORDID) THEN
+        EXIT;
+
+      IF SourceRecordRef.NUMBER = GetEntityTableID THEN BEGIN
+        IF GraphContact.FINDSET THEN
+          REPEAT
+            GraphIntegrationIdValue := GraphCollectionMgtContact.GetNavIntegrationId(GraphContact.GetNavIntegrationIdString);
+            IF EVALUATE(GraphIntegrationId,GraphIntegrationIdValue) THEN
+              IF IntegrationRecord."Integration ID" = GraphIntegrationId THEN BEGIN
+                DestinationFound := TRUE;
+                DestinationRecordRef.GETTABLE(GraphContact);
+                SENDTRACETAG(
+                  '00001BK',GraphSubscriptionManagement.TraceCategory,VERBOSITY::Normal,
+                  FoundUncoupledGraphRecordTxt,DATACLASSIFICATION::SystemMetadata);
+                EXIT;
+              END;
+          UNTIL GraphContact.NEXT = 0;
+      END;
+
+      SENDTRACETAG(
+        '00001BL',GraphSubscriptionManagement.TraceCategory,VERBOSITY::Normal,
+        MissingUncoupledGraphRecordTxt,DATACLASSIFICATION::SystemMetadata);
+    END;
+
+    [EventSubscriber(Table,5050,OnAfterDeleteEvent)]
+    LOCAL PROCEDURE UpdateGraphOnAfterContactDelete@8(VAR Rec@1000 : Record 5050;RunTrigger@1001 : Boolean);
+    VAR
+      GraphSubscriptionManagement@1008 : Codeunit 5450;
+      EntityRecordRef@1002 : RecordRef;
+    BEGIN
+      IF SyncEnabled THEN BEGIN
+        EntityRecordRef.GETTABLE(Rec);
+        SENDTRACETAG(
+          '00001BM',GraphSubscriptionManagement.TraceCategory,VERBOSITY::Normal,
+          STRSUBSTNO(DeletingGraphRecordTxt,EntityRecordRef.NUMBER),DATACLASSIFICATION::SystemMetadata);
+        GraphSubscriptionManagement.UpdateGraphOnAfterDelete(EntityRecordRef);
+      END;
+    END;
+
+    [EventSubscriber(Table,5050,OnAfterInsertEvent)]
+    LOCAL PROCEDURE UpdateGraphOnAfterContactInsert@32(VAR Rec@1000 : Record 5050;RunTrigger@1001 : Boolean);
+    VAR
+      GraphSubscriptionManagement@1002 : Codeunit 5450;
+      EntityRecordRef@1003 : RecordRef;
+    BEGIN
+      IF SyncEnabled THEN BEGIN
+        EntityRecordRef.GETTABLE(Rec);
+        SENDTRACETAG(
+          '00001P5',GraphSubscriptionManagement.TraceCategory,VERBOSITY::Normal,
+          STRSUBSTNO(InsertingGraphRecordTxt,EntityRecordRef.NUMBER),DATACLASSIFICATION::SystemMetadata);
+        GraphSubscriptionManagement.UpdateGraphOnAfterInsert(EntityRecordRef);
+      END;
+    END;
+
+    [EventSubscriber(Table,5050,OnAfterModifyEvent)]
+    LOCAL PROCEDURE UpdateGraphOnAfterContactModify@22(VAR Rec@1000 : Record 5050;VAR xRec@1001 : Record 5050;RunTrigger@1002 : Boolean);
+    VAR
+      GraphSubscriptionManagement@1008 : Codeunit 5450;
+      EntityRecordRef@1003 : RecordRef;
+    BEGIN
+      IF SyncEnabled THEN BEGIN
+        EntityRecordRef.GETTABLE(Rec);
+        SENDTRACETAG(
+          '00001BN',GraphSubscriptionManagement.TraceCategory,VERBOSITY::Normal,
+          STRSUBSTNO(UpdatingGraphRecordTxt,EntityRecordRef.NUMBER),DATACLASSIFICATION::SystemMetadata);
+        GraphSubscriptionManagement.UpdateGraphOnAfterModify(EntityRecordRef);
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

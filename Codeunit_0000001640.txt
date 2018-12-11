@@ -1,0 +1,139 @@
+OBJECT Codeunit 1640 Add-in Deployment Helper
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:13 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ExchangePowerShellRunner@1009 : Codeunit 1651;
+      AddinManifestMgt@1026 : Codeunit 1652;
+      AppNotInstalledErr@1015 : TextConst '@@@=%1: A GUID identifying the office add-in.;ENU=The application %1 did not install as expected. This might be caused by problems with the manifest file, problems connecting to the Exchange PowerShell server, or a version number that is not equal to or higher than the already installed application. You can download the manifest locally and then upload it to the Exchange Administration Center to determine the cause.';
+
+    PROCEDURE DeployManifest@1026(VAR NewOfficeAddin@1000 : Record 1610);
+    VAR
+      UserPreference@1001 : Record 1306;
+      InstructionMgt@1002 : Codeunit 1330;
+      ManifestText@1004 : Text;
+    BEGIN
+      InitializeExchangePSRunner;
+      AddinManifestMgt.GenerateManifest(NewOfficeAddin,ManifestText);
+
+      // Clear the credentials if the action fails and reset the PS object.
+      IF NOT RunManifestDeployer(ManifestText,NewOfficeAddin."Application ID") THEN BEGIN
+        ExchangePowerShellRunner.ResetInitialization;
+        ERROR(GETLASTERRORTEXT);
+      END;
+
+      NewOfficeAddin."Deployment Date" := TODAY;
+      NewOfficeAddin.MODIFY;
+
+      UserPreference.SETRANGE("Instruction Code",InstructionMgt.OfficeUpdateNotificationCode);
+      UserPreference.DELETEALL;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE RunManifestDeployer@1034(ManifestText@1011 : Text;AppID@1016 : GUID);
+    VAR
+      PSObj@1010 : DotNet "'Microsoft.Dynamics.Nav.PowerShellRunner, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.PSObjectAdapter";
+      Encoding@1002 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.UTF8Encoding";
+      ManifestBytes@1000 : DotNet "'mscorlib'.System.Array";
+      ProvisionMode@1008 : Text;
+      DefaultUserEnableState@1004 : Text;
+      EnabledState@1003 : Text;
+    BEGIN
+      InitializeExchangePSRunner;
+
+      ExchangePowerShellRunner.GetApp(AppID,PSObj);
+
+      IF ISNULL(PSObj) THEN BEGIN
+        DefaultUserEnableState := 'Enabled';
+        EnabledState := 'TRUE';
+        ProvisionMode := 'Everyone';
+      END;
+
+      Encoding := Encoding.UTF8Encoding;
+      ManifestBytes := Encoding.GetBytes(ManifestText);
+
+      // Add the add-in
+      IF NOT ExchangePowerShellRunner.NewApp(ManifestBytes,DefaultUserEnableState,EnabledState,ProvisionMode) THEN
+        ERROR(AppNotInstalledErr,FORMAT(AppID));
+    END;
+
+    [External]
+    PROCEDURE SetManifestDeploymentCredentials@1003(Username@1000 : Text[80];Password@1001 : Text[30]);
+    BEGIN
+      ExchangePowerShellRunner.SetCredentials(Username,Password);
+    END;
+
+    [External]
+    PROCEDURE SetManifestDeploymentCustomEndpoint@1004(Endpoint@1000 : Text[250]);
+    BEGIN
+      ExchangePowerShellRunner.SetEndpoint(Endpoint);
+    END;
+
+    PROCEDURE RemoveApp@1001(VAR OfficeAddin@1000 : Record 1610);
+    VAR
+      AppID@1001 : GUID;
+    BEGIN
+      InitializeExchangePSRunner;
+      AppID := AddinManifestMgt.GetAppID(OfficeAddin.GetDefaultManifestText);
+      ExchangePowerShellRunner.RemoveApp(AppID);
+    END;
+
+    LOCAL PROCEDURE InitializeExchangePSRunner@1007();
+    BEGIN
+      ExchangePowerShellRunner.PromptForCredentials;
+      ExchangePowerShellRunner.InitializePSRunner;
+      ExchangePowerShellRunner.ValidateCredentials;
+    END;
+
+    PROCEDURE InitializeAndValidate@1010();
+    BEGIN
+      InitializeExchangePSRunner;
+    END;
+
+    [External]
+    PROCEDURE CheckVersion@1002(HostType@1000 : Text;UserVersion@1001 : Text) CanContinue : Boolean;
+    VAR
+      OfficeAddin@1002 : Record 1610;
+      InstructionMgt@1004 : Codeunit 1330;
+      LatestAddinVersion@1003 : Text;
+    BEGIN
+      AddinManifestMgt.GetAddinByHostType(OfficeAddin,HostType);
+      AddinManifestMgt.GetAddinVersion(LatestAddinVersion,OfficeAddin."Manifest Codeunit");
+
+      // Make sure that the version of the add-in in the table is up to date
+      IF OfficeAddin.Version <> LatestAddinVersion THEN BEGIN
+        AddinManifestMgt.CreateDefaultAddins(OfficeAddin);
+        COMMIT;
+        AddinManifestMgt.GetAddinByHostType(OfficeAddin,HostType);
+      END;
+
+      CanContinue := TRUE;
+      IF UserVersion <> OfficeAddin.Version THEN BEGIN
+        OfficeAddin.Breaking := OfficeAddin.IsBreakingChange(UserVersion);
+        IF OfficeAddin.Breaking THEN
+          PAGE.RUNMODAL(PAGE::"Office Update Available Dlg",OfficeAddin)
+        ELSE
+          IF InstructionMgt.IsEnabled(InstructionMgt.OfficeUpdateNotificationCode) THEN
+            PAGE.RUNMODAL(PAGE::"Office Update Available Dlg",OfficeAddin);
+
+        CanContinue := NOT OfficeAddin.Breaking;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

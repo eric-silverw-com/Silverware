@@ -1,0 +1,276 @@
+OBJECT Table 322 Tax Detail
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:14:13 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnInsert=VAR
+               TaxJurisdiction@1000 : Record 320;
+             BEGIN
+               TaxJurisdiction.GET("Tax Jurisdiction Code");
+               "Calculate Tax on Tax" := TaxJurisdiction."Calculate Tax on Tax";
+               IF "Tax Type" <> "Tax Type"::"Excise Tax" THEN BEGIN
+                 PrepareForCheckTaxType(Rec);
+                 IF TaxDetailTemp.COUNT > 0 THEN
+                   IF NOT CheckTaxType(Rec) THEN
+                     ERROR(Text001);
+               END;
+             END;
+
+    OnRename=VAR
+               TaxJurisdiction@1000 : Record 320;
+             BEGIN
+               TaxJurisdiction.GET("Tax Jurisdiction Code");
+               "Calculate Tax on Tax" := TaxJurisdiction."Calculate Tax on Tax";
+               IF "Tax Type" <> "Tax Type"::"Excise Tax" THEN BEGIN
+                 PrepareForCheckTaxType(Rec);
+                 IF TaxDetailTemp.GET(xRec."Tax Jurisdiction Code",xRec."Tax Group Code",xRec."Tax Type",xRec."Effective Date") THEN
+                   TaxDetailTemp.DELETE;
+                 IF TaxDetailTemp.COUNT > 0 THEN
+                   IF NOT CheckTaxType(Rec) THEN
+                     ERROR(Text001);
+               END;
+             END;
+
+    CaptionML=ENU=Tax Detail;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Tax Jurisdiction Code;Code10       ;TableRelation="Tax Jurisdiction";
+                                                   CaptionML=ENU=Tax Jurisdiction Code;
+                                                   NotBlank=Yes }
+    { 2   ;   ;Tax Group Code      ;Code20        ;TableRelation="Tax Group";
+                                                   CaptionML=ENU=Tax Group Code }
+    { 3   ;   ;Tax Type            ;Option        ;CaptionML=ENU=Tax Type;
+                                                   OptionCaptionML=ENU=Sales and Use Tax,Excise Tax,Sales Tax Only,Use Tax Only;
+                                                   OptionString=Sales and Use Tax,Excise Tax,Sales Tax Only,Use Tax Only;
+                                                   NotBlank=No }
+    { 4   ;   ;Maximum Amount/Qty. ;Decimal       ;CaptionML=ENU=Maximum Amount/Qty.;
+                                                   DecimalPlaces=2:2;
+                                                   MinValue=0 }
+    { 5   ;   ;Tax Below Maximum   ;Decimal       ;CaptionML=ENU=Tax Below Maximum;
+                                                   DecimalPlaces=1:3;
+                                                   MinValue=0 }
+    { 6   ;   ;Tax Above Maximum   ;Decimal       ;CaptionML=ENU=Tax Above Maximum;
+                                                   DecimalPlaces=1:3;
+                                                   MinValue=0 }
+    { 7   ;   ;Effective Date      ;Date          ;CaptionML=ENU=Effective Date }
+    { 8   ;   ;Calculate Tax on Tax;Boolean       ;CaptionML=ENU=Calculate Tax on Tax;
+                                                   Editable=No }
+    { 10010;  ;Expense/Capitalize  ;Boolean       ;CaptionML=ENU=Expense/Capitalize }
+  }
+  KEYS
+  {
+    {    ;Tax Jurisdiction Code,Tax Group Code,Tax Type,Effective Date;
+                                                   Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      SpecifyTaxMsg@1001 : TextConst '@@@="%1=Tax Area Code or Tax Group Code";ENU=Please specify a %1 first.';
+      TaxDetailTemp@1020001 : TEMPORARY Record 322;
+      Text001@1020000 : TextConst 'ENU=A tax detail already exists with the same tax jurisdiction, tax group, and tax type.';
+      CannotChangeNonTaxableGroupCodeErr@1000 : TextConst 'ENU=You cannot change the rate for the non-taxable group.';
+
+    [External]
+    PROCEDURE CheckTaxType@1020000(TaxDetailRec@1020000 : Record 322) : Boolean;
+    BEGIN
+      IF TaxDetailRec."Tax Type" = TaxDetailRec."Tax Type"::"Sales and Use Tax" THEN
+        TaxDetailTemp.SETFILTER("Tax Type",'%1|%2',TaxDetailRec."Tax Type"::"Sales Tax Only",
+          TaxDetailRec."Tax Type"::"Use Tax Only")
+      ELSE
+        TaxDetailTemp.SETRANGE("Tax Type",TaxDetailRec."Tax Type"::"Sales and Use Tax");
+      IF TaxDetailTemp.FINDFIRST THEN
+        EXIT(FALSE)
+      ELSE
+        EXIT(TRUE);
+    END;
+
+    [External]
+    PROCEDURE PrepareForCheckTaxType@1020001(TaxDetailRec@1020000 : Record 322);
+    VAR
+      TaxDetail@1020001 : Record 322;
+    BEGIN
+      TaxDetailTemp.RESET;
+      TaxDetailTemp.DELETEALL;
+      TaxDetail.SETRANGE("Tax Jurisdiction Code",TaxDetailRec."Tax Jurisdiction Code");
+      TaxDetail.SETRANGE("Tax Group Code",TaxDetailRec."Tax Group Code");
+      TaxDetail.SETRANGE("Effective Date",TaxDetailRec."Effective Date");
+      IF TaxDetail.FINDSET THEN
+        REPEAT
+          TaxDetailTemp.INIT;
+          TaxDetailTemp := TaxDetail;
+          TaxDetailTemp.INSERT;
+        UNTIL TaxDetail.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE ApplyCommonFilters@5(TaxJurisdictionCode@1003 : Code[20];TaxGroupCode@1002 : Code[20];TaxType@1001 : Option;EffectiveDate@1000 : Date);
+    BEGIN
+      RESET;
+      SETRANGE("Tax Jurisdiction Code",TaxJurisdictionCode);
+      SETRANGE("Tax Group Code",TaxGroupCode);
+      SETRANGE("Tax Type",TaxType);
+      IF EffectiveDate <> 0D THEN
+        SETFILTER("Effective Date",'<=%1',EffectiveDate);
+    END;
+
+    [External]
+    PROCEDURE ValidateTaxSetup@3(TaxAreaCode@1001 : Code[20];TaxGroupCode@1000 : Code[20];EffectiveDate@1002 : Date);
+    VAR
+      TaxArea@1005 : Record 318;
+      TaxAreaLine@1004 : Record 319;
+      TaxGroup@1003 : Record 321;
+    BEGIN
+      TaxArea.GET(TaxAreaCode);
+      TaxGroup.GET(TaxGroupCode);
+      TaxAreaLine.SETRANGE("Tax Area",TaxArea.Code);
+      IF TaxAreaLine.FINDSET THEN
+        REPEAT
+          ApplyCommonFilters(TaxAreaLine."Tax Jurisdiction Code",TaxGroupCode,"Tax Type"::"Sales and Use Tax",EffectiveDate);
+          IF NOT FINDFIRST THEN
+            SetNewTaxRate(TaxAreaLine."Tax Jurisdiction Code",TaxGroupCode,"Tax Type"::"Sales and Use Tax",EffectiveDate,0);
+        UNTIL TaxAreaLine.NEXT = 0;
+    END;
+
+    [External]
+    PROCEDURE GetSalesTaxRate@4(TaxAreaCode@1002 : Code[20];TaxGroupCode@1001 : Code[20];EffectiveDate@1003 : Date;TaxLiable@1005 : Boolean) : Decimal;
+    VAR
+      TaxAreaLine@1004 : Record 319;
+      TotalTaxRate@1000 : Decimal;
+    BEGIN
+      IF NOT TaxLiable THEN
+        EXIT(0);
+      TaxAreaLine.SETRANGE("Tax Area",TaxAreaCode);
+      IF TaxAreaLine.FINDSET THEN
+        REPEAT
+          TotalTaxRate += GetTaxRate(TaxAreaLine."Tax Jurisdiction Code",TaxGroupCode,"Tax Type"::"Sales and Use Tax",EffectiveDate);
+        UNTIL TaxAreaLine.NEXT = 0;
+      EXIT(TotalTaxRate);
+    END;
+
+    [External]
+    PROCEDURE SetSalesTaxRate@6(TaxAreaCode@1001 : Code[20];TaxGroupCode@1000 : Code[20];NewTaxRate@1007 : Decimal;EffectiveDate@1009 : Date);
+    VAR
+      TaxSetup@1008 : Record 326;
+      TaxAreaLine@1006 : Record 319;
+      TaxJurisdiction@1004 : Record 320;
+      TaxJurisdiction2@1003 : Record 320;
+      TotalTaxRate@1002 : Decimal;
+    BEGIN
+      IF TaxGroupCode = '' THEN
+        EXIT;
+      IF TaxSetup.GET THEN
+        IF TaxSetup."Non-Taxable Tax Group Code" = TaxGroupCode THEN
+          ERROR(CannotChangeNonTaxableGroupCodeErr);
+      IF NewTaxRate = GetSalesTaxRate(TaxAreaCode,TaxGroupCode,EffectiveDate,TRUE) THEN
+        EXIT;
+      IF TaxAreaCode = '' THEN BEGIN
+        MESSAGE(SpecifyTaxMsg,TaxAreaLine.FIELDCAPTION("Tax Area"));
+        EXIT;
+      END;
+      TotalTaxRate := 0;
+      TaxAreaLine.SETRANGE("Tax Area",TaxAreaCode);
+      TaxAreaLine.SETFILTER("Tax Jurisdiction Code",'<>%1','');
+      IF TaxAreaLine.FINDSET THEN
+        REPEAT
+          IF TaxJurisdiction.GET(TaxAreaLine."Tax Jurisdiction Code") THEN BEGIN
+            TotalTaxRate += GetTaxRate(TaxJurisdiction.Code,TaxGroupCode,"Tax Type"::"Sales and Use Tax",EffectiveDate);
+            IF TaxJurisdiction2.Code = '' THEN // the first
+              TaxJurisdiction2 := TaxJurisdiction
+            ELSE
+              IF TaxJurisdiction.Code <> TaxJurisdiction."Report-to Jurisdiction" THEN
+                TaxJurisdiction2 := TaxJurisdiction;
+          END;
+        UNTIL TaxAreaLine.NEXT = 0;
+      IF TaxJurisdiction2.Code = '' THEN
+        EXIT; // missing setup
+      TotalTaxRate -= GetTaxRate(TaxJurisdiction2.Code,TaxGroupCode,"Tax Type"::"Sales and Use Tax",EffectiveDate);
+      SetNewTaxRate(TaxJurisdiction2.Code,TaxGroupCode,"Tax Type"::"Sales and Use Tax",EffectiveDate,NewTaxRate - TotalTaxRate);
+    END;
+
+    [External]
+    PROCEDURE SetSalesTaxRateDetailed@7(TaxAreaCode@1001 : Code[20];TaxGroupCode@1000 : Code[20];NewCityRate@1007 : Decimal;NewCountyRate@1005 : Decimal;NewStateRate@1008 : Decimal;EffectiveDate@1003 : Date);
+    VAR
+      TaxAreaLine@1006 : Record 319;
+      TaxJurisdiction@1004 : Record 320;
+      TaxJurisDictionCodes@1009 : ARRAY [3] OF Code[10];
+      i@1002 : Integer;
+    BEGIN
+      IF TaxAreaCode = '' THEN BEGIN
+        MESSAGE(SpecifyTaxMsg,TaxAreaLine.FIELDCAPTION("Tax Area"));
+        EXIT;
+      END;
+      TaxAreaLine.SETRANGE("Tax Area",TaxAreaCode);
+      TaxAreaLine.SETFILTER("Tax Jurisdiction Code",'<>%1','');
+      IF TaxAreaLine.FINDSET THEN
+        REPEAT
+          IF TaxJurisdiction.GET(TaxAreaLine."Tax Jurisdiction Code") THEN BEGIN
+            i += 1;
+            IF i <= 3 THEN
+              TaxJurisDictionCodes[i] := TaxJurisdiction.Code;
+          END;
+        UNTIL (TaxAreaLine.NEXT = 0) OR (i = 3);
+      IF i = 0 THEN
+        EXIT;
+      IF i < 3 THEN BEGIN
+        NewStateRate += NewCountyRate;
+        NewCountyRate := 0;
+      END;
+      IF i < 2 THEN BEGIN
+        NewStateRate += NewCityRate;
+        NewCityRate := 0;
+      END;
+      CASE i OF
+        1:
+          SetNewTaxRate(TaxJurisDictionCodes[1],TaxGroupCode,"Tax Type"::"Sales Tax Only",EffectiveDate,NewStateRate);
+        2:
+          BEGIN
+            SetNewTaxRate(TaxJurisDictionCodes[1],TaxGroupCode,"Tax Type"::"Sales Tax Only",EffectiveDate,NewCityRate);
+            SetNewTaxRate(TaxJurisDictionCodes[2],TaxGroupCode,"Tax Type"::"Sales Tax Only",EffectiveDate,NewStateRate);
+          END;
+        3:
+          BEGIN
+            SetNewTaxRate(TaxJurisDictionCodes[1],TaxGroupCode,"Tax Type"::"Sales Tax Only",EffectiveDate,NewCityRate);
+            SetNewTaxRate(TaxJurisDictionCodes[2],TaxGroupCode,"Tax Type"::"Sales Tax Only",EffectiveDate,NewCountyRate);
+            SetNewTaxRate(TaxJurisDictionCodes[3],TaxGroupCode,"Tax Type"::"Sales Tax Only",EffectiveDate,NewStateRate);
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetTaxRate@2(TaxJurisdictionCode@1000 : Code[20];TaxGroupCode@1001 : Code[20];TaxType@1002 : Option;EffectiveDate@1003 : Date) : Decimal;
+    BEGIN
+      ApplyCommonFilters(TaxJurisdictionCode,TaxGroupCode,TaxType,EffectiveDate);
+      IF FINDLAST THEN
+        EXIT("Tax Below Maximum");
+      EXIT(0);
+    END;
+
+    LOCAL PROCEDURE SetNewTaxRate@1(TaxJurisdictionCode@1000 : Code[10];TaxGroupCode@1001 : Code[20];TaxType@1002 : Option;EffectiveDate@1003 : Date;NewTaxRate@1004 : Decimal);
+    BEGIN
+      ApplyCommonFilters(TaxJurisdictionCode,TaxGroupCode,TaxType,EffectiveDate);
+      SETRANGE("Effective Date",EffectiveDate);
+      LOCKTABLE;
+      IF NOT FINDLAST THEN BEGIN
+        INIT;
+        "Tax Jurisdiction Code" := TaxJurisdictionCode;
+        "Tax Group Code" := TaxGroupCode;
+        "Tax Type" := TaxType;
+        "Effective Date" := EffectiveDate;
+        INSERT;
+      END;
+      "Tax Below Maximum" := NewTaxRate;
+      MODIFY;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,1081 @@
+OBJECT Codeunit 2110 O365 Sales Initial Setup
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:15 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 2100=rimd,
+                TableData 5079=rimd;
+    OnRun=BEGIN
+            InitializeO365SalesCompany;
+            InitializeAccountingPeriod; // ensure accounting period is always valid
+            EnableCompanyInvoicingApplicationArea;
+            CreatePaymentRegistrationSetupForCurrentUser; // payment registration setup needs to be initialized per user
+            ValidateUserLocale;
+            DisableGraphSync;
+            DisableCoupons;
+            DisableKPIs;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Company@1025 : Record 2000000006;
+      O365SalesInitialSetup@1000 : Record 2110;
+      IdentityManagement@1098 : Codeunit 9801;
+      OverrideDefaultsWithSalesSetupQst@1001 : TextConst 'ENU=We would like to update some configuration data but have detected some existing invoices. Would you like to update the configuration data anyway?';
+      ConfigTemplateManagement@1003 : Codeunit 8612;
+      HideDialogs@1002 : Boolean;
+      SetupCompleteMsg@1005 : TextConst 'ENU=Hello, this is your invoicing overview. The invoice you created has been saved as a draft.';
+      ViewInvoiceLbl@1013 : TextConst 'ENU=View Draft';
+      DeleteInvoiceLbl@1015 : TextConst 'ENU=Discard Draft';
+      NoInvoiceMsg@1016 : TextConst 'ENU=The draft invoice does not exist.';
+      ConfirmInvoiceDeleteQst@1017 : TextConst '@@@="%1 = customer name";ENU=Are you sure you want to delete the invoice for %1?';
+      NotAnInvoicingCompanyErr@1018 : TextConst '@@@="%1 = The name of your company";ENU=You cannot use the company %1 in Microsoft Invoicing because you use it in Microsoft Dynamics 365.';
+      DefaultLbl@1004 : TextConst 'ENU=Default';
+      TaxableCodeTxt@1009 : TextConst '@@@={Locked};ENU=TAXABLE';
+      TaxableDescriptionTxt@1008 : TextConst 'ENU=Taxable';
+      DefaultCityTxt@1006 : TextConst 'ENU=Default';
+      CompanyCodeTok@1011 : TextConst '@@@={Locked};ENU=COMPANY';
+      PersonCodeTok@1010 : TextConst '@@@={Locked};ENU=PERSON';
+      SalesMailTok@1014 : TextConst '@@@={Locked};ENU=SALESEMAIL';
+      OutOfDateCompanyErr@1019 : TextConst '@@@=No translation needed for url;ENU="You have used this company in Dynamics 365 a long time ago. Please go to Dynamics 365 Business Central and recreate the company. If you have forgotten your login details, the site will help you.\For more information, see https://go.microsoft.com/fwlink/?linkid=860971."';
+      CannotSendTestInvoiceErr@1007 : TextConst 'ENU=You cannot send a test invoice.';
+      InitialSetupCategoryTxt@1022 : TextConst '@@@={Locked};ENU=AL InvInitialSetup';
+      BadLocaleMsg@1023 : TextConst '@@@={Locked};ENU=An invalid locale was detected for the current user: %1. Resetting to %2.';
+      CompanyRead@1021 : Boolean;
+      O365SalesInitSetupRead@1024 : Boolean;
+
+    PROCEDURE HideConfirmDialog@5();
+    BEGIN
+      HideDialogs := TRUE;
+    END;
+
+    LOCAL PROCEDURE InitializeO365SalesCompany@3();
+    VAR
+      AssistedSetup@1000 : Record 1803;
+      Overwrite@1001 : Boolean;
+    BEGIN
+      // Override defaults for O365 Sales
+      IF NOT GetO365SalesInitialSetup THEN
+        EXIT;
+      IF O365SalesInitialSetup."Is initialized" THEN
+        EXIT;
+
+      IF NOT (IsNewCompany OR HideDialogs) THEN BEGIN
+        IF NOT GUIALLOWED THEN
+          EXIT;
+        Overwrite := CONFIRM(OverrideDefaultsWithSalesSetupQst);
+      END;
+
+      O365SalesInitialSetup.LOCKTABLE;
+      O365SalesInitialSetup.GET;
+
+      IF IsNewCompany OR Overwrite THEN BEGIN
+        InitializeBankAccount;
+        InitializeSalesAndReceivablesSetup;
+        InitializePaymentRegistrationSetup;
+        InitializeReportSelections;
+        InitializeNotifications;
+        InitializeNoSeries;
+        InitializeDefaultBCC;
+        InitializeCustomerTemplate;
+        InitializeContactToCustomerTemplate;
+        InitializePaymentInstructions;
+        InitializeItemTemplate;
+        ClearPaymentMethodsBalAccount;
+      END;
+
+      InitializeVAT;
+      InitializeVATRegService;
+      InitializeTax;
+
+      O365SalesInitialSetup."Is initialized" := TRUE;
+      O365SalesInitialSetup.MODIFY;
+
+      AssistedSetup.SetStatus(PAGE::"Assisted Company Setup Wizard",AssistedSetup.Status::Completed);
+    END;
+
+    LOCAL PROCEDURE InitializePaymentRegistrationSetup@12();
+    VAR
+      PaymentRegistrationSetup@1001 : Record 980;
+      GenJournalBatch@1000 : Record 232;
+    BEGIN
+      IF NOT GenJournalBatch.GET(
+           O365SalesInitialSetup."Payment Reg. Template Name",
+           O365SalesInitialSetup."Payment Reg. Batch Name")
+      THEN
+        EXIT;
+
+      WITH PaymentRegistrationSetup DO BEGIN
+        DELETEALL;
+        INIT;
+        VALIDATE("Journal Template Name",GenJournalBatch."Journal Template Name");
+        VALIDATE("Journal Batch Name",GenJournalBatch.Name);
+        INSERT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE CreatePaymentRegistrationSetupForCurrentUser@29();
+    VAR
+      PaymentRegistrationSetup@1000 : Record 980;
+    BEGIN
+      IF PaymentRegistrationSetup.GET(USERID) THEN
+        EXIT;
+      IF PaymentRegistrationSetup.GET THEN BEGIN
+        PaymentRegistrationSetup."User ID" := USERID;
+        IF PaymentRegistrationSetup.INSERT(TRUE) THEN;
+      END;
+    END;
+
+    LOCAL PROCEDURE InitializeSalesAndReceivablesSetup@13();
+    VAR
+      SalesReceivablesSetup@1000 : Record 311;
+    BEGIN
+      IF NOT SalesReceivablesSetup.GET THEN
+        SalesReceivablesSetup.INSERT(TRUE);
+
+      SalesReceivablesSetup."Default Item Quantity" := TRUE;
+      SalesReceivablesSetup."Create Item from Description" := TRUE;
+      SalesReceivablesSetup."Stockout Warning" := FALSE;
+      SalesReceivablesSetup."Calc. Inv. Discount" := TRUE;
+      SalesReceivablesSetup.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE InitializeCustomerTemplate@2();
+    VAR
+      ConfigTemplateHeader@1000 : Record 8618;
+      ConfigTmplSelectionRules@1002 : Record 8620;
+      Customer@1001 : Record 18;
+      CompanyInformation@1004 : Record 79;
+    BEGIN
+      ConfigTemplateHeader.SETFILTER(Code,'<>%1',O365SalesInitialSetup."Default Customer Template");
+      ConfigTemplateHeader.SETRANGE("Table ID",DATABASE::Customer);
+      ConfigTemplateHeader.DELETEALL(TRUE);
+
+      ConfigTemplateManagement.ReplaceDefaultValueForAllTemplates(
+        DATABASE::Customer,Customer.FIELDNO("Payment Method Code"),O365SalesInitialSetup."Default Payment Method Code");
+      ConfigTemplateManagement.ReplaceDefaultValueForAllTemplates(
+        DATABASE::Customer,Customer.FIELDNO("Payment Terms Code"),O365SalesInitialSetup."Default Payment Terms Code");
+
+      CompanyInformation.LOCKTABLE;
+      IF CompanyInformation.GET THEN BEGIN
+        CompanyInformation.InferIsCanadaFromCurrency;
+        IF CompanyInformation."Country/Region Code" <> '' THEN
+          ConfigTemplateManagement.ReplaceDefaultValueForAllTemplates(
+            DATABASE::Customer,Customer.FIELDNO("Country/Region Code"),CompanyInformation."Country/Region Code");
+      END;
+
+      ConfigTmplSelectionRules.SETRANGE("Table ID",DATABASE::Customer);
+      IF NOT ConfigTmplSelectionRules.FINDFIRST THEN BEGIN
+        ConfigTmplSelectionRules.VALIDATE("Table ID",DATABASE::Customer);
+        ConfigTmplSelectionRules.VALIDATE("Page ID",PAGE::"Customer Entity");
+        ConfigTmplSelectionRules.VALIDATE("Template Code",O365SalesInitialSetup."Default Customer Template");
+        ConfigTmplSelectionRules.INSERT(TRUE);
+        EXIT;
+      END;
+
+      CLEAR(ConfigTmplSelectionRules."Selection Criteria");
+      ConfigTmplSelectionRules.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE InitializeContactToCustomerTemplate@18();
+    VAR
+      MarketingSetup@1000 : Record 5079;
+      CompanyCustomerTemplate@1001 : Record 5105;
+      PersonCustomerTemplate@1004 : Record 5105;
+      ConfigTemplateLine@1002 : Record 8619;
+      Customer@1020000 : Record 18;
+      CompanyTemplateFieldRef@1003 : FieldRef;
+      CompanyTemplateRecordRef@1005 : RecordRef;
+      PersonTemplateFieldRef@1008 : FieldRef;
+      PersonTemplateRecordRef@1009 : RecordRef;
+      DefaultTaxLiableValue@1020001 : Boolean;
+    BEGIN
+      IF NOT MarketingSetup.GET THEN BEGIN
+        MarketingSetup.INIT;
+        MarketingSetup.INSERT(TRUE);
+      END;
+
+      IF (MarketingSetup."Cust. Template Company Code" = '') OR
+         (MarketingSetup."Cust. Template Person Code" = '')
+      THEN BEGIN
+        MarketingSetup.VALIDATE("Cust. Template Company Code",CompanyCodeTok);
+        MarketingSetup.VALIDATE("Cust. Template Person Code",PersonCodeTok);
+        MarketingSetup.MODIFY(TRUE);
+      END;
+
+      // Get the fields that we need to copy over to the customer template
+      ConfigTemplateLine.SETRANGE("Data Template Code",O365SalesInitialSetup."Default Customer Template");
+      ConfigTemplateLine.SETFILTER(
+        "Field ID",
+        '<>%1&<>%2&<>%3',// there are some fields we should ignore
+        CompanyCustomerTemplate.FIELDNO("Contact Type"),
+        CompanyCustomerTemplate.FIELDNO("Allow Line Disc."),
+        CompanyCustomerTemplate.FIELDNO("Prices Including VAT"));
+
+      IF NOT ConfigTemplateLine.FINDSET THEN
+        EXIT;
+
+      IF NOT CompanyCustomerTemplate.GET(MarketingSetup."Cust. Template Company Code") THEN BEGIN
+        CompanyCustomerTemplate.VALIDATE(Code,CompanyCodeTok);
+        CompanyCustomerTemplate.VALIDATE("Contact Type",CompanyCustomerTemplate."Contact Type"::Company);
+        CompanyCustomerTemplate.VALIDATE("Allow Line Disc.",TRUE);
+        CompanyCustomerTemplate.INSERT(TRUE);
+      END;
+
+      IF NOT PersonCustomerTemplate.GET(MarketingSetup."Cust. Template Person Code") THEN BEGIN
+        PersonCustomerTemplate.VALIDATE(Code,PersonCodeTok);
+        PersonCustomerTemplate.VALIDATE("Contact Type",PersonCustomerTemplate."Contact Type"::Person);
+        PersonCustomerTemplate.VALIDATE("Allow Line Disc.",TRUE);
+        IF O365SalesInitialSetup."Tax Type" = O365SalesInitialSetup."Tax Type"::VAT THEN
+          PersonCustomerTemplate.VALIDATE("Prices Including VAT",TRUE);
+        PersonCustomerTemplate.INSERT(TRUE);
+      END ELSE
+        IF O365SalesInitialSetup."Tax Type" = O365SalesInitialSetup."Tax Type"::VAT THEN BEGIN
+          PersonCustomerTemplate.VALIDATE("Prices Including VAT",TRUE);
+          PersonCustomerTemplate.MODIFY(TRUE);
+        END;
+
+      CompanyTemplateRecordRef.GETTABLE(CompanyCustomerTemplate);
+      PersonTemplateRecordRef.GETTABLE(PersonCustomerTemplate);
+
+      REPEAT
+        IF CompanyTemplateRecordRef.FIELDEXIST(ConfigTemplateLine."Field ID") THEN BEGIN
+          CompanyTemplateFieldRef := CompanyTemplateRecordRef.FIELD(ConfigTemplateLine."Field ID");
+          PersonTemplateFieldRef := PersonTemplateRecordRef.FIELD(ConfigTemplateLine."Field ID");
+          CompanyTemplateFieldRef.VALIDATE(ConfigTemplateLine."Default Value");
+          PersonTemplateFieldRef.VALIDATE(ConfigTemplateLine."Default Value");
+        END;
+      UNTIL ConfigTemplateLine.NEXT = 0;
+
+      // NA Customer template has Tax Liable and Tax Area Code but does not use the same IDs
+      // They must be set manually
+      ConfigTemplateLine.SETRANGE("Field ID",Customer.FIELDNO("Tax Liable"));
+      IF ConfigTemplateLine.FINDFIRST THEN BEGIN
+        IF NOT EVALUATE(DefaultTaxLiableValue,ConfigTemplateLine."Default Value") THEN
+          DefaultTaxLiableValue := TRUE; // default to true
+        CompanyTemplateFieldRef := CompanyTemplateRecordRef.FIELD(CompanyCustomerTemplate.FIELDNO("Tax Liable"));
+        CompanyTemplateFieldRef.VALIDATE(DefaultTaxLiableValue);
+        PersonTemplateFieldRef := PersonTemplateRecordRef.FIELD(PersonCustomerTemplate.FIELDNO("Tax Liable"));
+        PersonTemplateFieldRef.VALIDATE(DefaultTaxLiableValue);
+      END;
+
+      ConfigTemplateLine.SETRANGE("Field ID",Customer.FIELDNO("Tax Area Code"));
+      IF ConfigTemplateLine.FINDFIRST THEN BEGIN
+        CompanyTemplateFieldRef := CompanyTemplateRecordRef.FIELD(CompanyCustomerTemplate.FIELDNO("Tax Area Code"));
+        CompanyTemplateFieldRef.VALIDATE(ConfigTemplateLine."Default Value");
+        PersonTemplateFieldRef := PersonTemplateRecordRef.FIELD(PersonCustomerTemplate.FIELDNO("Tax Area Code"));
+        PersonTemplateFieldRef.VALIDATE(ConfigTemplateLine."Default Value");
+      END;
+
+      CompanyTemplateRecordRef.MODIFY(TRUE);
+      PersonTemplateRecordRef.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE InitializeItemTemplate@4();
+    VAR
+      ConfigTemplateHeader@1001 : Record 8618;
+      ConfigTmplSelectionRules@1000 : Record 8620;
+    BEGIN
+      ConfigTemplateHeader.SETFILTER(Code,'<>%1',O365SalesInitialSetup."Default Item Template");
+      ConfigTemplateHeader.SETRANGE("Table ID",DATABASE::Item);
+      ConfigTemplateHeader.DELETEALL(TRUE);
+
+      ConfigTmplSelectionRules.SETRANGE("Table ID",DATABASE::Item);
+      IF NOT ConfigTmplSelectionRules.FINDFIRST THEN BEGIN
+        ConfigTmplSelectionRules.VALIDATE("Table ID",DATABASE::Item);
+        ConfigTmplSelectionRules.VALIDATE("Page ID",PAGE::"Item Entity");
+        ConfigTmplSelectionRules.VALIDATE("Template Code",O365SalesInitialSetup."Default Item Template");
+        ConfigTmplSelectionRules.INSERT(TRUE);
+        EXIT;
+      END;
+
+      CLEAR(ConfigTmplSelectionRules."Selection Criteria");
+      ConfigTmplSelectionRules.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE InitializeReportSelections@1();
+    VAR
+      DummyReportSelections@1000 : Record 77;
+    BEGIN
+      InitializeReportSelection(
+        REPORT::"Standard Sales - Draft Invoice",DummyReportSelections.Usage::"S.Invoice Draft",
+        'MS-1303-INVOICING',SalesMailTok,DummyReportSelections."Email Body Layout Type"::"HTML Layout");
+      InitializeReportSelection(
+        REPORT::"Standard Sales - Quote",DummyReportSelections.Usage::"S.Quote",
+        'MS-1304-INVOICING',SalesMailTok,DummyReportSelections."Email Body Layout Type"::"HTML Layout");
+      InitializeReportSelection(
+        REPORT::"Standard Sales - Invoice",DummyReportSelections.Usage::"S.Invoice",
+        'MS-1306-INVOICING',SalesMailTok,DummyReportSelections."Email Body Layout Type"::"HTML Layout");
+    END;
+
+    LOCAL PROCEDURE InitializeReportSelection@7(ReportID@1003 : Integer;ReportUsage@1004 : Integer;LayoutCode@1005 : Code[20];EmailBodyLayoutCode@1006 : Code[20];EmailBodyLayoutType@1008 : Option);
+    VAR
+      ReportSelections@1000 : Record 77;
+      ReportLayoutSelection@1001 : Record 9651;
+      CustomReportLayout@1002 : Record 9650;
+    BEGIN
+      ReportSelections.SETRANGE(Usage,ReportUsage);
+      ReportSelections.DELETEALL;
+
+      ReportSelections.Usage := ReportUsage;
+      ReportSelections.NewRecord;
+      ReportSelections.VALIDATE("Report ID",ReportID);
+      ReportSelections.VALIDATE("Use for Email Body",TRUE);
+      ReportSelections.VALIDATE("Email Body Layout Type",EmailBodyLayoutType);
+      ReportSelections.VALIDATE("Email Body Layout Code",EmailBodyLayoutCode);
+      ReportSelections.INSERT(TRUE);
+
+      CustomReportLayout.RESET;
+      CustomReportLayout.SETRANGE(Code,LayoutCode);
+      CustomReportLayout.SETRANGE("Report ID",ReportID);
+      IF NOT CustomReportLayout.FINDFIRST THEN
+        EXIT;
+
+      IF ReportLayoutSelection.GET(ReportID,COMPANYNAME) THEN
+        ReportLayoutSelection.DELETE;
+      ReportLayoutSelection.INIT;
+      ReportLayoutSelection.VALIDATE("Report ID",ReportID);
+      ReportLayoutSelection.VALIDATE(Type,ReportLayoutSelection.Type::"Custom Layout");
+      ReportLayoutSelection.VALIDATE("Custom Report Layout Code",CustomReportLayout.Code);
+      ReportLayoutSelection.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE InitializeNotifications@6();
+    VAR
+      MyNotifications@1000 : Record 1518;
+      MyNotificationsPage@1001 : Page 1518;
+    BEGIN
+      // Disable all notifications
+      MyNotificationsPage.InitializeNotificationsWithDefaultState;
+      MyNotifications.MODIFYALL(Enabled,FALSE,TRUE);
+    END;
+
+    LOCAL PROCEDURE InitializeNoSeries@8();
+    VAR
+      SalesReceivablesSetup@1000 : Record 311;
+    BEGIN
+      IF NOT IsNewCompany THEN
+        EXIT; // Do not change no. series if we already have invoices documents
+
+      IF NOT SalesReceivablesSetup.GET THEN
+        EXIT;
+
+      IF O365SalesInitialSetup."Sales Invoice No. Series" <> '' THEN
+        SalesReceivablesSetup.VALIDATE("Invoice Nos.",O365SalesInitialSetup."Sales Invoice No. Series");
+      IF O365SalesInitialSetup."Posted Sales Inv. No. Series" <> '' THEN
+        SalesReceivablesSetup.VALIDATE("Posted Invoice Nos.",O365SalesInitialSetup."Posted Sales Inv. No. Series");
+      IF O365SalesInitialSetup."Sales Quote No. Series" <> '' THEN
+        SalesReceivablesSetup.VALIDATE("Quote Nos.",O365SalesInitialSetup."Sales Quote No. Series");
+      SalesReceivablesSetup.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE InitializeTax@23();
+    VAR
+      TaxGroup@1008 : Record 321;
+      Item@1002 : Record 27;
+      CompanyInformation@1020000 : Record 79;
+      ConfigTemplateManagement@1000 : Codeunit 8612;
+      O365TaxSettingsManagement@1020001 : Codeunit 10150;
+      TaxAreaCode@1010 : Code[20];
+    BEGIN
+      IF NOT TaxGroup.GET(TaxableCodeTxt) THEN BEGIN
+        TaxGroup.INIT;
+        TaxGroup.VALIDATE(Code,TaxableCodeTxt);
+        TaxGroup.VALIDATE(Description,TaxableDescriptionTxt);
+        TaxGroup.INSERT;
+      END;
+
+      IF CompanyInformation.IsCanada THEN
+        GetCanadaTaxDefaults(TaxAreaCode)
+      ELSE
+        GetUSTaxDefaults(TaxAreaCode);
+
+      ConfigTemplateManagement.ReplaceDefaultValueForAllTemplates(
+        DATABASE::Item,Item.FIELDNO("Tax Group Code"),TaxGroup.Code);
+
+      O365TaxSettingsManagement.AssignDefaultTaxArea(TaxAreaCode);
+    END;
+
+    LOCAL PROCEDURE InitializeVAT@1000();
+    VAR
+      VATBusinessPostingGroup@1000 : Record 323;
+      VATPostingSetup@1001 : Record 325;
+      VATProductPostingGroup@1002 : Record 324;
+    BEGIN
+      VATBusinessPostingGroup.SETFILTER(Code,'<>%1',O365SalesInitialSetup."Default VAT Bus. Posting Group");
+      VATBusinessPostingGroup.DELETEALL;
+
+      VATProductPostingGroup.SETFILTER(
+        Code,
+        '<>%1&<>%2&<>%3',
+        O365SalesInitialSetup."Normal VAT Prod. Posting Gr.",
+        O365SalesInitialSetup."Reduced VAT Prod. Posting Gr.",
+        O365SalesInitialSetup."Zero VAT Prod. Posting Gr.");
+      VATProductPostingGroup.DELETEALL;
+
+      VATPostingSetup.SETFILTER("VAT Bus. Posting Group",'<>%1',O365SalesInitialSetup."Default VAT Bus. Posting Group");
+      VATPostingSetup.DELETEALL;
+      VATPostingSetup.RESET;
+      VATPostingSetup.SETFILTER(
+        "VAT Prod. Posting Group",
+        '<>%1&<>%2&<>%3',
+        O365SalesInitialSetup."Normal VAT Prod. Posting Gr.",
+        O365SalesInitialSetup."Reduced VAT Prod. Posting Gr.",
+        O365SalesInitialSetup."Zero VAT Prod. Posting Gr.");
+      VATPostingSetup.DELETEALL;
+    END;
+
+    LOCAL PROCEDURE InitializeAccountingPeriod@14();
+    VAR
+      Item@1003 : Record 27;
+      AccountingPeriod@1000 : Record 50;
+      CreateFiscalYear@1002 : Report 93;
+      DateFormulaVariable@1001 : DateFormula;
+    BEGIN
+      IF NOT (GetO365SalesInitialSetup AND O365SalesInitialSetup."Is initialized") THEN
+        EXIT;
+
+      IF AccountingPeriod.FINDLAST THEN
+        IF AccountingPeriod."Starting Date" > WORKDATE + 366 THEN
+          EXIT;
+
+      // Auto-create accounting periods will fail with items with average costing.
+      Item.SETRANGE("Costing Method",Item."Costing Method"::Average);
+      IF NOT Item.ISEMPTY THEN
+        EXIT;
+
+      AccountingPeriod.LOCKTABLE;
+      IF AccountingPeriod.FINDLAST THEN
+        IF AccountingPeriod."Starting Date" > WORKDATE + 366 THEN
+          EXIT;
+
+      AccountingPeriod.SETRANGE("New Fiscal Year",TRUE);
+      IF NOT AccountingPeriod.FINDLAST THEN
+        AccountingPeriod."Starting Date" := CALCDATE('<-CY>',WORKDATE)
+      ELSE
+        AccountingPeriod."Starting Date" := CALCDATE('<1Y>',AccountingPeriod."Starting Date");
+
+      EVALUATE(DateFormulaVariable,'<1M>');
+      CreateFiscalYear.InitializeRequest(12,DateFormulaVariable,AccountingPeriod."Starting Date");
+      CreateFiscalYear.USEREQUESTPAGE(FALSE);
+      CreateFiscalYear.HideConfirmationDialog(TRUE);
+      CreateFiscalYear.RUNMODAL;
+    END;
+
+    LOCAL PROCEDURE InitializeBankAccount@24();
+    VAR
+      CompanyInformation@1000 : Record 79;
+      BankAccount@1001 : Record 270;
+      CompanyInformationMgt@1002 : Codeunit 1306;
+    BEGIN
+      CompanyInformation.LOCKTABLE;
+      IF NOT CompanyInformation.GET THEN
+        EXIT;
+
+      CompanyInformation.VALIDATE("Allow Blank Payment Info.",TRUE);
+      CompanyInformation.MODIFY(TRUE);
+
+      CompanyInformationMgt.UpdateCompanyBankAccount(CompanyInformation,'',BankAccount);
+    END;
+
+    LOCAL PROCEDURE InitializePaymentInstructions@36();
+    VAR
+      O365PaymentInstructions@1000 : Record 2155;
+      O365PaymentInstrTransl@1001 : Record 2156;
+    BEGIN
+      IF GetCompany THEN;
+      O365PaymentInstructions.SETRANGE(Default,TRUE);
+      IF O365PaymentInstructions.FINDFIRST THEN BEGIN
+        O365PaymentInstructions.SetPaymentInstructions(
+          STRSUBSTNO(O365PaymentInstructions.GetPaymentInstructions,Company."Display Name"));
+        O365PaymentInstructions.MODIFY(TRUE);
+        O365PaymentInstrTransl.SETRANGE(Id,O365PaymentInstructions.Id);
+        IF O365PaymentInstrTransl.FINDSET THEN
+          REPEAT
+            O365PaymentInstrTransl.SetTranslPaymentInstructions(
+              STRSUBSTNO(O365PaymentInstrTransl.GetTransPaymentInstructions,Company."Display Name"));
+            O365PaymentInstrTransl.MODIFY(TRUE);
+          UNTIL O365PaymentInstrTransl.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE InitializeDefaultBCC@16();
+    VAR
+      O365EmailSetup@1000 : Record 2118;
+      BccEmail@1004 : Text[80];
+    BEGIN
+      BccEmail := TryGetEmailFromSmtpSetup;
+
+      IF BccEmail = '' THEN BEGIN
+        BccEmail := TryGetEmailFromCurrentUser;
+        IF BccEmail = '' THEN
+          EXIT;
+      END;
+
+      O365EmailSetup.SETCURRENTKEY(Email,RecipientType);
+      O365EmailSetup.SETRANGE(Email,BccEmail);
+      O365EmailSetup.SETRANGE(RecipientType,O365EmailSetup.RecipientType::BCC);
+      IF O365EmailSetup.FINDFIRST THEN
+        EXIT;
+
+      // Add the email to BCC on all invoices
+      O365EmailSetup.RESET;
+      O365EmailSetup.INIT;
+      O365EmailSetup.VALIDATE(RecipientType,O365EmailSetup.RecipientType::BCC);
+      O365EmailSetup.Email := BccEmail;
+      O365EmailSetup.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE InitializeVATRegService@20();
+    VAR
+      VATRegistrationLogMgt@1000 : Codeunit 249;
+    BEGIN
+      VATRegistrationLogMgt.EnableService;
+    END;
+
+    LOCAL PROCEDURE DisableGraphSync@40();
+    VAR
+      CompanyInformation@1000 : Record 79;
+      O365SalesBackgroundSetup@1001 : Codeunit 2111;
+    BEGIN
+      IF NOT CompanyInformation.WRITEPERMISSION THEN
+        EXIT;
+
+      IF NOT CompanyInformation.GET THEN
+        EXIT;
+
+      IF NOT CompanyInformation."Sync with O365 Bus. profile" THEN
+        EXIT;
+
+      CompanyInformation.LOCKTABLE;
+      IF NOT CompanyInformation.GET THEN
+        EXIT;
+      IF NOT CompanyInformation."Sync with O365 Bus. profile" THEN
+        EXIT;
+
+      CompanyInformation.VALIDATE("Sync with O365 Bus. profile",FALSE);
+      CompanyInformation.MODIFY(TRUE);
+      O365SalesBackgroundSetup.InitializeGraphSync(FALSE,FALSE);
+    END;
+
+    LOCAL PROCEDURE DisableCoupons@41();
+    BEGIN
+      IF NOT O365SalesInitialSetup.WRITEPERMISSION THEN
+        EXIT;
+      IF NOT O365SalesInitialSetup.GET THEN
+        EXIT;
+      IF NOT O365SalesInitialSetup."Coupons Integration Enabled" THEN
+        EXIT;
+      O365SalesInitialSetup.LOCKTABLE;
+
+      IF NOT O365SalesInitialSetup.GET THEN
+        EXIT;
+      IF NOT O365SalesInitialSetup."Coupons Integration Enabled" THEN
+        EXIT;
+
+      O365SalesInitialSetup.LOCKTABLE;
+      IF NOT O365SalesInitialSetup.GET THEN
+        EXIT;
+      IF NOT O365SalesInitialSetup."Coupons Integration Enabled" THEN
+        EXIT;
+
+      O365SalesInitialSetup."Coupons Integration Enabled" := FALSE;
+      O365SalesInitialSetup.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE DisableKPIs@42();
+    VAR
+      O365C2GraphEventSettings@1000 : Record 2162;
+    BEGIN
+      IF NOT O365C2GraphEventSettings.WRITEPERMISSION THEN
+        EXIT;
+
+      IF NOT O365C2GraphEventSettings.GET THEN
+        EXIT;
+
+      O365C2GraphEventSettings.SetEventsEnabled(FALSE);
+      O365C2GraphEventSettings.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE ValidateUserLocale@37();
+    VAR
+      UserPersonalization@1000 : Record 2000000073;
+      WindowsLanguage@1001 : Record 2000000045;
+      LanguageManagement@1002 : Codeunit 43;
+    BEGIN
+      IF NOT (UserPersonalization.READPERMISSION AND UserPersonalization.WRITEPERMISSION) THEN
+        EXIT;
+      IF NOT WindowsLanguage.READPERMISSION THEN
+        EXIT;
+      IF NOT UserPersonalization.GET(USERSECURITYID) THEN
+        EXIT;
+
+      IF WindowsLanguage.GET(UserPersonalization."Locale ID") THEN
+        EXIT; // Valid configuration
+
+      // Locale may be invalid, perform check again with a lock to be sure
+      UserPersonalization.LOCKTABLE;
+      IF NOT UserPersonalization.GET(USERSECURITYID) THEN
+        EXIT;
+      IF WindowsLanguage.GET(UserPersonalization."Locale ID") THEN
+        EXIT;
+
+      SENDTRACETAG(
+        '00001UN',InitialSetupCategoryTxt,VERBOSITY::Warning,
+        STRSUBSTNO(BadLocaleMsg,UserPersonalization."Locale ID",LanguageManagement.ApplicationLanguage),
+        DATACLASSIFICATION::SystemMetadata);
+
+      UserPersonalization.VALIDATE("Locale ID",LanguageManagement.ApplicationLanguage);
+      UserPersonalization.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE TryGetEmailFromSmtpSetup@9() : Text[80];
+    VAR
+      SMTPMailSetup@1000 : Record 409;
+      MailManagement@1001 : Codeunit 9520;
+      BccEmail@1002 : Text[80];
+    BEGIN
+      IF NOT (SMTPMailSetup.GetSetup AND MailManagement.IsSMTPEnabled) THEN
+        EXIT;
+
+      IF SMTPMailSetup.Authentication <> SMTPMailSetup.Authentication::Basic THEN
+        EXIT;
+
+      BccEmail := COPYSTR(SMTPMailSetup."User ID",1,MAXSTRLEN(BccEmail));
+
+      IF NOT MailManagement.CheckValidEmailAddress(BccEmail) THEN
+        EXIT('');
+
+      EXIT(BccEmail);
+    END;
+
+    LOCAL PROCEDURE TryGetEmailFromCurrentUser@17() BccEmail : Text[80];
+    VAR
+      User@1001 : Record 2000000120;
+      MailManagement@1002 : Codeunit 9520;
+    BEGIN
+      IF NOT User.GET(USERSECURITYID) THEN
+        EXIT;
+
+      IF User."Authentication Email" = '' THEN
+        EXIT;
+
+      IF NOT MailManagement.CheckValidEmailAddress(User."Authentication Email") THEN
+        EXIT;
+
+      BccEmail := COPYSTR(User."Authentication Email",1,MAXSTRLEN(BccEmail));
+    END;
+
+    PROCEDURE NotifySetupComplete@10(SalesInvoiceNo@1001 : Code[20]);
+    VAR
+      SalesHeader@1004 : Record 36;
+      NotificationLifecycleMgt@1002 : Codeunit 1511;
+      SetupCompletedNotification@1000 : Notification;
+      InvoiceRecordId@1003 : RecordID;
+    BEGIN
+      SetupCompletedNotification.ID := CREATEGUID;
+      SetupCompletedNotification.SCOPE(NOTIFICATIONSCOPE::LocalScope);
+      SetupCompletedNotification.SETDATA('SalesInvoiceNo',SalesInvoiceNo);
+      SetupCompletedNotification.MESSAGE(SetupCompleteMsg);
+      SetupCompletedNotification.ADDACTION(ViewInvoiceLbl,CODEUNIT::"O365 Sales Initial Setup",'ViewInitialDraftInvoice');
+      SetupCompletedNotification.ADDACTION(DeleteInvoiceLbl,CODEUNIT::"O365 Sales Initial Setup",'RemoveInitialDraftInvoice');
+      InvoiceRecordId := SalesHeader.RECORDID;
+      IF SalesHeader.GET(SalesHeader."Document Type"::Invoice,SalesInvoiceNo) THEN
+        InvoiceRecordId := SalesHeader.RECORDID;
+      NotificationLifecycleMgt.SendNotification(SetupCompletedNotification,InvoiceRecordId);
+    END;
+
+    PROCEDURE ViewInitialDraftInvoice@28(SenderNotification@1002 : Notification);
+    VAR
+      SalesHeader@1000 : Record 36;
+      O365SalesInvoice@1001 : Page 2110;
+    BEGIN
+      IF NOT SalesHeader.GET(SalesHeader."Document Type"::Invoice,SenderNotification.GETDATA('SalesInvoiceNo')) THEN BEGIN
+        MESSAGE(NoInvoiceMsg);
+        EXIT;
+      END;
+
+      O365SalesInvoice.SETRECORD(SalesHeader);
+      O365SalesInvoice.SuppressExitPrompt;
+      O365SalesInvoice.RUN;
+    END;
+
+    PROCEDURE RemoveInitialDraftInvoice@27(SenderNotification@1002 : Notification);
+    VAR
+      SalesHeader@1000 : Record 36;
+    BEGIN
+      IF NOT SalesHeader.GET(SalesHeader."Document Type"::Invoice,SenderNotification.GETDATA('SalesInvoiceNo')) THEN BEGIN
+        MESSAGE(NoInvoiceMsg);
+        EXIT;
+      END;
+
+      IF CONFIRM(STRSUBSTNO(ConfirmInvoiceDeleteQst,SalesHeader."Sell-to Customer Name")) THEN
+        SalesHeader.DELETE(TRUE);
+    END;
+
+    LOCAL PROCEDURE HasPermission@33() : Boolean;
+    VAR
+      AccountingPeriod@1025 : Record 50;
+      ApplicationAreaSetup@1026 : Record 9178;
+      AssistedSetup@1023 : Record 1803;
+      BankAccount@1001 : Record 270;
+      ConfigTemplateHeader@1011 : Record 8618;
+      ConfigTemplateLine@1013 : Record 8619;
+      CustomReportLayout@1007 : Record 9650;
+      CustomerTemplate@1014 : Record 5105;
+      CompanyInformation@1000 : Record 79;
+      GenJournalBatch@1005 : Record 232;
+      MarketingSetup@1012 : Record 5079;
+      MyNotifications@1009 : Record 1518;
+      O365EmailSetup@1010 : Record 2118;
+      O365SalesInitialSetup@1024 : Record 2110;
+      PaymentMethod@1015 : Record 289;
+      PaymentRegistrationSetup@1004 : Record 980;
+      ReportLayoutSelection@1008 : Record 9651;
+      ReportSelections@1006 : Record 77;
+      SalesReceivablesSetup@1002 : Record 311;
+      TaxArea@1017 : Record 318;
+      TaxAreaLine@1021 : Record 319;
+      TaxDetail@1022 : Record 322;
+      TaxGroup@1019 : Record 321;
+      TaxJurisdiction@1018 : Record 320;
+      TaxSetup@1020 : Record 326;
+      VATBusinessPostingGroup@1003 : Record 323;
+      VATPostingSetup@1016 : Record 325;
+    BEGIN
+      EXIT(NOT (FALSE IN [
+                          AccountingPeriod.WRITEPERMISSION,
+                          ApplicationAreaSetup.WRITEPERMISSION,
+                          AssistedSetup.WRITEPERMISSION,
+                          BankAccount.WRITEPERMISSION,
+                          ConfigTemplateHeader.WRITEPERMISSION,
+                          ConfigTemplateLine.WRITEPERMISSION,
+                          CustomReportLayout.WRITEPERMISSION,
+                          CustomerTemplate.WRITEPERMISSION,
+                          CompanyInformation.WRITEPERMISSION,
+                          GenJournalBatch.WRITEPERMISSION,
+                          MarketingSetup.WRITEPERMISSION,
+                          MyNotifications.WRITEPERMISSION,
+                          O365EmailSetup.WRITEPERMISSION,
+                          O365SalesInitialSetup.WRITEPERMISSION,
+                          PaymentMethod.WRITEPERMISSION,
+                          PaymentRegistrationSetup.WRITEPERMISSION,
+                          ReportLayoutSelection.WRITEPERMISSION,
+                          ReportSelections.WRITEPERMISSION,
+                          SalesReceivablesSetup.WRITEPERMISSION,
+                          TaxArea.WRITEPERMISSION,
+                          TaxAreaLine.WRITEPERMISSION,
+                          TaxDetail.WRITEPERMISSION,
+                          TaxGroup.WRITEPERMISSION,
+                          TaxJurisdiction.WRITEPERMISSION,
+                          TaxSetup.WRITEPERMISSION,
+                          VATBusinessPostingGroup.WRITEPERMISSION,
+                          VATPostingSetup.WRITEPERMISSION
+                          ]
+                ));
+    END;
+
+    [External]
+    PROCEDURE CreateInvoice@25(Notification@1002 : Notification);
+    VAR
+      SalesHeader@1000 : Record 36;
+    BEGIN
+      SalesHeader.INIT;
+      SalesHeader.VALIDATE("Document Type",SalesHeader."Document Type"::Invoice);
+      SalesHeader.INSERT(TRUE);
+
+      PAGE.RUN(PAGE::"O365 Sales Invoice",SalesHeader);
+    END;
+
+    LOCAL PROCEDURE IsNewCompany@11() : Boolean;
+    VAR
+      GLRegister@1002 : Record 45;
+      Customer@1003 : Record 18;
+      Item@1004 : Record 27;
+    BEGIN
+      // Simple logic to determine if this is a new company
+      IF NOT GLRegister.ISEMPTY THEN
+        EXIT(FALSE);
+
+      IF NOT Customer.ISEMPTY THEN
+        EXIT(FALSE);
+
+      IF NOT Item.ISEMPTY THEN
+        EXIT(FALSE);
+
+      EXIT(TRUE);
+    END;
+
+    [EventSubscriber(Codeunit,40,OnAfterCompanyOpen)]
+    LOCAL PROCEDURE OnAfterCompanyOpen@26();
+    VAR
+      CompanyInformationMgt@1003 : Codeunit 1306;
+      FinancialsCompanyName@1002 : Text;
+    BEGIN
+      IF CURRENTCLIENTTYPE = CLIENTTYPE::Background THEN
+        EXIT;
+
+      IF NOT IdentityManagement.IsInvAppId THEN
+        EXIT;
+
+      IF GetCompany AND Company."Evaluation Company" THEN
+        EXIT;
+
+      IF CompanyInformationMgt.IsDemoCompany THEN
+        EXIT;
+
+      IF NOT HasPermission THEN
+        EXIT;
+
+      // Do not setup Invoicing App for financials users.
+      IF NOT IsNewCompany THEN
+        IF NOT (GetO365SalesInitialSetup AND O365SalesInitialSetup."Is initialized") THEN BEGIN
+          FinancialsCompanyName := COMPANYNAME;
+          IF GetCompany THEN
+            FinancialsCompanyName := Company."Display Name";
+          ERROR(NotAnInvoicingCompanyErr,FinancialsCompanyName);
+        END;
+
+      IF (NOT GetO365SalesInitialSetup) OR
+         ((NOT O365SalesInitialSetup."Is initialized") AND (O365SalesInitialSetup."Sales Quote No. Series" = ''))
+      THEN
+        ERROR(OutOfDateCompanyErr); // User signed up for financials a long time ago and is now trying to use MS invoicing
+
+      CODEUNIT.RUN(CODEUNIT::"O365 Sales Initial Setup");
+    END;
+
+    [EventSubscriber(Table,79,OnAfterModifyEvent)]
+    LOCAL PROCEDURE OnAfterCompanyInformationModify@15(VAR Rec@1000 : Record 79;VAR xRec@1001 : Record 79;RunTrigger@1002 : Boolean);
+    VAR
+      ConfigTemplateHeader@1003 : Record 8618;
+      ConfigTemplateLine@1005 : Record 8619;
+      DummyCustomer@1004 : Record 18;
+    BEGIN
+      IF Rec.ISTEMPORARY THEN
+        EXIT;
+
+      IF (Rec."Country/Region Code" <> xRec."Country/Region Code") AND (Rec."Country/Region Code" <> '') THEN
+        IF ConfigTemplateHeader.GET(O365SalesInitialSetup."Default Customer Template") THEN BEGIN
+          ConfigTemplateLine.SETRANGE("Data Template Code",ConfigTemplateHeader.Code);
+          ConfigTemplateLine.SETRANGE("Field ID",DummyCustomer.FIELDNO("Country/Region Code"));
+          ConfigTemplateLine.DELETEALL;
+          ConfigTemplateManagement.InsertConfigTemplateLine(ConfigTemplateHeader.Code,
+            DummyCustomer.FIELDNO("Country/Region Code"),Rec."Country/Region Code",ConfigTemplateHeader."Table ID");
+        END;
+    END;
+
+    LOCAL PROCEDURE EnableCompanyInvoicingApplicationArea@19();
+    VAR
+      ApplicationAreaSetup@1001 : Record 9178;
+      ExperienceTierSetup@1003 : Record 9176;
+      ApplicationAreaMgmtFacade@1002 : Codeunit 9179;
+      CurrentExperienceTier@1000 : Text;
+    BEGIN
+      IF NOT (GetO365SalesInitialSetup AND O365SalesInitialSetup."Is initialized") THEN
+        EXIT;
+
+      IF GetCompany AND Company."Evaluation Company" THEN
+        EXIT;
+
+      IF ApplicationAreaMgmtFacade.GetApplicationAreaSetupRecFromCompany(ApplicationAreaSetup,COMPANYNAME) THEN;
+      IF ApplicationAreaMgmtFacade.GetExperienceTierCurrentCompany(CurrentExperienceTier) THEN;
+      IF NOT ApplicationAreaSetup.Invoicing OR (CurrentExperienceTier <> ExperienceTierSetup.FIELDCAPTION(Invoicing)) THEN
+        ApplicationAreaMgmtFacade.SaveExperienceTierCurrentCompany(ExperienceTierSetup.FIELDCAPTION(Invoicing));
+    END;
+
+    LOCAL PROCEDURE GetCanadaTaxDefaults@1020021(VAR TaxAreaCode@1020000 : Code[20]);
+    VAR
+      CompanyInformation@1020002 : Record 79;
+      TaxArea@1020003 : Record 318;
+    BEGIN
+      IF TaxArea.FINDFIRST THEN
+        TaxAreaCode := TaxArea.Code;
+
+      IF CompanyInformation.GET AND (CompanyInformation.County <> '') THEN BEGIN
+        TaxArea.RESET;
+        TaxArea.SETRANGE(Code,CompanyInformation.County);
+        IF TaxArea.FINDFIRST THEN
+          TaxAreaCode := TaxArea.Code
+        ELSE BEGIN
+          TaxArea.RESET;
+          TaxArea.SETRANGE(Description,CompanyInformation.County);
+          IF TaxArea.FINDFIRST THEN
+            TaxAreaCode := TaxArea.Code
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetUSTaxDefaults@1020001(VAR TaxAreaCode@1020001 : Code[20]);
+    VAR
+      GLAccount@1020012 : Record 15;
+      CompanyInformation@1020011 : Record 79;
+      TaxArea@1020009 : Record 318;
+      TaxJurisdiction@1020008 : Record 320;
+      TaxSetup@1020007 : Record 326;
+      TaxAreaLine@1020006 : Record 319;
+      TaxDetail@1020005 : Record 322;
+      TaxJurisdictionCode@1020000 : Code[10];
+    BEGIN
+      IF CompanyInformation.GET AND (CompanyInformation.City <> '') THEN BEGIN
+        TaxAreaCode := UPPERCASE(COPYSTR(CompanyInformation.City,1,MAXSTRLEN(TaxAreaCode) - 4));
+        TaxJurisdictionCode := COPYSTR(TaxAreaCode,1,MAXSTRLEN(TaxJurisdictionCode));
+        IF CompanyInformation.County <> '' THEN // 2 char state
+          TaxAreaCode := COPYSTR(TaxAreaCode + ', ' + COPYSTR(CompanyInformation.County,1,2),1,MAXSTRLEN(TaxAreaCode));
+      END ELSE BEGIN
+        TaxAreaCode := DefaultLbl;
+        TaxJurisdictionCode := DefaultCityTxt;
+      END;
+
+      IF NOT TaxArea.GET(TaxAreaCode) THEN BEGIN
+        TaxArea.INIT;
+        TaxArea.VALIDATE(Code,TaxAreaCode);
+        TaxArea.VALIDATE(Description,TaxAreaCode);
+        TaxArea.INSERT;
+      END;
+
+      IF NOT TaxJurisdiction.GET(TaxJurisdictionCode) THEN BEGIN
+        TaxJurisdiction.INIT;
+        TaxJurisdiction.VALIDATE(Code,TaxJurisdictionCode);
+        TaxJurisdiction.INSERT;
+      END;
+
+      IF TaxSetup.GET THEN;
+      TaxJurisdiction.VALIDATE(Description,TaxableDescriptionTxt);
+      IF GLAccount.GET(TaxSetup."Tax Account (Sales)") THEN
+        TaxJurisdiction.VALIDATE("Tax Account (Sales)",GLAccount."No.");
+      IF GLAccount.GET(TaxSetup."Tax Account (Purchases)") THEN
+        TaxJurisdiction.VALIDATE("Tax Account (Purchases)",GLAccount."No.");
+      TaxJurisdiction.MODIFY;
+
+      IF NOT TaxAreaLine.GET(TaxArea.Code,TaxJurisdiction.Code) THEN BEGIN
+        TaxAreaLine.INIT;
+        TaxAreaLine.VALIDATE("Tax Area",TaxArea.Code);
+        TaxAreaLine.VALIDATE("Tax Jurisdiction Code",TaxJurisdiction.Code);
+        TaxAreaLine.INSERT;
+      END;
+
+      IF NOT TaxDetail.GET(TaxJurisdiction.Code,TaxableCodeTxt,TaxDetail."Tax Type"::"Sales and Use Tax",WORKDATE) THEN BEGIN
+        TaxDetail.INIT;
+        TaxDetail.VALIDATE("Tax Jurisdiction Code",TaxJurisdiction.Code);
+        TaxDetail.VALIDATE("Tax Group Code",TaxableCodeTxt);
+        TaxDetail.VALIDATE("Tax Type",TaxDetail."Tax Type"::"Sales and Use Tax");
+        TaxDetail.VALIDATE("Effective Date",WORKDATE);
+        TaxDetail.INSERT(TRUE);
+      END;
+
+      TaxDetail.VALIDATE("Maximum Amount/Qty.",0);
+      TaxDetail.VALIDATE("Tax Below Maximum",0);
+      TaxDetail.MODIFY;
+    END;
+
+    LOCAL PROCEDURE ClearPaymentMethodsBalAccount@21();
+    VAR
+      PaymentMethod@1000 : Record 289;
+    BEGIN
+      PaymentMethod.SETRANGE("Use for Invoicing",TRUE);
+      PaymentMethod.MODIFYALL("Bal. Account No.",'');
+    END;
+
+    PROCEDURE EnsureConfigurationTemplatateSelectionRuleExists@32(TableId@1001 : Integer);
+    VAR
+      ConfigTmplSelectionRules@1000 : Record 8620;
+      O365SalesInitialSetup@1003 : Record 2110;
+      ConfigTemplateHeader@1004 : Record 8618;
+      ExpectedCode@1005 : Code[10];
+    BEGIN
+      ConfigTmplSelectionRules.SETRANGE("Table ID",TableId);
+      IF ConfigTmplSelectionRules.FINDFIRST THEN
+        EXIT;
+
+      IF NOT GetO365SalesInitialSetup THEN
+        EXIT;
+
+      ConfigTmplSelectionRules.VALIDATE("Table ID",TableId);
+
+      CASE TableId OF
+        DATABASE::Item:
+          BEGIN
+            ConfigTmplSelectionRules.VALIDATE("Page ID",PAGE::"Item Entity");
+            ExpectedCode := O365SalesInitialSetup."Default Item Template";
+          END;
+        DATABASE::Customer:
+          BEGIN
+            ConfigTmplSelectionRules.VALIDATE("Page ID",PAGE::"Customer Entity");
+            ExpectedCode := O365SalesInitialSetup."Default Customer Template";
+          END;
+        ELSE
+          EXIT;
+      END;
+
+      IF ExpectedCode = '' THEN
+        EXIT;
+
+      ConfigTemplateHeader.SETRANGE("Table ID",TableId);
+      ConfigTemplateHeader.SETRANGE(Code,ExpectedCode);
+      IF NOT ConfigTemplateHeader.FINDFIRST THEN
+        EXIT;
+
+      ConfigTmplSelectionRules.VALIDATE("Template Code",ExpectedCode);
+      ConfigTmplSelectionRules.INSERT(TRUE);
+    END;
+
+    [EventSubscriber(Codeunit,80,OnBeforePostSalesDoc)]
+    LOCAL PROCEDURE BlockSendingTestInvoices@34(VAR SalesHeader@1000 : Record 36);
+    BEGIN
+      IF SalesHeader.IsTest THEN
+        ERROR(CannotSendTestInvoiceErr);
+    END;
+
+    [EventSubscriber(Page,1518,OnAfterInitializingNotificationWithDefaultState)]
+    LOCAL PROCEDURE OnAfterInitializingNotificationsDisable@35();
+    VAR
+      MyNotifications@1000 : Record 1518;
+    BEGIN
+      IF NOT GetO365SalesInitialSetup THEN
+        EXIT;
+      IF NOT O365SalesInitialSetup."Is initialized" THEN
+        EXIT;
+
+      MyNotifications.SETRANGE("User Id",USERID);
+      MyNotifications.MODIFYALL(Enabled,FALSE,TRUE);
+    END;
+
+    LOCAL PROCEDURE GetCompany@38() : Boolean;
+    BEGIN
+      IF NOT CompanyRead THEN
+        CompanyRead := Company.GET(COMPANYNAME);
+      EXIT(CompanyRead);
+    END;
+
+    LOCAL PROCEDURE GetO365SalesInitialSetup@39() : Boolean;
+    BEGIN
+      IF NOT O365SalesInitSetupRead THEN
+        O365SalesInitSetupRead := O365SalesInitialSetup.GET;
+      EXIT(O365SalesInitSetupRead);
+    END;
+
+    [EventSubscriber(Table,1518,OnAfterIsNotificationEnabled)]
+    LOCAL PROCEDURE DisableMyNotifications@22(NotificationId@1001 : GUID;VAR IsNotificationEnabled@1002 : Boolean);
+    BEGIN
+      IF NOT IdentityManagement.IsInvAppId THEN
+        EXIT;
+      IF NOT O365SalesInitialSetup.GET THEN
+        EXIT;
+      IF NOT O365SalesInitialSetup."Is initialized" THEN
+        EXIT;
+
+      IsNotificationEnabled := FALSE;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

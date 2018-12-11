@@ -1,0 +1,141 @@
+OBJECT Codeunit 5722 Item Category Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=;
+    Time=;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    EventSubscriberInstance=Manual;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      TempItemCategory@1000 : TEMPORARY Record 5722;
+
+    [EventSubscriber(Table,5722,OnAfterRenameEvent)]
+    LOCAL PROCEDURE UpdatedPresentationOrderOnAfterRenameItemCategory@1(VAR Rec@1000 : Record 5722;VAR xRec@1001 : Record 5722;RunTrigger@1002 : Boolean);
+    BEGIN
+      UpdatePresentationOrder;
+    END;
+
+    [EventSubscriber(Table,5722,OnAfterModifyEvent)]
+    LOCAL PROCEDURE UpdatePresentationOrderOnAfterModifyItemCategory@4(VAR Rec@1000 : Record 5722;VAR xRec@1001 : Record 5722;RunTrigger@1002 : Boolean);
+    VAR
+      NewParentItemCategory@1003 : Record 5722;
+    BEGIN
+      IF NOT Rec.ISTEMPORARY THEN
+        IF xRec."Parent Category" <> Rec."Parent Category" THEN BEGIN
+          UpdatePresentationOrder;
+          IF NewParentItemCategory.GET(Rec."Parent Category") THEN
+            Rec.VALIDATE(Indentation,NewParentItemCategory.Indentation + 1)
+          ELSE
+            Rec.VALIDATE(Indentation,0);
+          Rec.MODIFY;
+        END;
+    END;
+
+    [EventSubscriber(Table,5722,OnAfterInsertEvent)]
+    LOCAL PROCEDURE UpdatePresentationOrdOnAfterInsertItemCategory@7(VAR Rec@1000 : Record 5722;RunTrigger@1001 : Boolean);
+    VAR
+      NewParentItemCategory@1002 : Record 5722;
+    BEGIN
+      IF NOT Rec.ISTEMPORARY THEN BEGIN
+        UpdatePresentationOrder;
+        IF NewParentItemCategory.GET(Rec."Parent Category") THEN BEGIN
+          Rec.VALIDATE(Indentation,NewParentItemCategory.Indentation + 1);
+          Rec.MODIFY;
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE UpdatePresentationOrder@3();
+    VAR
+      ItemCategory@1002 : Record 5722;
+    BEGIN
+      TempItemCategory.RESET;
+      TempItemCategory.DELETEALL;
+      IF ItemCategory.FINDSET(FALSE,FALSE) THEN
+        REPEAT
+          TempItemCategory.TRANSFERFIELDS(ItemCategory);
+          TempItemCategory.INSERT;
+        UNTIL ItemCategory.NEXT = 0;
+      UpdatePresentationOrderIterative;
+    END;
+
+    LOCAL PROCEDURE UpdatePresentationOrderIterative@2();
+    VAR
+      ItemCategory@1000 : Record 5722;
+      TempStack@1005 : TEMPORARY Record 9160;
+      TempCurItemCategory@1004 : TEMPORARY Record 5722;
+      CurItemCategoryID@1003 : RecordID;
+      PresentationOrder@1001 : Integer;
+      Indentation@1002 : Integer;
+      HasChildren@1006 : Boolean;
+    BEGIN
+      PresentationOrder := 0;
+
+      TempCurItemCategory.COPY(TempItemCategory,TRUE);
+
+      TempItemCategory.SETCURRENTKEY("Parent Category");
+      TempItemCategory.ASCENDING(FALSE);
+      TempItemCategory.SETRANGE("Parent Category",'');
+      IF TempItemCategory.FINDSET(FALSE,FALSE) THEN
+        REPEAT
+          TempStack.Push(TempItemCategory.RECORDID);
+        UNTIL TempItemCategory.NEXT = 0;
+
+      WHILE TempStack.Pop(CurItemCategoryID) DO BEGIN
+        TempCurItemCategory.GET(CurItemCategoryID);
+        HasChildren := FALSE;
+
+        TempItemCategory.SETRANGE("Parent Category",TempCurItemCategory.Code);
+        IF TempItemCategory.FINDSET(FALSE,FALSE) THEN
+          REPEAT
+            TempStack.Push(TempItemCategory.RECORDID);
+            HasChildren := TRUE;
+          UNTIL TempItemCategory.NEXT = 0;
+
+        IF TempCurItemCategory."Parent Category" <> '' THEN BEGIN
+          TempItemCategory.GET(TempCurItemCategory."Parent Category");
+          Indentation := TempItemCategory.Indentation + 1;
+        END ELSE
+          Indentation := 0;
+        PresentationOrder := PresentationOrder + 1;
+
+        IF (TempCurItemCategory."Presentation Order" <> PresentationOrder) OR
+           (TempCurItemCategory.Indentation <> Indentation) OR (TempCurItemCategory."Has Children" <> HasChildren)
+        THEN BEGIN
+          ItemCategory.GET(TempCurItemCategory.Code);
+          ItemCategory.VALIDATE("Presentation Order",PresentationOrder);
+          ItemCategory.VALIDATE(Indentation,Indentation);
+          ItemCategory.VALIDATE("Has Children",HasChildren);
+          ItemCategory.MODIFY;
+          TempItemCategory.GET(TempCurItemCategory.Code);
+          TempItemCategory.VALIDATE("Presentation Order",PresentationOrder);
+          TempItemCategory.VALIDATE(Indentation,Indentation);
+          TempItemCategory.VALIDATE("Has Children",HasChildren);
+          TempItemCategory.MODIFY;
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE DoesValueExistInItemCategories@5(Text@1000 : Code[20];VAR ItemCategory@1001 : Record 5722) : Boolean;
+    BEGIN
+      ItemCategory.RESET;
+      ItemCategory.SETFILTER(Code,'@' + Text);
+      EXIT(ItemCategory.FINDSET);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,239 @@
+OBJECT Table 175 Standard Vendor Purchase Code
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:14:07 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Standard Vendor Purchase Code;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Vendor No.          ;Code20        ;TableRelation=Vendor;
+                                                   CaptionML=ENU=Vendor No.;
+                                                   NotBlank=Yes }
+    { 2   ;   ;Code                ;Code10        ;TableRelation="Standard Purchase Code";
+                                                   OnValidate=VAR
+                                                                StdPurchCode@1000 : Record 173;
+                                                              BEGIN
+                                                                IF Code = '' THEN
+                                                                  EXIT;
+                                                                StdPurchCode.GET(Code);
+                                                                Description := StdPurchCode.Description;
+                                                              END;
+
+                                                   CaptionML=ENU=Code;
+                                                   NotBlank=Yes }
+    { 3   ;   ;Description         ;Text50        ;CaptionML=ENU=Description }
+    { 15  ;   ;Insert Rec. Lines On Quotes;Option ;DataClassification=SystemMetadata;
+                                                   CaptionML=ENU=Insert Rec. Lines On Quotes;
+                                                   OptionCaptionML=ENU=Manual,Automatic,Always Ask;
+                                                   OptionString=Manual,Automatic,Always Ask }
+    { 16  ;   ;Insert Rec. Lines On Orders;Option ;DataClassification=SystemMetadata;
+                                                   CaptionML=ENU=Insert Rec. Lines On Orders;
+                                                   OptionCaptionML=ENU=Manual,Automatic,Always Ask;
+                                                   OptionString=Manual,Automatic,Always Ask }
+    { 17  ;   ;Insert Rec. Lines On Invoices;Option;
+                                                   DataClassification=SystemMetadata;
+                                                   CaptionML=ENU=Insert Rec. Lines On Invoices;
+                                                   OptionCaptionML=ENU=Manual,Automatic,Always Ask;
+                                                   OptionString=Manual,Automatic,Always Ask }
+    { 18  ;   ;Insert Rec. Lines On Cr. Memos;Option;
+                                                   DataClassification=SystemMetadata;
+                                                   CaptionML=ENU=Insert Rec. Lines On Cr. Memos;
+                                                   OptionCaptionML=ENU=Manual,Automatic,Always Ask;
+                                                   OptionString=Manual,Automatic,Always Ask }
+  }
+  KEYS
+  {
+    {    ;Vendor No.,Code                         ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+
+    [External]
+    PROCEDURE InsertPurchLines@1(PurchHeader@1000 : Record 38);
+    VAR
+      StdVendPurchCode@1002 : Record 175;
+      StdVendPurchCodes@1001 : Page 178;
+    BEGIN
+      PurchHeader.TESTFIELD("No.");
+      PurchHeader.TESTFIELD("Buy-from Vendor No.");
+
+      StdVendPurchCode.FILTERGROUP := 2;
+      StdVendPurchCode.SETRANGE("Vendor No.",PurchHeader."Buy-from Vendor No.");
+      StdVendPurchCode.FILTERGROUP := 0;
+
+      StdVendPurchCodes.SETTABLEVIEW(StdVendPurchCode);
+      StdVendPurchCodes.LOOKUPMODE(TRUE);
+      IF StdVendPurchCodes.RUNMODAL = ACTION::LookupOK THEN BEGIN
+        StdVendPurchCodes.GetSelected(StdVendPurchCode);
+        IF StdVendPurchCode.FINDSET THEN
+          REPEAT
+            ApplyStdCodesToPurchaseLines(PurchHeader,StdVendPurchCode);
+          UNTIL StdVendPurchCode.NEXT = 0;
+      END;
+    END;
+
+    [External]
+    PROCEDURE ApplyStdCodesToPurchaseLines@2(PurchHeader@1000 : Record 38;StdVendPurchCode@1005 : Record 175);
+    VAR
+      Currency@1007 : Record 4;
+      PurchLine@1006 : Record 39;
+      StdPurchLine@1004 : Record 174;
+      StdPurchCode@1003 : Record 173;
+      Factor@1002 : Integer;
+    BEGIN
+      Currency.Initialize(PurchHeader."Currency Code");
+
+      StdVendPurchCode.TESTFIELD(Code);
+      StdVendPurchCode.TESTFIELD("Vendor No.",PurchHeader."Buy-from Vendor No.");
+      StdPurchCode.GET(StdVendPurchCode.Code);
+      StdPurchCode.TESTFIELD("Currency Code",PurchHeader."Currency Code");
+      StdPurchLine.SETRANGE("Standard Purchase Code",StdVendPurchCode.Code);
+
+      PurchLine."Document Type" := PurchHeader."Document Type";
+      PurchLine."Document No." := PurchHeader."No.";
+      PurchLine.SETRANGE("Document Type",PurchHeader."Document Type");
+      PurchLine.SETRANGE("Document No.",PurchHeader."No.");
+      IF PurchHeader."Prices Including VAT" THEN
+        Factor := 1
+      ELSE
+        Factor := 0;
+      PurchLine.LOCKTABLE;
+      StdPurchLine.LOCKTABLE;
+      IF StdPurchLine.FIND('-') THEN BEGIN
+        REPEAT
+          PurchLine.INIT;
+          PurchLine."Line No." := 0;
+          PurchLine.VALIDATE(Type,StdPurchLine.Type);
+          IF StdPurchLine.Type = StdPurchLine.Type::" " THEN BEGIN
+            PurchLine.VALIDATE("No.",StdPurchLine."No.");
+            PurchLine.Description := StdPurchLine.Description
+          END ELSE
+            IF NOT StdPurchLine.EmptyLine THEN BEGIN
+              StdPurchLine.TESTFIELD("No.");
+              PurchLine.VALIDATE("No.",StdPurchLine."No.");
+              IF StdPurchLine."Variant Code" <> '' THEN
+                PurchLine.VALIDATE("Variant Code",StdPurchLine."Variant Code");
+              PurchLine.VALIDATE(Quantity,StdPurchLine.Quantity);
+              IF StdPurchLine."Unit of Measure Code" <> '' THEN
+                PurchLine.VALIDATE("Unit of Measure Code",StdPurchLine."Unit of Measure Code");
+              PurchLine.Description := StdPurchLine.Description;
+              IF (StdPurchLine.Type = StdPurchLine.Type::"G/L Account") OR
+                 (StdPurchLine.Type = StdPurchLine.Type::"Charge (Item)")
+              THEN
+                PurchLine.VALIDATE(
+                  "Direct Unit Cost",
+                  ROUND(StdPurchLine."Amount Excl. VAT" *
+                    (PurchLine."VAT %" / 100 * Factor + 1),Currency."Unit-Amount Rounding Precision"));
+            END;
+
+          PurchLine."Shortcut Dimension 1 Code" := StdPurchLine."Shortcut Dimension 1 Code";
+          PurchLine."Shortcut Dimension 2 Code" := StdPurchLine."Shortcut Dimension 2 Code";
+
+          CombineDimensions(PurchLine,StdPurchLine);
+          OnBeforeApplyStdCodesToPurchaseLines(PurchLine,StdPurchLine);
+          IF StdPurchLine.InsertLine THEN BEGIN
+            PurchLine."Line No." := GetNextLineNo(PurchLine);
+            PurchLine.INSERT(TRUE);
+            InsertExtendedText(PurchLine);
+          END;
+        UNTIL StdPurchLine.NEXT = 0;
+        PurchLine.CalcSalesTaxLines(PurchHeader,PurchLine);
+      END;
+    END;
+
+    LOCAL PROCEDURE CombineDimensions@5(VAR PurchaseLine@1001 : Record 39;StdPurchaseLine@1002 : Record 174);
+    VAR
+      DimensionManagement@1000 : Codeunit 408;
+      DimensionSetIDArr@1005 : ARRAY [10] OF Integer;
+    BEGIN
+      DimensionSetIDArr[1] := PurchaseLine."Dimension Set ID";
+      DimensionSetIDArr[2] := StdPurchaseLine."Dimension Set ID";
+
+      PurchaseLine."Dimension Set ID" :=
+        DimensionManagement.GetCombinedDimensionSetID(
+          DimensionSetIDArr,PurchaseLine."Shortcut Dimension 1 Code",PurchaseLine."Shortcut Dimension 2 Code");
+    END;
+
+    LOCAL PROCEDURE InsertExtendedText@3(PurchLine@1000 : Record 39);
+    VAR
+      TransferExtendedText@1001 : Codeunit 378;
+    BEGIN
+      IF TransferExtendedText.PurchCheckIfAnyExtText(PurchLine,FALSE) THEN
+        TransferExtendedText.InsertPurchExtText(PurchLine);
+    END;
+
+    LOCAL PROCEDURE GetNextLineNo@4(PurchLine@1001 : Record 39) : Integer;
+    BEGIN
+      PurchLine.SETRANGE("Document Type",PurchLine."Document Type");
+      PurchLine.SETRANGE("Document No.",PurchLine."Document No.");
+      IF PurchLine.FINDLAST THEN
+        EXIT(PurchLine."Line No." + 10000);
+
+      EXIT(10000);
+    END;
+
+    PROCEDURE SetFilterByAutomaticAndAlwaysAskCodes@8(PurchaseHeader@1000 : Record 38);
+    BEGIN
+      CASE PurchaseHeader."Document Type" OF
+        PurchaseHeader."Document Type"::Quote:
+          SETFILTER("Insert Rec. Lines On Quotes",'<>%1',"Insert Rec. Lines On Quotes"::Manual);
+        PurchaseHeader."Document Type"::Order:
+          SETFILTER("Insert Rec. Lines On Orders",'<>%1',"Insert Rec. Lines On Orders"::Manual);
+        PurchaseHeader."Document Type"::Invoice:
+          SETFILTER("Insert Rec. Lines On Invoices",'<>%1',"Insert Rec. Lines On Invoices"::Manual);
+        PurchaseHeader."Document Type"::"Credit Memo":
+          SETFILTER("Insert Rec. Lines On Cr. Memos",'<>%1',"Insert Rec. Lines On Cr. Memos"::Manual);
+      END;
+    END;
+
+    PROCEDURE IsInsertRecurringLinesOnDocumentAutomatic@9(PurchaseHeader@1000 : Record 38) : Boolean;
+    BEGIN
+      CASE PurchaseHeader."Document Type" OF
+        PurchaseHeader."Document Type"::Quote:
+          EXIT("Insert Rec. Lines On Quotes" = "Insert Rec. Lines On Quotes"::Automatic);
+        PurchaseHeader."Document Type"::Order:
+          EXIT("Insert Rec. Lines On Orders" = "Insert Rec. Lines On Orders"::Automatic);
+        PurchaseHeader."Document Type"::Invoice:
+          EXIT("Insert Rec. Lines On Invoices" = "Insert Rec. Lines On Invoices"::Automatic);
+        PurchaseHeader."Document Type"::"Credit Memo":
+          EXIT("Insert Rec. Lines On Cr. Memos" = "Insert Rec. Lines On Cr. Memos"::Automatic);
+        ELSE
+          EXIT(FALSE);
+      END;
+    END;
+
+    PROCEDURE ShouldAutoInsertRecurringLinesOnDocument@12(PurchaseHeader@1000 : Record 38) : Boolean;
+    BEGIN
+      CASE PurchaseHeader."Document Type" OF
+        PurchaseHeader."Document Type"::Quote:
+          EXIT("Insert Rec. Lines On Quotes" <> "Insert Rec. Lines On Quotes"::Manual);
+        PurchaseHeader."Document Type"::Order:
+          EXIT("Insert Rec. Lines On Orders" <> "Insert Rec. Lines On Orders"::Manual);
+        PurchaseHeader."Document Type"::Invoice:
+          EXIT("Insert Rec. Lines On Invoices" <> "Insert Rec. Lines On Invoices"::Manual);
+        PurchaseHeader."Document Type"::"Credit Memo":
+          EXIT("Insert Rec. Lines On Cr. Memos" <> "Insert Rec. Lines On Cr. Memos"::Manual);
+        ELSE
+          EXIT(FALSE);
+      END;
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeApplyStdCodesToPurchaseLines@6(VAR PurchLine@1000 : Record 39;StdPurchLine@1001 : Record 174);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,155 @@
+OBJECT Codeunit 45 AutoFormatManagement
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:07:48 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    SingleInstance=Yes;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Currency@1001 : Record 4;
+      GLSetup@1000 : Record 98;
+      GLSetupRead@1002 : Boolean;
+      Text012@1003 : TextConst 'ENU=<Precision,%1><Standard Format,0>';
+      CurrFormatTxt@1004 : TextConst '@@@={LOCKED} Do not translate;ENU=<Custom,%3%2<Precision,%1><Standard Format,0>>';
+
+    [External]
+    PROCEDURE AutoFormatTranslate@12(AutoFormatType@1000 : Integer;AutoFormatExpr@1001 : Text[80]) : Text[80];
+    VAR
+      FormatSubtype@1002 : Text;
+      AutoFormatPrefixedText@1004 : Text;
+      AutoFormatCurrencyCode@1003 : Text;
+      NumCommasInAutoFomatExpr@1005 : Integer;
+    BEGIN
+      IF AutoFormatType = 0 THEN
+        EXIT('');
+
+      IF NOT GetGLSetup THEN
+        EXIT('');
+
+      CASE AutoFormatType OF
+        1: // Amount
+          BEGIN
+            IF AutoFormatExpr = '' THEN
+              EXIT(STRSUBSTNO(Text012,GLSetup."Amount Decimal Places"));
+            IF GetCurrency(COPYSTR(AutoFormatExpr,1,10)) AND
+               (Currency."Amount Decimal Places" <> '')
+            THEN
+              EXIT(STRSUBSTNO(Text012,Currency."Amount Decimal Places"));
+            EXIT(STRSUBSTNO(Text012,GLSetup."Amount Decimal Places"));
+          END;
+        2: // Unit Amount
+          BEGIN
+            IF AutoFormatExpr = '' THEN
+              EXIT(STRSUBSTNO(Text012,GLSetup."Unit-Amount Decimal Places"));
+            IF GetCurrency(COPYSTR(AutoFormatExpr,1,10)) AND
+               (Currency."Unit-Amount Decimal Places" <> '')
+            THEN
+              EXIT(STRSUBSTNO(Text012,Currency."Unit-Amount Decimal Places"));
+            EXIT(STRSUBSTNO(Text012,GLSetup."Unit-Amount Decimal Places"));
+          END;
+        10: // Custom or AutoFormatExpr = '1[,<curr>[,<PrefixedText>]]' or '2[,<curr>[,<PrefixedText>]]'
+          BEGIN
+            FormatSubtype := SELECTSTR(1,AutoFormatExpr);
+            IF FormatSubtype IN ['1','2'] THEN BEGIN
+              NumCommasInAutoFomatExpr := STRLEN(AutoFormatExpr) - STRLEN(DELCHR(AutoFormatExpr,'=',','));
+              IF NumCommasInAutoFomatExpr >= 1 THEN
+                AutoFormatCurrencyCode := SELECTSTR(2,AutoFormatExpr);
+              IF NumCommasInAutoFomatExpr >= 2 THEN
+                AutoFormatPrefixedText := SELECTSTR(3,AutoFormatExpr);
+              IF AutoFormatPrefixedText <> '' THEN
+                AutoFormatPrefixedText := AutoFormatPrefixedText + ' ';
+            END ELSE
+              FormatSubtype := '';
+
+            CASE FormatSubtype OF
+              '1':
+                BEGIN
+                  IF AutoFormatCurrencyCode = '' THEN
+                    EXIT(STRSUBSTNO(CurrFormatTxt,GLSetup."Amount Decimal Places",GLSetup.GetCurrencySymbol,AutoFormatPrefixedText));
+                  IF GetCurrency(COPYSTR(AutoFormatCurrencyCode,1,10)) AND
+                     (Currency."Amount Decimal Places" <> '')
+                  THEN
+                    EXIT(STRSUBSTNO(CurrFormatTxt,Currency."Amount Decimal Places",Currency.GetCurrencySymbol,AutoFormatPrefixedText));
+                  EXIT(STRSUBSTNO(CurrFormatTxt,GLSetup."Amount Decimal Places",GLSetup.GetCurrencySymbol,AutoFormatPrefixedText));
+                END;
+              '2':
+                BEGIN
+                  IF AutoFormatCurrencyCode = '' THEN
+                    EXIT(
+                      STRSUBSTNO(CurrFormatTxt,GLSetup."Unit-Amount Decimal Places",GLSetup.GetCurrencySymbol,AutoFormatPrefixedText));
+                  IF GetCurrency(COPYSTR(AutoFormatCurrencyCode,1,10)) AND
+                     (Currency."Unit-Amount Decimal Places" <> '')
+                  THEN
+                    EXIT(
+                      STRSUBSTNO(CurrFormatTxt,Currency."Unit-Amount Decimal Places",Currency.GetCurrencySymbol,AutoFormatPrefixedText));
+                  EXIT(
+                    STRSUBSTNO(CurrFormatTxt,GLSetup."Unit-Amount Decimal Places",GLSetup.GetCurrencySymbol,AutoFormatPrefixedText));
+                END;
+              ELSE
+                EXIT('<Custom,' + AutoFormatExpr + '>');
+            END;
+          END;
+        11:
+          EXIT(AutoFormatExpr);
+      END;
+    END;
+
+    [External]
+    PROCEDURE ReadRounding@14() : Decimal;
+    BEGIN
+      GetGLSetup;
+      EXIT(GLSetup."Amount Rounding Precision");
+    END;
+
+    LOCAL PROCEDURE GetGLSetup@15() : Boolean;
+    BEGIN
+      IF NOT GLSetupRead THEN
+        GLSetupRead := GLSetup.GET;
+      EXIT(GLSetupRead);
+    END;
+
+    LOCAL PROCEDURE GetCurrency@16(CurrencyCode@1000 : Code[10]) : Boolean;
+    BEGIN
+      IF CurrencyCode = Currency.Code THEN
+        EXIT(TRUE);
+      IF CurrencyCode = '' THEN BEGIN
+        CLEAR(Currency);
+        Currency.InitRoundingPrecision;
+        EXIT(TRUE);
+      END;
+      EXIT(Currency.GET(CurrencyCode));
+    END;
+
+    [EventSubscriber(Codeunit,2000000004,AutoFormatTranslate)]
+    LOCAL PROCEDURE DoAutoFormatTranslate@2(AutoFormatType@1000 : Integer;AutoFormatExpr@1001 : Text[80];VAR Translation@1002 : Text[80]);
+    BEGIN
+      Translation := AutoFormatTranslate(AutoFormatType,AutoFormatExpr);
+      OnAfterAutoFormatTranslate(AutoFormatType,AutoFormatExpr,Translation);
+    END;
+
+    [EventSubscriber(Codeunit,2000000004,GetDefaultRoundingPrecision)]
+    LOCAL PROCEDURE GetDefaultRoundingPrecision@1(VAR AmountRoundingPrecision@1000 : Decimal);
+    BEGIN
+      AmountRoundingPrecision := ReadRounding;
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterAutoFormatTranslate@1056(AutoFormatType@1001 : Integer;AutoFormatExpression@1000 : Text[80];VAR AutoFormatTranslation@1002 : Text[80]);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

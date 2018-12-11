@@ -1,0 +1,186 @@
+OBJECT Report 7314 Whse. Change Unit of Measure
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:13:23 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Whse. Change Unit of Measure;
+    ProcessingOnly=Yes;
+  }
+  DATASET
+  {
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      InsertAllowed=No;
+      SourceTable=Table5767;
+      OnOpenPage=BEGIN
+                   COPY(WarehouseActivityLine);
+                   GET("Activity Type","No.","Line No.");
+                   SETRECFILTER;
+                   TESTFIELD("Bin Code");
+                 END;
+
+      OnAfterGetRecord=BEGIN
+                         UOMCode := "Unit of Measure Code";
+                         WarehouseActivityLine.Quantity := "Qty. to Handle";
+                         WarehouseActivityLine."Qty. (Base)" := "Qty. to Handle (Base)";
+                       END;
+
+      OnQueryClosePage=BEGIN
+                         IF CloseAction = ACTION::OK THEN
+                           IF UOMCode <> "Unit of Measure Code" THEN
+                             ChangeUOM2 := TRUE;
+                       END;
+
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=ENU=Options }
+
+      { 1   ;2   ;Field     ;
+                  ToolTipML=ENU=Specifies if you want to change the unit of measure on a Take line or on a Place line.;
+                  ApplicationArea=#Warehouse;
+                  SourceExpr="Action Type";
+                  Editable=FALSE }
+
+      { 5   ;2   ;Field     ;
+                  ToolTipML=ENU=Specifies how many units to handle in this warehouse activity.;
+                  ApplicationArea=#Warehouse;
+                  SourceExpr="Qty. to Handle";
+                  Editable=FALSE }
+
+      { 7   ;2   ;Group     ;
+                  CaptionML=ENU=From }
+
+      { 3   ;3   ;Field     ;
+                  ToolTipML=ENU=Specifies for a warehouse activity line, such as a warehouse pick, which unit of measure you want.;
+                  ApplicationArea=#Warehouse;
+                  SourceExpr="Unit of Measure Code";
+                  Editable=FALSE }
+
+      { 8   ;2   ;Group     ;
+                  CaptionML=ENU=To }
+
+      { 9   ;3   ;Field     ;
+                  Name=UnitOfMeasureCode;
+                  CaptionML=ENU=Unit of Measure Code;
+                  ToolTipML=ENU=Specifies the unit of measure for a warehouse activity line.;
+                  ApplicationArea=#Warehouse;
+                  SourceExpr=UOMCode;
+                  TableRelation="Item Unit of Measure".Code;
+                  OnValidate=BEGIN
+                               ItemUOM.GET("Item No.",UOMCode);
+                               WarehouseActivityLine."Qty. per Unit of Measure" := ItemUOM."Qty. per Unit of Measure";
+                               WarehouseActivityLine."Unit of Measure Code" := ItemUOM.Code;
+                               CheckUOM;
+                               UOMCode := ItemUOM.Code;
+                             END;
+
+                  OnLookup=BEGIN
+                             ItemUOM.RESET;
+                             ItemUOM.FILTERGROUP(2);
+                             ItemUOM.SETRANGE("Item No.","Item No.");
+                             ItemUOM.FILTERGROUP(0);
+                             ItemUOM.Code := WarehouseActivityLine."Unit of Measure Code";
+                             IF PAGE.RUNMODAL(0,ItemUOM) = ACTION::LookupOK THEN BEGIN
+                               Text := ItemUOM.Code;
+                               EXIT(TRUE);
+                             END;
+                           END;
+                            }
+
+      { 11  ;2   ;Field     ;
+                  CaptionML=ENU=Quantity;
+                  ToolTipML=ENU=Specifies the quantity that corresponds to the warehouse activity line.;
+                  ApplicationArea=#Warehouse;
+                  DecimalPlaces=0:5;
+                  SourceExpr=WarehouseActivityLine.Quantity;
+                  Editable=FALSE }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      WarehouseActivityLine@1002 : Record 5767;
+      BinContent@1005 : Record 7302;
+      ItemUOM@1003 : Record 5404;
+      UOMCode@1000 : Code[10];
+      QtyAvailBase@1006 : Decimal;
+      QtyChangeBase@1008 : Decimal;
+      ChangeUOM2@1001 : Boolean;
+      Text001@1007 : TextConst 'ENU=The %1 %2 exceeds the Quantity available to pick %3 of the %4.';
+
+    [External]
+    PROCEDURE DefWhseActLine@1(WhseActLine2@1000 : Record 5767);
+    BEGIN
+      WarehouseActivityLine.COPY(WhseActLine2);
+    END;
+
+    LOCAL PROCEDURE CheckUOM@2();
+    BEGIN
+      CLEAR(BinContent);
+      QtyChangeBase := 0;
+      QtyAvailBase := 0;
+      IF "Serial No." <> '' THEN
+        WarehouseActivityLine.TESTFIELD("Qty. per Unit of Measure",1);
+      BinContent."Qty. per Unit of Measure" := WarehouseActivityLine."Qty. per Unit of Measure";
+
+      QtyChangeBase := "Qty. to Handle (Base)";
+      IF "Action Type" = "Action Type"::Take THEN BEGIN
+        IF BinContent.GET(
+             "Location Code","Bin Code","Item No.",
+             "Variant Code",WarehouseActivityLine."Unit of Measure Code")
+        THEN BEGIN
+          QtyChangeBase := "Qty. to Handle (Base)";
+          IF "Activity Type" IN ["Activity Type"::Pick,"Activity Type"::"Invt. Pick","Activity Type"::"Invt. Movement"] THEN
+            QtyAvailBase := BinContent.CalcQtyAvailToPick(0)
+          ELSE
+            QtyAvailBase := BinContent.CalcQtyAvailToTake(0);
+          IF QtyAvailBase < QtyChangeBase THEN
+            ERROR(Text001,FIELDCAPTION("Qty. (Base)"),QtyChangeBase,BinContent.TABLECAPTION,FIELDCAPTION("Bin Code"))
+        END ELSE
+          ERROR(Text001,FIELDCAPTION("Qty. (Base)"),QtyChangeBase,BinContent.TABLECAPTION,FIELDCAPTION("Bin Code"));
+      END;
+
+      IF BinContent."Qty. per Unit of Measure" = WarehouseActivityLine."Qty. per Unit of Measure" THEN BEGIN
+        WarehouseActivityLine.VALIDATE(Quantity,"Qty. to Handle (Base)" / WarehouseActivityLine."Qty. per Unit of Measure");
+        WarehouseActivityLine.VALIDATE("Unit of Measure Code");
+      END ELSE BEGIN
+        WarehouseActivityLine.VALIDATE("Unit of Measure Code");
+        WarehouseActivityLine."Qty. per Unit of Measure" := BinContent."Qty. per Unit of Measure";
+        WarehouseActivityLine.VALIDATE(Quantity,"Qty. to Handle (Base)" / BinContent."Qty. per Unit of Measure");
+        WarehouseActivityLine.VALIDATE("Qty. Outstanding");
+        WarehouseActivityLine.VALIDATE("Qty. to Handle");
+      END;
+    END;
+
+    [External]
+    PROCEDURE ChangeUOMCode@3(VAR WhseActLine@1000 : Record 5767) ChangeUOM@1001 : Boolean;
+    BEGIN
+      WhseActLine := WarehouseActivityLine;
+      ChangeUOM := ChangeUOM2;
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

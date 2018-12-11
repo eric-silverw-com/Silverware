@@ -1,0 +1,175 @@
+OBJECT Codeunit 5060 DuplicateManagement
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:18 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=Duplicate Contacts were found. Would you like to process these?';
+      RMSetup@1001 : Record 5079;
+
+    [External]
+    PROCEDURE MakeContIndex@1(Cont@1000 : Record 5050);
+    VAR
+      DuplSearchStringSetup@1001 : Record 5095;
+    BEGIN
+      RMSetup.GET;
+
+      RemoveContIndex(Cont,TRUE);
+
+      IF DuplSearchStringSetup.FIND('-') THEN
+        REPEAT
+          InsDuplContIndex(Cont,DuplSearchStringSetup);
+        UNTIL DuplSearchStringSetup.NEXT = 0;
+
+      InsDuplCont(Cont,RMSetup."Search Hit %");
+    END;
+
+    [External]
+    PROCEDURE RemoveContIndex@2(Cont@1000 : Record 5050;KeepAccepted@1001 : Boolean);
+    VAR
+      DuplContSearchString@1002 : Record 5086;
+      DuplCont@1003 : Record 5085;
+    BEGIN
+      DuplContSearchString.SETRANGE("Contact Company No.",Cont."No.");
+      IF DuplContSearchString.FINDFIRST THEN
+        DuplContSearchString.DELETEALL;
+
+      DuplCont.FILTERGROUP(-1);
+      DuplCont.SETRANGE("Contact No.",Cont."No.");
+      DuplCont.SETRANGE("Duplicate Contact No.",Cont."No.");
+      DuplCont.FILTERGROUP(0);
+      IF KeepAccepted THEN
+        DuplCont.SETRANGE("Separate Contacts",FALSE);
+      DuplCont.DELETEALL(TRUE);
+    END;
+
+    [External]
+    PROCEDURE DuplicateExist@5(Cont@1000 : Record 5050) : Boolean;
+    VAR
+      DuplCont@1001 : Record 5085;
+    BEGIN
+      RMSetup.GET;
+      IF NOT RMSetup."Autosearch for Duplicates" THEN
+        EXIT(FALSE);
+      DuplCont.FILTERGROUP(-1);
+      DuplCont.SETRANGE("Contact No.",Cont."No.");
+      DuplCont.SETRANGE("Duplicate Contact No.",Cont."No.");
+      DuplCont.FILTERGROUP(0);
+      DuplCont.SETRANGE("Separate Contacts",FALSE);
+      EXIT(DuplCont.FIND('=<>'));
+    END;
+
+    [External]
+    PROCEDURE LaunchDuplicateForm@7(Cont@1000 : Record 5050);
+    VAR
+      DuplCont@1001 : Record 5085;
+    BEGIN
+      IF CONFIRM(Text000,TRUE) THEN BEGIN
+        DuplCont.SETRANGE("Contact No.",Cont."No.");
+        PAGE.RUNMODAL(PAGE::"Contact Duplicates",DuplCont);
+      END
+    END;
+
+    LOCAL PROCEDURE InsDuplContIndex@4(Cont@1000 : Record 5050;DuplSearchStringSetup@1001 : Record 5095);
+    VAR
+      DuplContSearchString@1002 : Record 5086;
+      ContactRecRef@1003 : RecordRef;
+    BEGIN
+      ContactRecRef.GETTABLE(Cont);
+
+      DuplContSearchString.INIT;
+      DuplContSearchString."Contact Company No." := Cont."No.";
+      DuplContSearchString."Field No." := DuplSearchStringSetup."Field No.";
+      DuplContSearchString."Part of Field" := DuplSearchStringSetup."Part of Field";
+      DuplContSearchString."Search String" :=
+        ComposeIndexString(
+          ContactRecRef,DuplContSearchString."Field No.",
+          DuplSearchStringSetup."Part of Field",DuplSearchStringSetup.Length);
+
+      IF DuplContSearchString."Search String" <> '' THEN
+        DuplContSearchString.INSERT;
+    END;
+
+    LOCAL PROCEDURE InsDuplCont@3(Cont@1000 : Record 5050;HitRatio@1001 : Integer);
+    VAR
+      DuplContSearchString@1002 : Record 5086;
+      DuplContSearchString2@1003 : Record 5086;
+      DuplCont@1004 : TEMPORARY Record 5085;
+      DuplCont2@1005 : Record 5085;
+      DuplSearchStringSetup@1006 : Record 5095;
+    BEGIN
+      DuplContSearchString.SETRANGE("Contact Company No.",Cont."No.");
+      IF DuplContSearchString.FIND('-') THEN
+        REPEAT
+          DuplContSearchString2.SETCURRENTKEY("Field No.","Part of Field","Search String");
+          DuplContSearchString2.SETRANGE("Field No.",DuplContSearchString."Field No.");
+          DuplContSearchString2.SETRANGE("Part of Field",DuplContSearchString."Part of Field");
+          DuplContSearchString2.SETRANGE("Search String",DuplContSearchString."Search String");
+          DuplContSearchString2.SETFILTER("Contact Company No.",'<>%1',DuplContSearchString."Contact Company No.");
+          IF DuplContSearchString2.FIND('-') THEN
+            REPEAT
+              IF DuplCont.GET(DuplContSearchString."Contact Company No.",DuplContSearchString2."Contact Company No.") THEN BEGIN
+                IF NOT DuplCont."Separate Contacts" THEN BEGIN
+                  DuplCont."No. of Matching Strings" := DuplCont."No. of Matching Strings" + 1;
+                  DuplCont.MODIFY;
+                END;
+              END ELSE BEGIN
+                DuplCont."Contact No." := DuplContSearchString."Contact Company No.";
+                DuplCont."Duplicate Contact No." := DuplContSearchString2."Contact Company No.";
+                DuplCont."Separate Contacts" := FALSE;
+                DuplCont."No. of Matching Strings" := 1;
+                DuplCont.INSERT;
+              END;
+            UNTIL DuplContSearchString2.NEXT = 0;
+        UNTIL DuplContSearchString.NEXT = 0;
+
+      DuplCont.SETFILTER("No. of Matching Strings",'>=%1',ROUND(DuplSearchStringSetup.COUNT * HitRatio / 100,1,'>'));
+      IF DuplCont.FIND('-') THEN BEGIN
+        REPEAT
+          DuplCont2 := DuplCont;
+          IF NOT DuplCont2.GET(DuplCont."Contact No.",DuplCont."Duplicate Contact No.") AND
+             NOT DuplCont2.GET(DuplCont."Duplicate Contact No.",DuplCont."Contact No.")
+          THEN
+            DuplCont2.INSERT(TRUE);
+        UNTIL DuplCont.NEXT = 0;
+        DuplCont.DELETEALL;
+      END;
+    END;
+
+    LOCAL PROCEDURE ComposeIndexString@6(VAR RecRef@1003 : RecordRef;FieldNo@1004 : Integer;Part@1001 : 'First,Last';ChrToCopy@1002 : Integer) : Text[10];
+    VAR
+      FieldRef@1005 : FieldRef;
+      InString@1000 : Text[260];
+    BEGIN
+      FieldRef := RecRef.FIELD(FieldNo);
+      InString := FORMAT(FieldRef.VALUE);
+      InString := DELCHR(InString,'=',' +"&/,.;:-_(){}#!œ$\');
+
+      IF STRLEN(InString) < ChrToCopy THEN
+        ChrToCopy := STRLEN(InString);
+
+      IF ChrToCopy > 0 THEN
+        IF Part = Part::First THEN
+          InString := COPYSTR(InString,1,ChrToCopy)
+        ELSE
+          InString := COPYSTR(InString,STRLEN(InString) - ChrToCopy + 1,ChrToCopy);
+
+      EXIT(UPPERCASE(InString));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

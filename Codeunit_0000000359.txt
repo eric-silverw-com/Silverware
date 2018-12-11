@@ -1,0 +1,233 @@
+OBJECT Codeunit 359 PeriodFormManagement
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:07:53 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=<Week>.<Year4>';
+      Text001@1001 : TextConst 'ENU=<Month Text,3> <Year4>';
+      Text002@1002 : TextConst 'ENU=<Quarter>/<Year4>';
+      Text003@1003 : TextConst 'ENU=<Year4>';
+      AccountingPeriod@1004 : Record 50;
+      AccountingPeriodMgt@1005 : Codeunit 360;
+
+    [External]
+    PROCEDURE FindDate@2(SearchString@1000 : Text[3];VAR Calendar@1001 : Record 2000000007;PeriodType@1002 : 'Day,Week,Month,Quarter,Year,Accounting Period') : Boolean;
+    VAR
+      Found@1003 : Boolean;
+    BEGIN
+      Calendar.SETRANGE("Period Type",PeriodType);
+      Calendar."Period Type" := PeriodType;
+      IF Calendar."Period Start" = 0D THEN
+        Calendar."Period Start" := WORKDATE;
+      IF SearchString IN ['','=><'] THEN
+        SearchString := '=<>';
+      IF PeriodType = PeriodType::"Accounting Period" THEN BEGIN
+        AccountingPeriod.SETRANGE("Starting Date");
+        IF AccountingPeriod.ISEMPTY THEN BEGIN
+          AccountingPeriodMgt.InitDefaultAccountingPeriod(AccountingPeriod,GetCalendarPeriodMinDate(Calendar));
+          Found := TRUE;
+        END ELSE BEGIN
+          SetAccountingPeriodFilter(Calendar);
+          Found := AccountingPeriod.FIND(SearchString);
+        END;
+        IF Found THEN
+          CopyAccountingPeriod(Calendar);
+      END ELSE BEGIN
+        Found := Calendar.FIND(SearchString);
+        IF Found THEN
+          Calendar."Period End" := NORMALDATE(Calendar."Period End");
+      END;
+      EXIT(Found);
+    END;
+
+    [External]
+    PROCEDURE NextDate@3(NextStep@1000 : Integer;VAR Calendar@1001 : Record 2000000007;PeriodType@1002 : 'Day,Week,Month,Quarter,Year,Accounting Period') : Integer;
+    BEGIN
+      Calendar.SETRANGE("Period Type",PeriodType);
+      Calendar."Period Type" := PeriodType;
+      IF PeriodType = PeriodType::"Accounting Period" THEN BEGIN
+        IF AccountingPeriod.ISEMPTY THEN
+          AccountingPeriodMgt.InitDefaultAccountingPeriod(AccountingPeriod,CALCDATE('<+1M>',GetCalendarPeriodMinDate(Calendar)))
+        ELSE BEGIN
+          SetAccountingPeriodFilter(Calendar);
+          NextStep := AccountingPeriod.NEXT(NextStep);
+        END;
+        IF NextStep <> 0 THEN
+          CopyAccountingPeriod(Calendar);
+      END ELSE BEGIN
+        NextStep := Calendar.NEXT(NextStep);
+        IF NextStep <> 0 THEN
+          Calendar."Period End" := NORMALDATE(Calendar."Period End");
+      END;
+      EXIT(NextStep);
+    END;
+
+    [External]
+    PROCEDURE CreatePeriodFormat@4(PeriodType@1000 : 'Day,Week,Month,Quarter,Year,Accounting Period';Date@1001 : Date) : Text[10];
+    BEGIN
+      CASE PeriodType OF
+        PeriodType::Day:
+          EXIT(FORMAT(Date));
+        PeriodType::Week:
+          BEGIN
+            IF DATE2DWY(Date,2) = 1 THEN
+              Date := Date + 7 - DATE2DWY(Date,1);
+            EXIT(FORMAT(Date,0,Text000));
+          END;
+        PeriodType::Month:
+          EXIT(FORMAT(Date,0,Text001));
+        PeriodType::Quarter:
+          EXIT(FORMAT(Date,0,Text002));
+        PeriodType::Year:
+          EXIT(FORMAT(Date,0,Text003));
+        PeriodType::"Accounting Period":
+          EXIT(FORMAT(Date));
+      END;
+    END;
+
+    [External]
+    PROCEDURE MoveDateByPeriod@1(Date@1001 : Date;PeriodType@1002 : Option;MoveByNoOfPeriods@1000 : Integer) : Date;
+    VAR
+      DateExpression@1003 : DateFormula;
+    BEGIN
+      EVALUATE(DateExpression,'<' + FORMAT(MoveByNoOfPeriods) + GetPeriodTypeSymbol(PeriodType) + '>');
+      EXIT(CALCDATE(DateExpression,Date));
+    END;
+
+    [External]
+    PROCEDURE MoveDateByPeriodToEndOfPeriod@8(Date@1001 : Date;PeriodType@1002 : Option;MoveByNoOfPeriods@1000 : Integer) : Date;
+    VAR
+      DateExpression@1003 : DateFormula;
+    BEGIN
+      EVALUATE(DateExpression,'<' + FORMAT(MoveByNoOfPeriods + 1) + GetPeriodTypeSymbol(PeriodType) + '-1D>');
+      EXIT(CALCDATE(DateExpression,Date));
+    END;
+
+    [External]
+    PROCEDURE GetPeriodTypeSymbol@7(PeriodType@1000 : Option) : Text[1];
+    VAR
+      Date@1001 : Record 2000000007;
+    BEGIN
+      CASE PeriodType OF
+        Date."Period Type"::Date:
+          EXIT('D');
+        Date."Period Type"::Week:
+          EXIT('W');
+        Date."Period Type"::Month:
+          EXIT('M');
+        Date."Period Type"::Quarter:
+          EXIT('Q');
+        Date."Period Type"::Year:
+          EXIT('Y');
+      END;
+    END;
+
+    LOCAL PROCEDURE SetAccountingPeriodFilter@5(VAR Calendar@1000 : Record 2000000007);
+    BEGIN
+      AccountingPeriod.SETFILTER("Starting Date",Calendar.GETFILTER("Period Start"));
+      AccountingPeriod.SETFILTER(Name,Calendar.GETFILTER("Period Name"));
+      AccountingPeriod."Starting Date" := Calendar."Period Start";
+    END;
+
+    LOCAL PROCEDURE GetCalendarPeriodMinDate@10(VAR Calendar@1000 : Record 2000000007) : Date;
+    BEGIN
+      IF Calendar.GETFILTER("Period Start") <> '' THEN
+        EXIT(Calendar.GETRANGEMIN("Period Start"));
+      EXIT(Calendar."Period Start");
+    END;
+
+    LOCAL PROCEDURE CopyAccountingPeriod@6(VAR Calendar@1000 : Record 2000000007);
+    BEGIN
+      Calendar.INIT;
+      Calendar."Period Start" := AccountingPeriod."Starting Date";
+      Calendar."Period Name" := AccountingPeriod.Name;
+      IF AccountingPeriod.ISEMPTY THEN
+        Calendar."Period End" := AccountingPeriodMgt.GetDefaultPeriodEndingDate(Calendar."Period Start")
+      ELSE
+        IF AccountingPeriod.NEXT = 0 THEN
+          Calendar."Period End" := DMY2DATE(31,12,9999)
+        ELSE
+          Calendar."Period End" := AccountingPeriod."Starting Date" - 1;
+    END;
+
+    [External]
+    PROCEDURE GetFullPeriodDateFilter@12(PeriodType@1003 : 'Day,Week,Month,Quarter,Year,Accounting Period';DateFilter@1000 : Text) : Text;
+    VAR
+      AccountingPeriod@1002 : Record 50;
+      Period@1001 : Record 2000000007;
+      StartDate@1004 : Date;
+      EndDate@1005 : Date;
+    BEGIN
+      IF DateFilter = '' THEN
+        EXIT(DateFilter);
+
+      Period.SETFILTER("Period Start",DateFilter);
+      StartDate := Period.GETRANGEMIN("Period Start");
+      EndDate := Period.GETRANGEMAX("Period Start");
+      CASE PeriodType OF
+        PeriodType::Week,
+        PeriodType::Month,
+        PeriodType::Quarter,
+        PeriodType::Year:
+          BEGIN
+            Period.SETRANGE("Period Type",PeriodType);
+            Period.SETFILTER("Period Start",'<=%1',StartDate);
+            Period.FINDLAST;
+            StartDate := Period."Period Start";
+            Period.SETRANGE("Period Start");
+            Period.SETFILTER("Period End",'>%1',EndDate);
+            Period.FINDFIRST;
+            EndDate := NORMALDATE(Period."Period End");
+          END;
+        PeriodType::"Accounting Period":
+          BEGIN
+            AccountingPeriod.SETFILTER("Starting Date",'<=%1',StartDate);
+            AccountingPeriod.FINDLAST;
+            StartDate := AccountingPeriod."Starting Date";
+            AccountingPeriod.SETFILTER("Starting Date",'>%1',EndDate);
+            AccountingPeriod.FINDFIRST;
+            EndDate := AccountingPeriod."Starting Date" - 1;
+          END;
+      END;
+      Period.SETRANGE("Period Start",StartDate,EndDate);
+      EXIT(Period.GETFILTER("Period Start"));
+    END;
+
+    [External]
+    PROCEDURE FindPeriodOnMatrixPage@9(VAR DateFilter@1004 : Text;VAR InternalDateFilter@1002 : Text;SearchText@1003 : Text[3];PeriodType@1005 : 'Day,Week,Month,Quarter,Year,Accounting Period';UpdateDateFilter@1008 : Boolean);
+    VAR
+      Item@1001 : Record 27;
+      Calendar@1000 : Record 2000000007;
+    BEGIN
+      IF DateFilter <> '' THEN BEGIN
+        Calendar.SETFILTER("Period Start",DateFilter);
+        IF NOT FindDate('+',Calendar,PeriodType) THEN
+          FindDate('+',Calendar,PeriodType::Day);
+        Calendar.SETRANGE("Period Start");
+      END;
+      FindDate(SearchText,Calendar,PeriodType);
+      Item.SETRANGE("Date Filter",Calendar."Period Start",Calendar."Period End");
+      IF Item.GETRANGEMIN("Date Filter") = Item.GETRANGEMAX("Date Filter") THEN
+        Item.SETRANGE("Date Filter",Item.GETRANGEMIN("Date Filter"));
+      InternalDateFilter := Item.GETFILTER("Date Filter");
+      IF UpdateDateFilter THEN
+        DateFilter := InternalDateFilter;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

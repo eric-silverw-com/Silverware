@@ -1,0 +1,238 @@
+OBJECT Report 9802 Copy Permission Set
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:13:25 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 9802=i;
+    CaptionML=ENU=Copy Permission Set;
+    ProcessingOnly=Yes;
+    OnPreReport=VAR
+                  PermissionPagesMgt@1000 : Codeunit 9001;
+                BEGIN
+                  PermissionPagesMgt.DisallowEditingPermissionSetsForNonAdminUsers;
+                END;
+
+    OnPostReport=BEGIN
+                   MESSAGE(CopySuccessMsg,InputRoleID);
+                 END;
+
+  }
+  DATASET
+  {
+    { 1   ;    ;DataItem;SourceAggregatePermissionSet;
+               DataItemTable=Table2000000167;
+               DataItemTableView=SORTING(Scope,App ID,Role ID);
+               OnPreDataItem=BEGIN
+                               AssertTargetPermissionSetRoleIDNotEmpty(InputRoleID);
+                               AssertTargetPermissionSetRoleIDNotExisting(InputRoleID);
+                               AssertSourcePermissionSetRoleIDExists(SourceAggregatePermissionSet);
+                               AssertSourcePermissionSetRoleIDOnlyOne(SourceAggregatePermissionSet);
+                             END;
+
+               OnAfterGetRecord=VAR
+                                  SourcePermission@1000 : Record 2000000005;
+                                  SourceTenantPermission@1001 : Record 2000000166;
+                                  PermissionSetLink@1002 : Record 9802;
+                                  SourcePermissionSet@1003 : Record 2000000004;
+                                BEGIN
+                                  CreateNewTenantPermissionSet(InputRoleID,Name);
+
+                                  CASE Scope OF
+                                    Scope::System:
+                                      BEGIN
+                                        SourcePermission.SETRANGE("Role ID","Role ID");
+                                        IF NOT SourcePermission.FINDSET THEN
+                                          EXIT;
+                                        REPEAT
+                                          CopyPermissionToNewTenantPermission(InputRoleID,SourcePermission);
+                                        UNTIL SourcePermission.NEXT = 0;
+                                        IF CreateLink THEN BEGIN
+                                          PermissionSetLink.INIT;
+                                          PermissionSetLink."Permission Set ID" := SourcePermission."Role ID";
+                                          PermissionSetLink."Linked Permission Set ID" := InputRoleID;
+                                          SourcePermissionSet.GET("Role ID");
+                                          PermissionSetLink."Source Hash" := SourcePermissionSet.Hash;
+                                          PermissionSetLink.INSERT;
+                                        END;
+                                      END;
+                                    Scope::Tenant:
+                                      BEGIN
+                                        SourceTenantPermission.SETRANGE("App ID","App ID");
+                                        SourceTenantPermission.SETRANGE("Role ID","Role ID");
+                                        IF SourceTenantPermission.FINDSET THEN
+                                          REPEAT
+                                            CopyTenantPermissionToNewTenantPermission(InputRoleID,SourceTenantPermission);
+                                          UNTIL SourceTenantPermission.NEXT = 0;
+                                      END;
+                                  END;
+                                END;
+                                 }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      OnOpenPage=VAR
+                   TypeHelper@1000 : Codeunit 10;
+                   PermissionPagesMgt@1003 : Codeunit 9001;
+                   RecordRef@1001 : RecordRef;
+                   FieldRef@1002 : FieldRef;
+                   IsScopeSystem@1004 : Boolean;
+                 BEGIN
+                   RecordRef.GETTABLE(SourceAggregatePermissionSet);
+                   FieldRef := RecordRef.FIELD(SourceAggregatePermissionSet.FIELDNO(Scope));
+                   IsScopeSystem :=
+                     TypeHelper.GetOptionNo(SourceAggregatePermissionSet.GETFILTER(Scope),FieldRef.OPTIONSTRING) =
+                     SourceAggregatePermissionSet.Scope::System;
+                   IsCreateLinkEnabled := IsScopeSystem AND PermissionPagesMgt.AppDbPermissionChangedNotificationEnabled;
+                   // defaulting value of flag
+                   CreateLink := IsCreateLinkEnabled;
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 3   ;0   ;Container ;
+                  ContainerType=ContentArea }
+
+      { 1   ;1   ;Group     ;
+                  CaptionML=ENU=Options }
+
+      { 2   ;2   ;Field     ;
+                  Name=NewPermissionSet;
+                  CaptionML=ENU=New Permission Set;
+                  ToolTipML=ENU=Specifies the name of the new permission set after copying.;
+                  ApplicationArea=#Basic,#Suite;
+                  NotBlank=Yes;
+                  SourceExpr=InputRoleID }
+
+      { 4   ;2   ;Field     ;
+                  CaptionML=ENU=Notify on Changed Permission Set;
+                  ToolTipML=ENU=Specifies if you want to be notified when the original System permission set is changed. Note: This option is only enabled if the related notification is enabled.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=CreateLink;
+                  Enabled=IsCreateLinkEnabled }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      InputRoleID@1000 : Code[20];
+      CopySuccessMsg@1005 : TextConst '@@@=New permission set, D365 Basic Set, has been created.;ENU=New permission set, %1, has been created.';
+      MissingSourceErr@1004 : TextConst 'ENU=There is no permission set to copy from.';
+      MultipleSourcesErr@1003 : TextConst 'ENU=You can only copy one permission set at a time.';
+      TargetExistsErr@1002 : TextConst 'ENU=The new permission set already exists.';
+      TargetNameMissingErr@1001 : TextConst 'ENU=You must specify a name for the new permission set.';
+      CreateLink@1006 : Boolean INDATASET;
+      IsCreateLinkEnabled@1007 : Boolean INDATASET;
+
+    [External]
+    PROCEDURE GetNewRoleID@3() : Code[20];
+    BEGIN
+      EXIT(InputRoleID);
+    END;
+
+    LOCAL PROCEDURE AssertTargetPermissionSetRoleIDNotEmpty@1(TargetPermissionSetRoleID@1000 : Code[20]);
+    BEGIN
+      IF TargetPermissionSetRoleID = '' THEN
+        ERROR(TargetNameMissingErr);
+    END;
+
+    LOCAL PROCEDURE AssertTargetPermissionSetRoleIDNotExisting@10(TargetPermissionSetRoleID@1000 : Code[20]);
+    VAR
+      AggregatePermissionSet@1001 : Record 2000000167;
+    BEGIN
+      AggregatePermissionSet.SETRANGE("Role ID",TargetPermissionSetRoleID);
+      IF NOT AggregatePermissionSet.ISEMPTY THEN
+        ERROR(TargetExistsErr);
+    END;
+
+    LOCAL PROCEDURE AssertSourcePermissionSetRoleIDExists@11(VAR FromAggregatePermissionSet@1000 : Record 2000000167);
+    VAR
+      AggregatePermissionSet@1001 : Record 2000000167;
+    BEGIN
+      AggregatePermissionSet.COPYFILTERS(FromAggregatePermissionSet);
+      IF AggregatePermissionSet.ISEMPTY THEN
+        ERROR(MissingSourceErr);
+    END;
+
+    LOCAL PROCEDURE AssertSourcePermissionSetRoleIDOnlyOne@12(VAR FromAggregatePermissionSet@1000 : Record 2000000167);
+    VAR
+      AggregatePermissionSet@1001 : Record 2000000167;
+    BEGIN
+      AggregatePermissionSet.COPYFILTERS(FromAggregatePermissionSet);
+      IF AggregatePermissionSet.COUNT > 1 THEN
+        ERROR(MultipleSourcesErr);
+    END;
+
+    LOCAL PROCEDURE CreateNewTenantPermissionSet@2(NewRoleID@1002 : Code[20];FromAggregatePermissionSetName@1001 : Text[30]);
+    VAR
+      TenantPermissionSet@1000 : Record 2000000165;
+      ZeroGUID@1003 : GUID;
+    BEGIN
+      IF TenantPermissionSet.GET(ZeroGUID,NewRoleID) THEN
+        EXIT;
+
+      TenantPermissionSet.INIT;
+      TenantPermissionSet."App ID" := ZeroGUID;
+      TenantPermissionSet."Role ID" := NewRoleID;
+      TenantPermissionSet.Name := FromAggregatePermissionSetName;
+      TenantPermissionSet.INSERT;
+    END;
+
+    LOCAL PROCEDURE CopyPermissionToNewTenantPermission@4(NewRoleID@1002 : Code[20];FromPermission@1001 : Record 2000000005);
+    VAR
+      TenantPermission@1000 : Record 2000000166;
+      ZeroGUID@1003 : GUID;
+    BEGIN
+      IF TenantPermission.GET(ZeroGUID,NewRoleID,FromPermission."Object Type",FromPermission."Object ID") THEN
+        EXIT;
+
+      TenantPermission.INIT;
+      TenantPermission."App ID" := ZeroGUID;
+      TenantPermission."Role ID" := NewRoleID;
+      TenantPermission."Object Type" := FromPermission."Object Type";
+      TenantPermission."Object ID" := FromPermission."Object ID";
+      TenantPermission."Read Permission" := FromPermission."Read Permission";
+      TenantPermission."Insert Permission" := FromPermission."Insert Permission";
+      TenantPermission."Modify Permission" := FromPermission."Modify Permission";
+      TenantPermission."Delete Permission" := FromPermission."Delete Permission";
+      TenantPermission."Execute Permission" := FromPermission."Execute Permission";
+      TenantPermission."Security Filter" := FromPermission."Security Filter";
+      TenantPermission.INSERT;
+    END;
+
+    LOCAL PROCEDURE CopyTenantPermissionToNewTenantPermission@6(NewRoleID@1002 : Code[20];FromTenantPermission@1001 : Record 2000000166);
+    VAR
+      TenantPermission@1000 : Record 2000000166;
+      ZeroGUID@1003 : GUID;
+    BEGIN
+      IF TenantPermission.GET(
+           FromTenantPermission."App ID",NewRoleID,FromTenantPermission."Object Type",FromTenantPermission."Object ID")
+      THEN
+        EXIT;
+
+      TenantPermission := FromTenantPermission;
+      TenantPermission."App ID" := ZeroGUID;
+      TenantPermission."Role ID" := NewRoleID;
+      TenantPermission.INSERT;
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

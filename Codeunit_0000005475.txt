@@ -1,0 +1,126 @@
+OBJECT Codeunit 5475 Graph Mgt - Sales Invoice
+{
+  OBJECT-PROPERTIES
+  {
+    Date=;
+    Time=;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 112=rimd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    PROCEDURE ProcessComplexTypes@1(VAR SalesInvoiceEntityAggregate@1000 : Record 5475;BillToAddressJSON@1001 : Text);
+    BEGIN
+      ParseBillToCustomerAddressFromJSON(BillToAddressJSON,SalesInvoiceEntityAggregate);
+    END;
+
+    PROCEDURE ParseBillToCustomerAddressFromJSON@10(BillToAddressJSON@1000 : Text;VAR SalesInvoiceEntityAggregate@1002 : Record 5475);
+    VAR
+      GraphMgtComplexTypes@1003 : Codeunit 5468;
+      RecRef@1001 : RecordRef;
+    BEGIN
+      IF BillToAddressJSON <> '' THEN
+        WITH SalesInvoiceEntityAggregate DO BEGIN
+          RecRef.GETTABLE(SalesInvoiceEntityAggregate);
+          GraphMgtComplexTypes.ApplyPostalAddressFromJSON(BillToAddressJSON,RecRef,
+            FIELDNO("Sell-to Address"),FIELDNO("Sell-to Address 2"),FIELDNO("Sell-to City"),FIELDNO("Sell-to County"),
+            FIELDNO("Sell-to Country/Region Code"),FIELDNO("Sell-to Post Code"));
+          RecRef.SETTABLE(SalesInvoiceEntityAggregate);
+        END;
+    END;
+
+    PROCEDURE BillToCustomerAddressToJSON@5(SalesInvoiceEntityAggregate@1000 : Record 5475) JSON : Text;
+    VAR
+      GraphMgtComplexTypes@1001 : Codeunit 5468;
+    BEGIN
+      WITH SalesInvoiceEntityAggregate DO
+        GraphMgtComplexTypes.GetPostalAddressJSON("Sell-to Address","Sell-to Address 2",
+          "Sell-to City","Sell-to County","Sell-to Country/Region Code","Sell-to Post Code",JSON);
+    END;
+
+    PROCEDURE UpdateIntegrationRecordIds@34(OnlyRecordsWithoutID@1007 : Boolean);
+    VAR
+      DummySalesInvoiceEntityAggregate@1001 : Record 5475;
+      DummyCustomer@1005 : Record 18;
+      GraphMgtGeneralTools@1008 : Codeunit 5465;
+      SalesInvoiceHeaderRecordRef@1002 : RecordRef;
+      SalesHeaderRecordRef@1000 : RecordRef;
+      CustomerRecordRef@1004 : RecordRef;
+    BEGIN
+      CustomerRecordRef.OPEN(DATABASE::Customer);
+      GraphMgtGeneralTools.UpdateIntegrationRecords(
+        CustomerRecordRef,DummyCustomer.FIELDNO(Id),TRUE);
+
+      SalesHeaderRecordRef.OPEN(DATABASE::"Sales Header");
+      GraphMgtGeneralTools.UpdateIntegrationRecords(
+        SalesHeaderRecordRef,DummySalesInvoiceEntityAggregate.FIELDNO(Id),OnlyRecordsWithoutID);
+
+      SalesInvoiceHeaderRecordRef.OPEN(DATABASE::"Sales Invoice Header");
+      GraphMgtGeneralTools.UpdateIntegrationRecords(
+        SalesInvoiceHeaderRecordRef,DummySalesInvoiceEntityAggregate.FIELDNO(Id),OnlyRecordsWithoutID);
+    END;
+
+    LOCAL PROCEDURE CheckSupportedTable@3(VAR RecRef@1000 : RecordRef) : Boolean;
+    VAR
+      SalesHeader@1002 : Record 36;
+    BEGIN
+      CASE RecRef.NUMBER OF
+        DATABASE::"Sales Invoice Header":
+          EXIT(TRUE);
+        DATABASE::"Sales Header":
+          BEGIN
+            RecRef.SETTABLE(SalesHeader);
+            EXIT(SalesHeader."Document Type" = SalesHeader."Document Type"::Invoice);
+          END;
+        ELSE
+          EXIT(FALSE);
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,5150,OnUpdateReferencedIdField)]
+    LOCAL PROCEDURE HandleUpdateReferencedIdFieldOnSalesInvoiceHeader@19(VAR RecRef@1000 : RecordRef;NewId@1001 : GUID;VAR Handled@1002 : Boolean);
+    VAR
+      DummySalesInvoiceEntityAggregate@1004 : Record 5475;
+      GraphMgtGeneralTools@1003 : Codeunit 5465;
+    BEGIN
+      IF NOT CheckSupportedTable(RecRef) THEN
+        EXIT;
+
+      GraphMgtGeneralTools.HandleUpdateReferencedIdFieldOnItem(
+        RecRef,NewId,Handled,RecRef.NUMBER,DummySalesInvoiceEntityAggregate.FIELDNO(Id));
+    END;
+
+    [EventSubscriber(Codeunit,5150,OnGetPredefinedIdValue)]
+    LOCAL PROCEDURE HandleGetPredefinedIdValue@21(VAR Id@1000 : GUID;VAR RecRef@1001 : RecordRef;VAR Handled@1002 : Boolean);
+    VAR
+      DummySalesInvoiceEntityAggregate@1004 : Record 5475;
+      GraphMgtGeneralTools@1007 : Codeunit 5465;
+    BEGIN
+      IF NOT CheckSupportedTable(RecRef) THEN
+        EXIT;
+
+      GraphMgtGeneralTools.HandleGetPredefinedIdValue(
+        Id,RecRef,Handled,RecRef.NUMBER,DummySalesInvoiceEntityAggregate.FIELDNO(Id));
+    END;
+
+    [EventSubscriber(Codeunit,5465,ApiSetup)]
+    PROCEDURE HandleApiSetup@2();
+    VAR
+      SalesInvoiceAggregator@1000 : Codeunit 5477;
+    BEGIN
+      UpdateIntegrationRecordIds(FALSE);
+      SalesInvoiceAggregator.UpdateAggregateTableRecords;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

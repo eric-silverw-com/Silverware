@@ -1,0 +1,355 @@
+OBJECT Codeunit 1651 Exchange PowerShell Runner
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:13 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      TempOfficeAdminCredentials@1008 : TEMPORARY Record 1612;
+      PSRunner@1007 : DotNet "'Microsoft.Dynamics.Nav.PowerShellRunner, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.PowerShellRunner";
+      PSInitialized@1002 : Boolean;
+      AppNotRemovedErr@1019 : TextConst '@@@=A GUID representing the Office add-in.;ENU=The application %1 was not removed as expected. Please remove the application manually from the Exchange Admin Center.';
+      AppDoesntExistMsg@1018 : TextConst 'ENU=The application is not deployed to Exchange.';
+      NotInitializedErr@1026 : TextConst 'ENU=The PowerShell Runner is not initialized.';
+      ConnectionFailureErr@1000 : TextConst '@@@=A URL for an Exchange endpoint that NAV is attempting to connect to.;ENU=A connection could not be established to the Exchange endpoint at %1. Please verify connection details and try again.';
+
+    [TryFunction]
+    PROCEDURE InitializePSRunner@3();
+    BEGIN
+      IF NOT PSInitialized THEN BEGIN
+        // If there was an issue with credentials, send it up back to the calling function.
+        IF NOT PromptForCredentials THEN BEGIN
+          ResetInitialization;
+          ERROR(GETLASTERRORTEXT);
+        END;
+
+        IF UseKerberos THEN
+          TempOfficeAdminCredentials.Email := ConvertEmailToDomainUsername(TempOfficeAdminCredentials.Email);
+
+        IF NOT CreateExchangePSRunner(PSRunner,TempOfficeAdminCredentials,UseKerberos) THEN
+          ERROR(GETLASTERRORTEXT);
+      END;
+      PSInitialized := TRUE;
+    END;
+
+    [External]
+    PROCEDURE SetCredentials@4(UserName@1000 : Text[80];Password@1001 : Text[30]);
+    BEGIN
+      IF TempOfficeAdminCredentials.ISEMPTY THEN
+        TempOfficeAdminCredentials.INIT;
+
+      TempOfficeAdminCredentials.Email := UserName;
+
+      IF NOT TempOfficeAdminCredentials.MODIFY THEN
+        TempOfficeAdminCredentials.INSERT(TRUE);
+
+      TempOfficeAdminCredentials.SavePassword(Password);
+
+      COMMIT;
+    END;
+
+    [External]
+    PROCEDURE GetCredentials@2(VAR TempUserOfficeAdminCredentials@1000 : TEMPORARY Record 1612);
+    BEGIN
+      TempUserOfficeAdminCredentials.COPY(TempOfficeAdminCredentials);
+    END;
+
+    [TryFunction]
+    PROCEDURE ValidateCredentials@5();
+    VAR
+      ErrorMessage@1000 : Text;
+    BEGIN
+      IF NOT PSInitialized THEN
+        ERROR(NotInitializedErr);
+
+      IF NOT RunNullCommand THEN
+        IF (TempOfficeAdminCredentials.Endpoint = O365PSEndpoint) AND NOT ValidateO365CredentialsWithEWS THEN
+          ErrorMessage := GETLASTERRORTEXT
+        ELSE
+          ErrorMessage := STRSUBSTNO(ConnectionFailureErr,TempOfficeAdminCredentials.Endpoint);
+
+      IF ErrorMessage <> '' THEN BEGIN
+        ResetInitialization;
+        ERROR(ErrorMessage);
+      END
+    END;
+
+    [External]
+    PROCEDURE SetEndpoint@1(Endpoint@1000 : Text[250]);
+    BEGIN
+      IF TempOfficeAdminCredentials.ISEMPTY THEN
+        TempOfficeAdminCredentials.INIT;
+
+      TempOfficeAdminCredentials.Endpoint := Endpoint;
+
+      IF NOT TempOfficeAdminCredentials.MODIFY(TRUE) THEN
+        TempOfficeAdminCredentials.INSERT(TRUE);
+      COMMIT;
+    END;
+
+    [TryFunction]
+    [External]
+    PROCEDURE PromptForCredentials@11();
+    BEGIN
+      IF TempOfficeAdminCredentials.ISEMPTY THEN BEGIN
+        TempOfficeAdminCredentials.INIT;
+        TempOfficeAdminCredentials.INSERT(TRUE);
+        PAGE.RUNMODAL(PAGE::"Office Admin. Credentials",TempOfficeAdminCredentials);
+      END;
+
+      IF (NOT TempOfficeAdminCredentials.FINDFIRST) OR
+         (TempOfficeAdminCredentials.Email = '') OR (TempOfficeAdminCredentials.GetPassword = '')
+      THEN BEGIN
+        TempOfficeAdminCredentials.DELETEALL(TRUE);
+        ERROR('');
+      END;
+    END;
+
+    LOCAL PROCEDURE UseKerberos@7() : Boolean;
+    BEGIN
+      EXIT(TempOfficeAdminCredentials.Endpoint <> DefaultPSEndpoint)
+    END;
+
+    LOCAL PROCEDURE ConvertEmailToDomainUsername@29(User@1000 : Text[80]) : Text[80];
+    VAR
+      Username@1002 : Text;
+      Domain@1003 : Text;
+      AtPos@1004 : Integer;
+    BEGIN
+      AtPos := STRPOS(User,'@');
+      IF AtPos = 0 THEN
+        EXIT(User);
+
+      Domain := COPYSTR(User,AtPos + 1);
+      Username := COPYSTR(User,1,AtPos - 1);
+      EXIT(STRSUBSTNO('%1\%2',Domain,Username));
+    END;
+
+    [External]
+    PROCEDURE DefaultPSEndpoint@16() : Text[250];
+    BEGIN
+      EXIT(TempOfficeAdminCredentials.DefaultEndpoint);
+    END;
+
+    [External]
+    PROCEDURE O365PSEndpoint@9() : Text[250];
+    BEGIN
+      EXIT(TempOfficeAdminCredentials.DefaultEndpoint);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE CreateExchangePSRunner@41(VAR PSRunnerObj@1005 : DotNet "'Microsoft.Dynamics.Nav.PowerShellRunner, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.PowerShellRunner";VAR OfficeAdminCredentials@1003 : Record 1612;UseKerberos@1004 : Boolean);
+    VAR
+      NetworkCredential@1001 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.NetworkCredential";
+      Uri@1000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Uri";
+      PSCred@1002 : DotNet "'System.Management.Automation, Version=3.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.System.Management.Automation.PSCredential";
+    BEGIN
+      PSRunnerObj := PSRunnerObj.CreateInSandbox;
+      NetworkCredential :=
+        NetworkCredential.NetworkCredential(OfficeAdminCredentials.Email,OfficeAdminCredentials.GetPassword);
+      PSCred := PSCred.PSCredential(FORMAT(NetworkCredential.UserName),NetworkCredential.SecurePassword);
+
+      PSRunnerObj.SetExchangeRemoteConnectionInformation(
+        PSCred,Uri.Uri(OfficeAdminCredentials.Endpoint),'Microsoft.Exchange',UseKerberos);
+    END;
+
+    [External]
+    PROCEDURE ResetInitialization@35();
+    BEGIN
+      TempOfficeAdminCredentials.DELETEALL;
+      CLEAR(TempOfficeAdminCredentials);
+      PSInitialized := FALSE;
+      COMMIT;
+    END;
+
+    [TryFunction]
+    PROCEDURE GetApp@31(AppID@1000 : Text;VAR ReturnObject@1001 : DotNet "'Microsoft.Dynamics.Nav.PowerShellRunner, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.PSObjectAdapter");
+    VAR
+      Enum@1002 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.IEnumerator";
+    BEGIN
+      IF NOT PSInitialized THEN
+        ERROR(NotInitializedErr);
+
+      AddCommand('Get-App',TRUE);
+      AddParameterFlag('OrganizationApp');
+      AddParameter('Identity',FORMAT(AppID));
+      Invoke;
+      GetResultEnumerator(Enum);
+
+      IF Enum.MoveNext THEN BEGIN
+        ReturnObject := ReturnObject.PSObjectAdapter;
+        ReturnObject.PSObject := Enum.Current;
+      END
+    END;
+
+    PROCEDURE RemoveApp@30(AppID@1000 : Text);
+    BEGIN
+      IF NOT PSInitialized THEN
+        ERROR(NotInitializedErr);
+
+      IF NOT TryRemoveApp(AppID) THEN BEGIN
+        ResetInitialization;
+        ERROR(GETLASTERRORTEXT);
+      END;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryRemoveApp@33(AppId@1000 : Text);
+    VAR
+      AppObject@1001 : DotNet "'Microsoft.Dynamics.Nav.PowerShellRunner, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.PSObjectAdapter";
+      ValidationAppObject@1002 : DotNet "'Microsoft.Dynamics.Nav.PowerShellRunner, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.PSObjectAdapter";
+    BEGIN
+      // If, for any reason, we cannot connect, re-throw the error
+      IF NOT GetApp(AppId,AppObject) THEN
+        ERROR(GETLASTERRORTEXT);
+
+      // If the add-in is not in Exchange, there's nothing to remove
+      IF ISNULL(AppObject) THEN BEGIN
+        MESSAGE(AppDoesntExistMsg);
+        EXIT;
+      END;
+
+      AddCommand('Remove-App',TRUE);
+      AddParameter('Identity',AppId);
+      AddParameterFlag('OrganizationApp');
+      AddParameter('Confirm',TRUE);
+      Invoke;
+
+      // Force PSRunner's async call to complete
+      AwaitCompletion;
+
+      // Validate that the app was removed, if not, display an error to the user
+      GetApp(AppId,ValidationAppObject);
+      IF NOT ISNULL(ValidationAppObject) THEN
+        ERROR(AppNotRemovedErr,AppId);
+    END;
+
+    PROCEDURE NewApp@24(VAR ManifestBytes@1000 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array";DefaultEnabledState@1001 : Text;EnabledState@1002 : Text;ProvisionMode@1003 : Text) : Boolean;
+    VAR
+      Enum@1007 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.IEnumerator";
+    BEGIN
+      IF NOT PSInitialized THEN
+        ERROR(NotInitializedErr);
+
+      AddCommand('New-App',TRUE);
+      AddParameter('FileData',ManifestBytes);
+
+      // If these are set, set them in PS, otherwise omit them (and keep the existing values in the case of redeployment)
+      IF DefaultEnabledState <> '' THEN
+        AddParameter('DefaultStateForUser',DefaultEnabledState);
+      IF ProvisionMode <> '' THEN
+        AddParameter('ProvidedTo',ProvisionMode);
+      EnabledState := UPPERCASE(EnabledState);
+      IF EnabledState <> '' THEN
+        IF EnabledState = 'TRUE' THEN
+          AddParameter('Enabled',TRUE)
+        ELSE
+          IF EnabledState = 'FALSE' THEN
+            AddParameter('Enabled',FALSE);
+
+      // Ensure this is an organization-wide app
+      AddParameter('OrganizationApp',TRUE);
+
+      Invoke;
+
+      // If we have an object coming back, the app was successfully installed
+      GetResultEnumerator(Enum);
+      IF Enum.MoveNext THEN
+        EXIT(TRUE);
+
+      // If we did not get an object back, the app was not successfully installed
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE AddCommand@14(Command@1000 : Text;LocalScope@1001 : Boolean);
+    BEGIN
+      IF NOT PSInitialized THEN
+        ERROR(NotInitializedErr);
+
+      PSRunner.AddCommand(Command,LocalScope);
+    END;
+
+    PROCEDURE AddParameter@15(Name@1000 : Text;Value@1001 : Variant);
+    BEGIN
+      IF NOT PSInitialized THEN
+        ERROR(NotInitializedErr);
+
+      PSRunner.AddParameter(Name,Value);
+    END;
+
+    PROCEDURE AddParameterFlag@28(Name@1000 : Text);
+    BEGIN
+      IF NOT PSInitialized THEN
+        ERROR(NotInitializedErr);
+
+      PSRunner.AddParameter(Name);
+    END;
+
+    PROCEDURE Invoke@17();
+    BEGIN
+      IF NOT PSInitialized THEN
+        ERROR(NotInitializedErr);
+
+      PSRunner.BeginInvoke;
+    END;
+
+    PROCEDURE AwaitCompletion@21();
+    BEGIN
+      IF NOT PSInitialized THEN
+        ERROR(NotInitializedErr);
+
+      PSRunner.Results;
+    END;
+
+    PROCEDURE GetResultEnumerator@26(VAR Enumerator@1002 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.IEnumerator");
+    BEGIN
+      IF NOT PSInitialized THEN
+        ERROR(NotInitializedErr);
+
+      Enumerator := PSRunner.Results.GetEnumerator;
+    END;
+
+    PROCEDURE RemoveRemoteConnectionInformation@27();
+    BEGIN
+      IF PSInitialized THEN
+        PSRunner.RemoveRemoteConnectionInformation;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE RunNullCommand@6();
+    BEGIN
+      AddCommand(';',TRUE);
+      Invoke;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE ValidateO365CredentialsWithEWS@8();
+    VAR
+      ExchangeAddinSetup@1000 : Codeunit 5323;
+    BEGIN
+      IF NOT ExchangeAddinSetup.InitializeServiceWithCredentials(TempOfficeAdminCredentials.Email,
+           TempOfficeAdminCredentials.GetPassword)
+      THEN
+        ERROR(GETLASTERRORTEXT);
+    END;
+
+    PROCEDURE ClearLog@10();
+    BEGIN
+      PSRunner.ClearLog;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

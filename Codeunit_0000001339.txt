@@ -1,0 +1,459 @@
+OBJECT Codeunit 1339 Cancel Posted Sales Cr. Memo
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:09 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    TableNo=114;
+    Permissions=TableData 112=rm,
+                TableData 114=rm;
+    OnRun=VAR
+            SalesHeader@1001 : Record 36;
+          BEGIN
+            UnapplyEntries(Rec);
+            CreateCopyDocument(Rec,SalesHeader);
+
+            CODEUNIT.RUN(CODEUNIT::"Sales-Post",SalesHeader);
+            SetTrackInfoForCancellation(Rec);
+
+            COMMIT;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      AlreadyCancelledErr@1000 : TextConst 'ENU=You cannot cancel this posted sales credit memo because it has already been canceled.';
+      NotCorrectiveDocErr@1005 : TextConst 'ENU=You cannot cancel this posted sales credit memo because it is not a corrective document.';
+      CustomerIsBlockedCancelErr@1016 : TextConst '@@@="%1 = Customer name";ENU=You cannot cancel this posted sales credit memo because customer %1 is blocked.';
+      ItemIsBlockedCancelErr@1017 : TextConst '@@@="%1 = Item No. %2 = Item Description";ENU=You cannot cancel this posted sales credit memo because item %1 %2 is blocked.';
+      AccountIsBlockedCancelErr@1025 : TextConst '@@@="%1 = Table Caption %2 = Account number.";ENU=You cannot cancel this posted sales credit memo because %1 %2 is blocked.';
+      NoFreeInvoiceNoSeriesCancelErr@1026 : TextConst 'ENU=You cannot cancel this posted sales credit memo because no unused invoice numbers are available. \\You must extend the range of the number series for sales invoices.';
+      NoFreePostInvSeriesCancelErr@1029 : TextConst 'ENU=You cannot cancel this posted sales credit memo because no unused posted invoice numbers are available. \\You must extend the range of the number series for posted invoices.';
+      PostingNotAllowedCancelErr@1033 : TextConst 'ENU=You cannot cancel this posted sales credit memo because it was posted in a posting period that is closed.';
+      InvalidDimCodeCancelErr@1038 : TextConst '@@@="%1 = Table caption %2 = Account number %3 = Item no. %4 = Item description.";ENU=You cannot cancel this posted sales credit memo because the dimension rule setup for account ''%1'' %2 prevents %3 %4 from being canceled.';
+      InvalidDimCombinationCancelErr@1039 : TextConst '@@@="%1 = Item no. %2 = Item description.";ENU=You cannot cancel this posted sales credit memo because the dimension combination for item %1 %2 is not allowed.';
+      InvalidDimCombHeaderCancelErr@1035 : TextConst 'ENU=You cannot cancel this posted sales credit memo because the combination of dimensions on the credit memo is blocked.';
+      ExternalDocCancelErr@1040 : TextConst 'ENU=You cannot cancel this posted sales credit memo because the external document number is required on the credit memo.';
+      InventoryPostClosedCancelErr@1042 : TextConst 'ENU=You cannot cancel this posted sales credit memo because the inventory period is already closed.';
+      PostingCreditMemoFailedOpenPostedInvQst@1020 : TextConst '@@@="%1 = error text";ENU=Canceling the credit memo failed because of the following error: \\%1\\An invoice is posted. Do you want to open the posted invoice?';
+      PostingCreditMemoFailedOpenInvQst@1021 : TextConst '@@@="%1 = error text";ENU=Canceling the credit memo failed because of the following error: \\%1\\An invoice is created but not posted. Do you want to open the invoice?';
+      CreatingInvFailedNothingCreatedErr@1022 : TextConst '@@@="%1 = error text";ENU=Canceling the credit memo failed because of the following error: \\%1.';
+      ErrorType@1024 : 'CustomerBlocked,ItemBlocked,AccountBlocked,IsAppliedIncorrectly,IsUnapplied,IsCanceled,IsCorrected,SerieNumInv,SerieNumPostInv,FromOrder,PostingNotAllowed,DimErr,DimCombErr,DimCombHeaderErr,ExtDocErr,InventoryPostClosed';
+      UnappliedErr@1001 : TextConst 'ENU=You cannot cancel this posted sales credit memo because it is fully or partially applied.\\To reverse an applied sales credit memo, you must manually unapply all applied entries.';
+      NotAppliedCorrectlyErr@1002 : TextConst 'ENU=You cannot cancel this posted sales credit memo because it is not fully applied to an invoice.';
+
+    PROCEDURE CancelPostedCrMemo@13(VAR SalesCrMemoHeader@1000 : Record 114) : Boolean;
+    VAR
+      SalesHeader@1004 : Record 36;
+      SalesInvHeader@1005 : Record 112;
+    BEGIN
+      TestCorrectCrMemoIsAllowed(SalesCrMemoHeader);
+      IF NOT CODEUNIT.RUN(CODEUNIT::"Cancel Posted Sales Cr. Memo",SalesCrMemoHeader) THEN BEGIN
+        SalesInvHeader.SETRANGE("Applies-to Doc. No.",SalesCrMemoHeader."No.");
+        IF SalesInvHeader.FINDFIRST THEN BEGIN
+          IF CONFIRM(STRSUBSTNO(PostingCreditMemoFailedOpenPostedInvQst,GETLASTERRORTEXT)) THEN
+            PAGE.RUN(PAGE::"Posted Sales Invoice",SalesInvHeader);
+        END ELSE BEGIN
+          SalesHeader.SETRANGE("Applies-to Doc. No.",SalesCrMemoHeader."No.");
+          IF SalesHeader.FINDFIRST THEN BEGIN
+            IF CONFIRM(STRSUBSTNO(PostingCreditMemoFailedOpenInvQst,GETLASTERRORTEXT)) THEN
+              PAGE.RUN(PAGE::"Sales Invoice",SalesHeader);
+          END ELSE
+            ERROR(CreatingInvFailedNothingCreatedErr,GETLASTERRORTEXT);
+        END;
+        EXIT(FALSE);
+      END;
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CreateCopyDocument@11(VAR SalesCrMemoHeader@1000 : Record 114;VAR SalesHeader@1001 : Record 36);
+    VAR
+      CopyDocMgt@1003 : Codeunit 6620;
+    BEGIN
+      CLEAR(SalesHeader);
+      SalesHeader."No." := '';
+      SalesHeader."Document Type" := SalesHeader."Document Type"::Invoice;
+      SalesHeader.INSERT(TRUE);
+      CopyDocMgt.SetPropertiesForInvoiceCorrection(FALSE);
+      CopyDocMgt.CopySalesDocForCrMemoCancelling(SalesCrMemoHeader."No.",SalesHeader);
+    END;
+
+    [External]
+    PROCEDURE TestCorrectCrMemoIsAllowed@5(VAR SalesCrMemoHeader@1000 : Record 114);
+    BEGIN
+      TestIfPostingIsAllowed(SalesCrMemoHeader);
+      TestIfCustomerIsBlocked(SalesCrMemoHeader,SalesCrMemoHeader."Sell-to Customer No.");
+      TestIfCustomerIsBlocked(SalesCrMemoHeader,SalesCrMemoHeader."Bill-to Customer No.");
+      TestIfInvoiceIsCorrectedOnce(SalesCrMemoHeader);
+      TestIfCrMemoIsCorrectiveDoc(SalesCrMemoHeader);
+      TestCustomerDimension(SalesCrMemoHeader,SalesCrMemoHeader."Bill-to Customer No.");
+      TestDimensionOnHeader(SalesCrMemoHeader);
+      TestSalesLines(SalesCrMemoHeader);
+      TestIfAnyFreeNumberSeries(SalesCrMemoHeader);
+      TestExternalDocument(SalesCrMemoHeader);
+      TestInventoryPostingClosed(SalesCrMemoHeader);
+    END;
+
+    LOCAL PROCEDURE SetTrackInfoForCancellation@2(VAR SalesCrMemoHeader@1000 : Record 114);
+    VAR
+      SalesInvHeader@1001 : Record 112;
+      CancelledDocument@1003 : Record 1900;
+    BEGIN
+      SalesInvHeader.SETRANGE("Applies-to Doc. No.",SalesCrMemoHeader."No.");
+      IF SalesInvHeader.FINDLAST THEN
+        CancelledDocument.InsertSalesCrMemoToInvCancelledDocument(SalesCrMemoHeader."No.",SalesInvHeader."No.");
+    END;
+
+    LOCAL PROCEDURE TestDimensionOnHeader@15(SalesCrMemoHeader@1002 : Record 114);
+    VAR
+      DimensionManagement@1001 : Codeunit 408;
+    BEGIN
+      IF NOT DimensionManagement.CheckDimIDComb(SalesCrMemoHeader."Dimension Set ID") THEN
+        ErrorHelperHeader(ErrorType::DimCombHeaderErr,SalesCrMemoHeader);
+    END;
+
+    LOCAL PROCEDURE TestIfCustomerIsBlocked@3(SalesCrMemoHeader@1002 : Record 114;CustNo@1000 : Code[20]);
+    VAR
+      Customer@1001 : Record 18;
+    BEGIN
+      Customer.GET(CustNo);
+      IF Customer.Blocked IN [Customer.Blocked::Invoice,Customer.Blocked::All] THEN
+        ErrorHelperHeader(ErrorType::CustomerBlocked,SalesCrMemoHeader);
+    END;
+
+    LOCAL PROCEDURE TestIfAppliedCorrectly@4(SalesCrMemoHeader@1000 : Record 114;CustLedgEntry@1001 : Record 21);
+    VAR
+      DetailedCustLedgEntry@1002 : Record 379;
+      PartiallyApplied@1003 : Boolean;
+    BEGIN
+      CustLedgEntry.CALCFIELDS(Amount,"Remaining Amount");
+      PartiallyApplied :=
+        ((CustLedgEntry.Amount <> CustLedgEntry."Remaining Amount") AND (CustLedgEntry."Remaining Amount" <> 0));
+      IF (CalcDtldCustLedgEntryCount(DetailedCustLedgEntry."Entry Type"::"Initial Entry",CustLedgEntry."Entry No.") <> 1) OR
+         (NOT (CalcDtldCustLedgEntryCount(DetailedCustLedgEntry."Entry Type"::Application,CustLedgEntry."Entry No.") IN [0,1])) OR
+         AnyDtldCustLedgEntriesExceptInitialAndApplicaltionExists(CustLedgEntry."Entry No.") OR
+         PartiallyApplied
+      THEN
+        ErrorHelperHeader(ErrorType::IsAppliedIncorrectly,SalesCrMemoHeader);
+    END;
+
+    LOCAL PROCEDURE TestIfUnapplied@7(SalesCrMemoHeader@1000 : Record 114);
+    BEGIN
+      SalesCrMemoHeader.CALCFIELDS("Amount Including VAT");
+      SalesCrMemoHeader.CALCFIELDS("Remaining Amount");
+      IF SalesCrMemoHeader."Amount Including VAT" <> -SalesCrMemoHeader."Remaining Amount" THEN
+        ErrorHelperHeader(ErrorType::IsUnapplied,SalesCrMemoHeader);
+    END;
+
+    LOCAL PROCEDURE TestCustomerDimension@9(SalesCrMemoHeader@1006 : Record 114;CustNo@1000 : Code[20]);
+    VAR
+      Customer@1001 : Record 18;
+      DimensionManagement@1004 : Codeunit 408;
+      TableID@1002 : ARRAY [10] OF Integer;
+      No@1003 : ARRAY [10] OF Code[20];
+    BEGIN
+      Customer.GET(CustNo);
+      TableID[1] := DATABASE::Customer;
+      No[1] := Customer."No.";
+      IF NOT DimensionManagement.CheckDimValuePosting(TableID,No,SalesCrMemoHeader."Dimension Set ID") THEN
+        ErrorHelperAccount(ErrorType::DimErr,Customer.TABLECAPTION,Customer."No.",Customer."No.",Customer.Name);
+    END;
+
+    LOCAL PROCEDURE TestSalesLines@6(SalesCrMemoHeader@1003 : Record 114);
+    VAR
+      SalesCrMemoLine@1001 : Record 115;
+      Item@1002 : Record 27;
+      DimensionManagement@1007 : Codeunit 408;
+      TableID@1013 : ARRAY [10] OF Integer;
+      No@1014 : ARRAY [10] OF Code[20];
+    BEGIN
+      SalesCrMemoLine.SETRANGE("Document No.",SalesCrMemoHeader."No.");
+      IF SalesCrMemoLine.FIND('-') THEN
+        REPEAT
+          IF NOT IsCommentLine(SalesCrMemoLine) THEN BEGIN
+            IF SalesCrMemoLine.Type = SalesCrMemoLine.Type::Item THEN BEGIN
+              Item.GET(SalesCrMemoLine."No.");
+
+              IF Item.Blocked THEN
+                ErrorHelperLine(ErrorType::ItemBlocked,SalesCrMemoLine);
+
+              TableID[1] := DATABASE::Item;
+              No[1] := SalesCrMemoLine."No.";
+              IF NOT DimensionManagement.CheckDimValuePosting(TableID,No,SalesCrMemoLine."Dimension Set ID") THEN
+                ErrorHelperAccount(ErrorType::DimErr,Item.TABLECAPTION,No[1],Item."No.",Item.Description);
+
+              IF Item.Type = Item.Type::Inventory THEN
+                TestInventoryPostingSetup(SalesCrMemoLine);
+            END;
+
+            TestGenPostingSetup(SalesCrMemoLine);
+            TestCustomerPostingGroup(SalesCrMemoLine,SalesCrMemoHeader."Customer Posting Group");
+            TestVATPostingSetup(SalesCrMemoLine);
+
+            IF NOT DimensionManagement.CheckDimIDComb(SalesCrMemoLine."Dimension Set ID") THEN
+              ErrorHelperLine(ErrorType::DimCombErr,SalesCrMemoLine);
+          END;
+        UNTIL SalesCrMemoLine.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE TestGLAccount@21(AccountNo@1000 : Code[20];SalesCrMemoLine@1005 : Record 115);
+    VAR
+      GLAccount@1001 : Record 15;
+      Item@1006 : Record 27;
+      DimensionManagement@1004 : Codeunit 408;
+      TableID@1002 : ARRAY [10] OF Integer;
+      No@1003 : ARRAY [10] OF Code[20];
+    BEGIN
+      GLAccount.GET(AccountNo);
+      IF GLAccount.Blocked THEN
+        ErrorHelperAccount(ErrorType::AccountBlocked,GLAccount.TABLECAPTION,AccountNo,'','');
+      TableID[1] := DATABASE::"G/L Account";
+      No[1] := AccountNo;
+
+      IF SalesCrMemoLine.Type = SalesCrMemoLine.Type::Item THEN BEGIN
+        Item.GET(SalesCrMemoLine."No.");
+        IF NOT DimensionManagement.CheckDimValuePosting(TableID,No,SalesCrMemoLine."Dimension Set ID") THEN
+          ErrorHelperAccount(ErrorType::DimErr,GLAccount.TABLECAPTION,AccountNo,Item."No.",Item.Description);
+      END;
+    END;
+
+    LOCAL PROCEDURE TestIfInvoiceIsCorrectedOnce@1(SalesCrMemoHeader@1001 : Record 114);
+    VAR
+      CancelledDocument@1000 : Record 1900;
+    BEGIN
+      IF CancelledDocument.FindSalesCancelledCrMemo(SalesCrMemoHeader."No.") THEN
+        ErrorHelperHeader(ErrorType::IsCorrected,SalesCrMemoHeader);
+    END;
+
+    LOCAL PROCEDURE TestIfCrMemoIsCorrectiveDoc@10(SalesCrMemoHeader@1000 : Record 114);
+    VAR
+      CancelledDocument@1001 : Record 1900;
+    BEGIN
+      IF NOT CancelledDocument.FindSalesCorrectiveCrMemo(SalesCrMemoHeader."No.") THEN
+        ErrorHelperHeader(ErrorType::IsCanceled,SalesCrMemoHeader);
+    END;
+
+    LOCAL PROCEDURE TestIfPostingIsAllowed@12(SalesCrMemoHeader@1000 : Record 114);
+    VAR
+      GenJnlCheckLine@1001 : Codeunit 11;
+    BEGIN
+      IF GenJnlCheckLine.DateNotAllowed(SalesCrMemoHeader."Posting Date") THEN
+        ErrorHelperHeader(ErrorType::PostingNotAllowed,SalesCrMemoHeader);
+    END;
+
+    LOCAL PROCEDURE TestIfAnyFreeNumberSeries@14(SalesCrMemoHeader@1004 : Record 114);
+    VAR
+      SalesReceivablesSetup@1001 : Record 311;
+      NoSeriesManagement@1002 : Codeunit 396;
+      PostingDate@1000 : Date;
+    BEGIN
+      PostingDate := WORKDATE;
+      SalesReceivablesSetup.GET;
+
+      IF NoSeriesManagement.TryGetNextNo(SalesReceivablesSetup."Invoice Nos.",PostingDate) = '' THEN
+        ErrorHelperHeader(ErrorType::SerieNumInv,SalesCrMemoHeader);
+
+      IF NoSeriesManagement.TryGetNextNo(SalesReceivablesSetup."Posted Invoice Nos.",PostingDate) = '' THEN
+        ErrorHelperHeader(ErrorType::SerieNumPostInv,SalesCrMemoHeader);
+    END;
+
+    LOCAL PROCEDURE TestExternalDocument@8(SalesCrMemoHeader@1002 : Record 114);
+    VAR
+      SalesReceivablesSetup@1001 : Record 311;
+    BEGIN
+      SalesReceivablesSetup.GET;
+      IF (SalesCrMemoHeader."External Document No." = '') AND SalesReceivablesSetup."Ext. Doc. No. Mandatory" THEN
+        ErrorHelperHeader(ErrorType::ExtDocErr,SalesCrMemoHeader);
+    END;
+
+    LOCAL PROCEDURE TestInventoryPostingClosed@26(SalesCrMemoHeader@1002 : Record 114);
+    VAR
+      InventoryPeriod@1001 : Record 5814;
+    BEGIN
+      InventoryPeriod.SETRANGE(Closed,TRUE);
+      InventoryPeriod.SETFILTER("Ending Date",'>=%1',SalesCrMemoHeader."Posting Date");
+      IF InventoryPeriod.FINDFIRST THEN
+        ErrorHelperHeader(ErrorType::InventoryPostClosed,SalesCrMemoHeader);
+    END;
+
+    LOCAL PROCEDURE TestGenPostingSetup@20(SalesCrMemoLine@1000 : Record 115);
+    VAR
+      GenPostingSetup@1001 : Record 252;
+    BEGIN
+      WITH GenPostingSetup DO BEGIN
+        GET(SalesCrMemoLine."Gen. Bus. Posting Group",SalesCrMemoLine."Gen. Prod. Posting Group");
+        TESTFIELD("Sales Account");
+        TestGLAccount("Sales Account",SalesCrMemoLine);
+        TESTFIELD("Sales Credit Memo Account");
+        TestGLAccount("Sales Credit Memo Account",SalesCrMemoLine);
+        TESTFIELD("Sales Line Disc. Account");
+        TestGLAccount("Sales Line Disc. Account",SalesCrMemoLine);
+        IF SalesCrMemoLine.Type = SalesCrMemoLine.Type::Item THEN BEGIN
+          TESTFIELD("COGS Account");
+          TestGLAccount("COGS Account",SalesCrMemoLine);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE TestCustomerPostingGroup@27(SalesCrMemoLine@1000 : Record 115;CustomerPostingGr@1002 : Code[20]);
+    VAR
+      CustomerPostingGroup@1001 : Record 92;
+    BEGIN
+      WITH CustomerPostingGroup DO BEGIN
+        GET(CustomerPostingGr);
+        TESTFIELD("Receivables Account");
+        TestGLAccount("Receivables Account",SalesCrMemoLine);
+      END;
+    END;
+
+    LOCAL PROCEDURE TestVATPostingSetup@29(SalesCrMemoLine@1000 : Record 115);
+    VAR
+      VATPostingSetup@1001 : Record 325;
+    BEGIN
+      WITH VATPostingSetup DO BEGIN
+        GET(SalesCrMemoLine."VAT Bus. Posting Group",SalesCrMemoLine."VAT Prod. Posting Group");
+        IF "VAT Calculation Type" <> "VAT Calculation Type"::"Sales Tax" THEN BEGIN
+          TESTFIELD("Sales VAT Account");
+          TestGLAccount("Sales VAT Account",SalesCrMemoLine);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE TestInventoryPostingSetup@39(SalesCrMemoLine@1002 : Record 115);
+    VAR
+      InventoryPostingSetup@1001 : Record 5813;
+    BEGIN
+      WITH InventoryPostingSetup DO BEGIN
+        GET(SalesCrMemoLine."Location Code",SalesCrMemoLine."Posting Group");
+        TESTFIELD("Inventory Account");
+        TestGLAccount("Inventory Account",SalesCrMemoLine);
+      END;
+    END;
+
+    LOCAL PROCEDURE UnapplyEntries@17(SalesCrMemoHeader@1000 : Record 114);
+    VAR
+      CustLedgEntry@1002 : Record 21;
+      DetailedCustLedgEntry@1001 : Record 379;
+      CustEntryApplyPostedEntries@1006 : Codeunit 226;
+    BEGIN
+      FindCustLedgEntry(CustLedgEntry,SalesCrMemoHeader."No.");
+      TestIfAppliedCorrectly(SalesCrMemoHeader,CustLedgEntry);
+      IF CustLedgEntry.Open THEN
+        EXIT;
+
+      FindDetailedApplicationEntry(DetailedCustLedgEntry,CustLedgEntry);
+      CustEntryApplyPostedEntries.PostUnApplyCustomer(
+        DetailedCustLedgEntry,DetailedCustLedgEntry."Document No.",DetailedCustLedgEntry."Posting Date");
+      TestIfUnapplied(SalesCrMemoHeader);
+    END;
+
+    LOCAL PROCEDURE FindCustLedgEntry@34(VAR CustLedgEntry@1000 : Record 21;DocNo@1001 : Code[20]);
+    BEGIN
+      CustLedgEntry.SETRANGE("Document Type",CustLedgEntry."Document Type"::"Credit Memo");
+      CustLedgEntry.SETRANGE("Document No.",DocNo);
+      CustLedgEntry.FINDLAST;
+    END;
+
+    LOCAL PROCEDURE FindDetailedApplicationEntry@25(VAR DetailedCustLedgEntry@1000 : Record 379;CustLedgEntry@1001 : Record 21);
+    BEGIN
+      DetailedCustLedgEntry.SETRANGE("Entry Type",DetailedCustLedgEntry."Entry Type"::Application);
+      DetailedCustLedgEntry.SETRANGE("Customer No.",CustLedgEntry."Customer No.");
+      DetailedCustLedgEntry.SETRANGE("Document No.",CustLedgEntry."Document No.");
+      DetailedCustLedgEntry.SETRANGE("Cust. Ledger Entry No.",CustLedgEntry."Entry No.");
+      DetailedCustLedgEntry.SETRANGE(Unapplied,FALSE);
+      DetailedCustLedgEntry.FINDFIRST;
+    END;
+
+    LOCAL PROCEDURE AnyDtldCustLedgEntriesExceptInitialAndApplicaltionExists@19(CustLedgEntryNo@1000 : Integer) : Boolean;
+    VAR
+      DetailedCustLedgEntry@1001 : Record 379;
+    BEGIN
+      DetailedCustLedgEntry.SETFILTER(
+        "Entry Type",'<>%1&<>%2',DetailedCustLedgEntry."Entry Type"::"Initial Entry",DetailedCustLedgEntry."Entry Type"::Application);
+      DetailedCustLedgEntry.SETRANGE("Cust. Ledger Entry No.",CustLedgEntryNo);
+      EXIT(NOT DetailedCustLedgEntry.ISEMPTY);
+    END;
+
+    LOCAL PROCEDURE CalcDtldCustLedgEntryCount@30(EntryType@1000 : Option;CustLedgEntryNo@1001 : Integer) : Integer;
+    VAR
+      DetailedCustLedgEntry@1002 : Record 379;
+    BEGIN
+      DetailedCustLedgEntry.SETRANGE("Entry Type",EntryType);
+      DetailedCustLedgEntry.SETRANGE("Cust. Ledger Entry No.",CustLedgEntryNo);
+      DetailedCustLedgEntry.SETRANGE(Unapplied,FALSE);
+      EXIT(DetailedCustLedgEntry.COUNT);
+    END;
+
+    LOCAL PROCEDURE IsCommentLine@18(SalesCrMemoLine@1001 : Record 115) : Boolean;
+    BEGIN
+      EXIT((SalesCrMemoLine.Type = SalesCrMemoLine.Type::" ") OR (SalesCrMemoLine."No." = ''));
+    END;
+
+    LOCAL PROCEDURE ErrorHelperHeader@22(ErrorOption@1000 : Option;SalesCrMemoHeader@1001 : Record 114);
+    VAR
+      Customer@1003 : Record 18;
+    BEGIN
+      CASE ErrorOption OF
+        ErrorType::CustomerBlocked:
+          BEGIN
+            Customer.GET(SalesCrMemoHeader."Bill-to Customer No.");
+            ERROR(CustomerIsBlockedCancelErr,Customer.Name);
+          END;
+        ErrorType::IsAppliedIncorrectly:
+          ERROR(NotAppliedCorrectlyErr);
+        ErrorType::IsUnapplied:
+          ERROR(UnappliedErr);
+        ErrorType::IsCorrected:
+          ERROR(AlreadyCancelledErr);
+        ErrorType::IsCanceled:
+          ERROR(NotCorrectiveDocErr);
+        ErrorType::SerieNumInv:
+          ERROR(NoFreeInvoiceNoSeriesCancelErr);
+        ErrorType::SerieNumPostInv:
+          ERROR(NoFreePostInvSeriesCancelErr);
+        ErrorType::PostingNotAllowed:
+          ERROR(PostingNotAllowedCancelErr);
+        ErrorType::ExtDocErr:
+          ERROR(ExternalDocCancelErr);
+        ErrorType::InventoryPostClosed:
+          ERROR(InventoryPostClosedCancelErr);
+        ErrorType::DimCombHeaderErr:
+          ERROR(InvalidDimCombHeaderCancelErr);
+      END
+    END;
+
+    LOCAL PROCEDURE ErrorHelperLine@23(ErrorOption@1000 : Option;SalesCrMemoLine@1001 : Record 115);
+    VAR
+      Item@1002 : Record 27;
+    BEGIN
+      CASE ErrorOption OF
+        ErrorType::ItemBlocked:
+          BEGIN
+            Item.GET(SalesCrMemoLine."No.");
+            ERROR(ItemIsBlockedCancelErr,Item."No.",Item.Description);
+          END;
+        ErrorType::DimCombErr:
+          ERROR(InvalidDimCombinationCancelErr,SalesCrMemoLine."No.",SalesCrMemoLine.Description);
+      END
+    END;
+
+    LOCAL PROCEDURE ErrorHelperAccount@24(ErrorOption@1000 : Option;AccountNo@1001 : Code[20];AccountCaption@1002 : Text;No@1003 : Code[20];Name@1004 : Text);
+    BEGIN
+      CASE ErrorOption OF
+        ErrorType::AccountBlocked:
+          ERROR(AccountIsBlockedCancelErr,AccountCaption,AccountNo);
+        ErrorType::DimErr:
+          ERROR(InvalidDimCodeCancelErr,AccountCaption,AccountNo,No,Name);
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

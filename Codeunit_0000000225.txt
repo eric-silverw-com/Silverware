@@ -1,0 +1,432 @@
+OBJECT Codeunit 225 Gen. Jnl.-Apply
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:07:51 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    TableNo=81;
+    OnRun=VAR
+            CustLedgEntry@1001 : Record 21;
+            VendLedgEntry@1002 : Record 25;
+            IsHandled@1000 : Boolean;
+          BEGIN
+            GenJnlLine.COPY(Rec);
+
+            IsHandled := FALSE;
+            OnBeforeRun(GenJnlLine,IsHandled);
+            IF IsHandled THEN
+              EXIT;
+
+            WITH GenJnlLine DO BEGIN
+              GetCurrency;
+              IF "Bal. Account Type" IN
+                 ["Bal. Account Type"::Customer,"Bal. Account Type"::Vendor,"Bal. Account Type"::Employee]
+              THEN BEGIN
+                AccType := "Bal. Account Type";
+                AccNo := "Bal. Account No.";
+              END ELSE BEGIN
+                AccType := "Account Type";
+                AccNo := "Account No.";
+              END;
+              CASE AccType OF
+                AccType::Customer:
+                  BEGIN
+                    OK := SelectCustLedgEntry(GenJnlLine);
+                    IF NOT OK THEN
+                      EXIT;
+
+                    CustLedgEntry.RESET;
+                    CustLedgEntry.SETCURRENTKEY("Customer No.",Open,Positive);
+                    CustLedgEntry.SETRANGE("Customer No.",AccNo);
+                    CustLedgEntry.SETRANGE(Open,TRUE);
+                    CustLedgEntry.SETRANGE("Applies-to ID","Applies-to ID");
+                    IF CustLedgEntry.FIND('-') THEN BEGIN
+                      CurrencyCode2 := CustLedgEntry."Currency Code";
+                      IF Amount = 0 THEN BEGIN
+                        REPEAT
+                          PaymentToleranceMgt.DelPmtTolApllnDocNo(GenJnlLine,CustLedgEntry."Document No.");
+                          CheckAgainstApplnCurrency(CurrencyCode2,CustLedgEntry."Currency Code",AccType::Customer,TRUE);
+                          UpdateCustLedgEntry(CustLedgEntry);
+                          IsHandled := FALSE;
+                          OnBeforeFindCustApply(GenJnlLine,CustLedgEntry,Amount,IsHandled);
+                          IF NOT IsHandled THEN
+                            IF PaymentToleranceMgt.CheckCalcPmtDiscGenJnlCust(Rec,CustLedgEntry,0,FALSE) AND
+                               (ABS(CustLedgEntry."Amount to Apply") >=
+                                ABS(CustLedgEntry."Remaining Amount" - CustLedgEntry."Remaining Pmt. Disc. Possible"))
+                            THEN
+                              Amount := Amount - (CustLedgEntry."Amount to Apply" - CustLedgEntry."Remaining Pmt. Disc. Possible")
+                            ELSE
+                              Amount := Amount - CustLedgEntry."Amount to Apply";
+                        UNTIL CustLedgEntry.NEXT = 0;
+                        IF ("Bal. Account Type" = "Bal. Account Type"::Customer) OR ("Bal. Account Type" = "Bal. Account Type"::Vendor) THEN
+                          Amount := -Amount;
+                        VALIDATE(Amount);
+                      END ELSE
+                        REPEAT
+                          CheckAgainstApplnCurrency(CurrencyCode2,CustLedgEntry."Currency Code",AccType::Customer,TRUE);
+                        UNTIL CustLedgEntry.NEXT = 0;
+                      IF "Currency Code" <> CurrencyCode2 THEN
+                        IF Amount = 0 THEN BEGIN
+                          IF NOT CONFIRM(ConfirmChangeQst,TRUE,TABLECAPTION,"Currency Code",CustLedgEntry."Currency Code") THEN
+                            ERROR(UpdateInterruptedErr);
+                          "Currency Code" := CustLedgEntry."Currency Code"
+                        END ELSE
+                          CheckAgainstApplnCurrency("Currency Code",CustLedgEntry."Currency Code",AccType::Customer,TRUE);
+                      "Applies-to Doc. Type" := 0;
+                      "Applies-to Doc. No." := '';
+                    END ELSE
+                      "Applies-to ID" := '';
+                    MODIFY;
+                    IF Rec.Amount <> 0 THEN
+                      IF NOT PaymentToleranceMgt.PmtTolGenJnl(GenJnlLine) THEN
+                        EXIT;
+                  END;
+                AccType::Vendor:
+                  BEGIN
+                    OK := SelectVendLedgEntry(GenJnlLine);
+                    IF NOT OK THEN
+                      EXIT;
+
+                    VendLedgEntry.RESET;
+                    VendLedgEntry.SETCURRENTKEY("Vendor No.",Open,Positive);
+                    VendLedgEntry.SETRANGE("Vendor No.",AccNo);
+                    VendLedgEntry.SETRANGE(Open,TRUE);
+                    VendLedgEntry.SETRANGE("Applies-to ID","Applies-to ID");
+                    IF VendLedgEntry.FIND('-') THEN BEGIN
+                      CurrencyCode2 := VendLedgEntry."Currency Code";
+                      IF Amount = 0 THEN BEGIN
+                        REPEAT
+                          PaymentToleranceMgt.DelPmtTolApllnDocNo(GenJnlLine,VendLedgEntry."Document No.");
+                          CheckAgainstApplnCurrency(CurrencyCode2,VendLedgEntry."Currency Code",AccType::Vendor,TRUE);
+                          UpdateVendLedgEntry(VendLedgEntry);
+                          IsHandled := FALSE;
+                          OnBeforeFindVendApply(GenJnlLine,VendLedgEntry,Amount,IsHandled);
+                          IF NOT IsHandled THEN
+                            IF PaymentToleranceMgt.CheckCalcPmtDiscGenJnlVend(Rec,VendLedgEntry,0,FALSE) AND
+                               (ABS(VendLedgEntry."Amount to Apply") >=
+                                ABS(VendLedgEntry."Remaining Amount" - VendLedgEntry."Remaining Pmt. Disc. Possible"))
+                            THEN
+                              Amount := Amount - (VendLedgEntry."Amount to Apply" - VendLedgEntry."Remaining Pmt. Disc. Possible")
+                            ELSE
+                              Amount := Amount - VendLedgEntry."Amount to Apply";
+                        UNTIL VendLedgEntry.NEXT = 0;
+                        IF ("Bal. Account Type" = "Bal. Account Type"::Customer) OR ("Bal. Account Type" = "Bal. Account Type"::Vendor) THEN
+                          Amount := -Amount;
+                        VALIDATE(Amount);
+                      END ELSE
+                        REPEAT
+                          CheckAgainstApplnCurrency(CurrencyCode2,VendLedgEntry."Currency Code",AccType::Vendor,TRUE);
+                        UNTIL VendLedgEntry.NEXT = 0;
+                      IF "Currency Code" <> CurrencyCode2 THEN
+                        IF Amount = 0 THEN BEGIN
+                          IF NOT CONFIRM(ConfirmChangeQst,TRUE,TABLECAPTION,"Currency Code",VendLedgEntry."Currency Code") THEN
+                            ERROR(UpdateInterruptedErr);
+                          "Currency Code" := VendLedgEntry."Currency Code"
+                        END ELSE
+                          CheckAgainstApplnCurrency("Currency Code",VendLedgEntry."Currency Code",AccType::Vendor,TRUE);
+                      "Applies-to Doc. Type" := 0;
+                      "Applies-to Doc. No." := '';
+                    END ELSE
+                      "Applies-to ID" := '';
+                    MODIFY;
+                    IF Rec.Amount <> 0 THEN
+                      IF NOT PaymentToleranceMgt.PmtTolGenJnl(GenJnlLine) THEN
+                        EXIT;
+                  END;
+                AccType::Employee:
+                  ApplyEmployeeLedgerEntry(GenJnlLine);
+                ELSE
+                  ERROR(
+                    Text005,
+                    FIELDCAPTION("Account Type"),FIELDCAPTION("Bal. Account Type"));
+              END;
+            END;
+            OnAfterRun(GenJnlLine);
+
+            Rec := GenJnlLine;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=You must specify %1 or %2.';
+      ConfirmChangeQst@1001 : TextConst '@@@="%1 = Table Name, %2 and %3 = Currency Code";ENU=CurrencyCode in the %1 will be changed from %2 to %3.\Do you wish to continue?';
+      UpdateInterruptedErr@1003 : TextConst 'ENU=The update has been interrupted to respect the warning.';
+      Text005@1004 : TextConst 'ENU=The %1 or %2 must be Customer or Vendor.';
+      Text006@1005 : TextConst 'ENU=All entries in one application must be in the same currency.';
+      Text007@1006 : TextConst 'ENU="All entries in one application must be in the same currency or one or more of the EMU currencies. "';
+      GenJnlLine@1008 : Record 81;
+      GLSetup@1011 : Record 98;
+      Currency@1012 : Record 4;
+      CurrExchRate@1020 : Record 330;
+      PaymentToleranceMgt@1007 : Codeunit 426;
+      AccNo@1016 : Code[20];
+      CurrencyCode2@1017 : Code[10];
+      OK@1018 : Boolean;
+      AccType@1019 : 'G/L Account,Customer,Vendor,Bank Account,Fixed Asset,IC Partner,Employee';
+
+    LOCAL PROCEDURE SelectCustLedgEntry@8(VAR GenJnlLine@1000 : Record 81) OK : Boolean;
+    VAR
+      CustLedgEntry@1002 : Record 21;
+      ApplyCustEntries@1001 : Page 232;
+    BEGIN
+      WITH GenJnlLine DO BEGIN
+        CustLedgEntry.SETCURRENTKEY("Customer No.",Open,Positive);
+        CustLedgEntry.SETRANGE("Customer No.",AccNo);
+        CustLedgEntry.SETRANGE(Open,TRUE);
+        IF "Applies-to ID" = '' THEN
+          "Applies-to ID" := "Document No.";
+        IF "Applies-to ID" = '' THEN
+          ERROR(
+            Text000,
+            FIELDCAPTION("Document No."),FIELDCAPTION("Applies-to ID"));
+        ApplyCustEntries.SetGenJnlLine(GenJnlLine,FIELDNO("Applies-to ID"));
+        ApplyCustEntries.SETRECORD(CustLedgEntry);
+        ApplyCustEntries.SETTABLEVIEW(CustLedgEntry);
+        ApplyCustEntries.LOOKUPMODE(TRUE);
+        OK := ApplyCustEntries.RUNMODAL = ACTION::LookupOK;
+        CLEAR(ApplyCustEntries);
+      END;
+    END;
+
+    LOCAL PROCEDURE SelectVendLedgEntry@9(VAR GenJnlLine@1000 : Record 81) OK : Boolean;
+    VAR
+      VendLedgEntry@1002 : Record 25;
+      ApplyVendEntries@1001 : Page 233;
+    BEGIN
+      WITH GenJnlLine DO BEGIN
+        VendLedgEntry.SETCURRENTKEY("Vendor No.",Open,Positive);
+        VendLedgEntry.SETRANGE("Vendor No.",AccNo);
+        VendLedgEntry.SETRANGE(Open,TRUE);
+        IF "Applies-to ID" = '' THEN
+          "Applies-to ID" := "Document No.";
+        IF "Applies-to ID" = '' THEN
+          ERROR(
+            Text000,
+            FIELDCAPTION("Document No."),FIELDCAPTION("Applies-to ID"));
+        ApplyVendEntries.SetGenJnlLine(GenJnlLine,FIELDNO("Applies-to ID"));
+        ApplyVendEntries.SETRECORD(VendLedgEntry);
+        ApplyVendEntries.SETTABLEVIEW(VendLedgEntry);
+        ApplyVendEntries.LOOKUPMODE(TRUE);
+        OK := ApplyVendEntries.RUNMODAL = ACTION::LookupOK;
+        CLEAR(ApplyVendEntries);
+      END;
+    END;
+
+    LOCAL PROCEDURE SelectEmplLedgEntry@10(VAR GenJnlLine@1000 : Record 81) OK : Boolean;
+    VAR
+      EmplLedgEntry@1002 : Record 5222;
+      ApplyEmplEntries@1001 : Page 234;
+    BEGIN
+      WITH GenJnlLine DO BEGIN
+        EmplLedgEntry.SETCURRENTKEY("Employee No.",Open,Positive);
+        EmplLedgEntry.SETRANGE("Employee No.",AccNo);
+        EmplLedgEntry.SETRANGE(Open,TRUE);
+        IF "Applies-to ID" = '' THEN
+          "Applies-to ID" := "Document No.";
+        IF "Applies-to ID" = '' THEN
+          ERROR(
+            Text000,
+            FIELDCAPTION("Document No."),FIELDCAPTION("Applies-to ID"));
+        ApplyEmplEntries.SetGenJnlLine(GenJnlLine,FIELDNO("Applies-to ID"));
+        ApplyEmplEntries.SETRECORD(EmplLedgEntry);
+        ApplyEmplEntries.SETTABLEVIEW(EmplLedgEntry);
+        ApplyEmplEntries.LOOKUPMODE(TRUE);
+        OK := ApplyEmplEntries.RUNMODAL = ACTION::LookupOK;
+        CLEAR(ApplyEmplEntries);
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateCustLedgEntry@6(VAR CustLedgEntry@1000 : Record 21);
+    BEGIN
+      WITH GenJnlLine DO BEGIN
+        CustLedgEntry.CALCFIELDS("Remaining Amount");
+        CustLedgEntry."Remaining Amount" :=
+          CurrExchRate.ExchangeAmount(
+            CustLedgEntry."Remaining Amount",CustLedgEntry."Currency Code","Currency Code","Posting Date");
+        CustLedgEntry."Remaining Amount" :=
+          ROUND(CustLedgEntry."Remaining Amount",Currency."Amount Rounding Precision");
+        CustLedgEntry."Remaining Pmt. Disc. Possible" :=
+          CurrExchRate.ExchangeAmount(
+            CustLedgEntry."Remaining Pmt. Disc. Possible",CustLedgEntry."Currency Code","Currency Code","Posting Date");
+        CustLedgEntry."Remaining Pmt. Disc. Possible" :=
+          ROUND(CustLedgEntry."Remaining Pmt. Disc. Possible",Currency."Amount Rounding Precision");
+        CustLedgEntry."Amount to Apply" :=
+          CurrExchRate.ExchangeAmount(
+            CustLedgEntry."Amount to Apply",CustLedgEntry."Currency Code","Currency Code","Posting Date");
+        CustLedgEntry."Amount to Apply" :=
+          ROUND(CustLedgEntry."Amount to Apply",Currency."Amount Rounding Precision");
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateVendLedgEntry@7(VAR VendLedgEntry@1000 : Record 25);
+    BEGIN
+      WITH GenJnlLine DO BEGIN
+        VendLedgEntry.CALCFIELDS("Remaining Amount");
+        VendLedgEntry."Remaining Amount" :=
+          CurrExchRate.ExchangeAmount(
+            VendLedgEntry."Remaining Amount",VendLedgEntry."Currency Code","Currency Code","Posting Date");
+        VendLedgEntry."Remaining Amount" :=
+          ROUND(VendLedgEntry."Remaining Amount",Currency."Amount Rounding Precision");
+        VendLedgEntry."Remaining Pmt. Disc. Possible" :=
+          CurrExchRate.ExchangeAmount(
+            VendLedgEntry."Remaining Pmt. Disc. Possible",VendLedgEntry."Currency Code","Currency Code","Posting Date");
+        VendLedgEntry."Remaining Pmt. Disc. Possible" :=
+          ROUND(VendLedgEntry."Remaining Pmt. Disc. Possible",Currency."Amount Rounding Precision");
+        VendLedgEntry."Amount to Apply" :=
+          CurrExchRate.ExchangeAmount(
+            VendLedgEntry."Amount to Apply",VendLedgEntry."Currency Code","Currency Code","Posting Date");
+        VendLedgEntry."Amount to Apply" :=
+          ROUND(VendLedgEntry."Amount to Apply",Currency."Amount Rounding Precision");
+      END;
+    END;
+
+    [External]
+    PROCEDURE CheckAgainstApplnCurrency@1(ApplnCurrencyCode@1000 : Code[10];CompareCurrencyCode@1001 : Code[10];AccType@1002 : 'G/L Account,Customer,Vendor,Bank Account,Fixed Asset';Message@1003 : Boolean) : Boolean;
+    VAR
+      Currency@1004 : Record 4;
+      Currency2@1005 : Record 4;
+      SalesSetup@1006 : Record 311;
+      PurchSetup@1007 : Record 312;
+      CurrencyAppln@1009 : 'No,EMU,All';
+    BEGIN
+      IF ApplnCurrencyCode = CompareCurrencyCode THEN
+        EXIT(TRUE);
+
+      CASE AccType OF
+        AccType::Customer:
+          BEGIN
+            SalesSetup.GET;
+            CurrencyAppln := SalesSetup."Appln. between Currencies";
+            CASE CurrencyAppln OF
+              CurrencyAppln::No:
+                BEGIN
+                  IF ApplnCurrencyCode <> CompareCurrencyCode THEN
+                    IF Message THEN
+                      ERROR(Text006)
+                    ELSE
+                      EXIT(FALSE);
+                END;
+              CurrencyAppln::EMU:
+                BEGIN
+                  GLSetup.GET;
+                  IF NOT Currency.GET(ApplnCurrencyCode) THEN
+                    Currency."EMU Currency" := GLSetup."EMU Currency";
+                  IF NOT Currency2.GET(CompareCurrencyCode) THEN
+                    Currency2."EMU Currency" := GLSetup."EMU Currency";
+                  IF NOT Currency."EMU Currency" OR NOT Currency2."EMU Currency" THEN
+                    IF Message THEN
+                      ERROR(Text007)
+                    ELSE
+                      EXIT(FALSE);
+                END;
+            END;
+          END;
+        AccType::Vendor:
+          BEGIN
+            PurchSetup.GET;
+            CurrencyAppln := PurchSetup."Appln. between Currencies";
+            CASE CurrencyAppln OF
+              CurrencyAppln::No:
+                BEGIN
+                  IF ApplnCurrencyCode <> CompareCurrencyCode THEN
+                    IF Message THEN
+                      ERROR(Text006)
+                    ELSE
+                      EXIT(FALSE);
+                END;
+              CurrencyAppln::EMU:
+                BEGIN
+                  GLSetup.GET;
+                  IF NOT Currency.GET(ApplnCurrencyCode) THEN
+                    Currency."EMU Currency" := GLSetup."EMU Currency";
+                  IF NOT Currency2.GET(CompareCurrencyCode) THEN
+                    Currency2."EMU Currency" := GLSetup."EMU Currency";
+                  IF NOT Currency."EMU Currency" OR NOT Currency2."EMU Currency" THEN
+                    IF Message THEN
+                      ERROR(Text007)
+                    ELSE
+                      EXIT(FALSE);
+                END;
+            END;
+          END;
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE GetCurrency@2();
+    BEGIN
+      WITH GenJnlLine DO
+        IF "Currency Code" = '' THEN
+          Currency.InitRoundingPrecision
+        ELSE BEGIN
+          Currency.GET("Currency Code");
+          Currency.TESTFIELD("Amount Rounding Precision");
+        END;
+    END;
+
+    LOCAL PROCEDURE ApplyEmployeeLedgerEntry@3(VAR GenJnlLine@1000 : Record 81);
+    VAR
+      EmplLedgEntry@1002 : Record 5222;
+    BEGIN
+      WITH GenJnlLine DO BEGIN
+        OK := SelectEmplLedgEntry(GenJnlLine);
+        IF NOT OK THEN
+          EXIT;
+
+        EmplLedgEntry.RESET;
+        EmplLedgEntry.SETCURRENTKEY("Employee No.",Open,Positive);
+        EmplLedgEntry.SETRANGE("Employee No.",AccNo);
+        EmplLedgEntry.SETRANGE(Open,TRUE);
+        EmplLedgEntry.SETRANGE("Applies-to ID","Applies-to ID");
+        IF EmplLedgEntry.FIND('-') THEN BEGIN
+          IF Amount = 0 THEN BEGIN
+            REPEAT
+              Amount := Amount - EmplLedgEntry."Amount to Apply";
+            UNTIL EmplLedgEntry.NEXT = 0;
+            IF ("Bal. Account Type" = "Bal. Account Type"::Customer) OR
+               ("Bal. Account Type" = "Bal. Account Type"::Vendor) OR
+               ("Bal. Account Type" = "Bal. Account Type"::Employee)
+            THEN
+              Amount := -Amount;
+            VALIDATE(Amount);
+          END;
+          "Applies-to Doc. Type" := 0;
+          "Applies-to Doc. No." := '';
+        END ELSE
+          "Applies-to ID" := '';
+        IF MODIFY THEN;
+      END;
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterRun@5(VAR GenJnlLine@1000 : Record 81);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeRun@4(VAR GenJnlLine@1000 : Record 81;VAR IsHandled@1001 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeFindCustApply@18(GenJournalLine@1000 : Record 81;CustLedgerEntry@1001 : Record 21;VAR Amount@1002 : Decimal;VAR IsHandled@1003 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeFindVendApply@19(GenJournalLine@1000 : Record 81;VendorLedgerEntry@1001 : Record 25;VAR Amount@1002 : Decimal;VAR IsHandled@1003 : Boolean);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

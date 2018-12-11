@@ -1,0 +1,490 @@
+OBJECT Codeunit 1540 Workflow Webhook Setup
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:12 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      CustomerApprovalDescriptionTxt@1001 : TextConst '@@@={Locked};ENU=Customer Approval Workflow';
+      FinCategoryTxt@1005 : TextConst '@@@={Locked};ENU=FIN';
+      GeneralJournalBatchApprovalDescriptionTxt@1006 : TextConst '@@@={Locked};ENU=General Journal Batch Approval Workflow';
+      GeneralJournaLineApprovalDescriptionTxt@1007 : TextConst '@@@={Locked};ENU=General Journal Line Approval Workflow';
+      ItemApprovalDescriptionTxt@1010 : TextConst '@@@={Locked};ENU=Item Approval Workflow';
+      PurchaseDocCategoryTxt@1004 : TextConst '@@@={Locked};ENU=PURCHDOC';
+      PurchaseDocApprovalDescriptionTxt@1002 : TextConst '@@@={Locked};ENU=Purchase Document Approval Workflow';
+      PurchPayCategoryTxt@1012 : TextConst '@@@={Locked};ENU=PURCH';
+      SalesDocCategoryTxt@1009 : TextConst '@@@={Locked};ENU=SALESDOC';
+      SalesDocApprovalDescriptionTxt@1008 : TextConst '@@@={Locked};ENU=Sales Document Approval Workflow';
+      SalesMktCategoryTxt@1000 : TextConst '@@@={Locked};ENU=SALES';
+      UnsupportedWorkflowEventCodeErr@1003 : TextConst '@@@="%1=Workflow event code";ENU=Unsupported workflow event code ''%1''.';
+      VendorApprovalDescriptionTxt@1011 : TextConst '@@@={Locked};ENU=Vendor Approval Workflow';
+
+    PROCEDURE CreateWorkflowDefinition@5(EventCode@1000 : Code[128];Name@1003 : Text[100];EventConditions@1001 : Text;ResponseUserID@1004 : Code[50]) : Code[20];
+    VAR
+      WorkflowEventHandling@1002 : Codeunit 1520;
+    BEGIN
+      CASE EventCode OF
+        WorkflowEventHandling.RunWorkflowOnSendCustomerForApprovalCode:
+          EXIT(CreateCustomerApprovalWorkflow(Name,EventConditions,ResponseUserID));
+        WorkflowEventHandling.RunWorkflowOnSendItemForApprovalCode:
+          EXIT(CreateItemApprovalWorkflow(Name,EventConditions,ResponseUserID));
+        WorkflowEventHandling.RunWorkflowOnSendGeneralJournalBatchForApprovalCode:
+          EXIT(CreateGeneralJournalBatchApprovalWorkflow(Name,EventConditions,ResponseUserID));
+        WorkflowEventHandling.RunWorkflowOnSendGeneralJournalLineForApprovalCode:
+          EXIT(CreateGeneralJournalLineApprovalWorkflow(Name,EventConditions,ResponseUserID));
+        WorkflowEventHandling.RunWorkflowOnSendPurchaseDocForApprovalCode:
+          EXIT(CreatePurchaseDocumentApprovalWorkflow(Name,EventConditions,ResponseUserID));
+        WorkflowEventHandling.RunWorkflowOnSendSalesDocForApprovalCode:
+          EXIT(CreateSalesDocumentApprovalWorkflow(Name,EventConditions,ResponseUserID));
+        WorkflowEventHandling.RunWorkflowOnSendVendorForApprovalCode:
+          EXIT(CreateVendorApprovalWorkflow(Name,EventConditions,ResponseUserID));
+        ELSE
+          ERROR(UnsupportedWorkflowEventCodeErr,EventCode);
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateApprovalWorkflow@9(WorkflowCode@1004 : Code[20];Name@1002 : Text[100];Category@1005 : Code[20];EventCode@1009 : Code[128];EventConditions@1001 : Text;ResponseUserID@1010 : Code[50]);
+    VAR
+      DummyWorkflowWebhookEntry@1000 : Record 467;
+      WorkflowResponseHandling@1011 : Codeunit 1521;
+      WorkflowWebhookEvents@1006 : Codeunit 1541;
+      WorkflowWebhookResponses@1012 : Codeunit 1542;
+      EmptyUserID@1014 : Code[50];
+      NotificationEventConditions@1013 : Text;
+      ParentStepID@1008 : Integer;
+      StepID@1007 : Integer;
+    BEGIN
+      EmptyUserID := '';
+      CLEAR(NotificationEventConditions);
+
+      InitializeWorkflow(WorkflowCode,Name,Category);
+
+      StepID := CreateEventStep(WorkflowCode,TRUE,0,EventCode,1,EventConditions);
+      StepID := CreateResponseStep(WorkflowCode,StepID,WorkflowResponseHandling.RestrictRecordUsageCode,0,EmptyUserID);
+      StepID := CreateResponseStep(WorkflowCode,StepID,WorkflowResponseHandling.SetStatusToPendingApprovalCode,0,EmptyUserID);
+      StepID := CreateResponseStep(WorkflowCode,StepID,WorkflowWebhookResponses.SendNotificationToWebhookCode,0,ResponseUserID);
+      ParentStepID := StepID;
+
+      NotificationEventConditions := CreateEventCondition(DummyWorkflowWebhookEntry.Response::Continue);
+      StepID := CreateEventStep(WorkflowCode,FALSE,ParentStepID,WorkflowWebhookEvents.WorkflowWebhookResponseReceivedEventCode,2,
+          NotificationEventConditions);
+      StepID := CreateResponseStep(WorkflowCode,StepID,WorkflowResponseHandling.AllowRecordUsageCode,0,EmptyUserID);
+      StepID := CreateResponseStep(WorkflowCode,StepID,WorkflowResponseHandling.ReleaseDocumentCode,0,EmptyUserID);
+
+      NotificationEventConditions := CreateEventCondition(DummyWorkflowWebhookEntry.Response::Reject);
+      StepID := CreateEventStep(WorkflowCode,FALSE,ParentStepID,WorkflowWebhookEvents.WorkflowWebhookResponseReceivedEventCode,3,
+          NotificationEventConditions);
+      StepID := CreateResponseStep(WorkflowCode,StepID,WorkflowResponseHandling.OpenDocumentCode,0,EmptyUserID);
+
+      NotificationEventConditions := CreateEventCondition(DummyWorkflowWebhookEntry.Response::Cancel);
+      StepID := CreateEventStep(WorkflowCode,FALSE,ParentStepID,WorkflowWebhookEvents.WorkflowWebhookResponseReceivedEventCode,4,
+          NotificationEventConditions);
+      StepID := CreateResponseStep(WorkflowCode,StepID,WorkflowResponseHandling.AllowRecordUsageCode,0,EmptyUserID);
+      StepID := CreateResponseStep(WorkflowCode,StepID,WorkflowResponseHandling.OpenDocumentCode,0,EmptyUserID);
+    END;
+
+    LOCAL PROCEDURE CreateCustomerItemApprovalWorkflow@23(WorkflowCode@1004 : Code[20];Name@1002 : Text[100];Category@1005 : Code[20];EventCode@1009 : Code[128];EventConditions@1001 : Text;ResponseUserID@1010 : Code[50]);
+    VAR
+      DummyWorkflowWebhookEntry@1000 : Record 467;
+      WorkflowResponseHandling@1011 : Codeunit 1521;
+      WorkflowWebhookEvents@1006 : Codeunit 1541;
+      WorkflowWebhookResponses@1012 : Codeunit 1542;
+      EmptyUserID@1014 : Code[50];
+      NotificationEventConditions@1013 : Text;
+      ParentStepID@1008 : Integer;
+      StepID@1007 : Integer;
+    BEGIN
+      EmptyUserID := '';
+      CLEAR(NotificationEventConditions);
+
+      InitializeWorkflow(WorkflowCode,Name,Category);
+
+      StepID := CreateEventStep(WorkflowCode,TRUE,0,EventCode,1,EventConditions);
+      StepID := CreateResponseStep(WorkflowCode,StepID,WorkflowResponseHandling.RestrictRecordUsageCode,0,EmptyUserID);
+      StepID := CreateResponseStep(WorkflowCode,StepID,WorkflowWebhookResponses.SendNotificationToWebhookCode,0,ResponseUserID);
+      ParentStepID := StepID;
+
+      NotificationEventConditions := CreateEventCondition(DummyWorkflowWebhookEntry.Response::Continue);
+      StepID := CreateEventStep(WorkflowCode,FALSE,ParentStepID,WorkflowWebhookEvents.WorkflowWebhookResponseReceivedEventCode,2,
+          NotificationEventConditions);
+      StepID := CreateResponseStep(WorkflowCode,StepID,WorkflowResponseHandling.AllowRecordUsageCode,0,EmptyUserID);
+
+      NotificationEventConditions := CreateEventCondition(DummyWorkflowWebhookEntry.Response::Reject);
+      StepID := CreateEventStep(WorkflowCode,FALSE,ParentStepID,WorkflowWebhookEvents.WorkflowWebhookResponseReceivedEventCode,3,
+          NotificationEventConditions);
+
+      NotificationEventConditions := CreateEventCondition(DummyWorkflowWebhookEntry.Response::Cancel);
+      StepID := CreateEventStep(WorkflowCode,FALSE,ParentStepID,WorkflowWebhookEvents.WorkflowWebhookResponseReceivedEventCode,4,
+          NotificationEventConditions);
+      StepID := CreateResponseStep(WorkflowCode,StepID,WorkflowResponseHandling.AllowRecordUsageCode,0,EmptyUserID);
+    END;
+
+    LOCAL PROCEDURE CreateGeneralJournalBatchApprovalWorkflowSteps@8(WorkflowCode@1004 : Code[20];Name@1002 : Text[100];Category@1005 : Code[20];EventCode@1009 : Code[128];EventConditions@1001 : Text;ResponseUserID@1010 : Code[50]);
+    VAR
+      WorkflowStep@1017 : Record 1502;
+      WorkflowStepArgument@1018 : Record 1523;
+      WorkflowResponseHandling@1011 : Codeunit 1521;
+      WorkflowWebhookResponses@1012 : Codeunit 1542;
+      WorkflowEventHandling@1015 : Codeunit 1520;
+      WorkflowSetup@1019 : Codeunit 1502;
+      EmptyUserID@1014 : Code[50];
+      ParentStepID@1008 : Integer;
+      StepID@1007 : Integer;
+      BalancedCodeParentStepID@1016 : Integer;
+    BEGIN
+      EmptyUserID := '';
+
+      InitializeWorkflow(WorkflowCode,Name,Category);
+
+      StepID := CreateEventStep(WorkflowCode,TRUE,0,EventCode,1,EventConditions);
+      StepID := CreateResponseStep(WorkflowCode,StepID,WorkflowResponseHandling.CheckGeneralJournalBatchBalanceCode,0,EmptyUserID);
+      BalancedCodeParentStepID := StepID;
+      StepID := CreateEventStep(WorkflowCode,FALSE,StepID,WorkflowEventHandling.RunWorkflowOnGeneralJournalBatchBalancedCode,0,'');
+      StepID := CreateResponseStep(WorkflowCode,StepID,WorkflowResponseHandling.RestrictRecordUsageCode,0,EmptyUserID);
+      StepID := CreateResponseStep(WorkflowCode,StepID,WorkflowWebhookResponses.SendNotificationToWebhookCode,0,ResponseUserID);
+      ParentStepID := StepID;
+
+      CreateGeneralJournalWorkflowNotificationSteps(WorkflowCode,ParentStepID);
+
+      StepID :=
+        CreateEventStep(
+          WorkflowCode,FALSE,BalancedCodeParentStepID,WorkflowEventHandling.RunWorkflowOnGeneralJournalBatchNotBalancedCode,0,
+          '');
+      StepID := CreateResponseStep(WorkflowCode,StepID,WorkflowResponseHandling.ShowMessageCode,0,EmptyUserID);
+
+      WorkflowStep.SETRANGE(ID,StepID);
+      WorkflowStep.FINDFIRST;
+      WorkflowStepArgument.GET(WorkflowStep.Argument);
+      WorkflowStepArgument.Message := WorkflowSetup.GetGeneralJournalBatchIsNotBalancedMsg;
+      WorkflowStepArgument.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE CreateGeneralJournalLineApprovalWorkflowSteps@24(WorkflowCode@1004 : Code[20];Name@1002 : Text[100];Category@1005 : Code[20];EventCode@1009 : Code[128];EventConditions@1001 : Text;ResponseUserID@1010 : Code[50]);
+    VAR
+      WorkflowResponseHandling@1011 : Codeunit 1521;
+      WorkflowWebhookResponses@1012 : Codeunit 1542;
+      EmptyUserID@1014 : Code[50];
+      ParentStepID@1008 : Integer;
+      StepID@1007 : Integer;
+    BEGIN
+      EmptyUserID := '';
+
+      InitializeWorkflow(WorkflowCode,Name,Category);
+
+      StepID := CreateEventStep(WorkflowCode,TRUE,0,EventCode,1,EventConditions);
+      StepID := CreateResponseStep(WorkflowCode,StepID,WorkflowResponseHandling.RestrictRecordUsageCode,0,EmptyUserID);
+      StepID := CreateResponseStep(WorkflowCode,StepID,WorkflowWebhookResponses.SendNotificationToWebhookCode,0,ResponseUserID);
+      ParentStepID := StepID;
+
+      CreateGeneralJournalWorkflowNotificationSteps(WorkflowCode,ParentStepID);
+    END;
+
+    LOCAL PROCEDURE CreateArgumentForEvent@21(EventConditions@1002 : Text) : GUID;
+    VAR
+      WorkflowStepArgument@1005 : Record 1523;
+      OutStream@1003 : OutStream;
+    BEGIN
+      WorkflowStepArgument.INIT;
+      WorkflowStepArgument.ID := CREATEGUID;
+      WorkflowStepArgument.Type := WorkflowStepArgument.Type::"Event";
+
+      IF EventConditions <> '' THEN BEGIN
+        WorkflowStepArgument."Event Conditions".CREATEOUTSTREAM(OutStream);
+        OutStream.WRITETEXT(EventConditions);
+      END;
+
+      WorkflowStepArgument.INSERT;
+      EXIT(WorkflowStepArgument.ID);
+    END;
+
+    LOCAL PROCEDURE CreateArgumentForResponse@17(FunctionName@1000 : Code[128];ResponseUserID@1002 : Code[50]) : GUID;
+    VAR
+      WorkflowStepArgument@1005 : Record 1523;
+    BEGIN
+      WorkflowStepArgument.INIT;
+      WorkflowStepArgument.ID := CREATEGUID;
+      WorkflowStepArgument.Type := WorkflowStepArgument.Type::Response;
+      WorkflowStepArgument."Response Function Name" := FunctionName;
+
+      IF ResponseUserID <> '' THEN BEGIN
+        WorkflowStepArgument."Response Type" := WorkflowStepArgument."Response Type"::"User ID";
+        WorkflowStepArgument."Response User ID" := ResponseUserID;
+      END;
+
+      WorkflowStepArgument.INSERT;
+      EXIT(WorkflowStepArgument.ID);
+    END;
+
+    LOCAL PROCEDURE CreateEventCondition@56(ResponseArgument@1000 : Option) : Text;
+    VAR
+      WorkflowWebhookEntry@1001 : Record 467;
+      RequestPageParametersHelper@1004 : Codeunit 1530;
+      EventConditions@1002 : FilterPageBuilder;
+    BEGIN
+      CLEAR(WorkflowWebhookEntry);
+      WorkflowWebhookEntry.SETFILTER(Response,'=%1',ResponseArgument);
+
+      CLEAR(EventConditions);
+      EventConditions.SETVIEW(EventConditions.ADDTABLE(GetTableCaption(DATABASE::"Workflow Webhook Entry"),
+          DATABASE::"Workflow Webhook Entry"),WorkflowWebhookEntry.GETVIEW);
+
+      EXIT(RequestPageParametersHelper.GetViewFromDynamicRequestPage(EventConditions,'',DATABASE::"Workflow Webhook Entry"));
+    END;
+
+    LOCAL PROCEDURE CreateEventStep@11(WorkflowCode@1000 : Code[20];IsEntryPoint@1001 : Boolean;PreviousStepID@1002 : Integer;FunctionName@1004 : Code[128];SequenceNumber@1005 : Integer;EventConditions@1006 : Text) : Integer;
+    VAR
+      WorkflowStep@1007 : Record 1502;
+    BEGIN
+      WorkflowStep.INIT;
+      WorkflowStep."Workflow Code" := WorkflowCode;
+      WorkflowStep."Entry Point" := IsEntryPoint;
+      WorkflowStep."Previous Workflow Step ID" := PreviousStepID;
+      WorkflowStep.Type := WorkflowStep.Type::"Event";
+      WorkflowStep."Function Name" := FunctionName;
+      WorkflowStep.Argument := CreateArgumentForEvent(EventConditions);
+      WorkflowStep."Sequence No." := SequenceNumber;
+      WorkflowStep.INSERT;
+
+      EXIT(WorkflowStep.ID);
+    END;
+
+    LOCAL PROCEDURE CreateResponseStep@25(WorkflowCode@1000 : Code[20];PreviousStepID@1002 : Integer;FunctionName@1004 : Code[128];SequenceNumber@1005 : Integer;ResponseUserID@1006 : Code[50]) : Integer;
+    VAR
+      WorkflowStep@1007 : Record 1502;
+    BEGIN
+      WorkflowStep.INIT;
+      WorkflowStep."Workflow Code" := WorkflowCode;
+      WorkflowStep."Entry Point" := FALSE;
+      WorkflowStep."Previous Workflow Step ID" := PreviousStepID;
+      WorkflowStep.Type := WorkflowStep.Type::Response;
+      WorkflowStep."Function Name" := FunctionName;
+      WorkflowStep.Argument := CreateArgumentForResponse(FunctionName,ResponseUserID);
+      WorkflowStep."Sequence No." := SequenceNumber;
+
+      WorkflowStep.INSERT;
+      EXIT(WorkflowStep.ID);
+    END;
+
+    LOCAL PROCEDURE CreateCustomerApprovalWorkflow@12(Name@1002 : Text[100];EventConditions@1001 : Text;ResponseUserID@1000 : Code[50]) WorkflowCode : Code[20];
+    VAR
+      Workflow@1004 : Record 1501;
+      WorkflowEventHandling@1003 : Codeunit 1520;
+    BEGIN
+      WorkflowCode := 'MS-CUSTAW-WH-01';
+      WHILE Workflow.GET(WorkflowCode) DO
+        WorkflowCode := INCSTR(WorkflowCode);
+
+      IF Name = '' THEN
+        Name := CustomerApprovalDescriptionTxt;
+
+      CreateCustomerItemApprovalWorkflow(WorkflowCode,Name,SalesMktCategoryTxt,
+        WorkflowEventHandling.RunWorkflowOnSendCustomerForApprovalCode,EventConditions,ResponseUserID);
+
+      EXIT(WorkflowCode);
+    END;
+
+    LOCAL PROCEDURE CreateGeneralJournalWorkflowNotificationSteps@13(WorkflowCode@1003 : Code[20];ParentStepId@1004 : Integer);
+    VAR
+      DummyWorkflowWebhookEntry@1001 : Record 467;
+      WorkflowResponseHandling@1006 : Codeunit 1521;
+      WorkflowWebhookEvents@1005 : Codeunit 1541;
+      EmptyUserID@1007 : Code[50];
+      NotificationEventConditions@1000 : Text;
+      StepID@1002 : Integer;
+    BEGIN
+      EmptyUserID := '';
+
+      NotificationEventConditions := CreateEventCondition(DummyWorkflowWebhookEntry.Response::Continue);
+      StepID := CreateEventStep(WorkflowCode,FALSE,ParentStepId,WorkflowWebhookEvents.WorkflowWebhookResponseReceivedEventCode,2,
+          NotificationEventConditions);
+      StepID := CreateResponseStep(WorkflowCode,StepID,WorkflowResponseHandling.AllowRecordUsageCode,0,EmptyUserID);
+
+      NotificationEventConditions := CreateEventCondition(DummyWorkflowWebhookEntry.Response::Reject);
+      StepID := CreateEventStep(WorkflowCode,FALSE,ParentStepId,WorkflowWebhookEvents.WorkflowWebhookResponseReceivedEventCode,3,
+          NotificationEventConditions);
+
+      NotificationEventConditions := CreateEventCondition(DummyWorkflowWebhookEntry.Response::Cancel);
+      StepID := CreateEventStep(WorkflowCode,FALSE,ParentStepId,WorkflowWebhookEvents.WorkflowWebhookResponseReceivedEventCode,4,
+          NotificationEventConditions);
+    END;
+
+    LOCAL PROCEDURE CreateGeneralJournalBatchApprovalWorkflow@10(Name@1002 : Text[100];EventConditions@1001 : Text;ResponseUserID@1000 : Code[50]) WorkflowCode : Code[20];
+    VAR
+      Workflow@1004 : Record 1501;
+      WorkflowEventHandling@1003 : Codeunit 1520;
+    BEGIN
+      WorkflowCode := 'MS-GJBAW-WH-01';
+      WHILE Workflow.GET(WorkflowCode) DO
+        WorkflowCode := INCSTR(WorkflowCode);
+
+      IF Name = '' THEN
+        Name := GeneralJournalBatchApprovalDescriptionTxt;
+
+      CreateGeneralJournalBatchApprovalWorkflowSteps(WorkflowCode,Name,FinCategoryTxt,
+        WorkflowEventHandling.RunWorkflowOnSendGeneralJournalBatchForApprovalCode,EventConditions,ResponseUserID);
+
+      EXIT(WorkflowCode);
+    END;
+
+    LOCAL PROCEDURE CreateGeneralJournalLineApprovalWorkflow@15(Name@1002 : Text[100];EventConditions@1001 : Text;ResponseUserID@1000 : Code[50]) WorkflowCode : Code[20];
+    VAR
+      Workflow@1004 : Record 1501;
+      WorkflowEventHandling@1003 : Codeunit 1520;
+    BEGIN
+      WorkflowCode := 'MS-GJLAW-WH-01';
+      WHILE Workflow.GET(WorkflowCode) DO
+        WorkflowCode := INCSTR(WorkflowCode);
+
+      IF Name = '' THEN
+        Name := GeneralJournaLineApprovalDescriptionTxt;
+
+      CreateGeneralJournalLineApprovalWorkflowSteps(WorkflowCode,Name,FinCategoryTxt,
+        WorkflowEventHandling.RunWorkflowOnSendGeneralJournalLineForApprovalCode,EventConditions,ResponseUserID);
+
+      EXIT(WorkflowCode);
+    END;
+
+    LOCAL PROCEDURE CreateItemApprovalWorkflow@16(Name@1002 : Text[100];EventConditions@1001 : Text;ResponseUserID@1000 : Code[50]) WorkflowCode : Code[20];
+    VAR
+      Workflow@1004 : Record 1501;
+      WorkflowEventHandling@1003 : Codeunit 1520;
+    BEGIN
+      WorkflowCode := 'MS-ITEMAW-WH-01';
+      WHILE Workflow.GET(WorkflowCode) DO
+        WorkflowCode := INCSTR(WorkflowCode);
+
+      IF Name = '' THEN
+        Name := ItemApprovalDescriptionTxt;
+
+      CreateCustomerItemApprovalWorkflow(WorkflowCode,Name,SalesMktCategoryTxt,
+        WorkflowEventHandling.RunWorkflowOnSendItemForApprovalCode,EventConditions,ResponseUserID);
+
+      EXIT(WorkflowCode);
+    END;
+
+    LOCAL PROCEDURE CreatePurchaseDocumentApprovalWorkflow@7(Name@1002 : Text[100];EventConditions@1001 : Text;ResponseUserID@1000 : Code[50]) WorkflowCode : Code[20];
+    VAR
+      Workflow@1004 : Record 1501;
+      WorkflowEventHandling@1003 : Codeunit 1520;
+    BEGIN
+      WorkflowCode := 'MS-PDAW-WH-01';
+      WHILE Workflow.GET(WorkflowCode) DO
+        WorkflowCode := INCSTR(WorkflowCode);
+
+      IF Name = '' THEN
+        Name := PurchaseDocApprovalDescriptionTxt;
+
+      CreateApprovalWorkflow(WorkflowCode,Name,PurchaseDocCategoryTxt,
+        WorkflowEventHandling.RunWorkflowOnSendPurchaseDocForApprovalCode,EventConditions,ResponseUserID);
+
+      EXIT(WorkflowCode);
+    END;
+
+    LOCAL PROCEDURE CreateSalesDocumentApprovalWorkflow@32(Name@1002 : Text[100];EventConditions@1001 : Text;ResponseUserID@1000 : Code[50]) WorkflowCode : Code[20];
+    VAR
+      Workflow@1004 : Record 1501;
+      WorkflowEventHandling@1003 : Codeunit 1520;
+    BEGIN
+      WorkflowCode := 'MS-SDAW-WH-01';
+      WHILE Workflow.GET(WorkflowCode) DO
+        WorkflowCode := INCSTR(WorkflowCode);
+
+      IF Name = '' THEN
+        Name := SalesDocApprovalDescriptionTxt;
+
+      CreateApprovalWorkflow(WorkflowCode,Name,SalesDocCategoryTxt,
+        WorkflowEventHandling.RunWorkflowOnSendSalesDocForApprovalCode,EventConditions,ResponseUserID);
+
+      EXIT(WorkflowCode);
+    END;
+
+    LOCAL PROCEDURE CreateVendorApprovalWorkflow@22(Name@1002 : Text[100];EventConditions@1001 : Text;ResponseUserID@1000 : Code[50]) WorkflowCode : Code[20];
+    VAR
+      Workflow@1004 : Record 1501;
+      WorkflowEventHandling@1003 : Codeunit 1520;
+    BEGIN
+      WorkflowCode := 'MS-VENDAW-WH-01';
+      WHILE Workflow.GET(WorkflowCode) DO
+        WorkflowCode := INCSTR(WorkflowCode);
+
+      IF Name = '' THEN
+        Name := VendorApprovalDescriptionTxt;
+
+      CreateCustomerItemApprovalWorkflow(WorkflowCode,Name,PurchPayCategoryTxt,
+        WorkflowEventHandling.RunWorkflowOnSendVendorForApprovalCode,EventConditions,ResponseUserID);
+
+      EXIT(WorkflowCode);
+    END;
+
+    LOCAL PROCEDURE GetTableCaption@4(TableID@1001 : Integer) : Text;
+    VAR
+      TableMetadata@1000 : Record 2000000136;
+    BEGIN
+      TableMetadata.GET(TableID);
+      EXIT(TableMetadata.Caption);
+    END;
+
+    LOCAL PROCEDURE InitializeWorkflow@2(WorkflowCode@1004 : Text[20];Name@1006 : Text[100];Category@1005 : Code[20]);
+    VAR
+      Workflow@1003 : Record 1501;
+      WorkflowEvent@1002 : Record 1520;
+      WorkflowSetup@1000 : Codeunit 1502;
+      WorkflowWebhookEvents@1001 : Codeunit 1541;
+    BEGIN
+      IF NOT WorkflowEvent.GET(WorkflowWebhookEvents.WorkflowWebhookResponseReceivedEventCode) THEN
+        WorkflowSetup.InitWorkflow;
+
+      Workflow.INIT;
+      Workflow.Code := WorkflowCode;
+      Workflow.Description := Name;
+      Workflow.Enabled := FALSE;
+      Workflow.Template := FALSE;
+      Workflow.Category := Category;
+      Workflow.INSERT;
+    END;
+
+    PROCEDURE GetSalesDocCategoryTxt@1() : Code[20];
+    BEGIN
+      EXIT(SalesDocCategoryTxt);
+    END;
+
+    PROCEDURE GetPurchaseDocCategoryTxt@6() : Code[20];
+    BEGIN
+      EXIT(PurchaseDocCategoryTxt);
+    END;
+
+    PROCEDURE GetPurchPayCategoryTxt@18() : Code[20];
+    BEGIN
+      EXIT(PurchaseDocCategoryTxt);
+    END;
+
+    PROCEDURE GetFinCategoryTxt@14() : Code[20];
+    BEGIN
+      EXIT(FinCategoryTxt);
+    END;
+
+    PROCEDURE GetSalesMktCategoryTxt@19() : Code[20];
+    BEGIN
+      EXIT(SalesMktCategoryTxt);
+    END;
+
+    PROCEDURE GetUnsupportedWorkflowEventCodeErr@3() : Text;
+    BEGIN
+      EXIT(UnsupportedWorkflowEventCodeErr);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

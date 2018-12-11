@@ -1,0 +1,941 @@
+OBJECT Codeunit 424 Export Analysis View
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:07:56 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1012 : TextConst 'ENU=You can only export Actual amounts and Budgeted amounts.\Please change the option in the Show field.';
+      Text001@1036 : TextConst 'ENU=This combination is not valid. You cannot export Debit and Credit amounts for Budgeted amounts.\Please enter Amount in the Show Amount field.';
+      Text002@1023 : TextConst 'ENU=General Info._';
+      Text003@1020 : TextConst 'ENU=None';
+      Text004@1033 : TextConst 'ENU=Day';
+      Text005@1024 : TextConst 'ENU=Week';
+      Text006@1014 : TextConst 'ENU=Month';
+      Text007@1025 : TextConst 'ENU=Quarter';
+      Text008@1026 : TextConst 'ENU=Year';
+      Text009@1027 : TextConst 'ENU=Accounting Period';
+      Text011@1029 : TextConst 'ENU="Analysis by Dimension "';
+      Text012@1030 : TextConst 'ENU=Amount Type';
+      Text013@1031 : TextConst 'ENU=Net Change';
+      Text014@1032 : TextConst 'ENU=Balance at Date';
+      Text015@1018 : TextConst 'ENU=Date Filter';
+      Text016@1022 : TextConst 'ENU=Budget Filter';
+      Text116@1114 : TextConst 'ENU=Cash Flow Forecast Filter';
+      Text018@1017 : TextConst 'ENU=G/L Account';
+      Text118@1116 : TextConst 'ENU=Cash Flow Account';
+      Text020@1021 : TextConst 'ENU=Budgeted Amount';
+      Text022@1043 : TextConst 'ENU=Level';
+      Text023@1040 : TextConst 'ENU=Analysis View Name';
+      Text024@1041 : TextConst 'ENU=Closing Entries';
+      Text025@1045 : TextConst 'ENU=Included';
+      Text026@1046 : TextConst 'ENU=Excluded';
+      Text027@1047 : TextConst 'ENU="All amounts shown in "';
+      Text028@1048 : TextConst 'ENU=Show Opposite Sign';
+      Text029@1049 : TextConst 'ENU=Yes';
+      Text030@1050 : TextConst 'ENU=No';
+      Text031@1051 : TextConst 'ENU=Data_';
+      TempDimValue2@1042 : TEMPORARY Record 349;
+      TempDimValue3@1037 : TEMPORARY Record 349;
+      TempGLAcc2@1052 : TEMPORARY Record 15;
+      TempGLAcc3@1007 : TEMPORARY Record 15;
+      TempCFAccount2@1136 : TEMPORARY Record 841;
+      TempCFAccount3@1137 : TEMPORARY Record 841;
+      BusUnit@1056 : Record 220;
+      TempExcelBuffer@1015 : TEMPORARY Record 370;
+      FileMgt@1003 : Codeunit 419;
+      NoOfColumns@1001 : Integer;
+      MaxLevel@1039 : Integer;
+      MaxLevelDim@1019 : ARRAY [4] OF Integer;
+      HasBusinessUnits@1055 : Boolean;
+      GLAccountSource@1002 : Boolean;
+      ServerFileName@1010 : Text;
+      SkipDownload@1016 : Boolean;
+
+    [External]
+    PROCEDURE ExportData@3(VAR Rec@1000 : Record 365;Sign@1006 : Boolean;ShowInAddCurr@1008 : Boolean;AmountField@1009 : Option;ShowName@1011 : Boolean;DateFilter@1013 : Text;AccFilter@1004 : Text;BudgetFilter@1014 : Text;Dim1Filter@1015 : Text;Dim2Filter@1017 : Text;Dim3Filter@1018 : Text;Dim4Filter@1019 : Text;AmountType@1021 : Option;ClosingEntryFilter@1022 : Option;Show@1024 : Option;OtherFilter@1033 : Text);
+    VAR
+      BusUnitFilter@1031 : Text;
+      CashFlowFilter@1030 : Text;
+    BEGIN
+      GLAccountSource := Rec."Account Source" = Rec."Account Source"::"G/L Account";
+
+      CheckCombination(Show,AmountField);
+
+      BusUnitFilter := '';
+      CashFlowFilter := '';
+
+      SetOtherFilterToCorrectFilter(OtherFilter,BusUnitFilter,CashFlowFilter);
+
+      HasBusinessUnits := NOT BusUnit.ISEMPTY;
+
+      ServerFileName := FileMgt.ServerTempFileName('xlsx');
+
+      CreateFillGeneralInfoSheet(
+        Rec,Sign,AmountType,DateFilter,AccFilter,BudgetFilter,
+        Dim1Filter,Dim2Filter,Dim3Filter,Dim4Filter,ClosingEntryFilter,ShowInAddCurr,CashFlowFilter);
+
+      TempExcelBuffer.CreateBook(ServerFileName,STRSUBSTNO('%1%2',Text002,Rec."Analysis View Code"));
+      TempExcelBuffer.WriteSheet(STRSUBSTNO('%1%2',Text002,Rec."Analysis View Code"),COMPANYNAME,USERID);
+
+      CreateDataSheet(
+        Rec,Sign,ShowInAddCurr,ShowName,AccFilter,Dim1Filter,Dim2Filter,
+        Dim3Filter,Dim4Filter,ClosingEntryFilter,DateFilter,BusUnitFilter,BudgetFilter,AmountType,CashFlowFilter);
+
+      TempExcelBuffer.SelectOrAddSheet(STRSUBSTNO('%1%2',Text031,Rec."Analysis View Code"));
+      TempExcelBuffer.WriteAllToCurrentSheet(TempExcelBuffer);
+
+      TempExcelBuffer.CloseBook;
+
+      IF NOT SkipDownload THEN
+        TempExcelBuffer.OpenExcel;
+    END;
+
+    LOCAL PROCEDURE CreateDataSheet@1(VAR AnalysisViewEntry@1000 : Record 365;Sign@1009 : Boolean;ShowInAddCurr@1010 : Boolean;ShowName@1018 : Boolean;AccFilter@1020 : Text;Dim1Filter@1025 : Text;Dim2Filter@1024 : Text;Dim3Filter@1023 : Text;Dim4Filter@1022 : Text;ClosingEntryFilter@1033 : Option;DateFilter@1011 : Text;BusUnitFilter@1030 : Text;BudgetFilter@1045 : Text;AmountType@1046 : Option;CFFilter@1146 : Text);
+    VAR
+      AnalysisViewEntry2@1001 : Record 365;
+      AnalysisView@1002 : Record 363;
+      BusUnit@1039 : Record 220;
+      StartDate@1028 : Date;
+      EndDate@1013 : Date;
+      WeekNo@1029 : Integer;
+      Year@1026 : Integer;
+      SignValue@1007 : Integer;
+      NoOfLeadingColumns@1040 : Integer;
+    BEGIN
+      TempExcelBuffer.DELETEALL;
+
+      AnalysisViewEntry2.COPY(AnalysisViewEntry);
+      AnalysisView.GET(AnalysisViewEntry2."Analysis View Code");
+      PopulateTempAccountTable(AccFilter);
+
+      FindDimLevel(AnalysisView."Dimension 1 Code",Dim1Filter,1);
+      FindDimLevel(AnalysisView."Dimension 2 Code",Dim2Filter,2);
+      FindDimLevel(AnalysisView."Dimension 3 Code",Dim3Filter,3);
+      FindDimLevel(AnalysisView."Dimension 4 Code",Dim4Filter,4);
+
+      SignValue := 1;
+      IF Sign THEN
+        SignValue := -1;
+
+      CreateRowWithColumnsCaptions(AnalysisViewEntry2,AnalysisView);
+
+      CreateAnalysisViewEntryPart(
+        AnalysisViewEntry2,AnalysisView,StartDate,EndDate,SignValue,ShowInAddCurr,ShowName,
+        ClosingEntryFilter,DateFilter,AmountType,CFFilter);
+
+      CreateAnalysisViewBudgetEntryPart(
+        AnalysisView,StartDate,EndDate,SignValue,ShowInAddCurr,ShowName,AccFilter,
+        Dim1Filter,Dim2Filter,Dim3Filter,Dim4Filter,ClosingEntryFilter,DateFilter,
+        BusUnitFilter,BudgetFilter,AmountType);
+
+      NoOfLeadingColumns := 0;
+      IF GLAccountSource THEN BEGIN
+        TempGLAcc2.SETRANGE("Account Type",TempGLAcc2."Account Type"::Posting);
+        IF TempGLAcc2.FIND('-') THEN
+          REPEAT
+            IF NOT TempGLAcc2.MARK THEN BEGIN
+              FillOutGLAcc(TempGLAcc2."No.",ShowName);
+              StartNewRow;
+            END;
+          UNTIL TempGLAcc2.NEXT = 0;
+      END ELSE BEGIN
+        TempCFAccount2.SETRANGE("Account Type",TempCFAccount2."Account Type"::Entry);
+        IF TempCFAccount2.FIND('-') THEN
+          ProcessMarkedTempCFAccountRec(ShowName);
+      END;
+      NoOfLeadingColumns := MaxLevel + 1;
+      IF HasBusinessUnits THEN BEGIN
+        IF BusUnit.FIND('-') THEN
+          REPEAT
+            IF NOT BusUnit.MARK THEN BEGIN
+              FillOutBusUnit(BusUnit.Code,ShowName);
+              StartNewRow;
+            END;
+          UNTIL BusUnit.NEXT = 0;
+        NoOfLeadingColumns := NoOfLeadingColumns + 1;
+        SetStartColumnNo(NoOfLeadingColumns);
+      END;
+
+      IF AnalysisView."Dimension 1 Code" <> '' THEN
+        WriteDimLine(1,Dim1Filter,AnalysisView."Dimension 1 Code",NoOfLeadingColumns,ShowName);
+      NoOfLeadingColumns := NoOfLeadingColumns + MaxLevelDim[1] + 1;
+
+      IF AnalysisView."Dimension 2 Code" <> '' THEN
+        WriteDimLine(2,Dim2Filter,AnalysisView."Dimension 2 Code",NoOfLeadingColumns,ShowName);
+      NoOfLeadingColumns := NoOfLeadingColumns + MaxLevelDim[2] + 1;
+
+      IF AnalysisView."Dimension 3 Code" <> '' THEN
+        WriteDimLine(3,Dim3Filter,AnalysisView."Dimension 3 Code",NoOfLeadingColumns,ShowName);
+      NoOfLeadingColumns := NoOfLeadingColumns + MaxLevelDim[3] + 1;
+
+      IF AnalysisView."Dimension 4 Code" <> '' THEN
+        WriteDimLine(4,Dim4Filter,AnalysisView."Dimension 4 Code",NoOfLeadingColumns,ShowName);
+      NoOfLeadingColumns := NoOfLeadingColumns + MaxLevelDim[4] + 1;
+
+      WeekNo := DATE2DWY(StartDate,2);
+      Year := DATE2DWY(StartDate,3);
+      StartDate := DWY2DATE(1,WeekNo,Year);
+
+      WHILE StartDate <= EndDate DO BEGIN
+        SetStartColumnNo(NoOfLeadingColumns);
+        FillNextCellInRow(FORMAT(CalculatePeriodStart(StartDate,0),0,9));
+        FillNextCellInRow(FORMAT(CalculatePeriodStart(StartDate,1),0,9));
+        FillNextCellInRow(FORMAT(CalculatePeriodStart(StartDate,2),0,9));
+        FillNextCellInRow(FORMAT(CalculatePeriodStart(StartDate,3),0,9));
+        FillNextCellInRow(FORMAT(CalculatePeriodStart(StartDate,4),0,9));
+        StartNewRow;
+
+        StartDate := CALCDATE('<1W>',StartDate);
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateAnalysisViewEntryPart@28(VAR AnalysisViewEntry@1015 : Record 365;AnalysisView@1014 : Record 363;VAR StartDate@1023 : Date;VAR EndDate@1002 : Date;SignValue@1013 : Integer;ShowInAddCurr@1012 : Boolean;ShowName@1011 : Boolean;ClosingEntryFilter@1005 : Option;DateFilter@1004 : Text;AmountType@1001 : Option;CFFilter@1000 : Text);
+    VAR
+      AnalysisViewEntry2@1024 : Record 365;
+      MaxDate@1021 : Date;
+    BEGIN
+      WITH AnalysisViewEntry DO BEGIN
+        StartDate := "Posting Date";
+        AnalysisViewEntry2.SETFILTER("Posting Date",DateFilter);
+        IF (DateFilter <> '') AND (AmountType = 1) THEN BEGIN
+          MaxDate := AnalysisViewEntry2.GETRANGEMAX("Posting Date");
+          SETFILTER("Posting Date",'<=%1',MaxDate);
+        END;
+        IF CFFilter <> '' THEN
+          SETFILTER("Cash Flow Forecast No.",CFFilter);
+
+        IF FINDSET THEN
+          REPEAT
+            IF (ClosingEntryFilter = 0) OR ("Posting Date" = NORMALDATE("Posting Date")) THEN BEGIN
+              IF "Posting Date" >= EndDate THEN
+                EndDate := "Posting Date"
+              ELSE
+                IF "Posting Date" <= StartDate THEN
+                  StartDate := "Posting Date";
+
+              IF GLAccountSource THEN BEGIN
+                IF TempGLAcc2.GET("Account No.") THEN
+                  TempGLAcc2.MARK(TRUE);
+                FillOutGLAcc("Account No.",ShowName);
+              END ELSE BEGIN
+                IF TempCFAccount2.GET("Account No.") THEN
+                  TempCFAccount2.MARK(TRUE);
+                FillOutCFAccount("Account No.",ShowName);
+              END;
+
+              IF HasBusinessUnits THEN
+                FillOutBusUnit("Business Unit Code",ShowName);
+              IF AnalysisView."Dimension 1 Code" <> '' THEN
+                FillOutDim("Dimension 1 Value Code",AnalysisView."Dimension 1 Code",1,ShowName);
+
+              IF AnalysisView."Dimension 2 Code" <> '' THEN
+                FillOutDim("Dimension 2 Value Code",AnalysisView."Dimension 2 Code",2,ShowName);
+
+              IF AnalysisView."Dimension 3 Code" <> '' THEN
+                FillOutDim("Dimension 3 Value Code",AnalysisView."Dimension 3 Code",3,ShowName);
+
+              IF AnalysisView."Dimension 4 Code" <> '' THEN
+                FillOutDim("Dimension 4 Value Code",AnalysisView."Dimension 4 Code",4,ShowName);
+
+              IF NOT ShowInAddCurr THEN BEGIN
+                FillNextCellInRow(FORMAT(CalculatePeriodStart(NORMALDATE("Posting Date"),-1),0,9));
+                FillNextCellInRow(FORMAT(CalculatePeriodStart(NORMALDATE("Posting Date"),0),0,9));
+                FillNextCellInRow(FORMAT(CalculatePeriodStart(NORMALDATE("Posting Date"),1),0,9));
+                FillNextCellInRow(FORMAT(CalculatePeriodStart(NORMALDATE("Posting Date"),2),0,9));
+                FillNextCellInRow(FORMAT(CalculatePeriodStart(NORMALDATE("Posting Date"),3),0,9));
+                FillNextCellInRow(FORMAT(CalculatePeriodStart(NORMALDATE("Posting Date"),4),0,9));
+                FillNextCellInRow(FORMAT(Amount * SignValue,0,'<Standard Format,1>'));
+                FillNextCellInRow(FORMAT("Debit Amount" * SignValue,0,'<Standard Format,1>'));
+                FillNextCellInRow(FORMAT("Credit Amount" * SignValue,0,'<Standard Format,1>'));
+              END ELSE BEGIN
+                FillNextCellInRow(FORMAT(CalculatePeriodStart(NORMALDATE("Posting Date"),-1),0,9));
+                FillNextCellInRow(FORMAT(CalculatePeriodStart(NORMALDATE("Posting Date"),0),0,9));
+                FillNextCellInRow(FORMAT(CalculatePeriodStart(NORMALDATE("Posting Date"),1),0,9));
+                FillNextCellInRow(FORMAT(CalculatePeriodStart(NORMALDATE("Posting Date"),2),0,9));
+                FillNextCellInRow(FORMAT(CalculatePeriodStart(NORMALDATE("Posting Date"),3),0,9));
+                FillNextCellInRow(FORMAT(CalculatePeriodStart(NORMALDATE("Posting Date"),4),0,9));
+                FillNextCellInRow(FORMAT("Add.-Curr. Amount" * SignValue,0,'<Standard Format,1>'));
+                FillNextCellInRow(FORMAT("Add.-Curr. Debit Amount" * SignValue,0,'<Standard Format,1>'));
+                FillNextCellInRow(FORMAT("Add.-Curr. Credit Amount" * SignValue,0,'<Standard Format,1>'));
+              END;
+              StartNewRow;
+            END;
+          UNTIL NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateAnalysisViewBudgetEntryPart@18(AnalysisView@1001 : Record 363;VAR StartDate@1023 : Date;VAR EndDate@1022 : Date;SignValue@1015 : Integer;ShowInAddCurr@1014 : Boolean;ShowName@1013 : Boolean;AccFilter@1012 : Text;Dim1Filter@1011 : Text;Dim2Filter@1010 : Text;Dim3Filter@1009 : Text;Dim4Filter@1008 : Text;ClosingEntryFilter@1007 : Option;DateFilter@1006 : Text;BusUnitFilter@1005 : Text;BudgetFilter@1004 : Text;AmountType@1003 : Option);
+    VAR
+      Currency@1024 : Record 4;
+      GLSetup@1016 : Record 98;
+      CurrExchRate@1026 : Record 330;
+      AnalysisViewBudgetEntry@1000 : Record 366;
+      MaxDate@1021 : Date;
+      CurrExchDate@1020 : Date;
+      NoOfRows@1019 : Integer;
+      AddRepCurrAmount@1025 : Decimal;
+    BEGIN
+      WITH AnalysisViewBudgetEntry DO BEGIN
+        SETFILTER("Analysis View Code",AnalysisView.Code);
+        SETFILTER("Posting Date",DateFilter);
+        IF (DateFilter <> '') AND (AmountType = 1) THEN BEGIN
+          MaxDate := GETRANGEMAX("Posting Date");
+          SETFILTER("Posting Date",'<= %1',MaxDate);
+        END;
+        SETFILTER("G/L Account No.",AccFilter);
+        SETFILTER("Business Unit Code",BusUnitFilter);
+        SETFILTER("Budget Name",BudgetFilter);
+        SETFILTER("Dimension 1 Value Code",Dim1Filter);
+        SETFILTER("Dimension 2 Value Code",Dim2Filter);
+        SETFILTER("Dimension 3 Value Code",Dim3Filter);
+        SETFILTER("Dimension 4 Value Code",Dim4Filter);
+        IF FINDSET THEN
+          REPEAT
+            IF (ClosingEntryFilter = 1) OR ("Posting Date" = NORMALDATE("Posting Date")) THEN BEGIN
+              IF "Posting Date" >= EndDate THEN
+                EndDate := "Posting Date";
+              IF ("Posting Date" <= StartDate) OR (StartDate = 0D) THEN
+                StartDate := "Posting Date";
+
+              NoOfRows := NoOfRows + 1;
+
+              IF TempGLAcc2.GET("G/L Account No.") THEN
+                TempGLAcc2.MARK(TRUE);
+              FillOutGLAcc("G/L Account No.",ShowName);
+              IF HasBusinessUnits THEN
+                FillOutBusUnit("Business Unit Code",ShowName);
+              IF AnalysisView."Dimension 1 Code" <> '' THEN
+                FillOutDim("Dimension 1 Value Code",AnalysisView."Dimension 1 Code",1,ShowName);
+
+              IF AnalysisView."Dimension 2 Code" <> '' THEN
+                FillOutDim("Dimension 2 Value Code",AnalysisView."Dimension 2 Code",2,ShowName);
+
+              IF AnalysisView."Dimension 3 Code" <> '' THEN
+                FillOutDim("Dimension 3 Value Code",AnalysisView."Dimension 3 Code",3,ShowName);
+
+              IF AnalysisView."Dimension 4 Code" <> '' THEN
+                FillOutDim("Dimension 4 Value Code",AnalysisView."Dimension 4 Code",4,ShowName);
+
+              IF NOT ShowInAddCurr THEN BEGIN
+                FillNextCellInRow(FORMAT(CalculatePeriodStart(NORMALDATE("Posting Date"),-1),0,9));
+                FillNextCellInRow(FORMAT(CalculatePeriodStart(NORMALDATE("Posting Date"),0),0,9));
+                FillNextCellInRow(FORMAT(CalculatePeriodStart(NORMALDATE("Posting Date"),1),0,9));
+                FillNextCellInRow(FORMAT(CalculatePeriodStart(NORMALDATE("Posting Date"),2),0,9));
+                FillNextCellInRow(FORMAT(CalculatePeriodStart(NORMALDATE("Posting Date"),3),0,9));
+                FillNextCellInRow(FORMAT(CalculatePeriodStart(NORMALDATE("Posting Date"),4),0,9));
+                FillNextCellInRow('');
+                FillNextCellInRow('');
+                FillNextCellInRow('');
+                FillNextCellInRow(FORMAT(Amount * SignValue,0,'<Standard Format,1>'));
+              END ELSE BEGIN
+                IF GETFILTER("Posting Date") = '' THEN
+                  CurrExchDate := WORKDATE
+                ELSE
+                  CurrExchDate := GETRANGEMIN("Posting Date");
+                GLSetup.GET;
+                IF ShowInAddCurr AND Currency.GET(GLSetup."Additional Reporting Currency") THEN
+                  AddRepCurrAmount :=
+                    ROUND(
+                      CurrExchRate.ExchangeAmtLCYToFCY(
+                        CurrExchDate,GLSetup."Additional Reporting Currency",Amount,
+                        CurrExchRate.ExchangeRate(
+                          CurrExchDate,GLSetup."Additional Reporting Currency")) * SignValue,
+                      Currency."Amount Rounding Precision")
+                ELSE
+                  AddRepCurrAmount :=
+                    ROUND(
+                      CurrExchRate.ExchangeAmtLCYToFCY(
+                        CurrExchDate,GLSetup."Additional Reporting Currency",Amount,
+                        CurrExchRate.ExchangeRate(
+                          CurrExchDate,GLSetup."Additional Reporting Currency")) * SignValue,
+                      GLSetup."Amount Rounding Precision");
+                FillNextCellInRow(FORMAT(CalculatePeriodStart(NORMALDATE("Posting Date"),-1),0,9));
+                FillNextCellInRow(FORMAT(CalculatePeriodStart(NORMALDATE("Posting Date"),0),0,9));
+                FillNextCellInRow(FORMAT(CalculatePeriodStart(NORMALDATE("Posting Date"),1),0,9));
+                FillNextCellInRow(FORMAT(CalculatePeriodStart(NORMALDATE("Posting Date"),2),0,9));
+                FillNextCellInRow(FORMAT(CalculatePeriodStart(NORMALDATE("Posting Date"),3),0,9));
+                FillNextCellInRow(FORMAT(CalculatePeriodStart(NORMALDATE("Posting Date"),4),0,9));
+                FillNextCellInRow('');
+                FillNextCellInRow('');
+                FillNextCellInRow('');
+                FillNextCellInRow(FORMAT(AddRepCurrAmount,0,'<Standard Format,1>'));
+              END;
+              StartNewRow;
+            END;
+          UNTIL NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE CalculatePeriodStart@4(PostingDate@1000 : Date;DateCompression@1001 : Integer) : Date;
+    VAR
+      AccountingPeriod@1002 : Record 50;
+      PrevPostingDate@1004 : Date;
+      PrevCalculatedPostingDate@1005 : Date;
+    BEGIN
+      IF PostingDate = CLOSINGDATE(PostingDate) THEN
+        EXIT(PostingDate);
+      CASE DateCompression OF
+        0:
+          // Week :
+          PostingDate := CALCDATE('<CW+1D-1W>',PostingDate);
+        1:
+          // Month :
+          PostingDate := CALCDATE('<CM+1D-1M>',PostingDate);
+        2:
+          // Quarter :
+          PostingDate := CALCDATE('<CQ+1D-1Q>',PostingDate);
+        3:
+          // Year :
+          PostingDate := CALCDATE('<CY+1D-1Y>',PostingDate);
+        4:
+          // Period :
+          BEGIN
+            IF PostingDate <> PrevPostingDate THEN BEGIN
+              PrevPostingDate := PostingDate;
+              AccountingPeriod.SETRANGE("Starting Date",0D,PostingDate);
+              IF AccountingPeriod.FINDLAST THEN BEGIN
+                PrevCalculatedPostingDate := AccountingPeriod."Starting Date"
+              END ELSE
+                PrevCalculatedPostingDate := PostingDate;
+            END;
+            PostingDate := PrevCalculatedPostingDate;
+          END;
+      END;
+      EXIT(PostingDate);
+    END;
+
+    LOCAL PROCEDURE CreateFillGeneralInfoSheet@20(VAR AnalysisViewEntry@1000 : Record 365;Sign@1016 : Boolean;AmountType@1004 : Option;DateFilter@1005 : Text;AccFilter@1006 : Text;BudgetFilter@1011 : Text;Dim1Filter@1010 : Text;Dim2Filter@1009 : Text;Dim3Filter@1008 : Text;Dim4Filter@1007 : Text;ClosingEntryFilter@1013 : Option;ShowInAddCurr@1015 : Boolean;CashFlowFilter@1012 : Text);
+    VAR
+      GLSetup@1014 : Record 98;
+      AnalysisView@1001 : Record 363;
+      AnalysisViewFilter@1003 : Record 364;
+      RowNoCount@1002 : Integer;
+    BEGIN
+      TempExcelBuffer.RESET;
+      TempExcelBuffer.DELETEALL;
+
+      WITH AnalysisViewEntry DO BEGIN
+        FillCell(1,1,AnalysisView.TABLECAPTION);
+        FillCell(2,2,FIELDCAPTION("Analysis View Code"));
+        FillCell(2,3,"Analysis View Code");
+        FillCell(3,2,Text023);
+        AnalysisView.GET("Analysis View Code");
+        FillCell(3,3,AnalysisView.Name);
+        RowNoCount := 3;
+        IF AnalysisView."Account Filter" <> '' THEN BEGIN
+          RowNoCount := RowNoCount + 1;
+          FillCell(RowNoCount,2,AnalysisView.FIELDCAPTION("Account Filter"));
+          FillCell(RowNoCount,3,AnalysisView."Account Filter");
+        END;
+        RowNoCount := RowNoCount + 1;
+        FillCell(RowNoCount,2,AnalysisView.FIELDCAPTION("Date Compression"));
+        CASE AnalysisView."Date Compression" OF
+          0:
+            FillCell(RowNoCount,3,Text003);
+          1:
+            FillCell(RowNoCount,3,Text004);
+          2:
+            FillCell(RowNoCount,3,Text005);
+          3:
+            FillCell(RowNoCount,3,Text006);
+          4:
+            FillCell(RowNoCount,3,Text007);
+          5:
+            FillCell(RowNoCount,3,Text008);
+          6:
+            FillCell(RowNoCount,3,Text009);
+        END;
+        IF AnalysisView."Starting Date" <> 0D THEN BEGIN
+          RowNoCount := RowNoCount + 1;
+          FillCell(RowNoCount,2,AnalysisView.FIELDCAPTION("Starting Date"));
+          FillCell(RowNoCount,3,FORMAT(AnalysisView."Starting Date"));
+        END;
+        RowNoCount := RowNoCount + 1;
+        FillCell(RowNoCount,2,AnalysisView.FIELDCAPTION("Last Date Updated"));
+        FillCell(RowNoCount,3,FORMAT(AnalysisView."Last Date Updated"));
+        AnalysisViewFilter.SETRANGE("Analysis View Code","Analysis View Code");
+        IF AnalysisViewFilter.FINDSET THEN
+          REPEAT
+            RowNoCount := RowNoCount + 1;
+            FillCell(RowNoCount,2,AnalysisViewFilter."Dimension Code");
+            FillCell(RowNoCount,3,AnalysisViewFilter."Dimension Value Filter");
+          UNTIL AnalysisViewFilter.NEXT = 0;
+        RowNoCount := RowNoCount + 1;
+        FillCell(RowNoCount,1,Text011);
+        RowNoCount := RowNoCount + 1;
+        FillCell(RowNoCount,2,Text012);
+        CASE AmountType OF
+          0:
+            FillCell(RowNoCount,3,Text013);
+          1:
+            FillCell(RowNoCount,3,Text014);
+        END;
+        IF DateFilter <> '' THEN BEGIN
+          RowNoCount := RowNoCount + 1;
+          FillCell(RowNoCount,2,Text015);
+          FillCell(RowNoCount,3,DateFilter);
+        END;
+        IF AccFilter <> '' THEN BEGIN
+          RowNoCount := RowNoCount + 1;
+          FillCell(RowNoCount,2,AnalysisView.FIELDCAPTION("Account Filter"));
+          FillCell(RowNoCount,3,AccFilter);
+        END;
+        IF BudgetFilter <> '' THEN BEGIN
+          RowNoCount := RowNoCount + 1;
+          FillCell(RowNoCount,2,Text016);
+          FillCell(RowNoCount,3,BudgetFilter);
+        END;
+        IF CashFlowFilter <> '' THEN BEGIN
+          RowNoCount := RowNoCount + 1;
+          FillCell(RowNoCount,2,Text116);
+          FillCell(RowNoCount,3,CashFlowFilter);
+        END;
+        IF Dim1Filter <> '' THEN BEGIN
+          RowNoCount := RowNoCount + 1;
+          FillCell(RowNoCount,2,AnalysisView."Dimension 1 Code");
+          FillCell(RowNoCount,3,Dim1Filter);
+        END;
+        IF Dim2Filter <> '' THEN BEGIN
+          RowNoCount := RowNoCount + 1;
+          FillCell(RowNoCount,2,AnalysisView."Dimension 2 Code");
+          FillCell(RowNoCount,3,Dim2Filter);
+        END;
+        IF Dim3Filter <> '' THEN BEGIN
+          RowNoCount := RowNoCount + 1;
+          FillCell(RowNoCount,2,AnalysisView."Dimension 3 Code");
+          FillCell(RowNoCount,3,Dim3Filter);
+        END;
+        IF Dim4Filter <> '' THEN BEGIN
+          RowNoCount := RowNoCount + 1;
+          FillCell(RowNoCount,2,AnalysisView."Dimension 4 Code");
+          FillCell(RowNoCount,3,Dim4Filter);
+        END;
+        IF GLAccountSource THEN BEGIN
+          RowNoCount := RowNoCount + 1;
+          FillCell(RowNoCount,2,Text024);
+          CASE ClosingEntryFilter OF
+            0:
+              FillCell(RowNoCount,3,Text025);
+            1:
+              FillCell(RowNoCount,3,Text026);
+          END;
+          RowNoCount := RowNoCount + 1;
+          FillCell(RowNoCount,2,Text027);
+          GLSetup.GET;
+          IF ShowInAddCurr THEN
+            FillCell(RowNoCount,3,GLSetup."Additional Reporting Currency")
+          ELSE
+            FillCell(RowNoCount,3,GLSetup."LCY Code");
+        END;
+
+        RowNoCount := RowNoCount + 1;
+        FillCell(RowNoCount,2,Text028);
+        IF Sign THEN
+          FillCell(RowNoCount,3,Text029)
+        ELSE
+          FillCell(RowNoCount,3,Text030);
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateRowWithColumnsCaptions@10(AnalysisViewEntry@1000 : Record 365;AnalysisView@1001 : Record 363);
+    VAR
+      i@1002 : Integer;
+    BEGIN
+      WITH AnalysisViewEntry DO BEGIN
+        FOR i := 0 TO MaxLevel DO BEGIN
+          NoOfColumns := NoOfColumns + 1;
+          FillCell(1,NoOfColumns,GetPivotFieldAccountIndexValue(i));
+        END;
+        IF HasBusinessUnits THEN BEGIN
+          NoOfColumns := NoOfColumns + 1;
+          FillCell(1,NoOfColumns,BusUnit.TABLECAPTION);
+        END;
+        IF AnalysisView."Dimension 1 Code" <> '' THEN
+          FOR i := 0 TO MaxLevelDim[1] DO BEGIN
+            NoOfColumns := NoOfColumns + 1;
+            FillCell(1,NoOfColumns,AnalysisView."Dimension 1 Code" + ' ' + FORMAT(Text022) + ' ' + FORMAT(i));
+          END;
+        IF AnalysisView."Dimension 2 Code" <> '' THEN
+          FOR i := 0 TO MaxLevelDim[2] DO BEGIN
+            NoOfColumns := NoOfColumns + 1;
+            FillCell(1,NoOfColumns,AnalysisView."Dimension 2 Code" + ' ' + FORMAT(Text022) + ' ' + FORMAT(i));
+          END;
+        IF AnalysisView."Dimension 3 Code" <> '' THEN
+          FOR i := 0 TO MaxLevelDim[3] DO BEGIN
+            NoOfColumns := NoOfColumns + 1;
+            FillCell(1,NoOfColumns,AnalysisView."Dimension 3 Code" + ' ' + FORMAT(Text022) + ' ' + FORMAT(i));
+          END;
+        IF AnalysisView."Dimension 4 Code" <> '' THEN
+          FOR i := 0 TO MaxLevelDim[4] DO BEGIN
+            NoOfColumns := NoOfColumns + 1;
+            FillCell(1,NoOfColumns,AnalysisView."Dimension 4 Code" + ' ' + FORMAT(Text022) + ' ' + FORMAT(i));
+          END;
+
+        FillNextCellInRow(Text004);
+        FillNextCellInRow(Text005);
+        FillNextCellInRow(Text006);
+        FillNextCellInRow(Text007);
+        FillNextCellInRow(Text008);
+        FillNextCellInRow(Text009);
+        FillNextCellInRow(FIELDCAPTION(Amount));
+        FillNextCellInRow(FIELDCAPTION("Debit Amount"));
+        FillNextCellInRow(FIELDCAPTION("Credit Amount"));
+        FillNextCellInRow(Text020);
+      END;
+
+      StartNewRow;
+    END;
+
+    LOCAL PROCEDURE FindGLAccountParent@7(VAR Account@1002 : Code[20]);
+    BEGIN
+      TempGLAcc3.GET(Account);
+      IF TempGLAcc3.Indentation <> 0 THEN BEGIN
+        TempGLAcc3.SETRANGE(Indentation,TempGLAcc3.Indentation - 1);
+        TempGLAcc3.NEXT(-1);
+      END;
+      Account := TempGLAcc3."No.";
+    END;
+
+    LOCAL PROCEDURE FindCFAccountParent@2(VAR Account@1002 : Code[20]);
+    BEGIN
+      TempCFAccount3.GET(Account);
+      IF TempCFAccount3.Indentation <> 0 THEN BEGIN
+        TempCFAccount3.SETRANGE(Indentation,TempCFAccount3.Indentation - 1);
+        TempCFAccount3.NEXT(-1);
+      END;
+      Account := TempCFAccount3."No.";
+    END;
+
+    LOCAL PROCEDURE FindDimLevel@8(DimCode@1000 : Code[20];DimFilter@1001 : Text;ArrayNo@1003 : Integer);
+    VAR
+      DimValue@1002 : Record 349;
+    BEGIN
+      IF DimCode = '' THEN
+        EXIT;
+      DimValue.SETRANGE("Dimension Code",DimCode);
+      IF DimValue.FIND('-') THEN
+        REPEAT
+          TempDimValue2.COPY(DimValue);
+          TempDimValue2.INSERT;
+          TempDimValue3.COPY(DimValue);
+          TempDimValue3.INSERT;
+        UNTIL DimValue.NEXT = 0;
+      TempDimValue2.SETFILTER(Code,DimFilter);
+      IF TempDimValue2.FIND('-') THEN
+        REPEAT
+          IF MaxLevelDim[ArrayNo] < TempDimValue2.Indentation THEN
+            MaxLevelDim[ArrayNo] := TempDimValue2.Indentation;
+        UNTIL TempDimValue2.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE FindDimParent@6(VAR Account@1000 : Code[20];DimensionCode@1001 : Code[20]);
+    BEGIN
+      TempDimValue3.RESET;
+      TempDimValue3.SETRANGE("Dimension Code",DimensionCode);
+      TempDimValue3.GET(DimensionCode,Account);
+      IF TempDimValue3.Indentation <> 0 THEN BEGIN
+        TempDimValue3.SETRANGE(Indentation,TempDimValue3.Indentation - 1);
+        TempDimValue3.NEXT(-1);
+      END;
+      Account := TempDimValue3.Code;
+    END;
+
+    LOCAL PROCEDURE FillOutDim@9(DimValueCode@1003 : Code[20];DimCode@1004 : Code[20];DimNo@1005 : Integer;ShowName@1006 : Boolean);
+    VAR
+      ParentTempNameValueBuffer@1000 : TEMPORARY Record 823;
+      DimensionValue@1008 : Record 349;
+      Indent@1002 : Integer;
+      i@1001 : Integer;
+      DimValueCode2@1011 : Code[20];
+    BEGIN
+      IF DimValueCode <> '' THEN BEGIN
+        IF TempDimValue2.GET(DimCode,DimValueCode) THEN
+          TempDimValue2.MARK(TRUE)
+        ELSE
+          TempDimValue2.INIT;
+        DimValueCode2 := DimValueCode;
+        Indent := TempDimValue2.Indentation;
+        IF (Indent <> 0) AND (DimValueCode2 <> '') THEN
+          FOR i := Indent DOWNTO 1 DO BEGIN
+            FindDimParent(DimValueCode2,DimCode);
+            TempDimValue2.GET(DimCode,DimValueCode2);
+            AddParentToBuffer(ParentTempNameValueBuffer,i,TempDimValue2.Code,TempDimValue2.Name);
+          END;
+
+        IF ParentTempNameValueBuffer.FINDSET THEN
+          REPEAT
+            AddAcc(ShowName,ParentTempNameValueBuffer.Name,ParentTempNameValueBuffer.Value);
+          UNTIL ParentTempNameValueBuffer.NEXT = 0;
+
+        IF DimensionValue.GET(DimCode,DimValueCode) THEN;
+
+        IF DimensionValue.Indentation <> MaxLevelDim[DimNo] THEN
+          FOR i := DimensionValue.Indentation + 1 TO MaxLevelDim[DimNo] DO
+            AddAcc(ShowName,DimensionValue.Code,DimensionValue.Name);
+
+        AddAcc(ShowName,DimensionValue.Code,DimensionValue.Name);
+      END ELSE
+        FOR i := 0 TO MaxLevelDim[DimNo] DO
+          AddAcc(FALSE,'','');
+    END;
+
+    LOCAL PROCEDURE FillOutGLAcc@5(GLAccNo@1001 : Code[20];ShowName@1005 : Boolean);
+    VAR
+      GLAccount@1003 : Record 15;
+      ParentTempNameValueBuffer@1002 : TEMPORARY Record 823;
+      i@1004 : Integer;
+      Indent@1008 : Integer;
+      Account@1000 : Code[20];
+    BEGIN
+      Account := GLAccNo;
+      TempGLAcc3.GET(Account);
+      TempGLAcc3.MARK(TRUE);
+      Indent := TempGLAcc3.Indentation;
+      IF Indent <> 0 THEN
+        FOR i := Indent DOWNTO 1 DO BEGIN
+          FindGLAccountParent(Account);
+          TempGLAcc3.GET(Account);
+          AddParentToBuffer(ParentTempNameValueBuffer,i,TempGLAcc3."No.",TempGLAcc3.Name);
+        END;
+
+      IF ParentTempNameValueBuffer.FINDSET THEN
+        REPEAT
+          AddAcc(ShowName,ParentTempNameValueBuffer.Name,ParentTempNameValueBuffer.Value);
+        UNTIL ParentTempNameValueBuffer.NEXT = 0;
+
+      GLAccount.GET(GLAccNo);
+      IF GLAccount.Indentation <> MaxLevel THEN
+        FOR i := GLAccount.Indentation + 1 TO MaxLevel DO
+          AddAcc(ShowName,GLAccount."No.",GLAccount.Name);
+
+      AddAcc(ShowName,GLAccount."No.",GLAccount.Name);
+    END;
+
+    LOCAL PROCEDURE FillOutCFAccount@1008(CFAccNo@1001 : Code[20];ShowName@1005 : Boolean);
+    VAR
+      CashFlowAccount@1003 : Record 841;
+      ParentTempNameValueBuffer@1006 : TEMPORARY Record 823;
+      i@1004 : Integer;
+      Indent@1008 : Integer;
+      Account@1000 : Code[20];
+    BEGIN
+      Account := CFAccNo;
+      TempCFAccount3.GET(Account);
+      TempCFAccount3.MARK(TRUE);
+
+      Indent := TempCFAccount2.Indentation;
+      IF Indent <> 0 THEN
+        FOR i := Indent DOWNTO 1 DO BEGIN
+          FindCFAccountParent(Account);
+          TempCFAccount3.GET(Account);
+          AddParentToBuffer(ParentTempNameValueBuffer,i,TempCFAccount3."No.",TempCFAccount3.Name);
+        END;
+
+      IF ParentTempNameValueBuffer.FINDSET THEN
+        REPEAT
+          AddAcc(ShowName,ParentTempNameValueBuffer.Name,ParentTempNameValueBuffer.Value);
+        UNTIL ParentTempNameValueBuffer.NEXT = 0;
+
+      CashFlowAccount.GET(CFAccNo);
+      IF CashFlowAccount.Indentation <> MaxLevel THEN
+        FOR i := CashFlowAccount.Indentation + 1 TO MaxLevel DO
+          AddAcc(ShowName,CashFlowAccount."No.",CashFlowAccount.Name);
+
+      AddAcc(ShowName,CashFlowAccount."No.",CashFlowAccount.Name);
+    END;
+
+    LOCAL PROCEDURE FillOutBusUnit@11(BusUnitCode@1001 : Code[20];ShowName@1005 : Boolean);
+    BEGIN
+      IF BusUnitCode <> '' THEN BEGIN
+        BusUnit.GET(BusUnitCode);
+        BusUnit.MARK(TRUE);
+        AddAcc(ShowName,BusUnit.Code,BusUnit.Name);
+      END ELSE
+        AddAcc(FALSE,'','');
+    END;
+
+    LOCAL PROCEDURE FillCell@26(RowNo@1001 : Integer;ColumnNo@1002 : Integer;CellValueAsText@1003 : Text);
+    BEGIN
+      WITH TempExcelBuffer DO BEGIN
+        INIT;
+        VALIDATE("Row No.",RowNo);
+        VALIDATE("Column No.",ColumnNo);
+        "Cell Value as Text" := COPYSTR(CellValueAsText,1,MAXSTRLEN("Cell Value as Text"));
+        INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE FillNextCellInRow@82(CellValueAsText@1000 : Text);
+    VAR
+      RowNo@1001 : Integer;
+      ColumnNo@1002 : Integer;
+    BEGIN
+      WITH TempExcelBuffer DO BEGIN
+        RowNo := "Row No.";
+        ColumnNo := "Column No." + 1;
+        INIT;
+        VALIDATE("Row No.",RowNo);
+        VALIDATE("Column No.",ColumnNo);
+        "Cell Value as Text" := COPYSTR(CellValueAsText,1,MAXSTRLEN("Cell Value as Text"));
+        INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE StartNewRow@32();
+    VAR
+      RowNo@1001 : Integer;
+    BEGIN
+      RowNo := TempExcelBuffer."Row No." + 1;
+      TempExcelBuffer.INIT;
+      TempExcelBuffer.VALIDATE("Row No.",RowNo);
+      TempExcelBuffer.VALIDATE("Column No.",0);
+    END;
+
+    LOCAL PROCEDURE SetStartColumnNo@40(ColumntNo@1001 : Integer);
+    BEGIN
+      TempExcelBuffer."Column No." := ColumntNo;
+    END;
+
+    LOCAL PROCEDURE AddAcc@14(ShowName@1002 : Boolean;Account@1000 : Text;AccName@1001 : Text);
+    VAR
+      CellValueAsText@1004 : Text;
+    BEGIN
+      IF Account = '' THEN
+        CellValueAsText := ''
+      ELSE
+        IF ShowName THEN
+          CellValueAsText := Account + ' ' + AccName
+        ELSE
+          CellValueAsText := Account;
+
+      FillNextCellInRow(CellValueAsText);
+    END;
+
+    LOCAL PROCEDURE AddParentToBuffer@12(VAR NameValueBuffer@1000 : Record 823;id@1003 : Integer;AccountNumber@1001 : Text[250];AccountName@1002 : Text[250]);
+    BEGIN
+      NameValueBuffer.INIT;
+      NameValueBuffer.ID := id;
+      NameValueBuffer.Name := AccountNumber;
+      NameValueBuffer.Value := AccountName;
+      NameValueBuffer.INSERT;
+    END;
+
+    LOCAL PROCEDURE GetPivotFieldAccountIndexValue@15(Level@1000 : Integer) : Text[250];
+    BEGIN
+      IF GLAccountSource THEN
+        EXIT(FORMAT(Text018) + ' ' + FORMAT(Text022) + ' ' + FORMAT(Level));
+
+      EXIT(FORMAT(Text118) + ' ' + FORMAT(Text022) + ' ' + FORMAT(Level));
+    END;
+
+    LOCAL PROCEDURE CheckCombination@21(Show@1000 : Integer;AmountField@1001 : Integer);
+    BEGIN
+      IF NOT GLAccountSource THEN
+        EXIT;
+
+      IF (Show <> 0) AND (Show <> 1) THEN
+        ERROR(Text000);
+      IF (Show = 1) AND (AmountField <> 0) THEN
+        ERROR(Text001);
+    END;
+
+    LOCAL PROCEDURE SetOtherFilterToCorrectFilter@16(DraftFilter@1002 : Text;VAR BusUnitFilter@1001 : Text;VAR CashFlowFilter@1000 : Text);
+    BEGIN
+      IF GLAccountSource THEN
+        BusUnitFilter := DraftFilter
+      ELSE
+        CashFlowFilter := DraftFilter;
+    END;
+
+    LOCAL PROCEDURE PopulateTempAccountTable@17(AccFilter@1002 : Text);
+    VAR
+      GLAcc@1001 : Record 15;
+      CFAccount@1000 : Record 841;
+    BEGIN
+      IF GLAccountSource THEN BEGIN
+        IF GLAcc.FIND('-') THEN
+          REPEAT
+            TempGLAcc3.COPY(GLAcc);
+            TempGLAcc3.INSERT;
+          UNTIL GLAcc.NEXT = 0;
+
+        TempGLAcc3.SETFILTER("No.",AccFilter);
+        IF TempGLAcc3.FIND('-') THEN
+          REPEAT
+            TempGLAcc2.COPY(TempGLAcc3);
+            TempGLAcc2.INSERT;
+            IF MaxLevel < TempGLAcc2.Indentation THEN
+              MaxLevel := TempGLAcc2.Indentation;
+          UNTIL TempGLAcc3.NEXT = 0;
+        TempGLAcc3.SETRANGE("No.");
+      END ELSE BEGIN
+        IF CFAccount.FIND('-') THEN
+          REPEAT
+            TempCFAccount3.COPY(CFAccount);
+            TempCFAccount3.INSERT;
+          UNTIL CFAccount.NEXT = 0;
+
+        TempCFAccount3.SETFILTER("No.",AccFilter);
+        IF TempCFAccount3.FIND('-') THEN
+          REPEAT
+            TempCFAccount2.COPY(TempCFAccount3);
+            TempCFAccount2.INSERT;
+            IF MaxLevel < TempCFAccount2.Indentation THEN
+              MaxLevel := TempCFAccount2.Indentation;
+          UNTIL TempCFAccount3.NEXT = 0;
+        TempCFAccount3.SETRANGE("No.");
+      END;
+    END;
+
+    LOCAL PROCEDURE ProcessMarkedTempCFAccountRec@19(ShowName@1002 : Boolean);
+    BEGIN
+      REPEAT
+        IF NOT TempCFAccount2.MARK THEN BEGIN
+          FillOutCFAccount(TempCFAccount2."No.",ShowName);
+          StartNewRow;
+        END;
+      UNTIL TempCFAccount2.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE WriteDimLine@13(DimNo@1008 : Integer;DimFilter@1002 : Text;DimCode@1003 : Code[20];NoOfLeadingColumns@1007 : Integer;ShowName@1006 : Boolean);
+    BEGIN
+      SetStartColumnNo(NoOfLeadingColumns);
+      TempDimValue2.SETFILTER(Code,DimFilter);
+      TempDimValue2.SETFILTER("Dimension Code",DimCode);
+      TempDimValue2.SETRANGE("Dimension Value Type",TempDimValue2."Dimension Value Type"::Standard);
+      IF TempDimValue2.FIND('-') THEN
+        REPEAT
+          IF NOT TempDimValue2.MARK THEN BEGIN
+            FillOutDim(TempDimValue2.Code,DimCode,DimNo,ShowName);
+            StartNewRow;
+            SetStartColumnNo(NoOfLeadingColumns);
+          END;
+        UNTIL TempDimValue2.NEXT = 0;
+    END;
+
+    PROCEDURE GetServerFileName@22() : Text;
+    BEGIN
+      EXIT(ServerFileName);
+    END;
+
+    PROCEDURE SetSkipDownload@43();
+    BEGIN
+      SkipDownload := TRUE;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,938 @@
+OBJECT Codeunit 9178 Application Area Mgmt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:52 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      OnlyBasicAppAreaMsg@1000 : TextConst 'ENU=You do not have access to this page, because your experience is set to Basic.';
+      ValuesNotAllowedErr@1001 : TextConst 'ENU=The selected experience is not supported.\\In the Application Area window, you define what is shown in the user interface.';
+      InvoicingExpTierErr@1002 : TextConst 'ENU=The Invoicing application area must be the only enabled area.';
+      HideApplicationAreaError@1003 : Boolean;
+      PremiumSubscriptionNeededMsg@1013 : TextConst 'ENU=To use the Premium experience, you must first buy the Premium plan.';
+
+    LOCAL PROCEDURE GetApplicationAreaSetupRec@3(VAR ApplicationAreaSetup@1000 : Record 9178) : Boolean;
+    VAR
+      ConfPersonalizationMgt@1001 : Codeunit 9170;
+    BEGIN
+      IF NOT ApplicationAreaSetup.GET('','',USERID) THEN
+        IF NOT ApplicationAreaSetup.GET('',ConfPersonalizationMgt.GetCurrentProfileIDNoError) THEN
+          IF NOT GetApplicationAreaSetupRecFromCompany(ApplicationAreaSetup,COMPANYNAME) THEN
+            EXIT(ApplicationAreaSetup.GET);
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GetApplicationAreaSetupRecFromCompany@13(VAR ApplicationAreaSetup@1000 : Record 9178;CompanyName@1001 : Text) : Boolean;
+    BEGIN
+      EXIT(ApplicationAreaSetup.GET(CompanyName));
+    END;
+
+    PROCEDURE GetApplicationAreaSetup@66() ApplicationAreas : Text;
+    VAR
+      ApplicationAreaSetup@1003 : Record 9178;
+      RecRef@1002 : RecordRef;
+      FieldRef@1005 : FieldRef;
+      FieldIndex@1004 : Integer;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(ApplicationAreas);
+
+      RecRef.GETTABLE(ApplicationAreaSetup);
+
+      FOR FieldIndex := 1 TO RecRef.FIELDCOUNT DO BEGIN
+        FieldRef := RecRef.FIELDINDEX(FieldIndex);
+        IF NOT IsInPrimaryKey(FieldRef) THEN
+          IF FieldRef.VALUE THEN
+            IF ApplicationAreas = '' THEN
+              ApplicationAreas := '#' + DELCHR(FieldRef.NAME)
+            ELSE
+              ApplicationAreas := ApplicationAreas + ',#' + DELCHR(FieldRef.NAME);
+      END;
+    END;
+
+    PROCEDURE GetApplicationAreaBuffer@2(VAR TempApplicationAreaBuffer@1000 : TEMPORARY Record 9179);
+    VAR
+      ApplicationAreaSetup@1003 : Record 9178;
+      RecRef@1002 : RecordRef;
+      FieldRef@1005 : FieldRef;
+      FieldIndex@1004 : Integer;
+    BEGIN
+      GetApplicationAreaSetupRec(ApplicationAreaSetup);
+      RecRef.GETTABLE(ApplicationAreaSetup);
+
+      FOR FieldIndex := GetFirstPublicAppAreaFieldIndex TO RecRef.FIELDCOUNT DO BEGIN
+        FieldRef := RecRef.FIELDINDEX(FieldIndex);
+        IF NOT IsInPrimaryKey(FieldRef) THEN BEGIN
+          TempApplicationAreaBuffer."Field No." := FieldRef.NUMBER;
+          TempApplicationAreaBuffer."Application Area" := FieldRef.CAPTION;
+          TempApplicationAreaBuffer.Selected := FieldRef.VALUE;
+          TempApplicationAreaBuffer.INSERT(TRUE);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE SaveApplicationArea@5(VAR TempApplicationAreaBuffer@1000 : TEMPORARY Record 9179;ApplicationAreaSetup@1006 : Record 9178;NoApplicationAreasExist@1007 : Boolean);
+    VAR
+      ExistingTempApplicationAreaBuffer@1009 : TEMPORARY Record 9179;
+      UserPreference@1010 : Record 1306;
+      RecRef@1002 : RecordRef;
+      FieldRef@1003 : FieldRef;
+      ApplicationAreasChanged@1001 : Boolean;
+    BEGIN
+      GetApplicationAreaBuffer(ExistingTempApplicationAreaBuffer);
+      RecRef.GETTABLE(ApplicationAreaSetup);
+
+      TempApplicationAreaBuffer.FINDFIRST;
+      ExistingTempApplicationAreaBuffer.FINDFIRST;
+      REPEAT
+        FieldRef := RecRef.FIELD(TempApplicationAreaBuffer."Field No.");
+        FieldRef.VALUE := TempApplicationAreaBuffer.Selected;
+        IF TempApplicationAreaBuffer.Selected <> ExistingTempApplicationAreaBuffer.Selected THEN
+          ApplicationAreasChanged := TRUE;
+      UNTIL (TempApplicationAreaBuffer.NEXT = 0) AND (ExistingTempApplicationAreaBuffer.NEXT = 0);
+
+      IF NoApplicationAreasExist THEN BEGIN
+        IF ApplicationAreasChanged THEN
+          RecRef.INSERT(TRUE);
+      END ELSE
+        RecRef.MODIFY(TRUE);
+
+      UserPreference.SETFILTER("User ID",USERID);
+      UserPreference.DELETEALL;
+
+      SetupApplicationArea;
+    END;
+
+    LOCAL PROCEDURE TrySaveApplicationArea@8(VAR TempApplicationAreaBuffer@1000 : TEMPORARY Record 9179;ApplicationAreaSetup@1003 : Record 9178;NoApplicationAreaExist@1002 : Boolean) IsApplicationAreaChanged : Boolean;
+    VAR
+      OldApplicationArea@1001 : Text;
+    BEGIN
+      OldApplicationArea := APPLICATIONAREA;
+      SaveApplicationArea(TempApplicationAreaBuffer,ApplicationAreaSetup,NoApplicationAreaExist);
+      IsApplicationAreaChanged := OldApplicationArea <> APPLICATIONAREA;
+    END;
+
+    PROCEDURE TrySaveApplicationAreaCurrentCompany@11(VAR TempApplicationAreaBuffer@1000 : TEMPORARY Record 9179) IsApplicationAreaChanged : Boolean;
+    VAR
+      ApplicationAreaSetup@1003 : Record 9178;
+      NoCompanyApplicationAreasExist@1002 : Boolean;
+    BEGIN
+      IF NOT ApplicationAreaSetup.GET(COMPANYNAME) THEN BEGIN
+        ApplicationAreaSetup."Company Name" := COMPANYNAME;
+        NoCompanyApplicationAreasExist := TRUE;
+      END;
+
+      IsApplicationAreaChanged :=
+        TrySaveApplicationArea(TempApplicationAreaBuffer,ApplicationAreaSetup,NoCompanyApplicationAreasExist);
+    END;
+
+    PROCEDURE TrySaveApplicationAreaCurrentUser@12(VAR TempApplicationAreaBuffer@1000 : TEMPORARY Record 9179) IsApplicationAreaChanged : Boolean;
+    VAR
+      ApplicationAreaSetup@1003 : Record 9178;
+      NoUserApplicationAreasExist@1002 : Boolean;
+    BEGIN
+      IF NOT ApplicationAreaSetup.GET('','',USERID) THEN BEGIN
+        ApplicationAreaSetup."User ID" := USERID;
+        NoUserApplicationAreasExist := TRUE;
+      END;
+
+      IsApplicationAreaChanged :=
+        TrySaveApplicationArea(TempApplicationAreaBuffer,ApplicationAreaSetup,NoUserApplicationAreasExist);
+    END;
+
+    PROCEDURE SetupApplicationArea@1();
+    BEGIN
+      APPLICATIONAREA(GetApplicationAreaSetup);
+    END;
+
+    PROCEDURE IsFoundationEnabled@4() : Boolean;
+    VAR
+      ApplicationAreaSetup@1000 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup.Basic OR ApplicationAreaSetup.Suite);
+    END;
+
+    PROCEDURE IsBasicOnlyEnabled@14() : Boolean;
+    VAR
+      ApplicationAreaSetup@1000 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup.Basic AND NOT ApplicationAreaSetup.Suite AND NOT ApplicationAreaSetup.Advanced);
+    END;
+
+    PROCEDURE IsAdvancedEnabled@6() : Boolean;
+    BEGIN
+      EXIT(NOT IsFoundationEnabled);
+    END;
+
+    PROCEDURE IsFixedAssetEnabled@22() : Boolean;
+    VAR
+      ApplicationAreaSetup@1000 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup."Fixed Assets");
+    END;
+
+    PROCEDURE IsJobsEnabled@15() : Boolean;
+    VAR
+      ApplicationAreaSetup@1001 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup.Jobs);
+    END;
+
+    PROCEDURE IsBasicHREnabled@19() : Boolean;
+    VAR
+      ApplicationAreaSetup@1001 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup.BasicHR);
+    END;
+
+    PROCEDURE IsDimensionEnabled@37() : Boolean;
+    VAR
+      ApplicationAreaSetup@1001 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup.Dimensions);
+    END;
+
+    PROCEDURE IsLocationEnabled@18() : Boolean;
+    VAR
+      ApplicationAreaSetup@1001 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup.Location);
+    END;
+
+    PROCEDURE IsAssemblyEnabled@27() : Boolean;
+    VAR
+      ApplicationAreaSetup@1001 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup.Assembly);
+    END;
+
+    PROCEDURE IsItemChargesEnabled@28() : Boolean;
+    VAR
+      ApplicationAreaSetup@1001 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup."Item Charges");
+    END;
+
+    PROCEDURE IsItemTrackingEnabled@36() : Boolean;
+    VAR
+      ApplicationAreaSetup@1000 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup."Item Tracking");
+    END;
+
+    PROCEDURE IsIntercompanyEnabled@38() : Boolean;
+    VAR
+      ApplicationAreaSetup@1001 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup.Intercompany);
+    END;
+
+    PROCEDURE IsSalesReturnOrderEnabled@31() : Boolean;
+    VAR
+      ApplicationAreaSetup@1000 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup."Sales Return Order");
+    END;
+
+    PROCEDURE IsPurchaseReturnOrderEnabled@40() : Boolean;
+    VAR
+      ApplicationAreaSetup@1000 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup."Purch Return Order");
+    END;
+
+    PROCEDURE IsCostAccountingEnabled@41() : Boolean;
+    VAR
+      ApplicationAreaSetup@1001 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup."Cost Accounting");
+    END;
+
+    PROCEDURE IsSalesBudgetEnabled@42() : Boolean;
+    VAR
+      ApplicationAreaSetup@1000 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup."Sales Budget");
+    END;
+
+    PROCEDURE IsPurchaseBudgetEnabled@64() : Boolean;
+    VAR
+      ApplicationAreaSetup@1000 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup."Purchase Budget");
+    END;
+
+    PROCEDURE IsItemBudgetEnabled@55() : Boolean;
+    VAR
+      ApplicationAreaSetup@1000 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup."Item Budget");
+    END;
+
+    PROCEDURE IsSalesAnalysisEnabled@54() : Boolean;
+    VAR
+      ApplicationAreaSetup@1001 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup."Sales Analysis");
+    END;
+
+    PROCEDURE IsPurchaseAnalysisEnabled@62() : Boolean;
+    VAR
+      ApplicationAreaSetup@1001 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup."Purchase Analysis");
+    END;
+
+    PROCEDURE IsInventoryAnalysisEnabled@58() : Boolean;
+    VAR
+      ApplicationAreaSetup@1001 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup."Inventory Analysis");
+    END;
+
+    PROCEDURE IsReservationEnabled@56() : Boolean;
+    VAR
+      ApplicationAreaSetup@1001 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup.Reservation);
+    END;
+
+    PROCEDURE IsInvoicingOnlyEnabled@29() : Boolean;
+    VAR
+      ApplicationAreaSetup@1001 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      IF NOT ApplicationAreaSetup.Invoicing THEN
+        EXIT(FALSE);
+
+      EXIT(SelectedAppAreaCount(ApplicationAreaSetup) = 0);
+    END;
+
+    PROCEDURE IsManufacturingEnabled@32() : Boolean;
+    VAR
+      ApplicationAreaSetup@1000 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup.Manufacturing);
+    END;
+
+    PROCEDURE IsPlanningEnabled@33() : Boolean;
+    VAR
+      ApplicationAreaSetup@1000 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup.Planning);
+    END;
+
+    PROCEDURE IsRelationshipMgmtEnabled@39() : Boolean;
+    VAR
+      ApplicationAreaSetup@1000 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup."Relationship Mgmt");
+    END;
+
+    PROCEDURE IsServiceEnabled@34() : Boolean;
+    VAR
+      ApplicationAreaSetup@1000 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup.Service);
+    END;
+
+    PROCEDURE IsWarehouseEnabled@35() : Boolean;
+    VAR
+      ApplicationAreaSetup@1000 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup.Warehouse);
+    END;
+
+    PROCEDURE IsOrderPromisingEnabled@79() : Boolean;
+    VAR
+      ApplicationAreaSetup@1000 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup."Order Promising");
+    END;
+
+    PROCEDURE IsCommentsEnabled@65() : Boolean;
+    VAR
+      ApplicationAreaSetup@1000 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup.Comments);
+    END;
+
+    PROCEDURE IsSuiteEnabled@16() : Boolean;
+    VAR
+      ApplicationAreaSetup@1001 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+
+      EXIT(ApplicationAreaSetup.Suite);
+    END;
+
+    PROCEDURE IsAllDisabled@17() : Boolean;
+    BEGIN
+      EXIT(NOT IsAnyEnabled);
+    END;
+
+    LOCAL PROCEDURE IsAnyEnabled@21() : Boolean;
+    VAR
+      ApplicationAreaSetup@1000 : Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRec(ApplicationAreaSetup) THEN
+        EXIT(FALSE);
+      EXIT(SelectedAppAreaCount(ApplicationAreaSetup) > 0);
+    END;
+
+    PROCEDURE IsPlanAssignedToCurrentUser@175(PlanGUID@1000 : GUID) : Boolean;
+    VAR
+      UserPlan@1001 : Record 9005;
+    BEGIN
+      UserPlan.SETRANGE("User Security ID",USERSECURITYID);
+      UserPlan.SETRANGE("Plan ID",PlanGUID);
+      EXIT(NOT UserPlan.ISEMPTY);
+    END;
+
+    PROCEDURE IsPremiumEnabled@75() : Boolean;
+    VAR
+      Plan@1001 : Record 9004;
+    BEGIN
+      IF IsPlanAssignedToCurrentUser(Plan.GetPremiumPlanId) THEN
+        EXIT(TRUE);
+
+      IF IsPlanAssignedToCurrentUser(Plan.GetViralSignupPlanId) THEN
+        EXIT(TRUE);
+    END;
+
+    PROCEDURE IsAdvancedSaaSEnabled@30() : Boolean;
+    VAR
+      PermissionManager@1001 : Codeunit 9002;
+    BEGIN
+      EXIT(PermissionManager.IsSandboxConfiguration);
+    END;
+
+    PROCEDURE CheckAppAreaOnlyBasic@43();
+    BEGIN
+      IF IsBasicOnlyEnabled THEN BEGIN
+        MESSAGE(OnlyBasicAppAreaMsg);
+        ERROR('');
+      END;
+    END;
+
+    PROCEDURE IsValidExperienceTierSelected@87(SelectedExperienceTier@1004 : Text) : Boolean;
+    VAR
+      ExperienceTierSetup@1000 : Record 9176;
+    BEGIN
+      IF (SelectedExperienceTier <> ExperienceTierSetup.FIELDNAME(Premium)) OR IsPremiumEnabled THEN
+        EXIT(TRUE);
+
+      MESSAGE(PremiumSubscriptionNeededMsg);
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE SelectedAppAreaCount@25(ApplicationAreaSetup@1000 : Record 9178) : Integer;
+    VAR
+      RecRef@1003 : RecordRef;
+      FieldRef@1002 : FieldRef;
+      FieldIndex@1001 : Integer;
+      Count@1004 : Integer;
+    BEGIN
+      RecRef.GETTABLE(ApplicationAreaSetup);
+
+      FOR FieldIndex := GetFirstPublicAppAreaFieldIndex TO RecRef.FIELDCOUNT DO BEGIN
+        FieldRef := RecRef.FIELDINDEX(FieldIndex);
+        IF NOT IsInPrimaryKey(FieldRef) THEN
+          IF FieldRef.VALUE THEN
+            Count += 1;
+      END;
+      EXIT(Count);
+    END;
+
+    LOCAL PROCEDURE IsInPrimaryKey@7(FieldRef@1000 : FieldRef) : Boolean;
+    VAR
+      RecRef@1003 : RecordRef;
+      KeyRef@1001 : KeyRef;
+      FieldIndex@1002 : Integer;
+    BEGIN
+      RecRef := FieldRef.RECORD;
+
+      KeyRef := RecRef.KEYINDEX(1);
+      FOR FieldIndex := 1 TO KeyRef.FIELDCOUNT DO
+        IF KeyRef.FIELDINDEX(FieldIndex).NUMBER = FieldRef.NUMBER THEN
+          EXIT(TRUE);
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE GetFirstPublicAppAreaFieldIndex@20() : Integer;
+    VAR
+      ApplicationAreaSetup@1002 : Record 9178;
+      RecRef@1000 : RecordRef;
+      FirstPublicAppAreaFieldRef@1001 : FieldRef;
+      i@1003 : Integer;
+    BEGIN
+      RecRef.GETTABLE(ApplicationAreaSetup);
+      FirstPublicAppAreaFieldRef := RecRef.FIELD(ApplicationAreaSetup.FIELDNO(Basic));
+      FOR i := 1 TO RecRef.FIELDCOUNT DO
+        IF RecRef.FIELDINDEX(i).NUMBER = FirstPublicAppAreaFieldRef.NUMBER THEN
+          EXIT(i);
+    END;
+
+    LOCAL PROCEDURE GetExperienceTierRec@51(VAR ExperienceTierSetup@1000 : Record 9176) : Boolean;
+    BEGIN
+      EXIT(ExperienceTierSetup.GET(COMPANYNAME));
+    END;
+
+    PROCEDURE GetExperienceTierBuffer@44(VAR TempExperienceTierBuffer@1000 : TEMPORARY Record 9177);
+    VAR
+      ExperienceTierSetup@1003 : Record 9176;
+      RecRef@1002 : RecordRef;
+      FieldRef@1005 : FieldRef;
+      FieldIndex@1004 : Integer;
+    BEGIN
+      GetExperienceTierRec(ExperienceTierSetup);
+      RecRef.GETTABLE(ExperienceTierSetup);
+
+      FOR FieldIndex := 1 TO RecRef.FIELDCOUNT DO BEGIN
+        FieldRef := RecRef.FIELDINDEX(FieldIndex);
+        IF NOT IsInPrimaryKey(FieldRef) THEN BEGIN
+          TempExperienceTierBuffer."Field No." := FieldRef.NUMBER;
+          TempExperienceTierBuffer."Experience Tier" := FieldRef.CAPTION;
+          TempExperienceTierBuffer.Selected := FieldRef.VALUE;
+          TempExperienceTierBuffer.INSERT(TRUE);
+        END;
+      END;
+    END;
+
+    PROCEDURE LookupExperienceTier@67(VAR NewExperienceTier@1004 : Text) : Boolean;
+    VAR
+      TempExperienceTierBuffer@1001 : TEMPORARY Record 9177;
+      ExperienceTierSetup@1000 : Record 9176;
+    BEGIN
+      GetExperienceTierBuffer(TempExperienceTierBuffer);
+      IF NewExperienceTier <> '' THEN BEGIN
+        TempExperienceTierBuffer.SETRANGE("Experience Tier",NewExperienceTier);
+        IF TempExperienceTierBuffer.FINDFIRST THEN;
+        TempExperienceTierBuffer.SETRANGE("Experience Tier");
+      END;
+
+      // Always remove Preview from ExpTier options, because Preview features have gradated to premium
+      IF TempExperienceTierBuffer.GET(ExperienceTierSetup.FIELDNO(Preview)) THEN
+        TempExperienceTierBuffer.DELETE;
+
+      // Always remove Advanced from ExpTier options
+      IF TempExperienceTierBuffer.GET(ExperienceTierSetup.FIELDNO(Advanced)) THEN
+        TempExperienceTierBuffer.DELETE;
+
+      IF TempExperienceTierBuffer.GET(ExperienceTierSetup.FIELDNO(Basic)) THEN
+        TempExperienceTierBuffer.DELETE;
+
+      GetExperienceTierRec(ExperienceTierSetup);
+      IF NOT ExperienceTierSetup.Custom THEN
+        IF TempExperienceTierBuffer.GET(ExperienceTierSetup.FIELDNO(Custom)) THEN
+          TempExperienceTierBuffer.DELETE;
+
+      IF NOT ExperienceTierSetup.Invoicing THEN
+        IF TempExperienceTierBuffer.GET(ExperienceTierSetup.FIELDNO(Invoicing)) THEN
+          TempExperienceTierBuffer.DELETE;
+
+      OnBeforeLookupExperienceTier(TempExperienceTierBuffer);
+      IF PAGE.RUNMODAL(0,TempExperienceTierBuffer,TempExperienceTierBuffer."Experience Tier") = ACTION::LookupOK THEN BEGIN
+        NewExperienceTier := TempExperienceTierBuffer."Experience Tier";
+        EXIT(TRUE);
+      END;
+    END;
+
+    PROCEDURE SaveExperienceTierCurrentCompany@60(NewExperienceTier@1000 : Text) ExperienceTierChanged : Boolean;
+    VAR
+      TempExperienceTierBuffer@1009 : TEMPORARY Record 9177;
+      ExperienceTierSetup@1001 : Record 9176;
+      Company@1005 : Record 2000000006;
+      RecRef@1002 : RecordRef;
+      FieldRef@1003 : FieldRef;
+      CurrentExperienceTier@1004 : Text;
+      SelectedAlreadySaved@1006 : Boolean;
+    BEGIN
+      GetExperienceTierCurrentCompany(CurrentExperienceTier);
+      ExperienceTierChanged := CurrentExperienceTier <> NewExperienceTier;
+
+      GetExperienceTierBuffer(TempExperienceTierBuffer);
+      TempExperienceTierBuffer.SETRANGE("Experience Tier",NewExperienceTier);
+      IF NOT TempExperienceTierBuffer.FINDFIRST THEN
+        EXIT(FALSE);
+
+      IF NOT GetExperienceTierRec(ExperienceTierSetup) THEN BEGIN
+        ExperienceTierSetup."Company Name" := COMPANYNAME;
+        ExperienceTierSetup.INSERT;
+      END ELSE
+        IF NOT ExperienceTierChanged THEN BEGIN
+          Company.GET(COMPANYNAME);
+          IF (NewExperienceTier = ExperienceTierSetup.FIELDCAPTION(Custom)) OR Company."Evaluation Company" THEN
+            EXIT(FALSE);
+        END;
+
+      RecRef.GETTABLE(ExperienceTierSetup);
+      FieldRef := RecRef.FIELD(TempExperienceTierBuffer."Field No.");
+      SelectedAlreadySaved := FieldRef.VALUE;
+      IF NOT SelectedAlreadySaved THEN BEGIN
+        RecRef.INIT;
+        FieldRef.VALUE := TRUE;
+        RecRef.SETTABLE(ExperienceTierSetup);
+        ExperienceTierSetup.MODIFY;
+      END;
+
+      SetExperienceTierCurrentCompany(ExperienceTierSetup);
+    END;
+
+    PROCEDURE GetExperienceTierCurrentCompany@9(VAR ExperienceTier@1000 : Text) : Boolean;
+    VAR
+      TempExperienceTierBuffer@1001 : TEMPORARY Record 9177;
+    BEGIN
+      CLEAR(ExperienceTier);
+      GetExperienceTierBuffer(TempExperienceTierBuffer);
+      TempExperienceTierBuffer.SETRANGE(Selected,TRUE);
+      IF TempExperienceTierBuffer.FINDFIRST THEN
+        ExperienceTier := TempExperienceTierBuffer."Experience Tier";
+      EXIT(ExperienceTier <> '');
+    END;
+
+    LOCAL PROCEDURE SetExperienceTier@26(CompanyName@1003 : Text;ExperienceTierSetup@1002 : Record 9176);
+    VAR
+      ApplicationAreaSetup@1000 : Record 9178;
+      TempApplicationAreaSetup@1001 : TEMPORARY Record 9178;
+      ApplicationAreasSet@1004 : Boolean;
+    BEGIN
+      IF ExperienceTierSetup.Custom THEN
+        ERROR(ValuesNotAllowedErr);
+
+      IF NOT GetApplicationAreaSetupRecFromCompany(ApplicationAreaSetup,CompanyName) THEN BEGIN
+        ApplicationAreaSetup."Company Name" := COPYSTR(CompanyName,1,STRLEN(CompanyName));
+        ApplicationAreaSetup.INSERT;
+      END;
+
+      CASE TRUE OF
+        ExperienceTierSetup.Basic:
+          GetBasicExperienceAppAreas(TempApplicationAreaSetup);
+        ExperienceTierSetup.Essential:
+          GetEssentialExperienceAppAreas(TempApplicationAreaSetup);
+        ExperienceTierSetup.Premium:
+          GetPremiumExperienceAppAreas(TempApplicationAreaSetup);
+        ExperienceTierSetup.Invoicing:
+          BEGIN
+            TempApplicationAreaSetup.INIT;
+            TempApplicationAreaSetup.Invoicing := TRUE;
+          END;
+        ELSE BEGIN
+          OnSetExperienceTier(ExperienceTierSetup,TempApplicationAreaSetup,ApplicationAreasSet);
+          IF NOT ApplicationAreasSet THEN
+            EXIT;
+        END;
+      END;
+
+      IF NOT ValidateApplicationAreasSet(ExperienceTierSetup,TempApplicationAreaSetup) THEN BEGIN
+        IF HideApplicationAreaError THEN
+          EXIT;
+        ERROR(GETLASTERRORTEXT);
+      END;
+
+      ApplicationAreaSetup.TRANSFERFIELDS(TempApplicationAreaSetup,FALSE);
+      ApplicationAreaSetup.MODIFY;
+      SetupApplicationArea;
+    END;
+
+    PROCEDURE SetExperienceTierCurrentCompany@10(ExperienceTierSetup@1000 : Record 9176);
+    BEGIN
+      SetExperienceTier(COMPANYNAME,ExperienceTierSetup);
+    END;
+
+    PROCEDURE SetExperienceTierOtherCompany@24(ExperienceTierSetup@1000 : Record 9176;CompanyName@1001 : Text);
+    BEGIN
+      SetExperienceTier(CompanyName,ExperienceTierSetup);
+    END;
+
+    LOCAL PROCEDURE ApplicationAreaSetupsMatch@57(ApplicationAreaSetup@1000 : Record 9178;TempApplicationAreaSetup@1001 : TEMPORARY Record 9178;CheckBaseOnly@1007 : Boolean) : Boolean;
+    VAR
+      RecRef@1002 : RecordRef;
+      RecRef2@1003 : RecordRef;
+      FieldRef@1004 : FieldRef;
+      FieldRef2@1005 : FieldRef;
+      FieldIndex@1006 : Integer;
+    BEGIN
+      RecRef.GETTABLE(ApplicationAreaSetup);
+      RecRef2.GETTABLE(TempApplicationAreaSetup);
+
+      FOR FieldIndex := 1 TO RecRef.FIELDCOUNT DO BEGIN
+        FieldRef := RecRef.FIELDINDEX(FieldIndex);
+        IF CheckBaseOnly AND (FieldRef.NUMBER >= 49999) THEN
+          EXIT(TRUE);
+        FieldRef2 := RecRef2.FIELDINDEX(FieldIndex);
+        IF NOT IsInPrimaryKey(FieldRef) THEN
+          IF NOT (FieldRef.VALUE = FieldRef2.VALUE) THEN
+            EXIT(FALSE);
+      END;
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE IsBasicExperienceEnabled@45() : Boolean;
+    VAR
+      ApplicationAreaSetup@1000 : Record 9178;
+      TempApplicationAreaSetup@1001 : TEMPORARY Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRecFromCompany(ApplicationAreaSetup,COMPANYNAME) THEN
+        EXIT(FALSE);
+
+      GetBasicExperienceAppAreas(TempApplicationAreaSetup);
+
+      EXIT(ApplicationAreaSetupsMatch(ApplicationAreaSetup,TempApplicationAreaSetup,FALSE));
+    END;
+
+    PROCEDURE IsEssentialExperienceEnabled@46() : Boolean;
+    VAR
+      ApplicationAreaSetup@1001 : Record 9178;
+      TempApplicationAreaSetup@1000 : TEMPORARY Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRecFromCompany(ApplicationAreaSetup,COMPANYNAME) THEN
+        EXIT(FALSE);
+
+      GetEssentialExperienceAppAreas(TempApplicationAreaSetup);
+
+      EXIT(ApplicationAreaSetupsMatch(ApplicationAreaSetup,TempApplicationAreaSetup,FALSE));
+    END;
+
+    PROCEDURE IsPremiumExperienceEnabled@85() : Boolean;
+    VAR
+      ApplicationAreaSetup@1001 : Record 9178;
+      TempApplicationAreaSetup@1000 : TEMPORARY Record 9178;
+    BEGIN
+      IF NOT GetApplicationAreaSetupRecFromCompany(ApplicationAreaSetup,COMPANYNAME) THEN
+        EXIT(FALSE);
+
+      GetPremiumExperienceAppAreas(TempApplicationAreaSetup);
+
+      EXIT(ApplicationAreaSetupsMatch(ApplicationAreaSetup,TempApplicationAreaSetup,FALSE));
+    END;
+
+    PROCEDURE IsCustomExperienceEnabled@47() : Boolean;
+    VAR
+      IsPreDefinedExperience@1000 : Boolean;
+    BEGIN
+      IsPreDefinedExperience :=
+        IsBasicExperienceEnabled OR IsEssentialExperienceEnabled OR IsPremiumExperienceEnabled OR
+        IsAdvancedExperienceEnabled OR IsInvoicingOnlyEnabled;
+
+      EXIT(NOT IsPreDefinedExperience);
+    END;
+
+    PROCEDURE IsAdvancedExperienceEnabled@48() : Boolean;
+    VAR
+      ApplicationAreaSetup@1000 : Record 9178;
+      TempApplicationAreaSetup@1001 : TEMPORARY Record 9178;
+    BEGIN
+      IF IsAdvancedSaaSEnabled THEN
+        EXIT(TRUE);
+
+      IF NOT GetApplicationAreaSetupRecFromCompany(ApplicationAreaSetup,COMPANYNAME) THEN
+        EXIT(TRUE);
+
+      EXIT(ApplicationAreaSetupsMatch(ApplicationAreaSetup,TempApplicationAreaSetup,FALSE));
+    END;
+
+    LOCAL PROCEDURE GetBasicExperienceAppAreas@52(VAR TempApplicationAreaSetup@1000 : TEMPORARY Record 9178);
+    BEGIN
+      TempApplicationAreaSetup.Basic := TRUE;
+      TempApplicationAreaSetup."Relationship Mgmt" := TRUE;
+
+      OnGetBasicExperienceAppAreas(TempApplicationAreaSetup);
+    END;
+
+    LOCAL PROCEDURE GetEssentialExperienceAppAreas@53(VAR TempApplicationAreaSetup@1000 : TEMPORARY Record 9178);
+    BEGIN
+      GetBasicExperienceAppAreas(TempApplicationAreaSetup);
+      TempApplicationAreaSetup.Suite := TRUE;
+      TempApplicationAreaSetup.Jobs := TRUE;
+      TempApplicationAreaSetup."Fixed Assets" := TRUE;
+      TempApplicationAreaSetup.Location := TRUE;
+      TempApplicationAreaSetup.BasicHR := TRUE;
+      TempApplicationAreaSetup.Assembly := TRUE;
+      TempApplicationAreaSetup."Item Charges" := TRUE;
+      TempApplicationAreaSetup.Intercompany := TRUE;
+      TempApplicationAreaSetup."Sales Return Order" := TRUE;
+      TempApplicationAreaSetup."Purch Return Order" := TRUE;
+      TempApplicationAreaSetup.Prepayments := TRUE;
+      TempApplicationAreaSetup."Cost Accounting" := TRUE;
+      TempApplicationAreaSetup."Sales Budget" := TRUE;
+      TempApplicationAreaSetup."Purchase Budget" := TRUE;
+      TempApplicationAreaSetup."Item Budget" := TRUE;
+      TempApplicationAreaSetup."Sales Analysis" := TRUE;
+      TempApplicationAreaSetup."Purchase Analysis" := TRUE;
+      TempApplicationAreaSetup."Inventory Analysis" := TRUE;
+      TempApplicationAreaSetup."Item Tracking" := TRUE;
+      TempApplicationAreaSetup.Warehouse := TRUE;
+      TempApplicationAreaSetup.XBRL := TRUE;
+      TempApplicationAreaSetup."Order Promising" := TRUE;
+      TempApplicationAreaSetup.Reservation := TRUE;
+      TempApplicationAreaSetup.Dimensions := TRUE;
+      TempApplicationAreaSetup.ADCS := TRUE;
+      TempApplicationAreaSetup.Planning := TRUE;
+      TempApplicationAreaSetup.Comments := TRUE;
+
+      OnGetEssentialExperienceAppAreas(TempApplicationAreaSetup);
+    END;
+
+    LOCAL PROCEDURE GetPremiumExperienceAppAreas@97(VAR TempApplicationAreaSetup@1000 : TEMPORARY Record 9178);
+    BEGIN
+      GetEssentialExperienceAppAreas(TempApplicationAreaSetup);
+      TempApplicationAreaSetup.Service := TRUE;
+      TempApplicationAreaSetup.Manufacturing := TRUE;
+
+      OnGetPremiumExperienceAppAreas(TempApplicationAreaSetup);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE ValidateApplicationAreasSet@23(ExperienceTierSetup@1000 : Record 9176;TempApplicationAreaSetup@1001 : TEMPORARY Record 9178);
+    VAR
+      TempApplicationAreaSetup2@1002 : TEMPORARY Record 9178;
+    BEGIN
+      IF TempApplicationAreaSetup.Invoicing THEN BEGIN
+        TempApplicationAreaSetup2.Invoicing := TRUE;
+        IF NOT ApplicationAreaSetupsMatch(TempApplicationAreaSetup,TempApplicationAreaSetup2,FALSE) THEN
+          ERROR(InvoicingExpTierErr);
+      END ELSE
+        TempApplicationAreaSetup.TESTFIELD(Basic,TRUE);
+
+      OnValidateApplicationAreas(ExperienceTierSetup,TempApplicationAreaSetup);
+    END;
+
+    [Integration(FALSE,FALSE)]
+    LOCAL PROCEDURE OnGetBasicExperienceAppAreas@49(VAR TempApplicationAreaSetup@1000 : TEMPORARY Record 9178);
+    BEGIN
+    END;
+
+    [Integration(FALSE,FALSE)]
+    LOCAL PROCEDURE OnGetEssentialExperienceAppAreas@50(VAR TempApplicationAreaSetup@1000 : TEMPORARY Record 9178);
+    BEGIN
+    END;
+
+    [Integration(FALSE,FALSE)]
+    LOCAL PROCEDURE OnGetPremiumExperienceAppAreas@80(VAR TempApplicationAreaSetup@1000 : TEMPORARY Record 9178);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeLookupExperienceTier@61(VAR TempExperienceTierBuffer@1000 : TEMPORARY Record 9177);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnSetExperienceTier@63(ExperienceTierSetup@1000 : Record 9176;VAR TempApplicationAreaSetup@1001 : TEMPORARY Record 9178;VAR ApplicationAreasSet@1002 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnValidateApplicationAreas@59(ExperienceTierSetup@1000 : Record 9176;TempApplicationAreaSetup@1001 : TEMPORARY Record 9178);
+    BEGIN
+    END;
+
+    PROCEDURE SetHideApplicationAreaError@68(NewHideApplicationAreaError@1000 : Boolean);
+    BEGIN
+      HideApplicationAreaError := NewHideApplicationAreaError;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

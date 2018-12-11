@@ -1,0 +1,198 @@
+OBJECT Page 2823 Native - Email Preview
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:10:51 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=[@@@={Locked};
+               ENU=nativeInvoicingEmailPreview];
+    InsertAllowed=No;
+    DeleteAllowed=No;
+    SourceTable=Table5509;
+    PageType=List;
+    SourceTableTemporary=Yes;
+    OnOpenPage=BEGIN
+                 BINDSUBSCRIPTION(NativeAPILanguageHandler);
+               END;
+
+    OnFindRecord=VAR
+                   DocumentId@1005 : GUID;
+                   DocumentIdFilter@1001 : Text;
+                   FilterView@1000 : Text;
+                 BEGIN
+                   IF NOT IsGenerated THEN BEGIN
+                     FilterView := GETVIEW;
+                     DocumentIdFilter := GETFILTER("Document Id");
+                     IF DocumentIdFilter = '' THEN
+                       DocumentIdFilter := GETFILTER(Id);
+                     SETVIEW(FilterView);
+                     DocumentId := GetDocumentId(DocumentIdFilter);
+                     IF ISNULLGUID(DocumentId) THEN
+                       EXIT(FALSE);
+                     GeneratePreview(DocumentId);
+                     IsGenerated := TRUE;
+                   END;
+                   EXIT(TRUE);
+                 END;
+
+    OnModifyRecord=VAR
+                     O365SalesEmailManagement@1001 : Codeunit 2151;
+                   BEGIN
+                     IF xRec."Document Id" <> "Document Id" THEN
+                       ERROR(CannotChangeDocumentIdErr);
+
+                     O365SalesEmailManagement.SaveEmailParametersIfChanged(
+                       DocumentNo,ReportUsage,PrevEmail,Email,Subject);
+                   END;
+
+    ODataKeyFields=Document Id;
+  }
+  CONTROLS
+  {
+    { 18  ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 17  ;1   ;Group     ;
+                Name=Group;
+                GroupType=Repeater }
+
+    { 1   ;2   ;Field     ;
+                Name=documentId;
+                CaptionML=[@@@={Locked};
+                           ENU=documentId];
+                ApplicationArea=#All;
+                SourceExpr="Document Id" }
+
+    { 7   ;2   ;Field     ;
+                Name=email;
+                CaptionML=[@@@={Locked};
+                           ENU=email];
+                ToolTipML=ENU=Specifies email address.;
+                ApplicationArea=#All;
+                SourceExpr=Email;
+                OnValidate=VAR
+                             MailManagement@1000 : Codeunit 9520;
+                           BEGIN
+                             IF Email = '' THEN
+                               ERROR(EmptyEmailAddressErr);
+                             IF Email = PrevEmail THEN
+                               EXIT;
+                             MailManagement.ValidateEmailAddressField(Email);
+                           END;
+                            }
+
+    { 2   ;2   ;Field     ;
+                Name=subject;
+                CaptionML=ENU=subject;
+                ToolTipML=ENU=Specifies e-mail subject.;
+                ApplicationArea=#All;
+                SourceExpr=Subject;
+                OnValidate=BEGIN
+                             IF Subject = '' THEN
+                               ERROR(EmptyEmailSubjectErr);
+                           END;
+                            }
+
+    { 3   ;2   ;Field     ;
+                Name=body;
+                CaptionML=ENU=body;
+                ToolTipML=ENU=Specifies e-mail body.;
+                ApplicationArea=#All;
+                SourceExpr=Content;
+                Editable=FALSE }
+
+    { 4   ;2   ;Field     ;
+                Name=bodyText;
+                CaptionML=[@@@={LOCKED};
+                           ENU=bodyText];
+                ToolTipML=ENU=Specifies the body text that will be set in the email body.;
+                ApplicationArea=#All;
+                SourceExpr=BodyText;
+                OnValidate=VAR
+                             EmailParameter@1000 : Record 9510;
+                           BEGIN
+                             EmailParameter.SaveParameterValueWithReportUsage(
+                               DocumentNo,ReportUsage,EmailParameter."Parameter Type"::Body,BodyText);
+                           END;
+                            }
+
+  }
+  CODE
+  {
+    VAR
+      CannotChangeDocumentIdErr@1011 : TextConst 'ENU=The documentId cannot be changed.';
+      DocumentIDNotSpecifiedErr@1010 : TextConst 'ENU=You must specify a document ID.';
+      DocumentDoesNotExistErr@1009 : TextConst 'ENU=No document with the specified ID exists.';
+      NativeAPILanguageHandler@1025 : Codeunit 2850;
+      IsGenerated@1002 : Boolean;
+      PrevEmail@1023 : Text[250];
+      Email@1004 : Text[250];
+      Subject@1007 : Text[250];
+      EmptyEmailAddressErr@1022 : TextConst 'ENU=The email address cannot be empty.';
+      EmptyEmailSubjectErr@1012 : TextConst 'ENU=The email subject cannot be empty.';
+      BodyText@1000 : Text;
+      DocumentNo@1013 : Code[20];
+      CustomerNo@1024 : Code[20];
+      ReportUsage@1014 : Integer;
+
+    LOCAL PROCEDURE GetDocumentId@5(DocumentIdFilter@1001 : Text) : GUID;
+    VAR
+      SalesHeader@1003 : Record 36;
+      SalesInvoiceHeader@1004 : Record 112;
+      DataTypeManagement@1006 : Codeunit 701;
+      DocumentRecordRef@1000 : RecordRef;
+      DocumentIdFieldRef@1005 : FieldRef;
+      DocumentId@1002 : GUID;
+    BEGIN
+      IF DocumentIdFilter = '' THEN
+        ERROR(DocumentIDNotSpecifiedErr);
+
+      SalesHeader.SETFILTER(Id,DocumentIdFilter);
+      IF SalesHeader.FINDFIRST THEN
+        DocumentRecordRef.GETTABLE(SalesHeader)
+      ELSE BEGIN
+        SalesInvoiceHeader.SETFILTER(Id,DocumentIdFilter);
+        IF SalesInvoiceHeader.FINDFIRST THEN
+          DocumentRecordRef.GETTABLE(SalesInvoiceHeader)
+        ELSE
+          ERROR(DocumentDoesNotExistErr);
+      END;
+
+      DataTypeManagement.FindFieldByName(DocumentRecordRef,DocumentIdFieldRef,SalesHeader.FIELDNAME(Id));
+      EVALUATE(DocumentId,FORMAT(DocumentIdFieldRef.VALUE));
+
+      EXIT(DocumentId);
+    END;
+
+    LOCAL PROCEDURE GeneratePreview@21(DocumentId@1009 : GUID);
+    VAR
+      O365SalesEmailManagement@1001 : Codeunit 2151;
+      Body@1000 : Text;
+    BEGIN
+      O365SalesEmailManagement.NativeAPIGetEmailParametersFromId(
+        DocumentId,DocumentNo,CustomerNo,Email,Subject,Body,ReportUsage,BodyText);
+      PrevEmail := Email;
+      FillRecord(DocumentId,Subject,Body);
+    END;
+
+    LOCAL PROCEDURE FillRecord@17(DocumentId@1010 : GUID;Subject@1003 : Text[250];Body@1002 : Text);
+    BEGIN
+      INIT;
+      Id := DocumentId;
+      "Document Id" := DocumentId;
+      "File Name" := Subject;
+      Type := Type::Email;
+      SetTextContent(Body);
+
+      INSERT(TRUE);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

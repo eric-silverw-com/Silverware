@@ -1,0 +1,206 @@
+OBJECT Page 2117 O365 Mark As Paid
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:10:45 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Register payment;
+    InsertAllowed=No;
+    DeleteAllowed=No;
+    SourceTable=Table981;
+    PageType=StandardDialog;
+    SourceTableTemporary=Yes;
+    ShowFilter=No;
+    OnOpenPage=BEGIN
+                 SetDefaultDate;
+               END;
+
+    OnQueryClosePage=VAR
+                       O365SalesInitialSetup@1001 : Record 2110;
+                       PaymentMethod@1002 : Record 289;
+                     BEGIN
+                       IF CloseAction <> ACTION::OK THEN
+                         EXIT;
+
+                       IF NOT PaymentMethod.GET(PaymentMethodCode) THEN
+                         ERROR(PaymentMethodDoesNotExistErr);
+
+                       TempPaymentRegistrationBuffer.VALIDATE("Payment Method Code",PaymentMethodCode);
+                       TempPaymentRegistrationBuffer.MODIFY(TRUE);
+                       IF TempPaymentRegistrationBuffer."Amount Received" = 0 THEN
+                         ERROR(MustSpecifyAmountErr);
+
+                       O365SalesInitialSetup.UpdateDefaultPaymentMethod(PaymentMethodCode);
+                     END;
+
+    OnAfterGetCurrRecord=VAR
+                           O365SalesInitialSetup@1000 : Record 2110;
+                         BEGIN
+                           RefreshPaymentRegistrationBuffer(TempPaymentRegistrationBuffer);
+
+                           SetPaymentRegistrationBuffer(TempPaymentRegistrationBuffer);
+                           IF O365SalesInitialSetup.GET THEN
+                             PaymentMethodCode := O365SalesInitialSetup."Default Payment Method Code";
+                         END;
+
+  }
+  CONTROLS
+  {
+    { 1   ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 2   ;1   ;Group     ;
+                Name=General;
+                CaptionML=ENU=Payment;
+                GroupType=Group;
+                InstructionalTextML=ENU=What is the payment amount received? }
+
+    { 4   ;2   ;Field     ;
+                Name=AmountReceived;
+                CaptionML=ENU=Amount Received;
+                ToolTipML=ENU=Specifies the payment received.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=TempPaymentRegistrationBuffer."Amount Received";
+                OnValidate=BEGIN
+                             IF TempPaymentRegistrationBuffer."Amount Received" < 0 THEN BEGIN
+                               TempPaymentRegistrationBuffer."Amount Received" := 0;
+                               MESSAGE(AmountReceivedSettoZeroMsg);
+                             END;
+                             TempPaymentRegistrationBuffer.VALIDATE("Amount Received");
+                             AmountModified := TRUE;
+                           END;
+                            }
+
+    { 10  ;2   ;Field     ;
+                Name=PaymentMethod;
+                CaptionML=ENU=Payment Method;
+                ToolTipML=ENU=Specifies how payment was made.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=PaymentMethodCode;
+                TableRelation="Payment Method";
+                Editable=FALSE;
+                OnAssistEdit=VAR
+                               TempO365PaymentMethod@1000 : TEMPORARY Record 2154;
+                               PaymentMethod@1001 : Record 289;
+                             BEGIN
+                               TempO365PaymentMethod.RefreshRecords;
+                               IF TempO365PaymentMethod.GET(PaymentMethodCode) THEN;
+                               IF PAGE.RUNMODAL(PAGE::"O365 Payment Method List",TempO365PaymentMethod) = ACTION::LookupOK THEN
+                                 PaymentMethodCode := TempO365PaymentMethod.Code;
+                               IF NOT PaymentMethod.GET(PaymentMethodCode) THEN
+                                 ERROR(PaymentMethodDoesNotExistErr);
+                             END;
+                              }
+
+    { 9   ;1   ;Group     ;
+                CaptionML=ENU=Payment Date;
+                GroupType=Group;
+                InstructionalTextML=ENU=When was the payment amount received? }
+
+    { 3   ;2   ;Field     ;
+                Name=DateReceived;
+                CaptionML=ENU=Date Received;
+                ToolTipML=ENU=Specifies the date the payment is received.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=TempPaymentRegistrationBuffer."Date Received";
+                Importance=Additional;
+                OnValidate=VAR
+                             SalesInvoiceHeader@1000 : Record 112;
+                           BEGIN
+                             IF SalesInvoiceHeader.GET(TempPaymentRegistrationBuffer."Document No.") THEN
+                               IF TempPaymentRegistrationBuffer."Date Received" < SalesInvoiceHeader."Posting Date" THEN BEGIN
+                                 TempPaymentRegistrationBuffer."Date Received" := SalesInvoiceHeader."Posting Date";
+                                 MESSAGE(DateReceivedHasBeenSetToPostingDateMsg);
+                               END;
+                             TempPaymentRegistrationBuffer.VALIDATE("Date Received");
+                           END;
+                            }
+
+    { 8   ;1   ;Group     ;
+                CaptionML=ENU=Outstanding Amount;
+                GroupType=Group }
+
+    { 7   ;2   ;Field     ;
+                Name=AmountBefore;
+                CaptionML=ENU=Before Payment;
+                ToolTipML=ENU=Specifies the amount that still needs to be paid.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=TempPaymentRegistrationBuffer."Rem. Amt. after Discount";
+                AutoFormatType=10;
+                AutoFormatExpr='1';
+                Editable=FALSE }
+
+    { 5   ;2   ;Field     ;
+                Name=AmountAfter;
+                CaptionML=ENU=After Payment;
+                ToolTipML=ENU=Specifies the amount that has not been paid.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=TempPaymentRegistrationBuffer."Remaining Amount";
+                AutoFormatType=10;
+                AutoFormatExpr='1';
+                Importance=Additional;
+                Editable=FALSE }
+
+    { 6   ;1   ;Part      ;
+                Name=SalesHistoryListPart;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                PagePartID=Page2119;
+                Visible=SalesHistoryHasEntries;
+                PartType=Page }
+
+  }
+  CODE
+  {
+    VAR
+      TempPaymentRegistrationBuffer@1000 : TEMPORARY Record 981;
+      SalesHistoryHasEntries@1001 : Boolean;
+      MustSpecifyAmountErr@1004 : TextConst 'ENU=Specify the amount received.';
+      AmountReceivedSettoZeroMsg@1002 : TextConst 'ENU=Negative amounts are not allowed, so we set it to zero. Update the amount again.';
+      DateReceivedHasBeenSetToPostingDateMsg@1003 : TextConst 'ENU=The received date is earlier than the date the invoice was sent, so we set the date to when it was sent.';
+      AmountModified@1006 : Boolean;
+      PaymentMethodCode@1007 : Code[10];
+      PaymentMethodDoesNotExistErr@1005 : TextConst 'ENU=The specified payment method does not exist, please select another payment method.';
+
+    PROCEDURE SetPaymentRegistrationBuffer@1(VAR NewTempPaymentRegistrationBuffer@1000 : TEMPORARY Record 981);
+    BEGIN
+      TempPaymentRegistrationBuffer.COPY(NewTempPaymentRegistrationBuffer,TRUE);
+      SalesHistoryHasEntries :=
+        CurrPage.SalesHistoryListPart.PAGE.ShowHistory(TempPaymentRegistrationBuffer."Document No.");
+    END;
+
+    PROCEDURE RefreshPaymentRegistrationBuffer@2(VAR InTempPaymentRegistrationBuffer@1000 : TEMPORARY Record 981);
+    VAR
+      NewPaymentRegistrationBuffer@1002 : Record 981;
+      O365SalesInvoicePayment@1003 : Codeunit 2105;
+    BEGIN
+      O365SalesInvoicePayment.CalculatePaymentRegistrationBuffer(
+        InTempPaymentRegistrationBuffer."Document No.",NewPaymentRegistrationBuffer);
+
+      IF (NOT AmountModified) OR
+         (InTempPaymentRegistrationBuffer."Rem. Amt. after Discount" <> NewPaymentRegistrationBuffer."Rem. Amt. after Discount")
+      THEN BEGIN
+        NewPaymentRegistrationBuffer.VALIDATE("Payment Method Code",InTempPaymentRegistrationBuffer."Payment Method Code");
+        NewPaymentRegistrationBuffer.VALIDATE("Date Received",InTempPaymentRegistrationBuffer."Date Received");
+
+        InTempPaymentRegistrationBuffer.COPY(NewPaymentRegistrationBuffer);
+      END;
+    END;
+
+    LOCAL PROCEDURE SetDefaultDate@5();
+    VAR
+      SalesInvoiceHeader@1000 : Record 112;
+    BEGIN
+      IF SalesInvoiceHeader.GET(TempPaymentRegistrationBuffer."Document No.") THEN
+        IF TempPaymentRegistrationBuffer."Date Received" < SalesInvoiceHeader."Posting Date" THEN
+          TempPaymentRegistrationBuffer.VALIDATE("Date Received",SalesInvoiceHeader."Posting Date");
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

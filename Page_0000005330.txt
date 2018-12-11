@@ -1,0 +1,643 @@
+OBJECT Page 5330 CRM Connection Setup
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:10:59 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    AccessByPermission=TableData 5330=IM;
+    CaptionML=ENU=Microsoft Dynamics 365 Connection Setup;
+    ApplicationArea=#Suite;
+    InsertAllowed=No;
+    DeleteAllowed=No;
+    LinksAllowed=No;
+    SourceTable=Table5330;
+    UsageCategory=Administration;
+    PromotedActionCategoriesML=ENU=New,Connection,Mapping,Synchronization,Encryption;
+    ShowFilter=No;
+    OnInit=VAR
+             PermissionManager@1000 : Codeunit 9002;
+             ApplicationAreaMgmtFacade@1001 : Codeunit 9179;
+           BEGIN
+             ApplicationAreaMgmtFacade.CheckAppAreaOnlyBasic;
+             AssistedSetupAvailable :=
+               AssistedSetup.GET(PAGE::"CRM Connection Setup Wizard") AND
+               AssistedSetup.Visible;
+             SoftwareAsAService := PermissionManager.SoftwareAsAService;
+           END;
+
+    OnOpenPage=VAR
+                 CRMIntegrationManagement@1002 : Codeunit 5330;
+               BEGIN
+                 IF NOT GET THEN BEGIN
+                   INIT;
+                   InitializeDefaultProxyVersion;
+                   INSERT;
+                 END ELSE BEGIN
+                   ConnectionString := GetConnectionString;
+                   UnregisterConnection;
+                   IF "Proxy Version" = 0 THEN BEGIN
+                     InitializeDefaultProxyVersion;
+                     MODIFY;
+                   END;
+                   IF "Is Enabled" THEN
+                     RegisterUserConnection
+                   ELSE
+                     IF "Disable Reason" <> '' THEN
+                       CRMIntegrationManagement.SendConnectionDisabledNotification("Disable Reason");
+                 END;
+               END;
+
+    OnAfterGetRecord=BEGIN
+                       IF HasPassword THEN
+                         CRMPassword := '*';
+                       RefreshData;
+                     END;
+
+    OnQueryClosePage=BEGIN
+                       IF NOT "Is Enabled" THEN
+                         IF NOT CONFIRM(STRSUBSTNO(EnableServiceQst,CurrPage.CAPTION),TRUE) THEN
+                           EXIT(FALSE);
+                     END;
+
+    ActionList=ACTIONS
+    {
+      { 4       ;    ;ActionContainer;
+                      ActionContainerType=ActionItems }
+      { 35      ;1   ;Action    ;
+                      Name=Assisted Setup;
+                      CaptionML=ENU=Assisted Setup;
+                      ToolTipML=ENU=Runs Dynamics 365 Connection Setup Wizard.;
+                      ApplicationArea=#Suite;
+                      Promoted=Yes;
+                      Enabled=AssistedSetupAvailable;
+                      Image=Setup;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 IF AssistedSetupAvailable THEN BEGIN
+                                   AssistedSetup.Run;
+                                   CurrPage.UPDATE(FALSE);
+                                 END;
+                               END;
+                                }
+      { 5       ;1   ;Action    ;
+                      Name=Test Connection;
+                      CaptionML=[@@@=Test is a verb.;
+                                 ENU=Test Connection];
+                      ToolTipML=ENU=Tests the connection to Dynamics 365 for Sales using the specified settings.;
+                      ApplicationArea=#Suite;
+                      Promoted=Yes;
+                      Image=ValidateEmailLoggingSetup;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 PerformTestConnection;
+                               END;
+                                }
+      { 13      ;1   ;Action    ;
+                      Name=ResetConfiguration;
+                      CaptionML=ENU=Use Default Synchronization Setup;
+                      ToolTipML=ENU=Resets the integration table mappings and synchronization jobs to the default values for a connection with Dynamics 365 for Sales. All current mappings are deleted.;
+                      ApplicationArea=#Suite;
+                      Enabled="Is Enabled";
+                      Image=ResetStatus;
+                      OnAction=VAR
+                                 CRMSetupDefaults@1000 : Codeunit 5334;
+                               BEGIN
+                                 IF CONFIRM(ResetIntegrationTableMappingConfirmQst,FALSE,CRMProductName.SHORT) THEN BEGIN
+                                   CRMSetupDefaults.ResetConfiguration(Rec);
+                                   MESSAGE(SetupSuccessfulMsg,CRMProductName.SHORT);
+                                 END;
+                                 RefreshDataFromCRM;
+                               END;
+                                }
+      { 41      ;1   ;Action    ;
+                      Name=CoupleUsers;
+                      CaptionML=ENU=Couple Salespersons;
+                      ToolTipML=ENU=Open the list of users in Dynamics 365 for Sales for manual coupling to salespersons in Business Central.;
+                      ApplicationArea=#Suite;
+                      Image=CoupledUsers;
+                      OnAction=VAR
+                                 CRMSystemuserList@1000 : Page 5340;
+                               BEGIN
+                                 CRMSystemuserList.Initialize(TRUE);
+                                 CRMSystemuserList.RUN;
+                               END;
+                                }
+      { 10      ;1   ;Action    ;
+                      Name=StartInitialSynchAction;
+                      CaptionML=ENU=Run Full Synchronization;
+                      ToolTipML=ENU=Start all the default integration jobs for synchronizing Business Central record types and Dynamics 365 for Sales entities, as defined on the Integration Table Mappings page.;
+                      ApplicationArea=#Suite;
+                      Enabled="Is Enabled For User";
+                      Image=RefreshLines;
+                      OnAction=BEGIN
+                                 PAGE.RUN(PAGE::"CRM Full Synch. Review");
+                               END;
+                                }
+      { 17      ;1   ;Action    ;
+                      Name=Reset Web Client URL;
+                      CaptionML=ENU=Reset Web Client URL;
+                      ToolTipML=ENU=Undo your change and enter the default URL in the Business Central web Client URL field.;
+                      ApplicationArea=#Suite;
+                      Enabled=IsWebCliResetEnabled;
+                      Image=ResetStatus;
+                      OnAction=BEGIN
+                                 PerformWebClientUrlReset;
+                                 MESSAGE(WebClientUrlResetMsg,PRODUCTNAME.SHORT);
+                               END;
+                                }
+      { 23      ;1   ;Action    ;
+                      Name=SynchronizeNow;
+                      CaptionML=ENU=Synchronize Modified Records;
+                      ToolTipML=ENU=Synchronize records that have been modified since the last time they were synchronized.;
+                      ApplicationArea=#Suite;
+                      Promoted=Yes;
+                      Enabled="Is Enabled For User";
+                      PromotedIsBig=Yes;
+                      Image=Refresh;
+                      PromotedCategory=Category4;
+                      OnAction=VAR
+                                 IntegrationSynchJobList@1000 : Page 5338;
+                               BEGIN
+                                 IF NOT CONFIRM(SynchronizeModifiedQst) THEN
+                                   EXIT;
+
+                                 SynchronizeNow(FALSE);
+                                 MESSAGE(SyncNowSuccessMsg,IntegrationSynchJobList.CAPTION);
+                               END;
+                                }
+      { 9       ;1   ;Action    ;
+                      Name=Generate Integration IDs;
+                      CaptionML=ENU=Generate Integration IDs;
+                      ToolTipML=ENU=Create integration IDs for new records that were added while the connection was disabled, for example, after you re-enable a Dynamics 365 for Sales connection.;
+                      ApplicationArea=#Suite;
+                      Image=Reconcile;
+                      OnAction=VAR
+                                 IntegrationManagement@1000 : Codeunit 5150;
+                               BEGIN
+                                 IF CONFIRM(ConfirmGenerateIntegrationIdsQst,TRUE) THEN BEGIN
+                                   IntegrationManagement.SetupIntegrationTables;
+                                   MESSAGE(GenerateIntegrationIdsSuccessMsg);
+                                 END;
+                               END;
+                                }
+      { 14      ;    ;ActionContainer;
+                      ActionContainerType=RelatedInformation }
+      { 19      ;1   ;Action    ;
+                      Name=Integration Table Mappings;
+                      CaptionML=ENU=Integration Table Mappings;
+                      ToolTipML=ENU=View entries that map integration tables to business data tables in Business Central. Integration tables are set up to act as interfaces for synchronizing data between an external database table, such as Dynamics 365 for Sales, and a corresponding business data table in Business Central.;
+                      ApplicationArea=#Suite;
+                      RunObject=Page 5335;
+                      Promoted=Yes;
+                      Image=Relationship;
+                      PromotedCategory=Report;
+                      RunPageMode=Edit }
+      { 12      ;1   ;Action    ;
+                      Name=Synch. Job Queue Entries;
+                      CaptionML=ENU=Synch. Job Queue Entries;
+                      ToolTipML=ENU=View the job queue entries that manage the scheduled synchronization between Dynamics 365 for Sales and Business Central.;
+                      ApplicationArea=#Suite;
+                      Promoted=Yes;
+                      Image=JobListSetup;
+                      PromotedCategory=Category4;
+                      OnAction=VAR
+                                 JobQueueEntry@1000 : Record 472;
+                               BEGIN
+                                 JobQueueEntry.FILTERGROUP := 2;
+                                 JobQueueEntry.SETRANGE("Object Type to Run",JobQueueEntry."Object Type to Run"::Codeunit);
+                                 JobQueueEntry.SETFILTER("Object ID to Run",GetJobQueueEntriesObjectIDToRunFilter);
+                                 JobQueueEntry.FILTERGROUP := 0;
+
+                                 PAGE.RUN(PAGE::"Job Queue Entries",JobQueueEntry);
+                               END;
+                                }
+      { 29      ;1   ;Action    ;
+                      Name=SkippedSynchRecords;
+                      CaptionML=ENU=Skipped Synch. Records;
+                      ToolTipML=ENU=View the list of records that will be skipped for synchronization.;
+                      ApplicationArea=#Suite;
+                      RunObject=Page 5333;
+                      Promoted=Yes;
+                      Enabled="Is Enabled";
+                      Image=NegativeLines;
+                      PromotedCategory=Category4;
+                      RunPageMode=View }
+      { 6       ;1   ;Action    ;
+                      Name=EncryptionManagement;
+                      CaptionML=ENU=Encryption Management;
+                      ToolTipML=ENU=Enable or disable data encryption. Data encryption helps make sure that unauthorized users cannot read business data.;
+                      ApplicationArea=#Advanced;
+                      RunObject=Page 9905;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=EncryptionKeys;
+                      PromotedCategory=Category5;
+                      RunPageMode=View }
+    }
+  }
+  CONTROLS
+  {
+    { 1900000001;;Container;
+                ContainerType=ContentArea }
+
+    { 1   ;1   ;Group     ;
+                Name=NAVToCRM;
+                CaptionML=ENU=Connection from Dynamics 365 Business Central to Dynamics 365 for Sales;
+                GroupType=Group }
+
+    { 2   ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the URL of the Dynamics 365 for Sales server that hosts the Dynamics 365 for Sales solution that you want to connect to.;
+                ApplicationArea=#Suite;
+                SourceExpr="Server Address";
+                Editable=IsEditable;
+                OnValidate=BEGIN
+                             ConnectionString := GetConnectionString;
+                           END;
+                            }
+
+    { 3   ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the user name of a Dynamics 365 for Sales account.;
+                ApplicationArea=#Suite;
+                SourceExpr="User Name";
+                Editable=IsEditable;
+                OnValidate=BEGIN
+                             ConnectionString := GetConnectionString;
+                           END;
+                            }
+
+    { 7   ;2   ;Field     ;
+                Name=Password;
+                ExtendedDatatype=Masked;
+                ToolTipML=ENU=Specifies the password of a Dynamics 365 for Sales user account.;
+                ApplicationArea=#Suite;
+                SourceExpr=CRMPassword;
+                Enabled=IsEditable;
+                OnValidate=BEGIN
+                             IF (CRMPassword <> '') AND (NOT ENCRYPTIONENABLED) THEN
+                               IF CONFIRM(EncryptionIsNotActivatedQst) THEN
+                                 PAGE.RUNMODAL(PAGE::"Data Encryption Management");
+                             SetPassword(CRMPassword);
+                           END;
+                            }
+
+    { 11  ;2   ;Field     ;
+                CaptionML=[@@@=Name of tickbox which shows whether the connection is enabled or disabled;
+                           ENU=Enabled];
+                ToolTipML=ENU=Specifies if the connection to Dynamics 365 for Sales is enabled.;
+                ApplicationArea=#Suite;
+                SourceExpr="Is Enabled";
+                OnValidate=BEGIN
+                             CurrPage.UPDATE(TRUE);
+                           END;
+                            }
+
+    { 22  ;2   ;Field     ;
+                Name=ScheduledSynchJobsActive;
+                CaptionML=ENU=Active scheduled synchronization jobs;
+                ToolTipML=ENU=Specifies how many of the default integration synchronization job queue entries ready to automatically synchronize data between Dynamics 365 and Dynamics 365 for Sales.;
+                ApplicationArea=#Suite;
+                SourceExpr=ScheduledSynchJobsRunning;
+                Editable=false;
+                StyleExpr=ScheduledSynchJobsRunningStyleExpr;
+                OnDrillDown=VAR
+                              ScheduledSynchJobsRunningMsg@1000 : Text;
+                            BEGIN
+                              IF TotalJobs = 0 THEN
+                                ScheduledSynchJobsRunningMsg := JobQueueIsNotRunningMsg
+                              ELSE
+                                IF ActiveJobs = TotalJobs THEN
+                                  ScheduledSynchJobsRunningMsg := AllScheduledJobsAreRunningMsg
+                                ELSE
+                                  ScheduledSynchJobsRunningMsg := STRSUBSTNO(PartialScheduledJobsAreRunningMsg,ActiveJobs,TotalJobs);
+                              MESSAGE(ScheduledSynchJobsRunningMsg);
+                            END;
+                             }
+
+    { 33  ;2   ;Field     ;
+                Name=SDKVersion;
+                AssistEdit=Yes;
+                CaptionML=ENU=Dynamics 365 SDK Version;
+                ToolTipML=ENU=Specifies the Microsoft Dynamics 365 (CRM) software development kit version that is used to connect to Dynamics 365 for Sales.;
+                ApplicationArea=#Suite;
+                SourceExpr="Proxy Version";
+                Enabled=IsEditable;
+                Editable=FALSE;
+                OnAssistEdit=VAR
+                               TempStack@1000 : TEMPORARY Record 9160;
+                             BEGIN
+                               IF PAGE.RUNMODAL(PAGE::"SDK Version List",TempStack) = ACTION::LookupOK THEN BEGIN
+                                 VALIDATE("Proxy Version",TempStack.StackOrder);
+                                 ConnectionString := GetConnectionString;
+                                 CurrPage.UPDATE(TRUE);
+                               END;
+                             END;
+                              }
+
+    { 8   ;1   ;Group     ;
+                Name=CRMToNAV;
+                CaptionML=ENU=Connection from Dynamics 365 for Sales to Dynamics 365 Business Central;
+                Visible="Is Enabled";
+                GroupType=Group }
+
+    { 16  ;2   ;Field     ;
+                Name=NAVURL;
+                CaptionML=ENU=Dynamics 365 Business Central Web Client URL;
+                ToolTipML=ENU=Specifies the URL to the Business Central web client. From records in Dynamics 365 for Sales, such as an account or product, users can open a corresponding (coupled) record in Business Central. Set this field to the URL of the Business Central web client instance to use.;
+                ApplicationArea=#Suite;
+                SourceExpr="Dynamics NAV URL";
+                Enabled="Is CRM Solution Installed" }
+
+    { 28  ;2   ;Field     ;
+                Name=ItemAvailabilityWebServEnabled;
+                CaptionML=ENU=Item Availability Web Service Enabled;
+                ToolTipML=ENU=Specifies that the Item Availability web service for Business Central is enabled.;
+                ApplicationArea=#Suite;
+                SourceExpr=WebServiceEnabled;
+                Editable=FALSE;
+                StyleExpr=WebServiceEnabledStyleExpr;
+                OnDrillDown=VAR
+                              CRMIntegrationManagement@1000 : Codeunit 5330;
+                            BEGIN
+                              IF WebServiceEnabled THEN
+                                CRMIntegrationManagement.UnPublishOnWebService(Rec)
+                              ELSE
+                                CRMIntegrationManagement.PublishWebService(Rec);
+                              CurrPage.UPDATE(TRUE);
+                            END;
+                             }
+
+    { 34  ;2   ;Field     ;
+                ApplicationArea=#Suite }
+
+    { 24  ;2   ;Field     ;
+                Name=NAVODataURL;
+                CaptionML=ENU=Dynamics 365 Business Central OData Web Service URL;
+                ToolTipML=ENU=Specifies the URL of Business Central OData web services. From sales order records in Dynamics 365 for Sales, users can retrieve item availability information for items in Business Central that are coupled to sales order detail records in Dynamics 365 for Sales. Set this field to the URL of the Business Central OData web services to use.;
+                ApplicationArea=#Suite;
+                SourceExpr="Dynamics NAV OData URL";
+                Enabled="Is CRM Solution Installed" }
+
+    { 31  ;2   ;Field     ;
+                Name=NAVODataUsername;
+                Lookup=Yes;
+                CaptionML=ENU=Dynamics 365 Business Central OData Web Service Username;
+                ToolTipML=ENU=Specifies the user name to access Dynamics 365 OData web services.;
+                ApplicationArea=#Suite;
+                SourceExpr="Dynamics NAV OData Username";
+                Enabled="Is CRM Solution Installed";
+                LookupPageID=Users }
+
+    { 32  ;2   ;Field     ;
+                Name=NAVODataAccesskey;
+                CaptionML=ENU=Dynamics 365 Business Central OData Web Service Accesskey;
+                ToolTipML=ENU=Specifies the access key to access Dynamics 365 OData web services.;
+                ApplicationArea=#Suite;
+                SourceExpr="Dynamics NAV OData Accesskey";
+                Enabled="Is CRM Solution Installed";
+                Editable=FALSE }
+
+    { 20  ;1   ;Group     ;
+                Name=CRMSettings;
+                CaptionML=ENU=Dynamics 365 for Sales Settings;
+                Visible="Is Enabled";
+                GroupType=Group }
+
+    { 25  ;2   ;Field     ;
+                CaptionML=ENU=Version;
+                ToolTipML=ENU=Specifies the version of Dynamics 365 for Sales.;
+                ApplicationArea=#Suite;
+                SourceExpr="CRM Version";
+                Editable=FALSE;
+                StyleExpr=CRMVersionStyleExpr;
+                OnDrillDown=BEGIN
+                              IF IsVersionValid THEN
+                                MESSAGE(FavorableCRMVersionMsg,CRMProductName.SHORT)
+                              ELSE
+                                MESSAGE(UnfavorableCRMVersionMsg,PRODUCTNAME.SHORT,CRMProductName.SHORT);
+                            END;
+                             }
+
+    { 15  ;2   ;Field     ;
+                CaptionML=ENU=Dynamics 365 Business Central Integration Solution Imported;
+                ToolTipML=ENU=Specifies if the Integration Solution is installed and configured in Dynamics 365 for Sales. You cannot change this setting.;
+                ApplicationArea=#Suite;
+                SourceExpr="Is CRM Solution Installed";
+                Editable=FALSE;
+                StyleExpr=CRMSolutionInstalledStyleExpr;
+                OnDrillDown=BEGIN
+                              IF "Is CRM Solution Installed" THEN
+                                MESSAGE(FavorableCRMSolutionInstalledMsg,PRODUCTNAME.SHORT,CRMProductName.SHORT)
+                              ELSE
+                                MESSAGE(UnfavorableCRMSolutionInstalledMsg,PRODUCTNAME.SHORT);
+                            END;
+                             }
+
+    { 21  ;2   ;Field     ;
+                CaptionML=ENU=Sales Order Integration Enabled;
+                ToolTipML=ENU=Specifies that it is possible for Dynamics 365 for Sales users to submit sales orders that can then be viewed and imported in Dynamics 365.;
+                ApplicationArea=#Suite;
+                SourceExpr="Is S.Order Integration Enabled";
+                OnValidate=BEGIN
+                             SetAutoCreateSalesOrdersEditable;
+                           END;
+                            }
+
+    { 40  ;2   ;Field     ;
+                CaptionML=ENU=Automatically Create Sales Orders;
+                ToolTipML=ENU=Specifies that sales orders will be created automatically from sales orders that are submitted in Dynamics 365 for Sales.;
+                ApplicationArea=#Suite;
+                SourceExpr="Auto Create Sales Orders";
+                Editable=IsAutoCreateSalesOrdersEditable }
+
+    { 26  ;1   ;Group     ;
+                Name=AdvancedSettings;
+                CaptionML=ENU=Advanced Settings;
+                Visible="Is Enabled";
+                GroupType=Group }
+
+    { 27  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies that Dynamics 365 users must have a matching user account in Dynamics 365 for Sales to have Dynamics 365 for Sales integration capabilities in the user interface.;
+                ApplicationArea=#Suite;
+                SourceExpr="Is User Mapping Required";
+                OnValidate=BEGIN
+                             UpdateIsEnabledState;
+                             SetStyleExpr;
+                           END;
+                            }
+
+    { 18  ;2   ;Field     ;
+                CaptionML=ENU=Current Business Central User is Mapped to a Dynamics 365 for Sales User;
+                ToolTipML=ENU=Specifies that the user account that you used to sign in with has a matching user account in Dynamics 365 for Sales.;
+                ApplicationArea=#Suite;
+                SourceExpr="Is User Mapped To CRM User";
+                Visible="Is User Mapping Required";
+                Editable=FALSE;
+                StyleExpr=UserMappedToCRMUserStyleExpr;
+                OnDrillDown=BEGIN
+                              IF "Is User Mapped To CRM User" THEN
+                                MESSAGE(CurrentuserIsMappedToCRMUserMsg,USERID,PRODUCTNAME.SHORT,CRMProductName.SHORT)
+                              ELSE
+                                MESSAGE(CurrentuserIsNotMappedToCRMUserMsg,USERID,PRODUCTNAME.SHORT,CRMProductName.SHORT);
+                            END;
+                             }
+
+    { 30  ;2   ;Field     ;
+                ApplicationArea=#Suite }
+
+    { 36  ;1   ;Group     ;
+                Name=AuthTypeDetails;
+                CaptionML=ENU=Authentication Type Details;
+                Visible=NOT SoftwareAsAService;
+                GroupType=Group }
+
+    { 37  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the authentication type that will be used to authenticate with Dynamics 365 for Sales;
+                ApplicationArea=#Advanced;
+                SourceExpr="Authentication Type";
+                Editable=NOT "Is Enabled";
+                OnValidate=BEGIN
+                             SetIsConnectionStringEditable;
+                             ConnectionString := GetConnectionString;
+                           END;
+                            }
+
+    { 39  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the domain name of your Dynamics 365 for Sales deployment.;
+                ApplicationArea=#Advanced;
+                SourceExpr=Domain }
+
+    { 38  ;2   ;Field     ;
+                Name=Connection String;
+                CaptionML=ENU=Connection String;
+                ToolTipML=ENU=Specifies the connection string that will be used to connect to Dynamics 365 for Sales;
+                ApplicationArea=#Advanced;
+                SourceExpr=ConnectionString;
+                Editable=IsConnectionStringEditable;
+                OnValidate=BEGIN
+                             SetConnectionString(ConnectionString);
+                           END;
+                            }
+
+  }
+  CODE
+  {
+    VAR
+      AssistedSetup@1010 : Record 1803;
+      CRMProductName@1017 : Codeunit 5344;
+      CRMPassword@1000 : Text;
+      ResetIntegrationTableMappingConfirmQst@1003 : TextConst '@@@="%1 = CRM product name";ENU=This will delete all existing integration table mappings and %1 synchronization jobs and install the default integration table mappings and jobs for %1 synchronization.\\Are you sure that you want to continue?';
+      ConfirmGenerateIntegrationIdsQst@1006 : TextConst 'ENU=You are about to add integration data to tables. This process may take several minutes. Do you want to continue?';
+      GenerateIntegrationIdsSuccessMsg@1005 : TextConst 'ENU=The integration data has been added to the tables.';
+      EncryptionIsNotActivatedQst@1016 : TextConst 'ENU=Data encryption is currently not enabled. We recommend that you encrypt data. \Do you want to open the Data Encryption Management window?';
+      WebClientUrlResetMsg@1014 : TextConst '@@@=%1 - product name;ENU=The %1 Web Client URL has been reset to the default value.';
+      SyncNowSuccessMsg@1018 : TextConst '@@@="%1 = Page 5338 Caption";ENU=Synchronize Modified Records completed.\See the %1 window for details.';
+      UnfavorableCRMVersionMsg@1033 : TextConst '@@@="%1 - product name, %2 = CRM product name";ENU=This version of %2 might not work correctly with %1. We recommend you upgrade to a supported version.';
+      FavorableCRMVersionMsg@1034 : TextConst '@@@="%1 = CRM product name";ENU=The version of %1 is valid.';
+      UnfavorableCRMSolutionInstalledMsg@1036 : TextConst '@@@=%1 - product name;ENU=The %1 Integration Solution was not detected.';
+      FavorableCRMSolutionInstalledMsg@1037 : TextConst '@@@="%1 - product name, %2 = CRM product name";ENU=The %1 Integration Solution is installed in %2.';
+      SynchronizeModifiedQst@1038 : TextConst 'ENU=This will synchronize all modified records in all Integration Table Mappings.\\Do you want to continue?';
+      ReadyScheduledSynchJobsTok@1049 : TextConst '@@@="%1 = Count of scheduled job queue entries in ready or in process state, %2 count of all scheduled jobs";ENU=%1 of %2';
+      ScheduledSynchJobsRunning@1002 : Text;
+      CurrentuserIsMappedToCRMUserMsg@1053 : TextConst '@@@="%1 = Current User ID, %2 - product name, %3 = CRM product name";ENU=%2 user (%1) is mapped to a %3 user.';
+      CurrentuserIsNotMappedToCRMUserMsg@1054 : TextConst '@@@="%1 = Current User ID, %2 - product name, %3 = CRM product name";ENU=Because the %2 Users Must Map to %3 Users field is set, %3 integration is not enabled for %1.\\To enable %3 integration for %2 user %1, the authentication email must match the primary email of a %3 user.';
+      EnableServiceQst@1057 : TextConst '@@@="%1 = This Page Caption (Microsoft Dynamics 365 Connection Setup)";ENU=The %1 is not enabled. Are you sure you want to exit?';
+      PartialScheduledJobsAreRunningMsg@1046 : TextConst '@@@="%1 = Count of scheduled job queue entries in ready or in process state, %2 count of all scheduled jobs";ENU=An active job queue is available but only %1 of the %2 scheduled synchronization jobs are ready or in process.';
+      JobQueueIsNotRunningMsg@1048 : TextConst 'ENU=There is no job queue started. Scheduled synchronization jobs require an active job queue to process jobs.\\Contact your administrator to get a job queue configured and started.';
+      AllScheduledJobsAreRunningMsg@1045 : TextConst 'ENU=An job queue is started and all scheduled synchronization jobs are ready or already processing.';
+      SetupSuccessfulMsg@1001 : TextConst '@@@="%1 = CRM product name";ENU=The default setup for %1 synchronization has completed successfully.';
+      ScheduledSynchJobsRunningStyleExpr@1011 : Text;
+      CRMSolutionInstalledStyleExpr@1012 : Text;
+      CRMVersionStyleExpr@1013 : Text;
+      UserMappedToCRMUserStyleExpr@1019 : Text;
+      ConnectionString@1020 : Text;
+      WebServiceEnabledStyleExpr@1024 : Text;
+      ActiveJobs@1007 : Integer;
+      TotalJobs@1004 : Integer;
+      IsEditable@1008 : Boolean;
+      IsWebCliResetEnabled@1009 : Boolean;
+      AssistedSetupAvailable@1058 : Boolean;
+      SoftwareAsAService@1015 : Boolean;
+      IsConnectionStringEditable@1022 : Boolean;
+      IsAutoCreateSalesOrdersEditable@1021 : Boolean;
+      WebServiceEnabled@1023 : Boolean;
+
+    LOCAL PROCEDURE RefreshData@19();
+    BEGIN
+      UpdateIsEnabledState;
+      SetIsConnectionStringEditable;
+      RefreshDataFromCRM;
+      SetAutoCreateSalesOrdersEditable;
+      RefreshSynchJobsData;
+      UpdateEnableFlags;
+      IF NOT WebServiceEnabled THEN
+        CLEAR("Dynamics NAV OData URL");
+      SetStyleExpr;
+    END;
+
+    LOCAL PROCEDURE RefreshSynchJobsData@20();
+    BEGIN
+      CountCRMJobQueueEntries(ActiveJobs,TotalJobs);
+      ScheduledSynchJobsRunning := STRSUBSTNO(ReadyScheduledSynchJobsTok,ActiveJobs,TotalJobs);
+      ScheduledSynchJobsRunningStyleExpr := GetRunningJobsStyleExpr;
+    END;
+
+    LOCAL PROCEDURE SetStyleExpr@9();
+    BEGIN
+      CRMSolutionInstalledStyleExpr := GetStyleExpr("Is CRM Solution Installed");
+      CRMVersionStyleExpr := GetStyleExpr(IsVersionValid);
+      UserMappedToCRMUserStyleExpr := GetStyleExpr("Is User Mapped To CRM User");
+      WebServiceEnabledStyleExpr := GetStyleExpr(WebServiceEnabled);
+    END;
+
+    LOCAL PROCEDURE SetIsConnectionStringEditable@4();
+    BEGIN
+      IsConnectionStringEditable :=
+        NOT "Is Enabled";
+    END;
+
+    LOCAL PROCEDURE SetAutoCreateSalesOrdersEditable@2();
+    BEGIN
+      IsAutoCreateSalesOrdersEditable := "Is S.Order Integration Enabled";
+    END;
+
+    LOCAL PROCEDURE GetRunningJobsStyleExpr@1() StyleExpr : Text;
+    BEGIN
+      IF ActiveJobs < TotalJobs THEN
+        StyleExpr := 'Ambiguous'
+      ELSE
+        StyleExpr := GetStyleExpr((ActiveJobs = TotalJobs) AND (TotalJobs <> 0))
+    END;
+
+    LOCAL PROCEDURE GetStyleExpr@6(Favorable@1000 : Boolean) StyleExpr : Text;
+    BEGIN
+      IF Favorable THEN
+        StyleExpr := 'Favorable'
+      ELSE
+        StyleExpr := 'Unfavorable'
+    END;
+
+    LOCAL PROCEDURE UpdateEnableFlags@3();
+    VAR
+      CRMIntegrationManagement@1000 : Codeunit 5330;
+    BEGIN
+      IsEditable := NOT "Is Enabled";
+      IsWebCliResetEnabled := "Is CRM Solution Installed" AND "Is Enabled For User";
+      WebServiceEnabled := CRMIntegrationManagement.IsItemAvailabilityWebServiceEnabled;
+    END;
+
+    LOCAL PROCEDURE InitializeDefaultProxyVersion@5();
+    VAR
+      CRMIntegrationManagement@1000 : Codeunit 5330;
+    BEGIN
+      VALIDATE("Proxy Version",CRMIntegrationManagement.GetLastProxyVersionItem);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

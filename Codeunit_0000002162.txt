@@ -1,0 +1,419 @@
+OBJECT Codeunit 2162 O365 Sales Invoice Events
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:16 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    TableNo=2160;
+    Permissions=TableData 2160=rimd;
+    OnRun=BEGIN
+            IF NOT IsInvoicing THEN BEGIN
+              Result := NotInvoicingErr;
+              State := State::Failed;
+              EXIT;
+            END;
+
+            ParseEvent(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      InvoicePostedMsg@1000 : TextConst '@@@="%1=The invoice number";ENU=Invoice %1 was posted.';
+      InvoicePaidMsg@1002 : TextConst '@@@="%1=The invoice number";ENU=Invoice %1 was paid.';
+      InvoiceOverdueMsg@1005 : TextConst '@@@="%1=The invoice number";ENU=Invoice %1 is overdue.';
+      KpiUpdateMsg@1009 : TextConst 'ENU=The KPIs were updated.';
+      InvoiceDraftMsg@1003 : TextConst 'ENU=There are unsent invoices.';
+      InvoiceInactivityMsg@1004 : TextConst 'ENU=No invoices have been sent recently.';
+      UnsupportedTypeErr@1001 : TextConst 'ENU=This event type is not supported.';
+      NotInvoicingErr@1006 : TextConst 'ENU=This event is only handled for Invoicing.';
+      InvoiceEmailFailedMsg@1007 : TextConst '@@@="%1=The invoice number";ENU=Invoice %1 could not be sent.';
+      EstimateEmailFailedMsg@1008 : TextConst '@@@="%1=The estimate number";ENU=Estimate %1 could not be sent.';
+
+    LOCAL PROCEDURE ParseEvent@1(CalendarEvent@1000 : Record 2160);
+    VAR
+      O365SalesEvent@1001 : Record 2163;
+      O365SalesWebService@1002 : Codeunit 2190;
+    BEGIN
+      O365SalesEvent.LOCKTABLE;
+      O365SalesEvent.GET(CalendarEvent."Record ID to Process");
+
+      CASE O365SalesEvent.Type OF
+        O365SalesEvent.Type::"Invoice Sent":
+          BEGIN
+            O365SalesWebService.SendInvoiceCreatedEvent(O365SalesEvent."Document No.");
+            O365SalesWebService.SendKPI;
+          END;
+        O365SalesEvent.Type::"Invoice Email Failed":
+          O365SalesWebService.SendInvoiceEmailFailedEvent(O365SalesEvent."Document No.");
+        O365SalesEvent.Type::"Invoice Paid":
+          BEGIN
+            O365SalesWebService.SendInvoicePaidEvent(O365SalesEvent."Document No.");
+            O365SalesWebService.SendKPI;
+          END;
+        O365SalesEvent.Type::"Draft Reminder":
+          O365SalesWebService.SendInvoiceDraftEvent;
+        O365SalesEvent.Type::"Invoice Overdue":
+          BEGIN
+            O365SalesWebService.SendInvoiceOverdueEvent(O365SalesEvent."Document No.");
+            O365SalesWebService.SendKPI;
+          END;
+        O365SalesEvent.Type::"Invoicing Inactivity":
+          O365SalesWebService.SendInvoiceInactivityEvent;
+        O365SalesEvent.Type::"KPI Update":
+          O365SalesWebService.SendKPI;
+        ELSE
+          ERROR(UnsupportedTypeErr);
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateDraftEvent@4();
+    VAR
+      O365C2GraphEventSettings@1000 : Record 2162;
+      CalendarEvent@1001 : Record 2160;
+      SalesHeader@1003 : Record 36;
+      O365SalesEvent@1005 : Record 2163;
+      CalendarEventMangement@1004 : Codeunit 2160;
+      NewDate@1002 : Date;
+      EventNo@1006 : Integer;
+    BEGIN
+      IF NOT O365C2GraphEventSettings.GET THEN
+        O365C2GraphEventSettings.INSERT(TRUE);
+
+      NewDate := CALCDATE(STRSUBSTNO('<%1D>',O365C2GraphEventSettings."Inv. Draft Duration (Day)"),TODAY);
+
+      SalesHeader.SETRANGE("Document Type",SalesHeader."Document Type"::Invoice);
+      IF CalendarEvent.GET(O365C2GraphEventSettings."Inv. Draft Event") AND (NOT CalendarEvent.Archived) THEN BEGIN
+        IF SalesHeader.ISEMPTY THEN
+          CalendarEvent.DELETE(TRUE)
+        ELSE BEGIN
+          CalendarEvent.VALIDATE("Scheduled Date",NewDate);
+          CalendarEvent.MODIFY(TRUE);
+        END;
+
+        EXIT;
+      END;
+
+      IF SalesHeader.ISEMPTY THEN
+        EXIT;
+
+      CreateEvent(O365SalesEvent,O365SalesEvent.Type::"Draft Reminder",'');
+      EventNo :=
+        CalendarEventMangement.CreateCalendarEvent(
+          NewDate,InvoiceDraftMsg,CODEUNIT::"O365 Sales Invoice Events",O365SalesEvent.RECORDID,
+          O365C2GraphEventSettings."Inv. Draft Enabled");
+
+      O365C2GraphEventSettings."Inv. Draft Event" := EventNo;
+      O365C2GraphEventSettings.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE UpdateInactivityEvent@6();
+    VAR
+      O365C2GraphEventSettings@1006 : Record 2162;
+      CalendarEvent@1005 : Record 2160;
+      O365SalesEvent@1003 : Record 2163;
+      CalendarEventMangement@1002 : Codeunit 2160;
+      NewDate@1001 : Date;
+      EventNo@1000 : Integer;
+    BEGIN
+      IF NOT O365C2GraphEventSettings.GET THEN
+        O365C2GraphEventSettings.INSERT(TRUE);
+
+      NewDate := CALCDATE(STRSUBSTNO('<%1D>',O365C2GraphEventSettings."Inv. Inactivity Duration (Day)"),TODAY);
+
+      IF CalendarEvent.GET(O365C2GraphEventSettings."Inv. Inactivity Event") AND (NOT CalendarEvent.Archived) THEN BEGIN
+        CalendarEvent.VALIDATE("Scheduled Date",NewDate);
+        CalendarEvent.MODIFY(TRUE);
+        EXIT;
+      END;
+
+      CreateEvent(O365SalesEvent,O365SalesEvent.Type::"Invoicing Inactivity",'');
+      EventNo :=
+        CalendarEventMangement.CreateCalendarEvent(
+          NewDate,InvoiceInactivityMsg,CODEUNIT::"O365 Sales Invoice Events",O365SalesEvent.RECORDID,
+          O365C2GraphEventSettings."Inv. Inactivity Enabled");
+
+      O365C2GraphEventSettings."Inv. Inactivity Event" := EventNo;
+      O365C2GraphEventSettings.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE CreateSendEvent@13(DocNo@1000 : Code[20]);
+    VAR
+      O365SalesEvent@1001 : Record 2163;
+      CalendarEventMangement@1002 : Codeunit 2160;
+    BEGIN
+      CreateEvent(O365SalesEvent,O365SalesEvent.Type::"Invoice Sent",DocNo);
+      CalendarEventMangement.CreateCalendarEvent(
+        TODAY,STRSUBSTNO(InvoicePostedMsg,DocNo),CODEUNIT::"O365 Sales Invoice Events",O365SalesEvent.RECORDID,
+        O365SalesEvent.IsEventTypeEnabled(O365SalesEvent.Type::"Invoice Sent"));
+    END;
+
+    LOCAL PROCEDURE CreateOverdueEvent@14(DocNo@1000 : Code[20];DueDate@1003 : Date);
+    VAR
+      O365SalesEvent@1002 : Record 2163;
+      CalendarEventMangement@1001 : Codeunit 2160;
+    BEGIN
+      CreateEvent(O365SalesEvent,O365SalesEvent.Type::"Invoice Overdue",DocNo);
+      CalendarEventMangement.CreateCalendarEvent(
+        DueDate,STRSUBSTNO(InvoiceOverdueMsg,DocNo),CODEUNIT::"O365 Sales Invoice Events",O365SalesEvent.RECORDID,
+        O365SalesEvent.IsEventTypeEnabled(O365SalesEvent.Type::"Invoice Overdue"));
+    END;
+
+    LOCAL PROCEDURE CreatePaidEvent@15(DocNo@1000 : Code[20]);
+    VAR
+      O365SalesEvent@1002 : Record 2163;
+      CalendarEventMangement@1001 : Codeunit 2160;
+    BEGIN
+      CreateEvent(O365SalesEvent,O365SalesEvent.Type::"Invoice Paid",DocNo);
+      CalendarEventMangement.CreateCalendarEvent(
+        TODAY,STRSUBSTNO(InvoicePaidMsg,DocNo),CODEUNIT::"O365 Sales Invoice Events",
+        O365SalesEvent.RECORDID,
+        O365SalesEvent.IsEventTypeEnabled(O365SalesEvent.Type::"Invoice Paid"));
+    END;
+
+    LOCAL PROCEDURE CreateKpiEvent@20();
+    VAR
+      O365SalesEvent@1001 : Record 2163;
+      CalendarEventMangement@1000 : Codeunit 2160;
+    BEGIN
+      CreateEvent(O365SalesEvent,O365SalesEvent.Type::"KPI Update",'');
+      CalendarEventMangement.CreateCalendarEvent(TODAY,KpiUpdateMsg,CODEUNIT::"O365 Sales Invoice Events",O365SalesEvent.RECORDID,
+        O365SalesEvent.IsEventTypeEnabled(O365SalesEvent.Type::"KPI Update"));
+    END;
+
+    LOCAL PROCEDURE CreateEmailFailedEventEstimate@11(DocNo@1000 : Code[20]);
+    VAR
+      O365SalesEvent@1002 : Record 2163;
+      CalendarEventMangement@1001 : Codeunit 2160;
+    BEGIN
+      CreateEvent(O365SalesEvent,O365SalesEvent.Type::"Estimate Email Failed",DocNo);
+      CalendarEventMangement.CreateCalendarEvent(
+        TODAY,STRSUBSTNO(EstimateEmailFailedMsg,DocNo),CODEUNIT::"O365 Sales Quote Events",
+        O365SalesEvent.RECORDID,
+        O365SalesEvent.IsEventTypeEnabled(O365SalesEvent.Type::"Estimate Email Failed"));
+    END;
+
+    LOCAL PROCEDURE CreateEmailFailedEventInvoice@12(DocNo@1000 : Code[20]);
+    VAR
+      O365SalesEvent@1002 : Record 2163;
+      CalendarEventMangement@1001 : Codeunit 2160;
+    BEGIN
+      CreateEvent(O365SalesEvent,O365SalesEvent.Type::"Invoice Email Failed",DocNo);
+      CalendarEventMangement.CreateCalendarEvent(
+        TODAY,STRSUBSTNO(InvoiceEmailFailedMsg,DocNo),CODEUNIT::"O365 Sales Invoice Events",
+        O365SalesEvent.RECORDID,
+        O365SalesEvent.IsEventTypeEnabled(O365SalesEvent.Type::"Invoice Email Failed"));
+    END;
+
+    LOCAL PROCEDURE CreateEvent@5(VAR O365SalesEvent@1002 : Record 2163;Type@1000 : Integer;DocNo@1001 : Code[20]);
+    BEGIN
+      O365SalesEvent.INIT;
+      O365SalesEvent.Type := Type;
+      O365SalesEvent."Document No." := DocNo;
+      O365SalesEvent.INSERT;
+    END;
+
+    LOCAL PROCEDURE IsInvoice@9(VAR SalesHeader@1000 : Record 36) : Boolean;
+    BEGIN
+      IF SalesHeader.ISTEMPORARY THEN
+        EXIT(FALSE);
+
+      EXIT(SalesHeader."Document Type" = SalesHeader."Document Type"::Invoice);
+    END;
+
+    LOCAL PROCEDURE IsInvoicing@8() : Boolean;
+    VAR
+      O365SalesInitialSetup@1000 : Record 2110;
+      O365C2GraphEventSettings@1002 : Record 2162;
+      O365SalesEvent@1001 : Record 2163;
+    BEGIN
+      IF NOT O365SalesInitialSetup.READPERMISSION THEN
+        EXIT(FALSE);
+
+      IF NOT (O365C2GraphEventSettings.READPERMISSION AND O365C2GraphEventSettings.WRITEPERMISSION) THEN
+        EXIT(FALSE);
+
+      IF NOT (O365SalesEvent.READPERMISSION AND O365SalesEvent.WRITEPERMISSION) THEN
+        EXIT(FALSE);
+
+      IF NOT O365SalesInitialSetup.GET THEN
+        EXIT(FALSE);
+
+      EXIT(O365SalesInitialSetup."Is initialized");
+    END;
+
+    [EventSubscriber(Codeunit,80,OnAfterPostSalesDoc)]
+    PROCEDURE OnAfterPostSalesDoc@2(VAR SalesHeader@1005 : Record 36;VAR GenJnlPostLine@1004 : Codeunit 12;SalesShptHdrNo@1003 : Code[20];RetRcpHdrNo@1002 : Code[20];SalesInvHdrNo@1001 : Code[20];SalesCrMemoHdrNo@1000 : Code[20]);
+    BEGIN
+      IF NOT IsInvoicing THEN
+        EXIT;
+
+      IF NOT IsInvoice(SalesHeader) THEN BEGIN
+        CreateKpiEvent;
+        EXIT;
+      END;
+
+      IF SalesHeader."Document Type" <> SalesHeader."Document Type"::Invoice THEN
+        EXIT;
+
+      // Queue/update Events
+      CreateSendEvent(SalesInvHdrNo);
+      CreateOverdueEvent(SalesInvHdrNo,SalesHeader."Due Date");
+      UpdateDraftEvent;
+      UpdateInactivityEvent;
+    END;
+
+    [EventSubscriber(Table,379,OnAfterInsertEvent)]
+    LOCAL PROCEDURE OnAfterInsertDetailedCustLedgEntry@19(VAR Rec@1000 : Record 379;RunTrigger@1001 : Boolean);
+    VAR
+      O365SalesEvent@1002 : Record 2163;
+      SalesInvoiceHeader@1004 : Record 112;
+      CalendarEvent@1003 : Record 2160;
+    BEGIN
+      IF Rec.ISTEMPORARY THEN
+        EXIT;
+
+      IF Rec."Initial Document Type" <> Rec."Document Type"::Invoice THEN
+        EXIT;
+
+      IF Rec."Document Type" <> Rec."Document Type"::Payment THEN
+        EXIT;
+
+      IF NOT IsInvoicing THEN
+        EXIT;
+
+      SalesInvoiceHeader.SETAUTOCALCFIELDS(Cancelled,Closed,Corrective,"Remaining Amount");
+      SalesInvoiceHeader.SETRANGE("Cust. Ledger Entry No.",Rec."Cust. Ledger Entry No.");
+      IF NOT SalesInvoiceHeader.FINDFIRST THEN
+        EXIT;
+
+      IF SalesInvoiceHeader.Cancelled THEN
+        EXIT;
+
+      IF SalesInvoiceHeader.Corrective THEN
+        EXIT;
+
+      IF NOT SalesInvoiceHeader.Closed THEN
+        EXIT;
+
+      // Verify paid
+      IF SalesInvoiceHeader."Remaining Amount" > 0 THEN BEGIN
+        CreateKpiEvent;
+        EXIT;
+      END;
+
+      CreatePaidEvent(SalesInvoiceHeader."No.");
+
+      // Remove overdue event
+      O365SalesEvent.SETRANGE(Type,O365SalesEvent.Type::"Invoice Overdue");
+      O365SalesEvent.SETRANGE("Document No.",SalesInvoiceHeader."No.");
+      IF NOT O365SalesEvent.FINDFIRST THEN
+        EXIT;
+
+      CalendarEvent.SETRANGE("Record ID to Process",O365SalesEvent.RECORDID);
+      IF CalendarEvent.FINDFIRST THEN
+        IF NOT CalendarEvent.Archived THEN
+          CalendarEvent.DELETE(TRUE);
+    END;
+
+    [EventSubscriber(Table,36,OnAfterInsertEvent)]
+    PROCEDURE OnAfterSalesHeaderInsert@7(VAR Rec@1000 : Record 36;RunTrigger@1001 : Boolean);
+    BEGIN
+      IF NOT IsInvoice(Rec) THEN
+        EXIT;
+
+      IF NOT IsInvoicing THEN
+        EXIT;
+
+      UpdateDraftEvent;
+      UpdateInactivityEvent;
+    END;
+
+    [EventSubscriber(Table,36,OnAfterDeleteEvent)]
+    PROCEDURE OnAfterSalesHeaderDelete@10(VAR Rec@1000 : Record 36;RunTrigger@1001 : Boolean);
+    BEGIN
+      IF NOT IsInvoice(Rec) THEN
+        EXIT;
+
+      IF NOT IsInvoicing THEN
+        EXIT;
+
+      UpdateDraftEvent;
+    END;
+
+    [EventSubscriber(Table,2158,OnBeforeModifyEvent)]
+    PROCEDURE OnBeforeDocumentSentHistoryModify@16(VAR Rec@1000 : Record 2158;VAR xRec@1001 : Record 2158;RunTrigger@1002 : Boolean);
+    BEGIN
+      OnInsertOrModifyDocumentSentHistory(Rec);
+    END;
+
+    [EventSubscriber(Table,2158,OnAfterInsertEvent)]
+    PROCEDURE OnAfterDocumentSentHistoryInsert@18(VAR Rec@1000 : Record 2158;RunTrigger@1001 : Boolean);
+    BEGIN
+      OnInsertOrModifyDocumentSentHistory(Rec);
+    END;
+
+    LOCAL PROCEDURE OnInsertOrModifyDocumentSentHistory@17(VAR O365DocumentSentHistory@1003 : Record 2158);
+    VAR
+      SalesInvoiceHeader@1001 : Record 112;
+      SalesHeader@1000 : Record 36;
+      O365DocumentSentHistory2@1002 : Record 2158;
+    BEGIN
+      IF O365DocumentSentHistory."Job Last Status" <> O365DocumentSentHistory."Job Last Status"::Error THEN
+        EXIT;
+
+      IF O365DocumentSentHistory.ISTEMPORARY THEN
+        EXIT;
+
+      IF NOT IsInvoicing THEN
+        EXIT;
+
+      // If the record existed and had already failed, then don't spam events
+      IF O365DocumentSentHistory2.GET(O365DocumentSentHistory."Document Type",O365DocumentSentHistory."Document No.",
+           O365DocumentSentHistory.Posted,O365DocumentSentHistory."Created Date-Time")
+      THEN
+        IF O365DocumentSentHistory2."Job Last Status" = O365DocumentSentHistory."Job Last Status" THEN
+          EXIT;
+
+      IF O365DocumentSentHistory.Posted AND
+         (O365DocumentSentHistory."Document Type" = O365DocumentSentHistory."Document Type"::Invoice)
+      THEN BEGIN
+        IF NOT SalesInvoiceHeader.GET(O365DocumentSentHistory."Document No.") THEN
+          EXIT;
+
+        // If in the meantime an email succedeed, don't send the event
+        SalesInvoiceHeader.CALCFIELDS("Last Email Sent Time","Last Email Sent Status");
+        IF (SalesInvoiceHeader."Last Email Sent Status" = SalesInvoiceHeader."Last Email Sent Status"::Finished) AND
+           (SalesInvoiceHeader."Last Email Sent Time" > O365DocumentSentHistory."Created Date-Time")
+        THEN
+          EXIT;
+
+        CreateEmailFailedEventInvoice(O365DocumentSentHistory."Document No.");
+      END ELSE
+        IF (NOT O365DocumentSentHistory.Posted) AND
+           (O365DocumentSentHistory."Document Type" = O365DocumentSentHistory."Document Type"::Quote)
+        THEN BEGIN
+          IF NOT SalesHeader.GET(SalesHeader."Document Type"::Quote,O365DocumentSentHistory."Document No.") THEN
+            EXIT;
+
+          // If in the meantime an email succedeed, don't send the event
+          SalesHeader.CALCFIELDS("Last Email Sent Time","Last Email Sent Status");
+          IF (SalesHeader."Last Email Sent Status" = SalesHeader."Last Email Sent Status"::Finished) AND
+             (SalesHeader."Last Email Sent Time" > O365DocumentSentHistory."Created Date-Time")
+          THEN
+            EXIT;
+
+          CreateEmailFailedEventEstimate(O365DocumentSentHistory."Document No.");
+        END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

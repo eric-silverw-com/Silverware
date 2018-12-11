@@ -1,0 +1,127 @@
+OBJECT Codeunit 2161 Calendar Event Execution
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:16 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 2160=rimd;
+    OnRun=BEGIN
+            RunCalendarEvents;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ProcessCalendarTxt@1000 : TextConst 'ENU=Run Calendar Event';
+      UnknownStateTxt@1001 : TextConst 'ENU=The event completed in an unknown state.';
+
+    PROCEDURE RunCalendarEvents@6();
+    VAR
+      CalendarEvent@1000 : Record 2160;
+      JobQueueEntry@1001 : Record 472;
+      CalendarEventMangement@1002 : Codeunit 2160;
+    BEGIN
+      CalendarEvent.SETRANGE("Scheduled Date",0D,TODAY);
+      CalendarEvent.SETRANGE(Archived,FALSE);
+      CalendarEvent.SETRANGE(User,USERID);
+
+      IF NOT CalendarEvent.FINDSET THEN BEGIN
+        // This may happen the first time we run (i.e. after the job queue has been created)
+        // UpdateJobQueue will now set the next run date to a good one.
+        IF CalendarEventMangement.FindJobQueue(JobQueueEntry) THEN // should always be called from a job queue so we should not create a new one
+          CalendarEventMangement.UpdateJobQueue(JobQueueEntry);
+        EXIT;
+      END;
+
+      REPEAT
+        RunCalendarEvent(CalendarEvent);
+      UNTIL CalendarEvent.NEXT = 0;
+
+      // Update the job queue entry if there are more events
+      // Otherwise it will be rescheduled when an event is inserted
+      CalendarEvent.SETRANGE("Scheduled Date");
+      CalendarEventMangement.FindJobQueue(JobQueueEntry);
+
+      IF CalendarEvent.ISEMPTY THEN
+        CalendarEventMangement.SetJobQueueOnHold(JobQueueEntry)
+      ELSE
+        CalendarEventMangement.UpdateJobQueue(JobQueueEntry);
+    END;
+
+    LOCAL PROCEDURE RunCalendarEvent@12(VAR CalendarEvent@1000 : Record 2160);
+    VAR
+      ActivityLog@1002 : Record 710;
+      Result@1001 : Boolean;
+    BEGIN
+      // Execute
+      Result := RunCodeunit(CalendarEvent);
+      CalendarEvent.LOCKTABLE(TRUE);
+      IF NOT CalendarEvent.FIND THEN BEGIN // The event may have been removed while we executed it
+        ActivityLog.LogActivity(CalendarEvent,ActivityLog.Status::Failed,ProcessCalendarTxt,CalendarEvent.Description,UnknownStateTxt);
+        COMMIT;
+        EXIT;
+      END;
+
+      // Log
+      IF Result THEN BEGIN
+        IF CalendarEvent.Type = CalendarEvent.Type::System THEN BEGIN
+          CalendarEvent.DELETE;
+          COMMIT;
+          EXIT;
+        END;
+        ActivityLog.LogActivity(CalendarEvent,ActivityLog.Status::Success,ProcessCalendarTxt,CalendarEvent.Description,'');
+        CalendarEvent.VALIDATE(State,CalendarEvent.State::Completed);
+      END ELSE BEGIN
+        ActivityLog.LogActivity(CalendarEvent,ActivityLog.Status::Failed,ProcessCalendarTxt,CalendarEvent.Description,'');
+        CalendarEvent.VALIDATE(State,CalendarEvent.State::Failed);
+      END;
+
+      // Mark as complete
+      CalendarEvent.VALIDATE(Archived,TRUE);
+      CalendarEvent.MODIFY(TRUE);
+
+      COMMIT; // may error if we have delayed inserts - this entry will be skipped when the job queue reruns
+    END;
+
+    LOCAL PROCEDURE RunCodeunit@8(VAR CalendarEvent@1000 : Record 2160) : Boolean;
+    VAR
+      AllObjWithCaption@1002 : Record 2000000058;
+      CalendarEventCopy@1004 : Record 2160;
+      Result@1005 : Boolean;
+    BEGIN
+      IF NOT AllObjWithCaption.GET(AllObjWithCaption."Object Type"::Codeunit,CalendarEvent."Object ID to Run") THEN
+        EXIT(FALSE);
+
+      IF CalendarEvent.Archived THEN // Sanity check
+        EXIT(FALSE);
+
+      IF CalendarEvent.State <> CalendarEvent.State::Queued THEN // Sanity check
+        EXIT(FALSE);
+
+      CalendarEvent.VALIDATE(State,CalendarEvent.State::"In Progress");
+      CalendarEvent.MODIFY(TRUE);
+      COMMIT; // Now if an error occurs related to this entry we will not run it again (even if the job queue is reran)
+
+      CalendarEventCopy := CalendarEvent;
+      Result := CODEUNIT.RUN(CalendarEvent."Object ID to Run",CalendarEventCopy);
+
+      // Write back allowed changes from the event
+      IF CalendarEventCopy.State = CalendarEventCopy.State::Failed THEN
+        Result := FALSE;
+
+      IF CalendarEventCopy.Result <> '' THEN
+        CalendarEvent.Result := CalendarEventCopy.Result;
+
+      EXIT(Result);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

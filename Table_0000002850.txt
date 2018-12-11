@@ -1,0 +1,329 @@
+OBJECT Table 2850 Native - API Tax Setup
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:14:37 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnDelete=BEGIN
+               DeleteRecord;
+             END;
+
+    CaptionML=ENU=Native - API Tax Setup;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Code                ;Code20        ;CaptionML=ENU=Code }
+    { 2   ;   ;Description         ;Text50        ;CaptionML=ENU=Description }
+    { 3   ;   ;Total Tax Percentage;Decimal       ;CaptionML=ENU=Total Tax Percentage }
+    { 10  ;   ;Last Modified Date Time;DateTime   ;CaptionML=ENU=Last Modified Date Time;
+                                                   Editable=No }
+    { 20  ;   ;VAT Percentage      ;Decimal       ;CaptionML=ENU=Tax Percentage }
+    { 21  ;   ;VAT Regulation Reference ID;GUID   ;CaptionML=ENU=Tax Regulation Reference ID }
+    { 22  ;   ;VAT Regulation Description;Text250 ;CaptionML=ENU=Tax Regulation Description }
+    { 30  ;   ;City                ;Text30        ;CaptionML=ENU=City }
+    { 31  ;   ;City Rate           ;Decimal       ;OnValidate=BEGIN
+                                                                "Total Tax Percentage" := "City Rate" + "State Rate";
+                                                              END;
+
+                                                   CaptionML=ENU=City Rate }
+    { 32  ;   ;State               ;Code2         ;CaptionML=ENU=State }
+    { 33  ;   ;State Rate          ;Decimal       ;OnValidate=BEGIN
+                                                                "Total Tax Percentage" := "City Rate" + "State Rate";
+                                                              END;
+
+                                                   CaptionML=ENU=State Rate }
+    { 40  ;   ;GST or HST Code     ;Code10        ;CaptionML=ENU=GST or HST Code }
+    { 41  ;   ;GST or HST Description;Text50      ;CaptionML=ENU=GST or HST Description;
+                                                   Editable=No }
+    { 42  ;   ;GST or HST Rate     ;Decimal       ;OnValidate=BEGIN
+                                                                "Total Tax Percentage" := "PST Rate" + "GST or HST Rate";
+                                                              END;
+
+                                                   CaptionML=ENU=GST or HST Rate }
+    { 45  ;   ;PST Code            ;Code10        ;CaptionML=ENU=PST Code }
+    { 46  ;   ;PST Description     ;Text50        ;CaptionML=ENU=PST Description;
+                                                   Editable=No }
+    { 47  ;   ;PST Rate            ;Decimal       ;OnValidate=BEGIN
+                                                                "Total Tax Percentage" := "PST Rate" + "GST or HST Rate";
+                                                              END;
+
+                                                   CaptionML=ENU=PST Rate }
+    { 100 ;   ;Default             ;Boolean       ;OnValidate=BEGIN
+                                                                IF xRec.Default AND (NOT Default) THEN
+                                                                  ERROR(OneValueMustBeDefaultErr);
+                                                              END;
+
+                                                   CaptionML=ENU=Default }
+    { 8000;   ;Id                  ;GUID          ;CaptionML=ENU=Id }
+    { 9600;   ;Type                ;Option        ;CaptionML=ENU=Type;
+                                                   OptionCaptionML=[@@@={Locked};
+                                                                    ENU=Sales Tax,VAT];
+                                                   OptionString=Sales Tax,VAT }
+    { 10010;  ;Country/Region      ;Option        ;CaptionML=ENU=Country/Region;
+                                                   OptionCaptionML=ENU=US,CA;
+                                                   OptionString=US,CA;
+                                                   BlankZero=No }
+  }
+  KEYS
+  {
+    {    ;Id                                      ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      RecordMustBeTemporaryErr@1001 : TextConst 'ENU=Tax Group Entity must be used as a temporary record.';
+      OneValueMustBeDefaultErr@1000 : TextConst 'ENU=One value must be default. To remove default select different entry as default.';
+      CannotDeleteSetupErr@1002 : TextConst 'ENU=You cannot remove the tax setup.';
+      CannotRemoveDefaultTaxAreaErr@1003 : TextConst 'ENU=You cannot remove the default tax area.';
+
+    PROCEDURE LoadSetupRecords@2();
+    VAR
+      TempTaxAreaBuffer@1000 : TEMPORARY Record 5504;
+    BEGIN
+      IF NOT ISTEMPORARY THEN
+        ERROR(RecordMustBeTemporaryErr);
+
+      IF NOT TempTaxAreaBuffer.LoadRecords THEN
+        EXIT;
+
+      LoadFromTaxArea(TempTaxAreaBuffer);
+    END;
+
+    PROCEDURE ReloadRecord@3();
+    VAR
+      TempTaxAreaBuffer@1002 : TEMPORARY Record 5504;
+      TempTaxGroupBuffer@1001 : TEMPORARY Record 5480;
+      CurrentId@1000 : GUID;
+    BEGIN
+      IF NOT ISTEMPORARY THEN
+        ERROR(RecordMustBeTemporaryErr);
+
+      CurrentId := Id;
+
+      CASE Type OF
+        Type::"Sales Tax":
+          BEGIN
+            CLEAR(Rec);
+            DELETEALL;
+
+            IF NOT TempTaxAreaBuffer.LoadRecords THEN
+              EXIT;
+
+            IF NOT TempTaxAreaBuffer.GET(CurrentId) THEN
+              EXIT;
+
+            LoadFromTaxArea(TempTaxAreaBuffer);
+            SETRANGE(Id,CurrentId);
+            FINDFIRST;
+          END;
+        Type::VAT:
+          BEGIN
+            CLEAR(Rec);
+            DELETEALL;
+
+            IF NOT TempTaxGroupBuffer.LoadRecords THEN
+              EXIT;
+
+            IF NOT TempTaxGroupBuffer.GET(CurrentId) THEN
+              EXIT;
+
+            LoadFromTaxGroup(TempTaxGroupBuffer);
+            INSERT;
+            SETRANGE(Id,CurrentId);
+            FINDFIRST;
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE LoadFromTaxArea@4(VAR TempTaxAreaBuffer@1000 : TEMPORARY Record 5504);
+    VAR
+      TaxAreaBuffer@1001 : Record 5504;
+    BEGIN
+      CASE TempTaxAreaBuffer.Type OF
+        TempTaxAreaBuffer.Type::VAT:
+          LoadVATSettings;
+        TaxAreaBuffer.Type::"Sales Tax":
+          OnLoadSalesTaxSettings(Rec,TempTaxAreaBuffer);
+      END;
+    END;
+
+    PROCEDURE SaveChanges@12(VAR PreviousNativeAPITaxSetup@1000 : Record 2850);
+    BEGIN
+      CASE Type OF
+        Type::VAT:
+          SaveVATSettings(PreviousNativeAPITaxSetup);
+        Type::"Sales Tax":
+          OnSaveSalesTaxSettings(Rec);
+      END;
+    END;
+
+    PROCEDURE DeleteRecord@7();
+    VAR
+      TaxArea@1000 : Record 318;
+      GeneralLedgerSetup@1001 : Record 98;
+      PreventDelete@1002 : Boolean;
+    BEGIN
+      IF Default THEN
+        ERROR(CannotRemoveDefaultTaxAreaErr);
+
+      OnCanDeleteTaxSetup(PreventDelete,Rec);
+
+      IF GeneralLedgerSetup.UseVat OR PreventDelete THEN
+        ERROR(CannotDeleteSetupErr);
+
+      IF TaxArea.GET(Code) THEN
+        TaxArea.DELETE(TRUE);
+    END;
+
+    LOCAL PROCEDURE LoadVATSettings@8();
+    VAR
+      TempTaxGroupBuffer@1000 : TEMPORARY Record 5480;
+    BEGIN
+      IF NOT TempTaxGroupBuffer.LoadRecords THEN
+        EXIT;
+
+      REPEAT
+        CLEAR(Rec);
+        LoadFromTaxGroup(TempTaxGroupBuffer);
+        INSERT;
+      UNTIL TempTaxGroupBuffer.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE LoadFromTaxGroup@5(VAR TempTaxGroupBuffer@1003 : TEMPORARY Record 5480);
+    VAR
+      VATClause@1002 : Record 560;
+      VATPostingSetup@1001 : Record 325;
+      O365TemplateManagement@1000 : Codeunit 2142;
+    BEGIN
+      TRANSFERFIELDS(TempTaxGroupBuffer,TRUE);
+      "Last Modified Date Time" := TempTaxGroupBuffer."Last Modified DateTime";
+
+      IF NOT VATPostingSetup.GET(O365TemplateManagement.GetDefaultVATBusinessPostingGroup,Code) THEN
+        EXIT;
+
+      "VAT Percentage" := VATPostingSetup."VAT %";
+      Default := Code = O365TemplateManagement.GetDefaultVATProdPostingGroup;
+
+      // VAT Regulation Reference = Vat clause
+      IF NOT VATClause.GET(VATPostingSetup."VAT Clause Code") THEN BEGIN
+        VATClause.INIT;
+        VATClause.Code := Code;
+        VATClause.INSERT;
+        VATPostingSetup.VALIDATE("VAT Clause Code",Code);
+        VATPostingSetup.MODIFY(TRUE);
+      END;
+
+      "VAT Regulation Reference ID" := VATClause.Id;
+      "VAT Regulation Description" := VATClause.Description;
+    END;
+
+    LOCAL PROCEDURE SaveVATSettings@17(VAR PreviousNativeAPITaxSetup@1002 : Record 2850);
+    VAR
+      VATProductPostingGroup@1001 : Record 324;
+      O365TemplateManagement@1000 : Codeunit 2142;
+    BEGIN
+      IF Default THEN
+        O365TemplateManagement.SetDefaultVATProdPostingGroup(Code);
+
+      UpdateVATClause(PreviousNativeAPITaxSetup);
+      UpdateVATPercentage(PreviousNativeAPITaxSetup);
+
+      IF Description <> PreviousNativeAPITaxSetup.Description THEN BEGIN
+        VATProductPostingGroup.GET(Code);
+        VATProductPostingGroup.VALIDATE(Description,Description);
+        VATProductPostingGroup.MODIFY(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateVATClause@21(VAR PreviousNativeAPITaxSetup@1004 : Record 2850);
+    VAR
+      VATPostingSetup@1003 : Record 325;
+      VATClause@1002 : Record 560;
+      O365TemplateManagement@1000 : Codeunit 2142;
+    BEGIN
+      VATClause.SETRANGE(Id,"VAT Regulation Reference ID");
+      VATClause.FINDFIRST;
+
+      IF PreviousNativeAPITaxSetup."VAT Regulation Reference ID" <> "VAT Regulation Reference ID" THEN BEGIN
+        VATPostingSetup.GET(O365TemplateManagement.GetDefaultVATBusinessPostingGroup,Code);
+        VATPostingSetup.VALIDATE("VAT Clause Code",VATClause.Code);
+        VATPostingSetup.MODIFY(TRUE);
+      END;
+
+      IF VATClause.Description <> "VAT Regulation Description" THEN BEGIN
+        VATClause.VALIDATE(Description,"VAT Regulation Description");
+        VATClause.MODIFY(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateVATPercentage@23(VAR PreviousNativeAPITaxSetup@1000 : Record 2850);
+    VAR
+      VATPostingSetup@1004 : Record 325;
+      SalesLine@1002 : Record 37;
+      O365TemplateManagement@1001 : Codeunit 2142;
+    BEGIN
+      IF PreviousNativeAPITaxSetup."VAT Percentage" <> "VAT Percentage" THEN BEGIN
+        VATPostingSetup.GET(O365TemplateManagement.GetDefaultVATBusinessPostingGroup,Code);
+        VATPostingSetup.VALIDATE("VAT %","VAT Percentage");
+        VATPostingSetup.MODIFY(TRUE);
+
+        SalesLine.SETRANGE("VAT Prod. Posting Group",Code);
+        IF SalesLine.FINDSET THEN
+          REPEAT
+            SalesLine.VALIDATE("VAT Prod. Posting Group");
+            SalesLine.MODIFY(TRUE);
+          UNTIL SalesLine.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE GetTaxAreaDisplayName@1(TaxAreaId@1000 : GUID) : Text;
+    VAR
+      TaxArea@1001 : Record 318;
+      VATBusinessPostingGroup@1002 : Record 323;
+      GeneralLedgerSetup@1003 : Record 98;
+    BEGIN
+      IF ISNULLGUID(TaxAreaId) THEN
+        EXIT;
+
+      IF GeneralLedgerSetup.UseVat THEN BEGIN
+        VATBusinessPostingGroup.SETRANGE(Id,TaxAreaId);
+        IF NOT VATBusinessPostingGroup.FINDFIRST THEN
+          EXIT;
+
+        EXIT(VATBusinessPostingGroup.Description);
+      END;
+
+      TaxArea.SETRANGE(Id,TaxAreaId);
+      IF NOT TaxArea.FINDFIRST THEN
+        EXIT;
+
+      EXIT(TaxArea.GetDescriptionInCurrentLanguage);
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnLoadSalesTaxSettings@6(VAR NativeAPITaxSetup@1001 : Record 2850;VAR TempTaxAreaBuffer@1000 : TEMPORARY Record 5504);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnSaveSalesTaxSettings@18(VAR NewNativeAPITaxSetup@1000 : Record 2850);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnCanDeleteTaxSetup@11(VAR PreventDeletion@1000 : Boolean;VAR NativeAPITaxSetup@1001 : Record 2850);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,579 @@
+OBJECT Codeunit 1639 Office Line Generation
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:13 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      NumbersTxt@1001 : TextConst '@@@=This is a ''|'' separated list of cardinal numbers from one to ten. This is used to find mentions of quantities of certain items.;ENU=one|two|three|four|five|six|seven|eight|nine|ten';
+      RestrictedWordsTxt@1000 : TextConst '@@@=Words that should not be used to find items in the item table (separated by "|").;ENU=and|for|the';
+      TelemetryClosedPageTxt@1002 : TextConst '@@@={Locked};ENU=Suggested line items closed via %2 action.%1  Items Suggested: %3%1  Items selected: %4';
+      TelemetryAlgorithmPerformanceTxt@1003 : TextConst '@@@={Locked};ENU=Item generation algorithm finished in %2ms.%1  Length of mail body: %3%1  Total items found:   %4%1  Single item matches: %5%1  Total matched items: %6';
+
+    [EventSubscriber(Codeunit,1637,OnGenerateLinesFromText)]
+    LOCAL PROCEDURE CreateLinesBasedOnQuantityReferences@35(VAR HeaderRecRef@1001 : RecordRef;VAR TempOfficeSuggestedLineItem@1002 : TEMPORARY Record 1637;EmailBody@1020 : Text);
+    VAR
+      OfficeMgt@1019 : Codeunit 1630;
+      Match@1000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Match";
+      Matches@1016 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.MatchCollection";
+      Regex@1008 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Regex";
+      Stopwatch@1011 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Diagnostics.Stopwatch";
+      SanitizedBody@1018 : Text;
+      QuantityText@1005 : Text;
+      FoundPre@1012 : Integer;
+      PreItemNo@1010 : Text[50];
+      PreText@1006 : Text;
+      StrengthPre@1009 : Decimal;
+      FoundPost@1015 : Integer;
+      PostItemNo@1023 : Text[50];
+      PostText@1014 : Text;
+      StrengthPost@1013 : Decimal;
+      Quantity@1007 : Integer;
+      SingleMatches@1022 : Integer;
+      TotalMatches@1021 : Integer;
+      AlreadyFound@1024 : Boolean;
+    BEGIN
+      // Searches for quantity keywords (1,2,..,999,one,two,..,nine) and takes the first four
+      // words on either side of the keyword as the "pretext" and the "posttext". Using the
+      // pretext and posttext values, we try to take substrings and find matches in the Item
+      // table. If multiple matches are found, then we allow the user to resolve the item.
+
+      // Measure the time it takes to find the items
+      Stopwatch := Stopwatch.StartNew;
+
+      // Find the words on each side of the quantity key word
+      // Use negative lookahead to find overlapping matches
+      Regex := Regex.Regex(STRSUBSTNO('((\w+ ?){0,4}\s+(?!>=(\d{1,3}|%1)))(?=(\d{1,3}|%1)\s+?((\w+ ?){0,4}))',NumbersTxt));
+      Matches := Regex.Matches(EmailBody);
+
+      // Get rid of insignificant words
+      SanitizedBody := SanitizeText(EmailBody,2);
+
+      FOREACH Match IN Matches DO BEGIN
+        PreItemNo := '';
+        PostItemNo := '';
+        FoundPre := 0;
+
+        PreText := SanitizeText(Match.Groups.Item(1).Value,3);
+        PostText := SanitizeText(Match.Groups.Item(5).Value,3);
+        QuantityText := Match.Groups.Item(4).Value;
+
+        FoundPre := FindItemFromText(PreItemNo,PreText,SanitizedBody,' ',TRUE);
+        AlreadyFound := ItemAlreadyFound(TempOfficeSuggestedLineItem,PreItemNo);
+        StrengthPre := CalculateMatchStrength(PreItemNo,FoundPre,PreText,AlreadyFound);
+
+        FoundPost := FindItemFromText(PostItemNo,PostText,SanitizedBody,' ',TRUE);
+        AlreadyFound := ItemAlreadyFound(TempOfficeSuggestedLineItem,PostItemNo);
+        StrengthPost := CalculateMatchStrength(PostItemNo,FoundPost,PostText,AlreadyFound);
+
+        ConvertToInteger(Quantity,QuantityText);
+        IF (StrengthPre > 0) AND (StrengthPre > StrengthPost) THEN
+          InsertSuggestedLineItem(TempOfficeSuggestedLineItem,PreItemNo,PreText,Quantity,FoundPre)
+        ELSE
+          IF StrengthPost > 0 THEN
+            InsertSuggestedLineItem(TempOfficeSuggestedLineItem,PostItemNo,PostText,Quantity,FoundPost)
+      END;
+
+      Stopwatch.Stop;
+      GetMatchTotals(TempOfficeSuggestedLineItem,SingleMatches,TotalMatches);
+      SENDTRACETAG('00001KH',OfficeMgt.TraceCategory,VERBOSITY::Verbose,STRSUBSTNO(TelemetryAlgorithmPerformanceTxt,NewLine,
+          Stopwatch.ElapsedMilliseconds,
+          STRLEN(EmailBody),
+          TempOfficeSuggestedLineItem.COUNT,
+          SingleMatches,
+          TotalMatches),DATACLASSIFICATION::SystemMetadata);
+    END;
+
+    [EventSubscriber(Codeunit,1637,OnGenerateLinesFromText)]
+    LOCAL PROCEDURE CreateLinesBasedOnItemReferences@2(VAR HeaderRecRef@1000 : RecordRef;VAR TempOfficeSuggestedLineItem@1001 : TEMPORARY Record 1637;EmailBody@1010 : Text);
+    VAR
+      OfficeMgt@1015 : Codeunit 1630;
+      Match@1003 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Match";
+      Regex@1012 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Regex";
+      Stopwatch@1011 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Diagnostics.Stopwatch";
+      Word@1005 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.String";
+      WordMatches@1004 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.MatchCollection";
+      SanitizedBody@1002 : Text;
+      ItemNo@1006 : Text[50];
+      BestItem@1007 : Text[50];
+      BestText@1008 : Text;
+      BestCount@1009 : Integer;
+      BestStrength@1016 : Decimal;
+      SingleMatches@1013 : Integer;
+      TotalMatches@1014 : Integer;
+    BEGIN
+      IF NOT TempOfficeSuggestedLineItem.ISEMPTY THEN
+        EXIT;
+
+      Stopwatch := Stopwatch.StartNew;
+
+      SanitizedBody := SanitizeText(EmailBody,2);
+      Regex := Regex.Regex('([\w\d]{3,})');
+      WordMatches := Regex.Matches(SanitizedBody);
+
+      FOREACH Match IN WordMatches DO BEGIN
+        ItemNo := '';
+        BestCount := 999999;
+        BestStrength := 0;
+        BestText := '';
+        BestItem := '';
+        Word := STRSUBSTNO('%1',Match.Value);
+        IF PerformSearch(ItemNo,Word,BestCount,BestText,BestItem,BestStrength,SanitizedBody,TRUE) THEN
+          InsertSuggestedLineItem(TempOfficeSuggestedLineItem,ItemNo,Match.Value,0,BestCount);
+      END;
+
+      Stopwatch.Stop;
+      GetMatchTotals(TempOfficeSuggestedLineItem,SingleMatches,TotalMatches);
+      SENDTRACETAG('00001KI',OfficeMgt.TraceCategory,VERBOSITY::Verbose,STRSUBSTNO(TelemetryAlgorithmPerformanceTxt,NewLine,
+          Stopwatch.ElapsedMilliseconds,
+          STRLEN(EmailBody),
+          TempOfficeSuggestedLineItem.COUNT,
+          SingleMatches,
+          TotalMatches),DATACLASSIFICATION::SystemMetadata);
+    END;
+
+    [EventSubscriber(Codeunit,1637,OnCloseSuggestedLineItemsPage)]
+    LOCAL PROCEDURE CreateLineItemsOnCloseSuggestedLineItems@3(VAR TempOfficeSuggestedLineItem@1000 : TEMPORARY Record 1637;VAR HeaderRecRef@1001 : RecordRef;PageCloseAction@1002 : Action);
+    VAR
+      OfficeMgt@1004 : Codeunit 1630;
+      LastLineNo@1003 : Integer;
+      AddedCount@1005 : Integer;
+    BEGIN
+      IF PageCloseAction IN [ACTION::OK,ACTION::LookupOK] THEN
+        IF TempOfficeSuggestedLineItem.FINDSET THEN
+          REPEAT
+            IF TempOfficeSuggestedLineItem.Add THEN BEGIN
+              InsertLineItem(LastLineNo,HeaderRecRef,TempOfficeSuggestedLineItem."Item No.",TempOfficeSuggestedLineItem.Quantity);
+              AddedCount += 1;
+            END;
+          UNTIL TempOfficeSuggestedLineItem.NEXT = 0;
+
+      SENDTRACETAG('00001KJ',OfficeMgt.TraceCategory,VERBOSITY::Verbose,STRSUBSTNO(TelemetryClosedPageTxt,NewLine,
+          PageCloseAction,
+          TempOfficeSuggestedLineItem.COUNT,
+          AddedCount),DATACLASSIFICATION::SystemMetadata);
+    END;
+
+    LOCAL PROCEDURE CalculateMatchStrength@16(ItemNo@1000 : Text[50];Matches@1001 : Integer;SearchText@1002 : Text;AlreadyFound@1004 : Boolean) Strength : Decimal;
+    VAR
+      Item@1003 : Record 27;
+    BEGIN
+      // Determines the strength of the matched item or items based on the length
+      // of the search text that was used to find those items and how close the search text
+      // is to the actual description of the item.
+
+      CASE TRUE OF
+        Matches = 0:
+          Strength := 0;
+        (Matches = 1) AND AlreadyFound:
+          Strength := 0.01;
+        (Matches = 1) AND Item.GET(ItemNo):
+          Strength := 1 + ((STRLEN(SearchText) / STRLEN(Item.Description)) * (STRLEN(SearchText) / STRLEN(Item.Description)));
+        Matches > 1:
+          Strength := 1 + (1 / Matches) - (1 / (1 + STRLEN(SearchText)));
+      END;
+
+      IF AlreadyFound THEN
+        Strength *= (1 - (1 / (Matches + 1))); // Strength is weakened if the item has already been found. More so if there are fewer matches.
+    END;
+
+    LOCAL PROCEDURE ConvertToInteger@13(VAR NumberValue@1001 : Integer;NumberText@1000 : Text);
+    VAR
+      NumbersList@1002 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.IList";
+      NumbersString@1004 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.String";
+      Separator@1003 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.String";
+    BEGIN
+      IF EVALUATE(NumberValue,NumberText) THEN
+        EXIT;
+
+      NumbersString := NumbersTxt;
+      Separator := '|';
+      NumbersList := NumbersString.Split(Separator.ToCharArray);
+      NumberValue := NumbersList.IndexOf(NumberText) + 1;
+    END;
+
+    LOCAL PROCEDURE FindItemFromText@18(VAR ItemNo@1000 : Text[50];VAR SearchText@1001 : Text;EmailBody@1015 : Text;Separator@1017 : Text;Recurse@1004 : Boolean) : Integer;
+    VAR
+      TermsArray@1009 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array";
+      SearchTerms@1006 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.String";
+      SeparatorString@1005 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.String";
+      i@1007 : Integer;
+      Count@1008 : Integer;
+      BestCount@1002 : Integer;
+      BestText@1003 : Text;
+      BestItem@1010 : Text[50];
+      BestStrength@1011 : Decimal;
+    BEGIN
+      IF STRLEN(SearchText) < 3 THEN
+        EXIT(0);
+
+      SeparatorString := Separator;
+      SearchTerms := DELCHR(SearchText,'<>',' ');
+      TermsArray := SearchTerms.Split(SeparatorString.ToCharArray);
+      Count := TermsArray.Length;
+
+      BestCount := 999999; // Sentinel value
+
+      PerformSearch(ItemNo,SearchText,BestCount,BestText,BestItem,BestStrength,EmailBody,Recurse);
+
+      // Try to resolve the item. The best search is the search that yields the lowest, non-zero number of results.
+      FOR i := 1 TO Count - 1 DO BEGIN
+        // Try with the last (n - i) words of the search phrase
+        SearchText := OmitFirst(TermsArray,i,Separator);
+        PerformSearch(ItemNo,SearchText,BestCount,BestText,BestItem,BestStrength,EmailBody,Recurse);
+
+        // Try with the first (n - i) words of the search phrase
+        SearchText := OmitLast(TermsArray,i,Separator);
+        PerformSearch(ItemNo,SearchText,BestCount,BestText,BestItem,BestStrength,EmailBody,Recurse);
+
+        // Try with the ith word of the search phrase
+        SearchText := TermsArray.GetValue(i);
+        PerformSearch(ItemNo,SearchText,BestCount,BestText,BestItem,BestStrength,EmailBody,Recurse);
+      END;
+
+      IF BestCount < 999999 THEN BEGIN
+        SearchText := BestText;
+        ItemNo := BestItem;
+        EXIT(BestCount);
+      END;
+    END;
+
+    LOCAL PROCEDURE FindItemsByDescription@1(VAR ItemNo@1000 : Text;Description@1001 : Text) FoundCount : Integer;
+    VAR
+      Item@1004 : Record 27;
+      SearchText@1005 : Text;
+    BEGIN
+      // Searches for items by the specified description.
+      // (1) Look for the item no.
+      // (2) Look for an exact match on the description
+      // (3) Look for items that start with the description
+      // (4) Look for items that include the description
+
+      Item.SETRANGE("No.",COPYSTR(Description,1,20));
+      IF NOT Item.ISEMPTY THEN BEGIN
+        FoundCount := Item.COUNT;
+        Item.FINDFIRST;
+        ItemNo := Item."No.";
+        EXIT;
+      END;
+      Item.SETRANGE("No.");
+
+      SearchText := '''@' + Description + '''';
+      Item.SETFILTER(Description,Description);
+      IF NOT Item.ISEMPTY THEN BEGIN
+        FoundCount := Item.COUNT;
+        Item.FINDFIRST;
+        ItemNo := Item."No.";
+        EXIT;
+      END;
+
+      SearchText := '''@' + Description + '*''';
+      Item.SETFILTER(Description,SearchText);
+      IF NOT Item.ISEMPTY THEN BEGIN
+        FoundCount := Item.COUNT;
+        Item.FINDFIRST;
+        ItemNo := Item."No.";
+        EXIT;
+      END;
+
+      SearchText := '''@* ' + Description + '*''';
+      Item.SETFILTER(Description,SearchText);
+      IF NOT Item.ISEMPTY THEN BEGIN
+        FoundCount := Item.COUNT;
+        Item.FINDFIRST;
+        ItemNo := Item."No.";
+        EXIT;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetMatchTotals@8(VAR TempOfficeSuggestedLineItem@1000 : TEMPORARY Record 1637;VAR SingleMatches@1001 : Integer;VAR TotalMatches@1002 : Integer);
+    BEGIN
+      TempOfficeSuggestedLineItem.SETRANGE(Matches,1);
+      SingleMatches := TempOfficeSuggestedLineItem.COUNT;
+      TempOfficeSuggestedLineItem.SETRANGE(Matches);
+
+      IF TempOfficeSuggestedLineItem.FINDSET THEN
+        REPEAT
+          TotalMatches += TempOfficeSuggestedLineItem.Matches;
+        UNTIL TempOfficeSuggestedLineItem.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE ItemAlreadyFound@40(VAR TempOfficeSuggestedLineItem@1000 : TEMPORARY Record 1637;ItemNo@1001 : Text) Found : Boolean;
+    BEGIN
+      TempOfficeSuggestedLineItem.SETRANGE("Item No.",ItemNo);
+      Found := NOT TempOfficeSuggestedLineItem.ISEMPTY;
+      TempOfficeSuggestedLineItem.SETRANGE("Item No.");
+    END;
+
+    LOCAL PROCEDURE InsertSuggestedLineItem@7(VAR TempOfficeSuggestedLineItem@1000 : TEMPORARY Record 1637;ItemNo@1001 : Text[50];SearchKeyword@1004 : Text;Quantity@1002 : Integer;Matches@1005 : Integer);
+    VAR
+      LastLineNo@1003 : Integer;
+    BEGIN
+      IF (Matches = 0) OR (SearchKeyword = '') THEN
+        EXIT;
+
+      IF NOT TempOfficeSuggestedLineItem.ISEMPTY THEN
+        TempOfficeSuggestedLineItem.FINDLAST;
+
+      LastLineNo := TempOfficeSuggestedLineItem."Line No.";
+
+      IF Matches > 1 THEN
+        TempOfficeSuggestedLineItem.SETRANGE("Item Description",COPYSTR(SearchKeyword,1,50))
+      ELSE
+        TempOfficeSuggestedLineItem.SETRANGE("Item No.",ItemNo);
+
+      IF TempOfficeSuggestedLineItem.FINDFIRST THEN BEGIN
+        TempOfficeSuggestedLineItem.VALIDATE(Add,FALSE);
+        IF (TempOfficeSuggestedLineItem.Quantity = 0) AND (Quantity > 0) THEN
+          TempOfficeSuggestedLineItem.VALIDATE(Quantity,Quantity);
+        TempOfficeSuggestedLineItem.MODIFY(TRUE);
+      END ELSE BEGIN
+        TempOfficeSuggestedLineItem.INIT;
+        TempOfficeSuggestedLineItem.VALIDATE("Line No.",LastLineNo + 1000);
+        IF Matches = 1 THEN
+          TempOfficeSuggestedLineItem.VALIDATE("Item No.",COPYSTR(ItemNo,1,20))
+        ELSE BEGIN
+          TempOfficeSuggestedLineItem.VALIDATE("Item Description",COPYSTR(SearchKeyword,1,50));
+          TempOfficeSuggestedLineItem.VALIDATE(Add,FALSE);
+        END;
+        TempOfficeSuggestedLineItem.VALIDATE(Quantity,Quantity);
+        TempOfficeSuggestedLineItem.VALIDATE(Matches,Matches);
+        TempOfficeSuggestedLineItem.INSERT(TRUE);
+      END;
+
+      TempOfficeSuggestedLineItem.SETRANGE("Item No.");
+      TempOfficeSuggestedLineItem.SETRANGE("Item Description");
+    END;
+
+    LOCAL PROCEDURE InsertLineItem@4(VAR LastLineNo@1000 : Integer;VAR HeaderRecRef@1001 : RecordRef;ItemNo@1002 : Text[50];Quantity@1003 : Integer);
+    VAR
+      SalesHeader@1004 : Record 36;
+      PurchaseHeader@1005 : Record 38;
+    BEGIN
+      LastLineNo += 10000;
+
+      CASE HeaderRecRef.NUMBER OF
+        DATABASE::"Sales Header":
+          BEGIN
+            HeaderRecRef.SETTABLE(SalesHeader);
+            InsertSalesLine(SalesHeader,LastLineNo,ItemNo,Quantity);
+          END;
+        DATABASE::"Purchase Header":
+          BEGIN
+            HeaderRecRef.SETTABLE(PurchaseHeader);
+            InsertPurchaseLine(PurchaseHeader,LastLineNo,ItemNo,Quantity);
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertSalesLine@11(VAR SalesHeader@1001 : Record 36;LineNo@1000 : Integer;ItemNo@1002 : Text[50];Quantity@1003 : Integer);
+    VAR
+      SalesLine@1004 : Record 37;
+    BEGIN
+      SalesLine.INIT;
+      SalesLine.VALIDATE("Document Type",SalesHeader."Document Type");
+      SalesLine.VALIDATE("Document No.",SalesHeader."No.");
+      SalesLine.VALIDATE("Sell-to Customer No.",SalesHeader."Sell-to Customer No.");
+      SalesLine.VALIDATE(Type,SalesLine.Type::Item);
+      SalesLine.VALIDATE("No.",COPYSTR(ItemNo,1,20));
+      SalesLine.VALIDATE(Quantity,Quantity);
+      SalesLine.VALIDATE("Line No.",LineNo);
+      SalesLine.INSERT(TRUE);
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE InsertPurchaseLine@10(VAR PurchaseHeader@1001 : Record 38;LineNo@1000 : Integer;ItemNo@1002 : Text[50];Quantity@1003 : Integer);
+    VAR
+      PurchaseLine@1004 : Record 39;
+    BEGIN
+      PurchaseLine.INIT;
+      PurchaseLine.VALIDATE("Document Type",PurchaseHeader."Document Type");
+      PurchaseLine.VALIDATE("Document No.",PurchaseHeader."No.");
+      PurchaseLine.VALIDATE("Buy-from Vendor No.",PurchaseHeader."Buy-from Vendor No.");
+      PurchaseLine.VALIDATE(Type,PurchaseLine.Type::Item);
+      PurchaseLine.VALIDATE("No.",COPYSTR(ItemNo,1,20));
+      PurchaseLine.VALIDATE(Quantity,Quantity);
+      PurchaseLine.VALIDATE("Line No.",LineNo);
+      PurchaseLine.INSERT(TRUE);
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE NewLine@17() CrLf : Text[2];
+    BEGIN
+      CrLf[1] := 13;
+      CrLf[2] := 10;
+    END;
+
+    LOCAL PROCEDURE OmitFirst@44(SearchTerms@1004 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array";i@1001 : Integer;Separator@1000 : Text) Result : Text;
+    VAR
+      TempResult@1003 : Text;
+      j@1002 : Integer;
+    BEGIN
+      FOR j := i TO SearchTerms.Length - 1 DO BEGIN
+        EVALUATE(TempResult,SearchTerms.GetValue(j));
+        Result += TempResult + Separator;
+      END;
+      Result := DELCHR(Result,'>',Separator);
+    END;
+
+    LOCAL PROCEDURE OmitLast@45(SearchTerms@1001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array";i@1000 : Integer;Separator@1004 : Text) Result : Text;
+    VAR
+      TempResult@1003 : Text;
+      j@1002 : Integer;
+    BEGIN
+      FOR j := 0 TO SearchTerms.Length - 1 - i DO BEGIN
+        EVALUATE(TempResult,SearchTerms.GetValue(j));
+        Result += TempResult + Separator;
+      END;
+      Result := DELCHR(Result,'>',Separator);
+    END;
+
+    LOCAL PROCEDURE PerformSearch@14(VAR ItemNo@1000 : Text[50];VAR SearchText@1001 : Text;VAR BestCount@1002 : Integer;VAR BestText@1003 : Text;VAR BestItem@1004 : Text[50];VAR BestStrength@1008 : Decimal;EmailBody@1007 : Text;Recurse@1006 : Boolean) : Boolean;
+    VAR
+      FoundCount@1005 : Integer;
+      Strength@1009 : Decimal;
+    BEGIN
+      FoundCount := FindItemsByDescription(ItemNo,SearchText);
+      Strength := CalculateMatchStrength(ItemNo,FoundCount,SearchText,FALSE);
+      IF (FoundCount > 0) AND (Strength > BestStrength) THEN BEGIN
+        BestCount := FoundCount;
+        BestStrength := Strength;
+        BestText := SearchText;
+        BestItem := ItemNo;
+      END;
+      IF Recurse AND (FoundCount > 1) THEN BEGIN
+        FoundCount := ResolveItem(ItemNo,SearchText,EmailBody);
+        Strength := CalculateMatchStrength(ItemNo,FoundCount,SearchText,FALSE);
+        IF (FoundCount > 0) AND (Strength > BestStrength) THEN BEGIN
+          BestStrength := Strength;
+          BestCount := FoundCount;
+          BestText := SearchText;
+          BestItem := ItemNo;
+        END;
+      END;
+
+      EXIT(FoundCount > 0);
+    END;
+
+    LOCAL PROCEDURE ResolveItem@6(VAR ItemNo@1000 : Text[50];VAR Description@1001 : Text;EmailBody@1005 : Text) : Integer;
+    VAR
+      PreRegex@1004 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Regex";
+      PreMatches@1003 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.MatchCollection";
+      PostRegex@1007 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Regex";
+      PostMatches@1006 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.MatchCollection";
+      Match@1002 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Match";
+      NewDescription@1012 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.String";
+      FoundCount@1008 : Integer;
+      BestCount@1009 : Integer;
+      BestDescription@1010 : Text;
+      OriginalDescription@1011 : Text;
+      Strength@1013 : Decimal;
+      BestStrength@1014 : Decimal;
+    BEGIN
+      IF STRLEN(Description) < 4 THEN
+        EXIT(0);
+
+      OriginalDescription := Description;
+      FoundCount := FindItemsByDescription(ItemNo,Description);
+      IF FoundCount = 1 THEN
+        EXIT(FoundCount);
+
+      BestCount := 999999; // sentinel value
+
+      // Find all phrases around Description - up to 2 words on left side
+      PreRegex := PreRegex.Regex(STRSUBSTNO('([^\W\d]+ ?){0,2} ?\b%1\b',Description));
+      PreMatches := PreRegex.Matches(EmailBody);
+      FOREACH Match IN PreMatches DO BEGIN
+        NewDescription := PreRegex.Replace(SanitizeText(Match.Value,3),' ','*');
+        NewDescription := NewDescription.Replace(CONVERTSTR(OriginalDescription,' ','*'),OriginalDescription);
+        IF FORMAT(NewDescription) <> OriginalDescription THEN BEGIN
+          FoundCount := FindItemFromText(ItemNo,NewDescription,EmailBody,'*',FALSE);
+          Strength := CalculateMatchStrength(ItemNo,FoundCount,NewDescription,FALSE);
+          IF (FoundCount > 0) AND (Strength > BestStrength) THEN BEGIN
+            BestStrength := Strength;
+            BestDescription := NewDescription;
+          END;
+        END;
+      END;
+
+      // Find all phrases around Description - up to 2 words on right side
+      PostRegex := PostRegex.Regex(STRSUBSTNO('\b%1\b ?([^\W\d]+ ?){0,2}',Description));
+      PostMatches := PostRegex.Matches(EmailBody);
+      FOREACH Match IN PostMatches DO BEGIN
+        NewDescription := PostRegex.Replace(SanitizeText(Match.Value,3),' ','*');
+        NewDescription := NewDescription.Replace(CONVERTSTR(OriginalDescription,' ','*'),OriginalDescription);
+        IF FORMAT(NewDescription) <> OriginalDescription THEN BEGIN
+          FoundCount := FindItemFromText(ItemNo,NewDescription,EmailBody,'*',FALSE);
+          Strength := CalculateMatchStrength(ItemNo,FoundCount,NewDescription,FALSE);
+          IF (FoundCount > 0) AND (Strength > BestStrength) THEN BEGIN
+            BestCount := FoundCount;
+            BestDescription := NewDescription;
+          END;
+        END;
+      END;
+
+      IF (BestCount < 999999) AND (STRPOS(BestDescription,CONVERTSTR(OriginalDescription,' ','*')) > 0) THEN BEGIN
+        Description := BestDescription;
+        IF BestCount = 1 THEN
+          FindItemFromText(ItemNo,BestDescription,EmailBody,'*',FALSE);
+        EXIT(BestCount);
+      END;
+    END;
+
+    LOCAL PROCEDURE SanitizeText@9(Text@1000 : Text;MinWordLength@1004 : Integer) Sanitized : Text;
+    VAR
+      CultureInfo@1002 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Globalization.CultureInfo";
+      PluralizationService@1001 : DotNet "'System.Data.Entity.Design, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.Entity.Design.PluralizationServices.PluralizationService";
+      Regex@1003 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Regex";
+      WordMatches@1005 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.MatchCollection";
+      Match@1006 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Match";
+      Word@1007 : Text;
+      Restricted@1009 : Text;
+    BEGIN
+      IF Text = '' THEN
+        EXIT;
+
+      // Sanitization:
+      // 1. Trim white space
+      // 2. Remove any words < specified minimum word lengthh
+      // 3. Remove any restricted words (the, for, but, etc.)
+      // 4. Singularize each word
+
+      Sanitized := Text;
+
+      Sanitized := Regex.Replace(Sanitized,STRSUBSTNO('\b\w{1,%1}\b\s?',MinWordLength - 1),'');
+      Sanitized := Regex.Replace(Sanitized,'\b\d{1,3}\b','');
+      Restricted := '\b' + Regex.Replace(RestrictedWordsTxt,'\|','\b|\b') + '\b'; // Make sure to match whole words only
+      Sanitized := Regex.Replace(Sanitized,Restricted,'');
+      Sanitized := Regex.Replace(Sanitized,'^\s*',''); // Trim white space
+      Sanitized := Regex.Replace(Sanitized,'\s*$',''); // Trim white space
+
+      // The pluralization service only supports English
+      PluralizationService := PluralizationService.CreateService(CultureInfo.CultureInfo('en'));
+      WordMatches := Regex.Matches(Sanitized,'\b(\w+)\b');
+      FOREACH Match IN WordMatches DO BEGIN
+        Word := Match.Groups.Item(1).Value;
+        IF PluralizationService.IsPlural(Word) THEN
+          Sanitized := Regex.Replace(Sanitized,Word,PluralizationService.Singularize(Word));
+      END;
+      Sanitized := PluralizationService.Singularize(Sanitized);
+    END;
+
+    BEGIN
+    {
+      This codeunit contains algorithms for finding item references within text.
+    }
+    END.
+  }
+}
+

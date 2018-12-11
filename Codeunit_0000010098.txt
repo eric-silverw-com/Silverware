@@ -1,0 +1,287 @@
+OBJECT Codeunit 10098 Generate EFT
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:55 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      BankAccount@1020026 : Record 270;
+      DummyLastEFTExportWorkset@1020001 : Record 10811;
+      TempNameValueBuffer@1020008 : TEMPORARY Record 823;
+      FileManagementUnit@1020004 : Codeunit 419;
+      FileManagement@1020028 : Codeunit 419;
+      CheckManagement@1020014 : Codeunit 367;
+      ExportPaymentsACH@1020013 : Codeunit 10090;
+      ACHFileCreated@1020015 : Boolean;
+      IATFileCreated@1020016 : Boolean;
+      BankAccountIs@1020007 : 'Acnt,BalAcnt';
+      SettleDate@1020006 : Date;
+      SaveFolderMsg@1020005 : TextConst 'ENU=Select a folder to save reports to.';
+      Path@1020011 : Text;
+      SelectAFolderMsg@1020034 : TextConst 'ENU=A folder needs to be selected.';
+      NothingToExportErr@1020035 : TextConst 'ENU=There is nothing to export.';
+      ProcessOrderNo@1020002 : Integer;
+      GeneratingFileMsg@1020000 : TextConst 'ENU=The electronic funds transfer file is now being generated.';
+      ZipFileName@1020003 : Text;
+
+    PROCEDURE ProcessAndGenerateEFTFile@1020000(BalAccountNo@1020000 : Code[20];SettlementDate@1020008 : Date;VAR TempEFTExportWorkset@1020009 : TEMPORARY Record 10811;VAR EFTValues@1020002 : Codeunit 10340);
+    VAR
+      CustomLayoutReporting@1020003 : Codeunit 8800;
+      ExportEFTACH@1020004 : Codeunit 10094;
+      Window@1020001 : Dialog;
+    BEGIN
+      InitialChecks(BalAccountNo,SettlementDate);
+
+      ACHFileCreated := FALSE;
+      IATFileCreated := FALSE;
+
+      IF FileManagement.IsWindowsClient THEN
+        IF NOT IsTestMode THEN BEGIN
+          FileManagement.SelectFolderDialog(SaveFolderMsg,Path);
+          IF Path = '' THEN BEGIN
+            MESSAGE(SelectAFolderMsg);
+            EXIT;
+          END;
+        END;
+
+      Window.OPEN(GeneratingFileMsg);
+
+      TempEFTExportWorkset.SETRANGE("Bank Payment Type",3,3);
+      IF TempEFTExportWorkset.FINDFIRST THEN
+        StartEFTProcess(SettlementDate,TempEFTExportWorkset,EFTValues);
+
+      EFTValues.SetParentDefCode('');
+
+      TempEFTExportWorkset.RESET;
+      TempEFTExportWorkset.SETRANGE("Bank Payment Type",4,4);
+      IF TempEFTExportWorkset.FINDFIRST THEN
+        StartEFTProcess(SettlementDate,TempEFTExportWorkset,EFTValues);
+
+      IF EFTValues.GetIATFileCreated OR EFTValues.GetEFTFileCreated THEN
+        IF CustomLayoutReporting.IsWebClient THEN
+          ExportEFTACH.DownloadWebclientZip(TempNameValueBuffer,ZipFileName,FileManagementUnit);
+
+      Window.CLOSE;
+    END;
+
+    LOCAL PROCEDURE InitialChecks@1020002(BankAccountNo@1020000 : Code[20];SettlementDate@1020001 : Date);
+    BEGIN
+      WITH BankAccount DO BEGIN
+        LOCKTABLE;
+        GET(BankAccountNo);
+        TESTFIELD(Blocked,FALSE);
+        TESTFIELD("Currency Code",'');  // local currency only
+        TESTFIELD("Export Format");
+        TESTFIELD("Last Remittance Advice No.");
+      END;
+      SettleDate := SettlementDate;
+    END;
+
+    LOCAL PROCEDURE InsertIntoCheckLedger@2(Trace@1000 : Code[30];Amt@1001 : Decimal;RecordIdToPrint@1020000 : RecordID;VAR TempEFTExportWorkset@1020001 : TEMPORARY Record 10811);
+    VAR
+      CheckLedgerEntry@1002 : Record 272;
+    BEGIN
+      WITH CheckLedgerEntry DO BEGIN
+        INIT;
+        "Bank Account No." := BankAccount."No.";
+        "Posting Date" := SettleDate;
+        "Document Type" := TempEFTExportWorkset."Document Type";
+        "Document No." := TempEFTExportWorkset."Document No.";
+        Description := TempEFTExportWorkset.Description;
+        "Bank Payment Type" := "Bank Payment Type"::"Electronic Payment";
+        "Entry Status" := "Entry Status"::Exported;
+        "Check Date" := SettleDate;
+        "Check No." := TempEFTExportWorkset."Document No.";
+
+        IF BankAccountIs = BankAccountIs::Acnt THEN BEGIN
+          "Bal. Account Type" := TempEFTExportWorkset."Bal. Account Type";
+          "Bal. Account No." := TempEFTExportWorkset."Bank Account No.";
+        END ELSE BEGIN
+          "Bal. Account Type" := TempEFTExportWorkset."Account Type";
+          "Bal. Account No." := TempEFTExportWorkset."Account No.";
+        END;
+        "Trace No." := Trace;
+
+        Amount := Amt;
+      END;
+      CheckManagement.InsertCheck(CheckLedgerEntry,RecordIdToPrint);
+    END;
+
+    PROCEDURE SetOptions@1020001(BankAccountNo@1020000 : Code[20];ExportSettleDate@1020001 : Date);
+    BEGIN
+      BankAccount.GET(BankAccountNo);
+      SettleDate := ExportSettleDate;
+    END;
+
+    LOCAL PROCEDURE CheckAndStartExport@1020003(VAR TempEFTExportWorkset@1020000 : TEMPORARY Record 10811;VAR EFTValues@1020003 : Codeunit 10340);
+    VAR
+      ExpLauncherEFT@1020002 : Codeunit 10320;
+    BEGIN
+      IF (NOT ACHFileCreated AND
+          (TempEFTExportWorkset."Bank Payment Type" = TempEFTExportWorkset."Bank Payment Type"::"Electronic Payment")) OR
+         (NOT IATFileCreated AND
+          (TempEFTExportWorkset."Bank Payment Type" = TempEFTExportWorkset."Bank Payment Type"::"Electronic Payment-IAT"))
+      THEN
+        WITH TempEFTExportWorkset DO BEGIN
+          IF NOT FINDSET THEN
+            ERROR(NothingToExportErr);
+
+          ExpLauncherEFT.EFTPaymentProcess(TempEFTExportWorkset,TempNameValueBuffer,FileManagementUnit,ZipFileName,EFTValues);
+        END;
+    END;
+
+    LOCAL PROCEDURE SetGenJrnlCheckTransmitted@1020004(JournalTemplateName@1020002 : Code[10];JournalBatchName@1020001 : Code[10];LineNo@1020000 : Integer);
+    VAR
+      GenJournalLine@1020003 : Record 81;
+    BEGIN
+      GenJournalLine.SETRANGE("Journal Template Name",JournalTemplateName);
+      GenJournalLine.SETRANGE("Journal Batch Name",JournalBatchName);
+      GenJournalLine.SETRANGE("Line No.",LineNo);
+      IF GenJournalLine.FINDFIRST THEN BEGIN
+        GenJournalLine."Check Transmitted" := TRUE;
+        GenJournalLine.MODIFY;
+      END;
+    END;
+
+    PROCEDURE IsTestMode@36() : Boolean;
+    VAR
+      TempBlob@1003 : Record 99008535;
+      TestModeInStream@1002 : InStream;
+      ReadText@1001 : Text[10];
+      ReadBoolean@1000 : Boolean;
+    BEGIN
+      // Check to see if the test mode flag is set (usually via test codeunits before calling this codeunit directly)
+      // Alternatively, check tempblob for a sentinel value (set via test codeunits that do not/cannot call this codeunit directly
+      ReadBoolean := FALSE;
+      IF TempBlob.GET(10098) THEN BEGIN
+        TempBlob.CALCFIELDS(Blob);
+        TempBlob.Blob.CREATEINSTREAM(TestModeInStream);
+        TestModeInStream.READTEXT(ReadText,10);
+        EVALUATE(ReadBoolean,ReadText);
+      END;
+      EXIT(ReadBoolean);
+    END;
+
+    PROCEDURE SetSavePath@29(SavePath@1000 : Text);
+    BEGIN
+      // This allows us to set the path ahead of setting request parameters if we know it or need to set it ahead of time
+      // e.g. for unit tests
+      Path := SavePath;
+    END;
+
+    PROCEDURE SetTestMode@1020012(TestMode@1020000 : Boolean);
+    VAR
+      TempBlob@1020001 : Record 99008535;
+      BlobOutStream@1020002 : OutStream;
+    BEGIN
+      // Sets test mode for this codeunit - enables unit test scenarios
+      TempBlob.INIT;
+      TempBlob.DELETEALL;
+      TempBlob."Primary Key" := 10098;
+      IF TempBlob.FINDFIRST THEN
+        TempBlob.DELETE;
+
+      TempBlob.Blob.CREATEOUTSTREAM(BlobOutStream);
+      BlobOutStream.WRITETEXT(FORMAT(TestMode));
+      TempBlob.INSERT;
+      COMMIT;
+    END;
+
+    PROCEDURE UpdateEFTExport@1020008(VAR TempEFTExportWorkset@1020001 : TEMPORARY Record 10811;TraceNumber@1020002 : Code[30]);
+    VAR
+      EFTExport@1020000 : Record 10810;
+    BEGIN
+      EFTExport.GET(TempEFTExportWorkset."Journal Template Name",TempEFTExportWorkset."Journal Batch Name",
+        TempEFTExportWorkset."Line No.",TempEFTExportWorkset."Sequence No.");
+      EFTExport."Posting Date" := TempEFTExportWorkset.UserSettleDate;
+      EFTExport."Check Printed" := TRUE;
+      EFTExport."Check Exported" := TRUE;
+      EFTExport."Exported to Payment File" := TRUE;
+      EFTExport.Transmitted := TRUE;
+      EFTExport.MODIFY;
+      SetGenJrnlCheckTransmitted(TempEFTExportWorkset."Journal Template Name",
+        TempEFTExportWorkset."Journal Batch Name",TempEFTExportWorkset."Line No.");
+      InsertIntoCheckLedger(TraceNumber,-TempEFTExportWorkset."Amount (LCY)",EFTExport.RECORDID,TempEFTExportWorkset);
+    END;
+
+    LOCAL PROCEDURE StartEFTProcess@1020009(SettlementDate@1020001 : Date;VAR TempEFTExportWorkset@1020000 : TEMPORARY Record 10811;VAR EFTValues@1020002 : Codeunit 10340);
+    VAR
+      DummyVendor@1020003 : Record 23;
+      VendorBankAccount@1020004 : Record 288;
+      LocalBankAccount@1030000 : Record 270;
+      CheckDigitCheck@1030001 : Boolean;
+    BEGIN
+      ProcessOrderNo := 1;
+
+      IF TempEFTExportWorkset."Bank Payment Type" = TempEFTExportWorkset."Bank Payment Type"::"Electronic Payment-IAT" THEN BEGIN
+        TempEFTExportWorkset.SETCURRENTKEY("Account Type","Account No.","Foreign Exchange Indicator","Foreign Exchange Ref.Indicator",
+          "Foreign Exchange Reference");
+        DummyLastEFTExportWorkset."Account Type" := TempEFTExportWorkset."Account Type";
+        DummyLastEFTExportWorkset."Account No." := TempEFTExportWorkset."Account No.";
+        DummyLastEFTExportWorkset."Foreign Exchange Indicator" := TempEFTExportWorkset."Foreign Exchange Indicator";
+        DummyLastEFTExportWorkset."Foreign Exchange Ref.Indicator" := TempEFTExportWorkset."Foreign Exchange Ref.Indicator";
+        DummyLastEFTExportWorkset."Foreign Exchange Reference" := TempEFTExportWorkset."Foreign Exchange Reference";
+      END;
+
+      REPEAT
+        WITH TempEFTExportWorkset DO BEGIN
+          Pathname := COPYSTR(Path,1,MAXSTRLEN(Pathname));
+          UserSettleDate := SettlementDate;
+          IF "Bank Payment Type" = "Bank Payment Type"::"Electronic Payment-IAT" THEN
+            IF (DummyLastEFTExportWorkset."Account Type" <> "Account Type") OR
+               (DummyLastEFTExportWorkset."Account No." <> "Account No.") OR
+               (DummyLastEFTExportWorkset."Foreign Exchange Indicator" <> "Foreign Exchange Indicator") OR
+               (DummyLastEFTExportWorkset."Foreign Exchange Ref.Indicator" <> "Foreign Exchange Ref.Indicator") OR
+               (DummyLastEFTExportWorkset."Foreign Exchange Reference" <> "Foreign Exchange Reference")
+            THEN BEGIN
+              ProcessOrderNo := ProcessOrderNo + 1;
+              ProcessOrder := ProcessOrderNo;
+              DummyLastEFTExportWorkset."Account Type" := "Account Type";
+              DummyLastEFTExportWorkset."Account No." := "Account No.";
+              DummyLastEFTExportWorkset."Foreign Exchange Indicator" := "Foreign Exchange Indicator";
+              DummyLastEFTExportWorkset."Foreign Exchange Ref.Indicator" := "Foreign Exchange Ref.Indicator";
+              DummyLastEFTExportWorkset."Foreign Exchange Reference" := "Foreign Exchange Reference";
+            END ELSE
+              ProcessOrder := ProcessOrderNo;
+          IF "Bank Payment Type" = "Bank Payment Type"::"Electronic Payment" THEN
+            ProcessOrder := 1;
+          MODIFY;
+        END;
+      UNTIL TempEFTExportWorkset.NEXT = 0;
+      COMMIT;
+
+      IF TempEFTExportWorkset.FINDFIRST THEN BEGIN
+        REPEAT
+          LocalBankAccount.GET(TempEFTExportWorkset."Bank Account No.");
+          CheckDigitCheck := (LocalBankAccount."Export Format" <> LocalBankAccount."Export Format"::CA);
+          ExportPaymentsACH.CheckVendorTransitNum(TempEFTExportWorkset."Account No.",DummyVendor,VendorBankAccount,CheckDigitCheck);
+          VendorBankAccount.TESTFIELD("Bank Account No.");
+        UNTIL TempEFTExportWorkset.NEXT = 0;
+      END;
+
+      TempEFTExportWorkset.FINDFIRST;
+
+      IF ProcessOrderNo >= 1 THEN BEGIN
+        REPEAT
+          TempEFTExportWorkset.SETRANGE(ProcessOrder,ProcessOrderNo,ProcessOrderNo);
+          CheckAndStartExport(TempEFTExportWorkset,EFTValues);
+          ProcessOrderNo := ProcessOrderNo - 1;
+        UNTIL ProcessOrderNo = 0;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

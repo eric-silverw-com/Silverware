@@ -1,0 +1,225 @@
+OBJECT Codeunit 5442 Graph Int - Business Profile
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:22 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      BusinessTypeTxt@1001 : TextConst '@@@={Locked};ENU=Business';
+      ShippingTypeTxt@1002 : TextConst '@@@={Locked};ENU=Shipping';
+
+    PROCEDURE UpdateCompanyBusinessProfileId@30(BusinessProfileId@1001 : Text[250]);
+    VAR
+      Company@1002 : Record 2000000006;
+    BEGIN
+      Company.GET(COMPANYNAME);
+      IF Company."Business Profile Id" <> BusinessProfileId THEN BEGIN
+        Company."Business Profile Id" := BusinessProfileId;
+        Company.MODIFY;
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,5345,OnAfterTransferRecordFields)]
+    PROCEDURE OnAfterTransferRecordFields@35(SourceRecordRef@1002 : RecordRef;VAR DestinationRecordRef@1001 : RecordRef;VAR AdditionalFieldsWereModified@1000 : Boolean);
+    BEGIN
+      CASE GetSourceDestCode(SourceRecordRef,DestinationRecordRef) OF
+        'Company Information-Graph Business Profile':
+          BEGIN
+            SetAddressesOnGraph(SourceRecordRef,DestinationRecordRef);
+            AdditionalFieldsWereModified := TRUE;
+          END;
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,5345,OnAfterInsertRecord)]
+    PROCEDURE OnAfterInsertRecord@45(SourceRecordRef@1001 : RecordRef;DestinationRecordRef@1000 : RecordRef);
+    BEGIN
+      OnAfterModifyRecord(SourceRecordRef,DestinationRecordRef);
+    END;
+
+    [EventSubscriber(Codeunit,5345,OnAfterModifyRecord)]
+    PROCEDURE OnAfterModifyRecord@51(SourceRecordRef@1001 : RecordRef;VAR DestinationRecordRef@1002 : RecordRef);
+    VAR
+      GraphBusinessProfile@1000 : Record 5456;
+    BEGIN
+      CASE GetSourceDestCode(SourceRecordRef,DestinationRecordRef) OF
+        'Graph Business Profile-Company Information':
+          BEGIN
+            HandleLogoChanges(DestinationRecordRef,SourceRecordRef);
+            SetAddressesFromGraph(SourceRecordRef,DestinationRecordRef);
+            DestinationRecordRef.MODIFY(TRUE);
+            SourceRecordRef.SETTABLE(GraphBusinessProfile);
+            UpdateCompanyBusinessProfileId(GraphBusinessProfile.Id);
+          END;
+        'Company Information-Graph Business Profile':
+          BEGIN
+            HandleLogoChanges(SourceRecordRef,DestinationRecordRef);
+            DestinationRecordRef.SETTABLE(GraphBusinessProfile);
+            UpdateCompanyBusinessProfileId(GraphBusinessProfile.Id);
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetSourceDestCode@38(SourceRecordRef@1001 : RecordRef;DestinationRecordRef@1000 : RecordRef) : Text;
+    BEGIN
+      IF (SourceRecordRef.NUMBER <> 0) AND (DestinationRecordRef.NUMBER <> 0) THEN
+        EXIT(STRSUBSTNO('%1-%2',SourceRecordRef.NAME,DestinationRecordRef.NAME));
+      EXIT('');
+    END;
+
+    LOCAL PROCEDURE SetAddressesFromGraph@13(VAR SourceRecordRef@1000 : RecordRef;VAR DestinationRecordRef@1001 : RecordRef);
+    VAR
+      CompanyInformation@1002 : Record 79;
+      GraphBusinessProfile@1003 : Record 5456;
+      GraphMgtCompanyInfo@1008 : Codeunit 5473;
+      AddressesString@1007 : Text;
+      EmailAddressesString@1006 : Text;
+      PhoneNumbersString@1005 : Text;
+      SocialLinksString@1009 : Text;
+      WebsiteString@1004 : Text;
+      DummyCountryCode@1010 : Code[10];
+    BEGIN
+      SourceRecordRef.SETTABLE(GraphBusinessProfile);
+      DestinationRecordRef.SETTABLE(CompanyInformation);
+
+      AddressesString := GraphBusinessProfile.GetAddressesString;
+      PhoneNumbersString := GraphBusinessProfile.GetPhoneNumbersString;
+      WebsiteString := GraphBusinessProfile.GetWebsiteString;
+      EmailAddressesString := GraphBusinessProfile.GetEmailAddressesString;
+      SocialLinksString := GraphBusinessProfile.GetSocialLinksString;
+
+      IF GraphMgtCompanyInfo.HasPostalAddress(AddressesString,BusinessTypeTxt) THEN
+        WITH CompanyInformation DO
+          GraphMgtCompanyInfo.GetPostalAddress(AddressesString,BusinessTypeTxt,Address,"Address 2",
+            City,County,DummyCountryCode,"Post Code");
+
+      IF GraphMgtCompanyInfo.HasPostalAddress(AddressesString,ShippingTypeTxt) THEN
+        WITH CompanyInformation DO
+          GraphMgtCompanyInfo.GetPostalAddress(AddressesString,ShippingTypeTxt,"Ship-to Address","Ship-to Address 2",
+            "Ship-to City","Ship-to County","Ship-to Country/Region Code","Ship-to Post Code");
+
+      IF GraphMgtCompanyInfo.HasEmailAddress(EmailAddressesString,BusinessTypeTxt) THEN
+        GraphMgtCompanyInfo.GetEmailAddress(EmailAddressesString,BusinessTypeTxt,CompanyInformation."E-Mail");
+
+      IF GraphMgtCompanyInfo.HasPhoneNumber(PhoneNumbersString,BusinessTypeTxt) THEN
+        GraphMgtCompanyInfo.GetPhone(PhoneNumbersString,BusinessTypeTxt,CompanyInformation."Phone No.");
+
+      IF WebsiteString <> '' THEN
+        GraphMgtCompanyInfo.GetWebsite(WebsiteString,CompanyInformation."Home Page");
+
+      IF SocialLinksString <> '' THEN
+        GraphMgtCompanyInfo.UpdateSocialNetworks(SocialLinksString);
+
+      DestinationRecordRef.GETTABLE(CompanyInformation);
+    END;
+
+    LOCAL PROCEDURE SetAddressesOnGraph@2(VAR SourceRecordRef@1000 : RecordRef;VAR DestinationRecordRef@1001 : RecordRef);
+    VAR
+      CompanyInformation@1002 : Record 79;
+      GraphBusinessProfile@1003 : Record 5456;
+      O365SocialNetwork@1010 : Record 2122;
+      GraphMgtCompanyInfo@1008 : Codeunit 5473;
+      AddressesString@1004 : Text;
+      EmailAddressesString@1005 : Text;
+      PhoneNumbersString@1006 : Text;
+      SocialNetworksString@1009 : Text;
+      WebsiteString@1007 : Text;
+    BEGIN
+      SourceRecordRef.SETTABLE(CompanyInformation);
+      DestinationRecordRef.SETTABLE(GraphBusinessProfile);
+
+      AddressesString := GraphBusinessProfile.GetAddressesString;
+      WITH CompanyInformation DO BEGIN
+        AddressesString := GraphMgtCompanyInfo.UpdatePostalAddressJson(AddressesString,BusinessTypeTxt,
+            Address,"Address 2",City,County,"Country/Region Code","Post Code");
+        AddressesString := GraphMgtCompanyInfo.UpdatePostalAddressJson(AddressesString,ShippingTypeTxt,
+            "Ship-to Address","Ship-to Address 2","Ship-to City","Ship-to County","Ship-to Country/Region Code","Ship-to Post Code");
+      END;
+      GraphBusinessProfile.SetAddressesString(AddressesString);
+
+      EmailAddressesString := GraphBusinessProfile.GetEmailAddressesString;
+      EmailAddressesString :=
+        GraphMgtCompanyInfo.UpdateEmailAddressJson(EmailAddressesString,BusinessTypeTxt,CompanyInformation."E-Mail");
+      GraphBusinessProfile.SetEmailAddressesString(EmailAddressesString);
+
+      PhoneNumbersString := GraphBusinessProfile.GetPhoneNumbersString;
+      PhoneNumbersString := GraphMgtCompanyInfo.UpdatePhoneJson(PhoneNumbersString,BusinessTypeTxt,CompanyInformation."Phone No.");
+      GraphBusinessProfile.SetPhoneNumbersString(PhoneNumbersString);
+
+      WebsiteString := GraphBusinessProfile.GetWebsiteString;
+      WebsiteString := GraphMgtCompanyInfo.UpdateWorkWebsiteJson(WebsiteString,BusinessTypeTxt,CompanyInformation."Home Page");
+      GraphBusinessProfile.SetWebsitesString(WebsiteString);
+
+      GraphMgtCompanyInfo.GetSocialNetworksJSON(O365SocialNetwork,SocialNetworksString);
+      GraphBusinessProfile.SetSocialLinksString(SocialNetworksString);
+
+      DestinationRecordRef.GETTABLE(GraphBusinessProfile);
+    END;
+
+    LOCAL PROCEDURE HandleLogoChanges@9(VAR LocalRecRef@1000 : RecordRef;VAR GraphRecRef@1001 : RecordRef);
+    VAR
+      CompanyInformation@1002 : Record 79;
+      GraphBusinessProfile@1005 : Record 5456;
+      DateFilterCalc@1010 : Codeunit 358;
+      JSONManagement@1003 : Codeunit 5459;
+      JObject@1004 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";
+      DateVariant@1006 : Variant;
+      LastModifiedDateTime@1007 : DateTime;
+      SetFromGraph@1009 : Boolean;
+    BEGIN
+      LocalRecRef.SETTABLE(CompanyInformation);
+      GraphRecRef.SETTABLE(GraphBusinessProfile);
+
+      IF GraphBusinessProfile.CALCFIELDS(Logo) AND GraphBusinessProfile.Logo.HASVALUE THEN BEGIN
+        JSONManagement.InitializeObject(GraphBusinessProfile.GetLogoString);
+        JSONManagement.GetJSONObject(JObject);
+        JSONManagement.GetPropertyValueFromJObjectByName(JObject,'lastModifiedDate',DateVariant);
+        IF EVALUATE(LastModifiedDateTime,FORMAT(DateVariant)) THEN
+          IF LastModifiedDateTime > DateFilterCalc.ConvertToUtcDateTime(CompanyInformation."Picture - Last Mod. Date Time") THEN BEGIN
+            // Need to update picture from graph;
+            GraphBusinessProfile.CALCFIELDS(LogoContent);
+            CompanyInformation.VALIDATE(Picture,GraphBusinessProfile.LogoContent);
+            CompanyInformation.MODIFY(TRUE);
+            SetFromGraph := TRUE;
+          END;
+      END;
+
+      IF NOT SetFromGraph THEN BEGIN
+        IF CompanyInformation."Last Modified Date Time" = CompanyInformation."Picture - Last Mod. Date Time" THEN
+          IF CompanyInformation.Picture.HASVALUE THEN BEGIN
+            CompanyInformation.CALCFIELDS(Picture);
+            CLEAR(GraphBusinessProfile.Logo);
+            GraphBusinessProfile.LogoContent := CompanyInformation.Picture;
+            GraphBusinessProfile.MODIFY;
+          END;
+
+        IF (NOT GraphBusinessProfile.Logo.HASVALUE) AND (NOT GraphBusinessProfile.LogoContent.HASVALUE) THEN BEGIN
+          CLEAR(CompanyInformation.Picture);
+          CompanyInformation.VALIDATE(Picture);
+          CompanyInformation.MODIFY(TRUE);
+        END;
+      END;
+
+      LocalRecRef.GETTABLE(CompanyInformation);
+      GraphRecRef.SETTABLE(GraphBusinessProfile);
+    END;
+
+    PROCEDURE SyncFromGraphSynchronously@1();
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

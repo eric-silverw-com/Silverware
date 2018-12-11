@@ -1,0 +1,896 @@
+OBJECT Codeunit 8610 Questionnaire Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:49 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=The value of the key field %1 has not been filled in for questionnaire %2.';
+      OpenXMLManagement@1006 : Codeunit 6223;
+      XMLDOMMgt@1002 : Codeunit 6224;
+      ConfigPackageMgt@1027 : Codeunit 8611;
+      ConfigProgressBar@1023 : Codeunit 8615;
+      ConfigValidateMgt@1003 : Codeunit 8617;
+      FileMgt@1016 : Codeunit 419;
+      Text001@1008 : TextConst 'ENU=Exporting questionnaire';
+      Text002@1009 : TextConst 'ENU=Importing questionnaire';
+      Text005@1010 : TextConst 'ENU=Could not create the XML schema.';
+      Text007@1026 : TextConst 'ENU=Applying answers';
+      Text008@1025 : TextConst 'ENU=Updating questionnaire';
+      TypeHelper@1001 : Codeunit 10;
+      WrkBkWriter@1012 : DotNet "'Microsoft.Dynamics.Nav.OpenXml, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.OpenXml.Spreadsheet.WorkbookWriter";
+      FieldNameCaptionList@1007 : Text;
+      ExportToExcel@1018 : Boolean;
+      Text022@1005 : TextConst 'ENU=Creating Excel worksheet';
+      Text024@1020 : TextConst 'ENU=Download';
+      Text025@1021 : TextConst 'ENU=*.*|*.*';
+      Text026@1022 : TextConst 'ENU=Default';
+      CalledFromCode@1024 : Boolean;
+      Text028@1019 : TextConst 'ENU=Import File';
+      Text029@1004 : TextConst '@@@="Only translate ''XML Files'' {Split=r""[\|\(]\*\.[^ |)]*[|) ]?""}";ENU=XML file (*.xml)|*.xml';
+      CreateWrkBkFailedErr@1017 : TextConst 'ENU=Could not create the Excel workbook.';
+
+    PROCEDURE UpdateQuestions@1(ConfigQuestionArea@1000 : Record 8611);
+    VAR
+      ConfigQuestion@1002 : Record 8612;
+      Field@1001 : Record 2000000041;
+      NextQuestionNo@1007 : Integer;
+    BEGIN
+      IF ConfigQuestionArea."Table ID" = 0 THEN
+        EXIT;
+
+      ConfigQuestion.SETRANGE("Questionnaire Code",ConfigQuestionArea."Questionnaire Code");
+      ConfigQuestion.SETRANGE("Question Area Code",ConfigQuestionArea.Code);
+      IF ConfigQuestion.FINDLAST THEN
+        NextQuestionNo := ConfigQuestion."No." + 1
+      ELSE
+        NextQuestionNo := 1;
+
+      ConfigPackageMgt.SetFieldFilter(Field,ConfigQuestionArea."Table ID",0);
+      IF Field.FINDSET THEN
+        REPEAT
+          ConfigQuestion.INIT;
+          ConfigQuestion."Questionnaire Code" := ConfigQuestionArea."Questionnaire Code";
+          ConfigQuestion."Question Area Code" := ConfigQuestionArea.Code;
+          ConfigQuestion."No." := NextQuestionNo;
+          ConfigQuestion."Table ID" := ConfigQuestionArea."Table ID";
+          ConfigQuestion."Field ID" := Field."No.";
+          IF NOT QuestionExist(ConfigQuestion) THEN BEGIN
+            UpdateQuestion(ConfigQuestion);
+            ConfigQuestion."Answer Option" := BuildAnswerOption(ConfigQuestionArea."Table ID",Field."No.");
+            ConfigQuestion.INSERT;
+            NextQuestionNo := NextQuestionNo + 1;
+          END;
+        UNTIL Field.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE UpdateQuestion@2(VAR ConfigQuestion@1000 : Record 8612);
+    VAR
+      RecRef@1002 : RecordRef;
+      FieldRef@1003 : FieldRef;
+    BEGIN
+      WITH ConfigQuestion DO BEGIN
+        IF Question <> '' THEN
+          EXIT;
+        IF "Table ID" = 0 THEN
+          EXIT;
+        RecRef.OPEN("Table ID");
+        FieldRef := RecRef.FIELD("Field ID");
+        Question := FieldRef.CAPTION + '?';
+      END;
+    END;
+
+    PROCEDURE UpdateQuestionnaire@3(ConfigQuestionnaire@1000 : Record 8610) : Boolean;
+    VAR
+      ConfigQuestionArea@1001 : Record 8611;
+    BEGIN
+      IF ConfigQuestionnaire.Code = '' THEN
+        EXIT;
+
+      ConfigQuestionArea.RESET;
+      ConfigQuestionArea.SETRANGE("Questionnaire Code",ConfigQuestionnaire.Code);
+      IF ConfigQuestionArea.FINDSET THEN BEGIN
+        ConfigProgressBar.Init(ConfigQuestionArea.COUNT,1,Text008);
+        REPEAT
+          ConfigProgressBar.Update(ConfigQuestionArea.Code);
+          UpdateQuestions(ConfigQuestionArea);
+        UNTIL ConfigQuestionArea.NEXT = 0;
+        ConfigProgressBar.Close;
+        EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE QuestionExist@12(ConfigQuestion@1000 : Record 8612) : Boolean;
+    VAR
+      ConfigQuestion2@1001 : Record 8612;
+    BEGIN
+      ConfigQuestion2.RESET;
+      ConfigQuestion2.SETCURRENTKEY("Questionnaire Code","Question Area Code","Field ID");
+      ConfigQuestion2.SETRANGE("Questionnaire Code",ConfigQuestion."Questionnaire Code");
+      ConfigQuestion2.SETRANGE("Question Area Code",ConfigQuestion."Question Area Code");
+      ConfigQuestion2.SETRANGE("Field ID",ConfigQuestion."Field ID");
+      EXIT(NOT ConfigQuestion2.ISEMPTY);
+    END;
+
+    PROCEDURE BuildAnswerOption@8(TableID@1007 : Integer;FieldID@1006 : Integer) : Text[250];
+    VAR
+      Field@1008 : Record 2000000041;
+      RecRef@1001 : RecordRef;
+      FieldRef@1000 : FieldRef;
+      BooleanText@1002 : Text[30];
+    BEGIN
+      IF NOT TypeHelper.GetField(TableID,FieldID,Field) THEN
+        EXIT;
+
+      CASE Field.Type OF
+        Field.Type::Option:
+          BEGIN
+            RecRef.OPEN(Field.TableNo);
+            FieldRef := RecRef.FIELD(Field."No.");
+            EXIT(FieldRef.OPTIONCAPTION);
+          END;
+        Field.Type::Boolean:
+          BEGIN
+            BooleanText := FORMAT(TRUE) + ',' + FORMAT(FALSE);
+            EXIT(BooleanText)
+          END;
+        ELSE
+          EXIT(FORMAT(Field.Type));
+      END;
+    END;
+
+    PROCEDURE ApplyAnswers@30(ConfigQuestionnaire@1001 : Record 8610) : Boolean;
+    VAR
+      ConfigQuestionArea@1000 : Record 8611;
+    BEGIN
+      ConfigQuestionArea.RESET;
+      ConfigQuestionArea.SETRANGE("Questionnaire Code",ConfigQuestionnaire.Code);
+      IF ConfigQuestionArea.FINDSET THEN BEGIN
+        ConfigProgressBar.Init(ConfigQuestionArea.COUNT,1,Text007);
+        REPEAT
+          ConfigProgressBar.Update(ConfigQuestionArea.Code);
+          ApplyAnswer(ConfigQuestionArea);
+        UNTIL ConfigQuestionArea.NEXT = 0;
+        ConfigProgressBar.Close;
+        EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE ApplyAnswer@7(ConfigQuestionArea@1001 : Record 8611);
+    VAR
+      RecRef@1000 : RecordRef;
+    BEGIN
+      IF ConfigQuestionArea."Table ID" = 0 THEN
+        EXIT;
+
+      RecRef.OPEN(ConfigQuestionArea."Table ID");
+      RecRef.INIT;
+
+      InsertRecordWithKeyFields(RecRef,ConfigQuestionArea);
+      ModifyRecordWithOtherFields(RecRef,ConfigQuestionArea);
+    END;
+
+    LOCAL PROCEDURE InsertRecordWithKeyFields@40(VAR RecRef@1000 : RecordRef;ConfigQuestionArea@1002 : Record 8611);
+    VAR
+      ConfigQuestion@1001 : Record 8612;
+      RecRef1@1006 : RecordRef;
+      KeyRef@1003 : KeyRef;
+      FieldRef@1004 : FieldRef;
+      KeyFieldCount@1005 : Integer;
+    BEGIN
+      ConfigQuestion.SETRANGE("Questionnaire Code",ConfigQuestionArea."Questionnaire Code");
+      ConfigQuestion.SETRANGE("Question Area Code",ConfigQuestionArea.Code);
+
+      KeyRef := RecRef.KEYINDEX(1);
+      FOR KeyFieldCount := 1 TO KeyRef.FIELDCOUNT DO BEGIN
+        FieldRef := KeyRef.FIELDINDEX(KeyFieldCount);
+        ConfigQuestion.SETRANGE("Field ID",FieldRef.NUMBER);
+        IF ConfigQuestion.FINDFIRST THEN BEGIN
+          ConfigValidateMgt.ValidateFieldValue(RecRef,FieldRef,ConfigQuestion.Answer,FALSE,GLOBALLANGUAGE);
+        END ELSE
+          IF KeyRef.FIELDCOUNT <> 1 THEN
+            ERROR(Text000,FieldRef.NAME,ConfigQuestionArea.Code);
+      END;
+
+      RecRef1 := RecRef.DUPLICATE;
+
+      IF RecRef1.FIND THEN BEGIN
+        RecRef := RecRef1;
+        EXIT
+      END;
+
+      RecRef.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE ModifyRecordWithOtherFields@39(VAR RecRef@1004 : RecordRef;ConfigQuestionArea@1002 : Record 8611);
+    VAR
+      ConfigQuestion@1003 : Record 8612;
+      TempConfigPackageField@1006 : TEMPORARY Record 8616;
+      ConfigPackageManagement@1005 : Codeunit 8611;
+      FieldRef@1001 : FieldRef;
+      ErrorText@1000 : Text[250];
+    BEGIN
+      ConfigQuestion.SETRANGE("Questionnaire Code",ConfigQuestionArea."Questionnaire Code");
+      ConfigQuestion.SETRANGE("Question Area Code",ConfigQuestionArea.Code);
+
+      IF ConfigQuestion.FINDSET THEN
+        REPEAT
+          TempConfigPackageField.DELETEALL;
+          IF ConfigQuestion.Answer <> '' THEN BEGIN
+            FieldRef := RecRef.FIELD(ConfigQuestion."Field ID");
+            ConfigValidateMgt.ValidateFieldValue(RecRef,FieldRef,ConfigQuestion.Answer,FALSE,GLOBALLANGUAGE);
+            ConfigPackageManagement.GetFieldsOrder(RecRef,'',TempConfigPackageField);
+            ErrorText := ConfigValidateMgt.ValidateFieldRefRelationAgainstCompanyData(FieldRef,TempConfigPackageField);
+            IF ErrorText <> '' THEN
+              ERROR(ErrorText);
+          END;
+        UNTIL ConfigQuestion.NEXT = 0;
+      RecRef.MODIFY(TRUE);
+    END;
+
+    PROCEDURE ExportQuestionnaireAsXML@4(XMLDataFile@1000 : Text;VAR ConfigQuestionnaire@1001 : Record 8610) : Boolean;
+    VAR
+      QuestionnaireXML@1003 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      ToFile@1007 : Text[1024];
+      FileName@1006 : Text;
+      Exported@1009 : Boolean;
+    BEGIN
+      QuestionnaireXML := QuestionnaireXML.XmlDocument;
+
+      GenerateQuestionnaireXMLDocument(QuestionnaireXML,ConfigQuestionnaire);
+
+      Exported := TRUE;
+      IF NOT ExportToExcel THEN BEGIN
+        FileName := XMLDataFile;
+        ToFile := Text026 + '.xml';
+
+        IF NOT CalledFromCode THEN
+          FileName := FileMgt.ServerTempFileName('.xml');
+        QuestionnaireXML.Save(FileName);
+        IF NOT CalledFromCode THEN
+          Exported := FileMgt.DownloadHandler(FileName,Text024,'',Text025,ToFile);
+      END ELSE BEGIN
+        FileName := XMLDataFile;
+        QuestionnaireXML.Save(FileName);
+      END;
+
+      EXIT(Exported);
+    END;
+
+    PROCEDURE GenerateQuestionnaireXMLDocument@1100(QuestionnaireXML@1000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";VAR ConfigQuestionnaire@1001 : Record 8610);
+    VAR
+      ConfigQuestionArea@1005 : Record 8611;
+      RecRef@1002 : RecordRef;
+      DocumentNode@1004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+    BEGIN
+      XMLDOMMgt.LoadXMLDocumentFromText(
+        '<?xml version="1.0" encoding="UTF-16" standalone="yes"?><Questionnaire></Questionnaire>',QuestionnaireXML);
+
+      DocumentNode := QuestionnaireXML.DocumentElement;
+
+      RecRef.GETTABLE(ConfigQuestionnaire);
+      CreateFieldSubtree(RecRef,DocumentNode);
+
+      ConfigQuestionArea.SETRANGE("Questionnaire Code",ConfigQuestionnaire.Code);
+      IF ConfigQuestionArea.FINDSET THEN BEGIN
+        ConfigProgressBar.Init(ConfigQuestionArea.COUNT,1,Text001);
+        REPEAT
+          ConfigProgressBar.Update(ConfigQuestionArea.Code);
+          CreateQuestionNodes(QuestionnaireXML,ConfigQuestionArea);
+        UNTIL ConfigQuestionArea.NEXT = 0;
+        ConfigProgressBar.Close;
+      END;
+    END;
+
+    PROCEDURE ImportQuestionnaireAsXMLFromClient@15() : Boolean;
+    VAR
+      ServerFileName@1000 : Text;
+    BEGIN
+      ServerFileName := FileMgt.ServerTempFileName('.xml');
+      IF UPLOAD(Text028,'',Text029,'',ServerFileName) THEN
+        EXIT(ImportQuestionnaireAsXML(ServerFileName));
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE ImportQuestionnaireAsXML@5(XMLDataFile@1000 : Text) : Boolean;
+    VAR
+      QuestionnaireXML@1100 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+    BEGIN
+      XMLDOMMgt.LoadXMLDocumentFromFile(XMLDataFile,QuestionnaireXML);
+
+      EXIT(ImportQuestionnaireXMLDocument(QuestionnaireXML));
+    END;
+
+    PROCEDURE ImportQuestionnaireXMLDocument@1108(QuestionnaireXML@1104 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument") : Boolean;
+    VAR
+      ConfigQuestionnaire@1003 : Record 8610;
+      ConfigQuestionArea@1007 : Record 8611;
+      ConfigQuestion@1000 : Record 8612;
+      QuestionAreaNodes@1002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      QuestionAreaNode@1004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      QuestionNodes@1100 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      QuestionnaireNode@1103 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      AreaNodeCount@1009 : Integer;
+      NodeCount@1010 : Integer;
+    BEGIN
+      QuestionnaireNode := QuestionnaireXML.SelectSingleNode('//Questionnaire');
+
+      UpdateInsertQuestionnaireField(ConfigQuestionnaire,QuestionnaireNode);
+      QuestionAreaNodes := QuestionnaireNode.SelectNodes('child::*[position() >= 3]');
+
+      ConfigProgressBar.Init(QuestionAreaNodes.Count,1,Text002);
+
+      FOR AreaNodeCount := 0 TO QuestionAreaNodes.Count - 1 DO BEGIN
+        QuestionAreaNode := QuestionAreaNodes.Item(AreaNodeCount);
+        ConfigProgressBar.Update(GetNodeValue(QuestionAreaNode,'Code'));
+        ConfigQuestionArea."Questionnaire Code" := ConfigQuestionnaire.Code;
+        UpdateInsertQuestionAreaFields(ConfigQuestionArea,QuestionAreaNode);
+
+        QuestionNodes := QuestionAreaNode.SelectNodes('ConfigQuestion');
+        FOR NodeCount := 0 TO QuestionNodes.Count - 1 DO BEGIN
+          ConfigQuestion.INIT;
+          ConfigQuestion."Questionnaire Code" := ConfigQuestionArea."Questionnaire Code";
+          ConfigQuestion."Question Area Code" := ConfigQuestionArea.Code;
+          ConfigQuestion."Table ID" := ConfigQuestionArea."Table ID";
+          UpdateInsertQuestionFields(ConfigQuestion,QuestionNodes.Item(NodeCount))
+        END;
+      END;
+
+      ConfigProgressBar.Close;
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ExportQuestionnaireToExcel@9(ExcelFile@1001 : Text;VAR ConfigQuestionnaire@1000 : Record 8610) : Boolean;
+    VAR
+      TempBlob@1011 : Record 99008535;
+      ColumnNodes@1007 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      MapXML@1019 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      NamespaceMgr@1002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager";
+      QuestionnaireXML@1004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      QuestionAreaNodes@1013 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      QuestionAreaNode@1012 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      QuestionNodes@1009 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      QuestionnaireNode@1008 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      Table@1014 : DotNet "'DocumentFormat.OpenXml, Version=2.5.5631.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.DocumentFormat.OpenXml.Spreadsheet.Table";
+      WorksheetWriter@1010 : DotNet "'Microsoft.Dynamics.Nav.OpenXml, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.OpenXml.Spreadsheet.WorksheetWriter";
+      RootElementName@1003 : Text;
+      TempConfigQuestionnaireFileName@1006 : Text;
+      TempSchemaFileName@1005 : Text;
+    BEGIN
+      CreateFieldNameCaptionList(DATABASE::"Config. Question");
+      CreateEmptyBook(TempBlob);
+
+      TempSchemaFileName := CreateSchemaFile(ConfigQuestionnaire,RootElementName);
+      OpenXMLManagement.ImportSchema(WrkBkWriter,TempSchemaFileName,1,RootElementName);
+      OpenXMLManagement.CleanMapInfo(WrkBkWriter.Workbook.WorkbookPart.CustomXmlMappingsPart.MapInfo);
+
+      TempConfigQuestionnaireFileName := CreateConfigQuestionnaireXMLFile(ConfigQuestionnaire);
+      OpenXMLManagement.CreateSchemaConnection(WrkBkWriter,TempConfigQuestionnaireFileName);
+
+      OpenXMLManagement.CreateTableStyles(WrkBkWriter.Workbook);
+      ReadXSDSchema(TempSchemaFileName,MapXML,NamespaceMgr);
+
+      XMLDOMMgt.LoadXMLDocumentFromFile(TempConfigQuestionnaireFileName,QuestionnaireXML);
+      QuestionnaireNode := QuestionnaireXML.SelectSingleNode('//Questionnaire');
+      QuestionAreaNodes := QuestionnaireNode.SelectNodes('child::*[position() >= 3]');
+      ConfigProgressBar.Init(QuestionAreaNodes.Count,1,Text022);
+
+      FOREACH QuestionAreaNode IN QuestionAreaNodes DO BEGIN
+        ConfigProgressBar.Update(QuestionAreaNode.Name);
+        FillQuestionAreaHeader(WorksheetWriter,QuestionAreaNode);
+
+        QuestionNodes := QuestionAreaNode.SelectNodes('ConfigQuestion');
+        IF NOT ISNULL(QuestionNodes) THEN BEGIN
+          GetColumnsFromSchema(MapXML,NamespaceMgr,QuestionAreaNode.Name,ColumnNodes);
+          OpenXMLManagement.AddTable(WorksheetWriter,2,ColumnNodes.Count,QuestionNodes.Count,Table);
+          AddColumns(WorksheetWriter,Table,ColumnNodes,QuestionNodes);
+          WriteData(WorksheetWriter,ColumnNodes,QuestionNodes);
+        END;
+      END;
+      FillQuestionnaireHeader(WorksheetWriter,QuestionnaireNode);
+
+      WrkBkWriter.Workbook.Save;
+      WrkBkWriter.Close;
+      CLEAR(WrkBkWriter);
+
+      ConfigProgressBar.Close;
+
+      IF ExcelFile = '' THEN
+        ExcelFile := ConfigQuestionnaire.Code;
+      IF FileMgt.GetExtension(ExcelFile) = '' THEN
+        ExcelFile += '.xlsx';
+      FileMgt.BLOBExport(TempBlob,ExcelFile,TRUE);
+
+      FILE.ERASE(TempSchemaFileName);
+      FILE.ERASE(TempConfigQuestionnaireFileName);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CreateQuestionNodes@10(QuestionnaireXML@1104 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";ConfigQuestionArea@1000 : Record 8611);
+    VAR
+      ConfigQuestion@1001 : Record 8612;
+      DocumentElement@1103 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlElement";
+      QuestionAreaNode@1102 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      QuestionNode@1100 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      RecRef@1012 : RecordRef;
+      QuestionRecRef@1002 : RecordRef;
+    BEGIN
+      DocumentElement := QuestionnaireXML.DocumentElement;
+      QuestionAreaNode := QuestionnaireXML.CreateElement(GetElementName(ConfigQuestionArea.Code + 'Questions'));
+      DocumentElement.AppendChild(QuestionAreaNode);
+
+      RecRef.GETTABLE(ConfigQuestionArea);
+      CreateFieldSubtree(RecRef,QuestionAreaNode);
+
+      ConfigQuestion.SETRANGE("Questionnaire Code",ConfigQuestionArea."Questionnaire Code");
+      ConfigQuestion.SETRANGE("Question Area Code",ConfigQuestionArea.Code);
+      IF ConfigQuestion.FINDSET THEN
+        REPEAT
+          QuestionNode := QuestionnaireXML.CreateElement(GetElementName(ConfigQuestion.TABLENAME));
+          QuestionAreaNode.AppendChild(QuestionNode);
+
+          QuestionRecRef.GETTABLE(ConfigQuestion);
+          CreateFieldSubtree(QuestionRecRef,QuestionNode);
+        UNTIL ConfigQuestion.NEXT = 0;
+    END;
+
+    [External]
+    PROCEDURE GetElementName@22(NameIn@1000 : Text) : Text;
+    BEGIN
+      NameIn := DELCHR(NameIn,'=','?''`');
+      NameIn := CONVERTSTR(NameIn,'<>,./\+&()%:','            ');
+      NameIn := CONVERTSTR(NameIn,'-','_');
+      NameIn := DELCHR(NameIn,'=',' ');
+      EXIT(NameIn);
+    END;
+
+    LOCAL PROCEDURE CreateFieldSubtree@6(VAR RecRef@1001 : RecordRef;VAR Node@1100 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlElement");
+    VAR
+      Field@1006 : Record 2000000041;
+      FieldRef@1003 : FieldRef;
+      FieldNode@1101 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      XmlDom@1102 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      i@1002 : Integer;
+    BEGIN
+      XmlDom := Node.OwnerDocument;
+      FOR i := 1 TO RecRef.FIELDCOUNT DO BEGIN
+        FieldRef := RecRef.FIELDINDEX(i);
+        IF NOT FieldException(RecRef.NUMBER,FieldRef.NUMBER) THEN BEGIN
+          FieldNode := XmlDom.CreateElement(GetElementName(FieldRef.NAME));
+
+          IF Field.GET(RecRef.NUMBER,FieldRef.NUMBER) THEN BEGIN
+            IF Field.Class = Field.Class::FlowField THEN
+              FieldRef.CALCFIELD;
+            FieldNode.InnerText := FORMAT(FieldRef.VALUE);
+
+            XMLDOMMgt.AddAttribute(FieldNode,'fieldlength',FORMAT(Field.Len));
+          END;
+          Node.AppendChild(FieldNode);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateFieldNameCaptionList@19(TableID@1000 : Integer);
+    VAR
+      FieldRef@1001 : FieldRef;
+      RecRef@1002 : RecordRef;
+      i@1003 : Integer;
+    BEGIN
+      FieldNameCaptionList := '';
+      RecRef.OPEN(TableID);
+      FOR i := 1 TO RecRef.FIELDCOUNT DO BEGIN
+        FieldRef := RecRef.FIELDINDEX(i);
+        FieldNameCaptionList += STRSUBSTNO('[%1]%2;',GetElementName(FieldRef.NAME),FieldRef.CAPTION);
+      END;
+      RecRef.CLOSE;
+    END;
+
+    LOCAL PROCEDURE GetCaptionByXMLFieldName@24(XMLFieldName@1000 : Text) Caption : Text;
+    VAR
+      Pos@1001 : Integer;
+    BEGIN
+      Pos := STRPOS(FieldNameCaptionList,STRSUBSTNO('[%1]',XMLFieldName));
+      IF Pos = 0 THEN
+        EXIT(XMLFieldName);
+      Caption := COPYSTR(FieldNameCaptionList,Pos + STRLEN(XMLFieldName) + 2);
+      Caption := COPYSTR(Caption,1,STRPOS(Caption,';') - 1);
+    END;
+
+    LOCAL PROCEDURE FindNode@45(VAR ParentNode@1001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";ChildNodeName@1000 : Text;VAR ChildNode@1003 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode") : Boolean;
+    BEGIN
+      ChildNode := ParentNode.SelectSingleNode(ChildNodeName);
+      EXIT(NOT ISNULL(ChildNode));
+    END;
+
+    LOCAL PROCEDURE GetNodeValue@26(VAR RecordNode@1100 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";FieldNodeName@1001 : Text) : Text;
+    VAR
+      FieldNode@1101 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+    BEGIN
+      FieldNode := RecordNode.SelectSingleNode(FieldNodeName);
+      EXIT(FieldNode.InnerText);
+    END;
+
+    LOCAL PROCEDURE GetXMLNodeValue@38(VAR RecordNode@1001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";NodeName@1000 : Text;VAR xPath@1003 : Text) : Text;
+    VAR
+      FieldNode@1004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+    BEGIN
+      IF FindNode(RecordNode,GetElementName(NodeName),FieldNode) THEN BEGIN
+        xPath := GetXPath(FieldNode);
+        EXIT(FieldNode.InnerText);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetXPath@33(VAR XMLNode@1000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode") : Text;
+    VAR
+      ParentXMLNode@1001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+    BEGIN
+      IF ISNULL(XMLNode.ParentNode) THEN
+        EXIT('');
+      ParentXMLNode := XMLNode.ParentNode;
+      EXIT(GetXPath(ParentXMLNode) + '/' + XMLNode.Name);
+    END;
+
+    LOCAL PROCEDURE UpdateInsertQuestionnaireField@18(VAR ConfigQuestionnaire@1011 : Record 8610;RecordNode@1100 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode");
+    VAR
+      RecRef@1000 : RecordRef;
+    BEGIN
+      RecRef.OPEN(DATABASE::"Config. Questionnaire");
+
+      ValidateRecordFields(RecRef,RecordNode);
+
+      RecRef.SETTABLE(ConfigQuestionnaire);
+    END;
+
+    LOCAL PROCEDURE UpdateInsertQuestionAreaFields@25(VAR ConfigQuestionArea@1002 : Record 8611;RecordNode@1100 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode");
+    VAR
+      RecRef@1000 : RecordRef;
+    BEGIN
+      RecRef.GETTABLE(ConfigQuestionArea);
+
+      ValidateRecordFields(RecRef,RecordNode);
+
+      RecRef.SETTABLE(ConfigQuestionArea);
+    END;
+
+    LOCAL PROCEDURE UpdateInsertQuestionFields@27(VAR ConfigQuestion@1011 : Record 8612;RecordNode@1100 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode");
+    VAR
+      Field@1001 : Record 2000000041;
+      RecRef@1000 : RecordRef;
+    BEGIN
+      RecRef.GETTABLE(ConfigQuestion);
+
+      ValidateRecordFields(RecRef,RecordNode);
+
+      RecRef.SETTABLE(ConfigQuestion);
+
+      IF TypeHelper.GetField(ConfigQuestion."Table ID",ConfigQuestion."Field ID",Field) THEN
+        ModifyConfigQuestionAnswer(ConfigQuestion,Field);
+    END;
+
+    LOCAL PROCEDURE FieldNodeExists@36(VAR RecordNode@1100 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";FieldNodeName@1001 : Text) : Boolean;
+    VAR
+      FieldNode@1101 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+    BEGIN
+      FieldNode := RecordNode.SelectSingleNode(FieldNodeName);
+      IF NOT ISNULL(FieldNode) THEN
+        EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE GetXLColumnID@14(ColumnNo@1003 : Integer) : Text[10];
+    VAR
+      ExcelBuf@1000 : Record 370;
+    BEGIN
+      ExcelBuf.INIT;
+      ExcelBuf.VALIDATE("Column No.",ColumnNo);
+      EXIT(ExcelBuf.xlColID);
+    END;
+
+    LOCAL PROCEDURE FieldException@11(TableID@1000 : Integer;FieldID@1001 : Integer) : Boolean;
+    VAR
+      ConfigQuestionArea@1004 : Record 8611;
+      ConfigQuestion@1005 : Record 8612;
+    BEGIN
+      CASE TableID OF
+        DATABASE::"Config. Questionnaire":
+          EXIT(FALSE);
+        DATABASE::"Config. Question Area":
+          EXIT(FieldID IN [ConfigQuestionArea.FIELDNO("Questionnaire Code"),
+                           ConfigQuestionArea.FIELDNO("Table Name")]);
+        DATABASE::"Config. Question":
+          EXIT(FieldID IN [ConfigQuestion.FIELDNO("Questionnaire Code"),
+                           ConfigQuestion.FIELDNO("Question Area Code"),
+                           ConfigQuestion.FIELDNO("Table ID")]);
+      END;
+    END;
+
+    [External]
+    PROCEDURE SetCalledFromCode@13();
+    BEGIN
+      CalledFromCode := TRUE;
+    END;
+
+    LOCAL PROCEDURE ValidateKeyFields@16(RecRef@1000 : RecordRef;RecordNode@1004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode");
+    VAR
+      KeyRef@1001 : KeyRef;
+      FieldRef@1002 : FieldRef;
+      KeyFieldCount@1003 : Integer;
+    BEGIN
+      KeyRef := RecRef.KEYINDEX(1);
+      FOR KeyFieldCount := 1 TO KeyRef.FIELDCOUNT DO BEGIN
+        FieldRef := KeyRef.FIELDINDEX(KeyFieldCount);
+        IF FieldNodeExists(RecordNode,GetElementName(FieldRef.NAME)) THEN
+          ConfigValidateMgt.ValidateFieldValue(
+            RecRef,FieldRef,GetNodeValue(RecordNode,GetElementName(FieldRef.NAME)),FALSE,GLOBALLANGUAGE);
+      END;
+    END;
+
+    LOCAL PROCEDURE ValidateFields@20(RecRef@1000 : RecordRef;RecordNode@1003 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode");
+    VAR
+      Field@1001 : Record 2000000041;
+      FieldRef@1002 : FieldRef;
+    BEGIN
+      ConfigPackageMgt.SetFieldFilter(Field,RecRef.NUMBER,0);
+      IF Field.FINDSET THEN
+        REPEAT
+          FieldRef := RecRef.FIELD(Field."No.");
+          IF FieldNodeExists(RecordNode,GetElementName(FieldRef.NAME)) THEN
+            ConfigValidateMgt.ValidateFieldValue(
+              RecRef,FieldRef,GetNodeValue(RecordNode,GetElementName(FieldRef.NAME)),FALSE,GLOBALLANGUAGE)
+        UNTIL Field.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE ValidateRecordFields@21(RecRef@1000 : RecordRef;RecordNode@1003 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode");
+    VAR
+      RecRef1@1001 : RecordRef;
+    BEGIN
+      ValidateKeyFields(RecRef,RecordNode);
+
+      RecRef1 := RecRef.DUPLICATE;
+      IF NOT RecRef1.FIND THEN
+        RecRef.INSERT(TRUE);
+
+      ValidateFields(RecRef,RecordNode);
+
+      RecRef.MODIFY(TRUE);
+    END;
+
+    PROCEDURE ModifyConfigQuestionAnswer@23(VAR ConfigQuestion@1000 : Record 8612;Field@1001 : Record 2000000041);
+    VAR
+      DateFormula@1003 : DateFormula;
+      OptionInt@1002 : Integer;
+    BEGIN
+      CASE Field.Type OF
+        Field.Type::Option,
+        Field.Type::Boolean:
+          BEGIN
+            IF ConfigQuestion.Answer <> '' THEN BEGIN
+              OptionInt := ConfigValidateMgt.GetOptionNo(ConfigQuestion.Answer,ConfigQuestion."Answer Option");
+              ConfigQuestion."Answer Option" :=
+                BuildAnswerOption(ConfigQuestion."Table ID",ConfigQuestion."Field ID");
+              IF OptionInt <> -1 THEN
+                ConfigQuestion.Answer := SELECTSTR(OptionInt + 1,ConfigQuestion."Answer Option");
+            END ELSE BEGIN
+              ConfigQuestion.Answer := '';
+              ConfigQuestion."Answer Option" :=
+                BuildAnswerOption(ConfigQuestion."Table ID",ConfigQuestion."Field ID");
+            END;
+            ConfigQuestion.MODIFY;
+          END;
+        Field.Type::DateFormula:
+          BEGIN
+            EVALUATE(DateFormula,ConfigQuestion.Answer);
+            ConfigQuestion.Answer := FORMAT(DateFormula);
+            ConfigQuestion.MODIFY;
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateSchemaFile@77(ConfigQuestionnaire@1000 : Record 8610;VAR RootElementName@1004 : Text) FileName : Text;
+    VAR
+      ConfigQuestionnaireSchema@1003 : XMLport 8611;
+      OStream@1002 : OutStream;
+      TempSchemaFile@1001 : File;
+    BEGIN
+      FileName := FileMgt.ServerTempFileName('xsd');
+      TempSchemaFile.CREATE(FileName);
+      TempSchemaFile.CREATEOUTSTREAM(OStream);
+
+      ConfigQuestionnaire.SETRECFILTER;
+      RootElementName := ConfigQuestionnaireSchema.GetRootElementName;
+      ConfigQuestionnaireSchema.SETTABLEVIEW(ConfigQuestionnaire);
+      ConfigQuestionnaireSchema.SETDESTINATION(OStream);
+      IF NOT ConfigQuestionnaireSchema.EXPORT THEN
+        ERROR(Text005);
+
+      TempSchemaFile.CLOSE;
+    END;
+
+    LOCAL PROCEDURE CreateConfigQuestionnaireXMLFile@80(ConfigQuestionnaire@1000 : Record 8610) FileName : Text;
+    BEGIN
+      ExportToExcel := TRUE;
+      CalledFromCode := TRUE;
+      FileName := FileMgt.ServerTempFileName('xml');
+      ExportQuestionnaireAsXML(FileName,ConfigQuestionnaire);
+      ExportToExcel := FALSE;
+    END;
+
+    LOCAL PROCEDURE CreateEmptyBook@82(VAR TempBlob@1000 : Record 99008535);
+    VAR
+      InStream@1001 : InStream;
+    BEGIN
+      TempBlob.Blob.CREATEINSTREAM(InStream);
+      WrkBkWriter := WrkBkWriter.Create(InStream);
+      IF ISNULL(WrkBkWriter) THEN
+        ERROR(CreateWrkBkFailedErr);
+
+      WrkBkWriter.DeleteWorksheet(WrkBkWriter.FirstWorksheet.Name);
+    END;
+
+    LOCAL PROCEDURE WriteData@28(VAR WorksheetWriter@1002 : DotNet "'Microsoft.Dynamics.Nav.OpenXml, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.OpenXml.Spreadsheet.WorksheetWriter";ColumnNodes@1001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";QuestionNodes@1000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList");
+    VAR
+      ColumnNode@1003 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      QuestionNode@1006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      ColumnNo@1005 : Integer;
+      RowNo@1004 : Integer;
+      Value@1007 : Text;
+    BEGIN
+      RowNo := 2; // to put the first data row to the 3rd row
+      FOREACH QuestionNode IN QuestionNodes DO BEGIN
+        RowNo += 1;
+        ColumnNo := 0;
+        FOREACH ColumnNode IN ColumnNodes DO BEGIN
+          ColumnNo += 1;
+          Value := GetNodeValue(QuestionNode,GetAttribute('name',ColumnNode));
+          WorksheetWriter.SetCellValueText(RowNo,GetXLColumnID(ColumnNo),Value,WorksheetWriter.DefaultCellDecorator);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE AddColumns@85(VAR WorksheetWriter@1008 : DotNet "'Microsoft.Dynamics.Nav.OpenXml, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.OpenXml.Spreadsheet.WorksheetWriter";Table@1016 : DotNet "'DocumentFormat.OpenXml, Version=2.5.5631.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.DocumentFormat.OpenXml.Spreadsheet.Table";ColumnNodes@1025 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";QuestionNodes@1022 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList");
+    VAR
+      FieldNode@1009 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      QuestionNode@1000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      ColumnName@1005 : Text;
+      xPathPrefix@1013 : Text;
+      FieldName@1024 : Text;
+      FieldType@1026 : Text;
+      ColumnId@1027 : Integer;
+    BEGIN
+      QuestionNode := QuestionNodes.Item(0);
+      xPathPrefix := GetXPath(QuestionNode) + '/';
+      ColumnId := 0;
+      FOREACH FieldNode IN ColumnNodes DO BEGIN
+        ColumnId += 1;
+        FieldName := GetAttribute('name',FieldNode);
+        ColumnName := GetCaptionByXMLFieldName(FieldName);
+        FieldType := GetAttribute('type',FieldNode);
+        OpenXMLManagement.AddColumnHeaderWithXPath(
+          WorksheetWriter,Table,ColumnId,ColumnName,FieldType,xPathPrefix + FieldName);
+        WorksheetWriter.SetCellValueText(2,GetXLColumnID(ColumnId),ColumnName,WorksheetWriter.DefaultCellDecorator);
+      END;
+    END;
+
+    LOCAL PROCEDURE FillQuestionnaireHeader@29(VAR WorksheetWriter@1001 : DotNet "'Microsoft.Dynamics.Nav.OpenXml, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.OpenXml.Spreadsheet.WorksheetWriter";QuestionnaireNode@1004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode");
+    VAR
+      ConfigQuestionnaire@1002 : Record 8610;
+      SingleXMLCells@1000 : DotNet "'DocumentFormat.OpenXml, Version=2.5.5631.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.DocumentFormat.OpenXml.Spreadsheet.SingleXmlCells";
+      Description@1005 : ARRAY [2] OF Text;
+      XPath@1006 : ARRAY [2] OF Text;
+    BEGIN
+      Description[2] := GetXMLNodeValue(QuestionnaireNode,ConfigQuestionnaire.FIELDNAME(Description),XPath[2]);
+      IF Description[2] <> '' THEN BEGIN
+        Description[1] := GetXMLNodeValue(QuestionnaireNode,ConfigQuestionnaire.FIELDNAME(Code),XPath[1]);
+
+        WorksheetWriter := WrkBkWriter.AddWorksheet(Description[2]);
+        AddSingleXMLCells(WorksheetWriter,SingleXMLCells);
+
+        OpenXMLManagement.SetSingleCellValue(WorksheetWriter,SingleXMLCells,1,'A',Description[1],XPath[1]);
+        OpenXMLManagement.SetSingleCellValue(WorksheetWriter,SingleXMLCells,1,'B',Description[2],XPath[2]);
+      END;
+    END;
+
+    LOCAL PROCEDURE FillQuestionAreaHeader@96(VAR WorksheetWriter@1001 : DotNet "'Microsoft.Dynamics.Nav.OpenXml, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.OpenXml.Spreadsheet.WorksheetWriter";QuestionAreaNode@1002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode");
+    VAR
+      ConfigQuestionArea@1000 : Record 8611;
+      SingleXMLCells@1003 : DotNet "'DocumentFormat.OpenXml, Version=2.5.5631.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.DocumentFormat.OpenXml.Spreadsheet.SingleXmlCells";
+      Description@1007 : ARRAY [3] OF Text;
+      XPath@1006 : ARRAY [3] OF Text;
+      i@1004 : Integer;
+    BEGIN
+      Description[2] := GetXMLNodeValue(QuestionAreaNode,ConfigQuestionArea.FIELDNAME(Description),XPath[2]);
+      IF Description[2] = '' THEN
+        EXIT;
+      Description[1] := GetXMLNodeValue(QuestionAreaNode,ConfigQuestionArea.FIELDNAME(Code),XPath[1]);
+      Description[3] := GetXMLNodeValue(QuestionAreaNode,ConfigQuestionArea.FIELDNAME("Table ID"),XPath[3]);
+
+      WorksheetWriter := WrkBkWriter.AddWorksheet(Description[2]);
+      AddSingleXMLCells(WorksheetWriter,SingleXMLCells);
+
+      FOR i := 1 TO ARRAYLEN(Description) DO
+        OpenXMLManagement.SetSingleCellValue(WorksheetWriter,SingleXMLCells,1,GetXLColumnID(i),Description[i],XPath[i]);
+    END;
+
+    LOCAL PROCEDURE AddSingleXMLCells@102(VAR WrkShtWriter@1001 : DotNet "'Microsoft.Dynamics.Nav.OpenXml, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.OpenXml.Spreadsheet.WorksheetWriter";VAR SingleXMLCells@1000 : DotNet "'DocumentFormat.OpenXml, Version=2.5.5631.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.DocumentFormat.OpenXml.Spreadsheet.SingleXmlCells");
+    BEGIN
+      WrkShtWriter.AddSingleCellTablePart;
+      SingleXMLCells := SingleXMLCells.SingleXmlCells;
+      WrkShtWriter.Worksheet.WorksheetPart.SingleCellTablePart.SingleXmlCells := SingleXMLCells;
+    END;
+
+    LOCAL PROCEDURE GetAttribute@64(AttributeName@1001 : Text;XMLNode@1000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode") : Text[1024];
+    VAR
+      XMLAttributeNode@1003 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+    BEGIN
+      XMLAttributeNode := XMLNode.Attributes.GetNamedItem(AttributeName);
+      IF ISNULL(XMLAttributeNode) THEN
+        EXIT('');
+
+      EXIT(FORMAT(XMLAttributeNode.InnerText));
+    END;
+
+    LOCAL PROCEDURE ReadXSDSchema@43(FileName@1000 : Text;VAR MapXML@1002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";VAR NamespaceMgr@1001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager");
+    BEGIN
+      XMLDOMMgt.LoadXMLDocumentFromFile(FileName,MapXML);
+      CreateNameSpaceManager(MapXML,NamespaceMgr);
+    END;
+
+    LOCAL PROCEDURE CreateNameSpaceManager@32(XmlDocument@1000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";VAR NamespaceMgr@1001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager");
+    BEGIN
+      IF NOT ISNULL(NamespaceMgr) THEN
+        CLEAR(NamespaceMgr);
+
+      NamespaceMgr := NamespaceMgr.XmlNamespaceManager(XmlDocument.NameTable);
+      PopulateNamespaceManager(XmlDocument.DocumentElement,NamespaceMgr);
+    END;
+
+    LOCAL PROCEDURE PopulateNamespaceManager@34(XmlNode@1000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";VAR NamespaceMgr@1005 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager");
+    VAR
+      Attribute@1002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlAttribute";
+      Attributes@1003 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlAttributeCollection";
+      i@1001 : Integer;
+      Prefix@1004 : Text;
+    BEGIN
+      IF NOT ISNULL(XmlNode) THEN BEGIN
+        Attributes := XmlNode.Attributes;
+        FOR i := 0 TO Attributes.Count - 1 DO BEGIN
+          Attribute := Attributes.Item(i);
+          IF STRPOS(Attribute.Name,'xmlns') = 1 THEN
+            IF STRPOS(Attribute.Name,':') > 0 THEN BEGIN
+              Prefix := COPYSTR(Attribute.Name,STRPOS(Attribute.Name,':') + 1);
+              NamespaceMgr.AddNamespace(Prefix,Attribute.Value);
+            END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetColumnsFromSchema@35(MapXML@1000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";NamespaceMgr@1001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager";QuestionAreaName@1005 : Text;VAR ColumnNodes@1002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList");
+    VAR
+      Node@1004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      SchemaPath@1003 : Text;
+    BEGIN
+      SchemaPath := 'xsd:complexType/xsd:sequence/xsd:element';
+      Node :=
+        MapXML.DocumentElement.SelectSingleNode(
+          STRSUBSTNO('xsd:element/%2[@name=''%1'']',QuestionAreaName,SchemaPath),NamespaceMgr);
+      ColumnNodes := Node.SelectNodes(STRSUBSTNO('%1[@name=''ConfigQuestion'']/%1',SchemaPath),NamespaceMgr);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

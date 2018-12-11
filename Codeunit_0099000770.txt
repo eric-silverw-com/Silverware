@@ -1,0 +1,168 @@
+OBJECT Codeunit 99000770 Where-Used Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=;
+    Time=;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 99000771=r,
+                TableData 99000779=r,
+                TableData 99000790=imd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      WhereUsedList@1001 : TEMPORARY Record 99000790;
+      UOMMgt@1002 : Codeunit 5402;
+      VersionMgt@1003 : Codeunit 99000756;
+      CostCalcMgt@1004 : Codeunit 5836;
+      MultiLevel@1005 : Boolean;
+      NextWhereUsedEntryNo@1006 : Integer;
+
+    [External]
+    PROCEDURE FindRecord@2(Which@1000 : Text[30];VAR WhereUsedList2@1001 : Record 99000790) : Boolean;
+    BEGIN
+      WhereUsedList.COPY(WhereUsedList2);
+      IF NOT WhereUsedList.FIND(Which) THEN
+        EXIT(FALSE);
+      WhereUsedList2 := WhereUsedList;
+
+      EXIT(TRUE);
+    END;
+
+    [External]
+    PROCEDURE NextRecord@3(Steps@1000 : Integer;VAR WhereUsedList2@1001 : Record 99000790) : Integer;
+    VAR
+      CurrentSteps@1002 : Integer;
+    BEGIN
+      WhereUsedList.COPY(WhereUsedList2);
+      CurrentSteps := WhereUsedList.NEXT(Steps);
+      IF CurrentSteps <> 0 THEN
+        WhereUsedList2 := WhereUsedList;
+
+      EXIT(CurrentSteps);
+    END;
+
+    [External]
+    PROCEDURE WhereUsedFromItem@4(Item@1000 : Record 27;CalcDate@1001 : Date;NewMultiLevel@1002 : Boolean);
+    BEGIN
+      WhereUsedList.DELETEALL;
+      NextWhereUsedEntryNo := 1;
+      MultiLevel := NewMultiLevel;
+
+      BuildWhereUsedList(1,Item."No.",CalcDate,1,1);
+    END;
+
+    [External]
+    PROCEDURE WhereUsedFromProdBOM@5(ProdBOM@1000 : Record 99000771;CalcDate@1001 : Date;NewMultiLevel@1002 : Boolean);
+    BEGIN
+      WhereUsedList.DELETEALL;
+      NextWhereUsedEntryNo := 1;
+      MultiLevel := NewMultiLevel;
+
+      BuildWhereUsedList(2,ProdBOM."No.",CalcDate,1,1);
+    END;
+
+    LOCAL PROCEDURE BuildWhereUsedList@1(Type@1000 : ' ,Item,Production BOM';No@1001 : Code[20];CalcDate@1002 : Date;Level@1003 : Integer;Quantity@1004 : Decimal);
+    VAR
+      ItemAssembly@1005 : Record 27;
+      ProdBOMComponent@1006 : Record 99000772;
+    BEGIN
+      IF Level > 30 THEN
+        EXIT;
+
+      IF Type = Type::"Production BOM" THEN BEGIN
+        ItemAssembly.SETCURRENTKEY("Production BOM No.");
+        ItemAssembly.SETRANGE("Production BOM No.",No);
+        IF ItemAssembly.FINDSET THEN
+          REPEAT
+            WhereUsedList."Entry No." := NextWhereUsedEntryNo;
+            WhereUsedList."Item No." := ItemAssembly."No.";
+            WhereUsedList.Description := ItemAssembly.Description;
+            WhereUsedList."Level Code" := Level;
+            WhereUsedList."Quantity Needed" :=
+              Quantity *
+              (1 + ItemAssembly."Scrap %" / 100) *
+              UOMMgt.GetQtyPerUnitOfMeasure(
+                ItemAssembly,
+                ItemAssembly."Base Unit of Measure") /
+              UOMMgt.GetQtyPerUnitOfMeasure(
+                ItemAssembly,
+                VersionMgt.GetBOMUnitOfMeasure(
+                  ItemAssembly."Production BOM No.",
+                  VersionMgt.GetBOMVersion(
+                    ItemAssembly."Production BOM No.",
+                    CalcDate,FALSE)));
+            WhereUsedList."Version Code" := VersionMgt.GetBOMVersion(No,CalcDate,TRUE);
+            WhereUsedList.INSERT;
+            NextWhereUsedEntryNo := NextWhereUsedEntryNo + 1;
+            IF MultiLevel THEN
+              BuildWhereUsedList(
+                1,
+                ItemAssembly."No.",
+                CalcDate,
+                Level + 1,
+                WhereUsedList."Quantity Needed");
+          UNTIL ItemAssembly.NEXT = 0;
+      END;
+
+      ProdBOMComponent.SETCURRENTKEY(Type,"No.");
+      ProdBOMComponent.SETRANGE(Type,Type);
+      ProdBOMComponent.SETRANGE("No.",No);
+      IF CalcDate <> 0D THEN BEGIN
+        ProdBOMComponent.SETFILTER("Starting Date",'%1|..%2',0D,CalcDate);
+        ProdBOMComponent.SETFILTER("Ending Date",'%1|%2..',0D,CalcDate);
+      END;
+
+      IF ProdBOMComponent.FINDSET THEN
+        REPEAT
+          IF VersionMgt.GetBOMVersion(
+               ProdBOMComponent."Production BOM No.",CalcDate,TRUE) =
+             ProdBOMComponent."Version Code"
+          THEN BEGIN
+            IF IsActiveProductionBOM(ProdBOMComponent) THEN
+              BuildWhereUsedList(
+                2,
+                ProdBOMComponent."Production BOM No.",
+                CalcDate,
+                Level,
+                CostCalcMgt.CalcCompItemQtyBase(ProdBOMComponent,CalcDate,Quantity,'',FALSE));
+          END;
+        UNTIL ProdBOMComponent.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE IsActiveProductionBOM@9(ProductionBOMLine@1000 : Record 99000772) : Boolean;
+    BEGIN
+      IF ProductionBOMLine."Version Code" = '' THEN
+        EXIT(NOT IsProductionBOMClosed(ProductionBOMLine));
+
+      EXIT(NOT IsProdBOMVersionClosed(ProductionBOMLine));
+    END;
+
+    LOCAL PROCEDURE IsProductionBOMClosed@10(ProductionBOMLine@1000 : Record 99000772) : Boolean;
+    VAR
+      ProdBOMHeader@1001 : Record 99000771;
+    BEGIN
+      ProdBOMHeader.GET(ProductionBOMLine."Production BOM No.");
+      EXIT(ProdBOMHeader.Status = ProdBOMHeader.Status::Closed);
+    END;
+
+    LOCAL PROCEDURE IsProdBOMVersionClosed@11(ProductionBOMLine@1000 : Record 99000772) : Boolean;
+    VAR
+      ProductionBOMVersion@1001 : Record 99000779;
+    BEGIN
+      ProductionBOMVersion.GET(ProductionBOMLine."Production BOM No.",ProductionBOMLine."Version Code");
+      EXIT(ProductionBOMVersion.Status = ProductionBOMVersion.Status::Closed);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,395 @@
+OBJECT Codeunit 10095 Export EFT (RB)
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:54 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Vendor@1020032 : Record 23;
+      Customer@1020031 : Record 18;
+      BankAccount@1020030 : Record 270;
+      CompanyInformation@1020029 : Record 79;
+      FileManagement@1020028 : Codeunit 419;
+      FileName@1020021 : Text;
+      FileDate@1020019 : Date;
+      DummyModifierValues@1020018 : ARRAY [26] OF Code[1];
+      PaymentsThisAcct@1020016 : Integer;
+      CurrencyType@1020014 : Code[10];
+      AcctNo@1020012 : Code[20];
+      AcctName@1020011 : Text[30];
+      AcctLanguage@1020010 : 'E  English,F  French';
+      RecipientAddress@1020009 : Text[80];
+      RecipientCity@1020008 : Text[30];
+      RecipientCountryCode@1020007 : Text[30];
+      RecipientCounty@1020006 : Text[30];
+      RecipientPostCode@1020005 : Code[20];
+      RecipientBankAcctNo@1020004 : Text[30];
+      RecipientTransitNo@1020003 : Text[20];
+      RecipientBankNo@1020002 : Text[20];
+      RecipientBankAcctCurrencyCode@1020001 : Code[10];
+      RecipientBankAcctCountryCode@1020000 : Code[10];
+      AlreadyExistsErr@1020045 : TextConst 'ENU=The file already exists. Check the "Last E-Pay Export File Name" field in the bank account.';
+      ReferErr@1020043 : TextConst 'ENU=Either Account type or balance account type must refer to either a vendor or a customer for an electronic payment.';
+      VendorBankAccountErr@1020042 : TextConst 'ENU=The vendor has no bank account setup for electronic payments.';
+      VendorMoreThanOneBankAccErr@1020041 : TextConst 'ENU=The vendor has more than one bank account setup for electronic payments.';
+      CustomerBankAccountErr@1020040 : TextConst 'ENU=The customer has no bank account setup for electronic payments.';
+      CustomerMoreThanOneBankAccountErr@1020039 : TextConst 'ENU=The customer has more than one bank account setup for electronic payments.';
+      IsBlockedErr@1020035 : TextConst 'ENU=Account type is blocked for processing.';
+      PrivacyBlockedErr@1234567 : TextConst 'ENU=Account type is blocked for privacy.';
+
+    PROCEDURE StartExportFile@6(VAR TempEFTExportWorkset@1020004 : TEMPORARY Record 10811;BankAccountNo@1020001 : Code[20];DataExchEntryNo@1020005 : Integer;VAR EFTValues@1020003 : Codeunit 10340);
+    VAR
+      ACHRBHeader@1020006 : Record 10303;
+      GLSetup@1030002 : Record 98;
+      ExportEFTACH@1020010 : Codeunit 10094;
+      i@1020002 : Integer;
+      FedID@1020000 : Text[30];
+    BEGIN
+      ExportEFTACH.BuildIDModifier(DummyModifierValues);
+
+      CompanyInformation.GET;
+      CompanyInformation.TESTFIELD("Federal ID No.");
+
+      WITH BankAccount DO BEGIN
+        LOCKTABLE;
+        GET(BankAccountNo);
+        TESTFIELD("Export Format","Export Format"::CA);
+        TESTFIELD("Transit No.");
+        TESTFIELD("Last E-Pay Export File Name");
+        TESTFIELD("Bank Acc. Posting Group");
+        TESTFIELD(Blocked,FALSE);
+        TESTFIELD("Client No.");
+        TESTFIELD("Client Name");
+
+        IF TempEFTExportWorkset."Bank Payment Type" =
+           TempEFTExportWorkset."Bank Payment Type"::"Electronic Payment-IAT"
+        THEN BEGIN
+          TempEFTExportWorkset.TESTFIELD("Transaction Code");
+          TempEFTExportWorkset.TESTFIELD("Company Entry Description");
+        END;
+
+        FileName := FileManagement.ServerTempFileName('');
+
+        IF "Last ACH File ID Modifier" = '' THEN
+          "Last ACH File ID Modifier" := '1'
+        ELSE BEGIN
+          i := 1;
+          WHILE (i < ARRAYLEN(DummyModifierValues)) AND
+                ("Last ACH File ID Modifier" <> DummyModifierValues[i])
+          DO
+            i := i + 1;
+          IF i = ARRAYLEN(DummyModifierValues) THEN
+            i := 1
+          ELSE
+            i := i + 1;
+
+          "Last ACH File ID Modifier" := DummyModifierValues[i];
+        END;
+        "Last E-Pay File Creation No." := "Last E-Pay File Creation No." + 1;
+        MODIFY;
+
+        IF EXISTS(FileName) THEN
+          ERROR(AlreadyExistsErr);
+
+        FileDate := TODAY;
+        EFTValues.SetNoOfRec(1);
+        EFTValues.SetNoOfCustInfoRec(0);
+        EFTValues.SetTotalFileDebit(0);
+        EFTValues.SetTotalFileCredit(0);
+        EFTValues.SetTransactions(0);
+        FedID := CompanyInformation."Federal ID No.";
+
+        IF TempEFTExportWorkset."Currency Code" = '' THEN BEGIN
+          GLSetup.GET;
+          CurrencyType := GLSetup."LCY Code";
+        END ELSE
+          CurrencyType := TempEFTExportWorkset."Currency Code";
+
+        ACHRBHeader.GET(DataExchEntryNo);
+        ACHRBHeader."Record Count" := EFTValues.GetNoOfRec;
+        ACHRBHeader."Record Type" := 'A';
+        ACHRBHeader."Transaction Code" := 'HDR';
+        ACHRBHeader."Client Number" := "Client No.";
+        ACHRBHeader."Client Name" := "Client Name";
+        ACHRBHeader."Federal ID No." := DELCHR(FedID,'=',' .,-');
+        ACHRBHeader."File Creation Number" := "Last E-Pay File Creation No.";
+        ACHRBHeader."File Creation Date" := JulianDate(FileDate);
+        ACHRBHeader."Currency Type" := CurrencyType;
+        ACHRBHeader."Input Type" := '1';
+        ACHRBHeader."Input Qualifier" := "Input Qualifier";
+        ACHRBHeader.MODIFY;
+      END;
+    END;
+
+    PROCEDURE ExportElectronicPayment@17(VAR TempEFTExportWorkset@1020002 : TEMPORARY Record 10811;PaymentAmount@1020001 : Decimal;SettleDate@1020000 : Date;DataExchEntryNo@1020003 : Integer;DataExchLineDefCode@1020006 : Code[20];VAR EFTValues@1020005 : Codeunit 10340) : Code[30];
+    VAR
+      DemandCredit@1020004 : Boolean;
+    BEGIN
+      // NOTE:  If PaymentAmount is Positive, then we are Receiving money.
+      // If PaymentAmount is Negative, then we are Sending money.
+      IF PaymentAmount = 0 THEN
+        EXIT('');
+      DemandCredit := (PaymentAmount < 0);
+      PaymentAmount := ABS(PaymentAmount);
+
+      IF EFTValues.GetParentBoolean THEN
+        IF DemandCredit THEN
+          EFTValues.SetTotalFileCredit(EFTValues.GetTotalFileCredit + PaymentAmount)
+        ELSE
+          EFTValues.SetTotalFileDebit(EFTValues.GetTotalFileDebit + PaymentAmount);
+
+      GetRecipientData(TempEFTExportWorkset);
+      WriteRecord(TempEFTExportWorkset,PaymentAmount,SettleDate,DataExchEntryNo,DataExchLineDefCode,
+        EFTValues.GetParentBoolean,EFTValues);
+
+      EXIT(GenerateFullTraceNoCode(EFTValues.GetTraceNo));
+    END;
+
+    PROCEDURE EndExportFile@10(DataExchEntryNo@1020002 : Integer;VAR EFTValues@1020000 : Codeunit 10340) : Boolean;
+    VAR
+      ACHRBFooter@1020005 : Record 10305;
+    BEGIN
+      ACHRBFooter.GET(DataExchEntryNo);
+      ACHRBFooter."Record Type" := 'Z';
+      ACHRBFooter."Transaction Code" := 'TRL';
+      ACHRBFooter."Client Number" := BankAccount."Client No.";
+      EFTValues.SetNoOfRec(EFTValues.GetNoOfRec + 1);
+      ACHRBFooter."Record Count" := EFTValues.GetNoOfRec;
+      ACHRBFooter."Credit Payment Transactions" := EFTValues.GetTransactions;
+      ACHRBFooter."Total File Credit" := EFTValues.GetTotalFileCredit;
+      ACHRBFooter."Zero Fill" := 0;
+      ACHRBFooter."Number of Cust Info Records" := EFTValues.GetNoOfCustInfoRec;
+      OnBeforeACHRBFooterModify(ACHRBFooter,BankAccount."No.");
+      ACHRBFooter.MODIFY;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE GenerateFullTraceNoCode@14(TraceNo@1020000 : Integer) : Code[30];
+    VAR
+      TraceCode@1020001 : Text;
+    BEGIN
+      TraceCode := '';
+      TraceCode := FORMAT(BankAccount."Last E-Pay File Creation No." + TraceNo);
+      EXIT(TraceCode);
+    END;
+
+    LOCAL PROCEDURE GetRecipientData@20(VAR TempEFTExportWorkset@1020000 : TEMPORARY Record 10811);
+    VAR
+      AcctType@1030001 : Text[1];
+    BEGIN
+      WITH TempEFTExportWorkset DO BEGIN
+        IF "Account Type" = "Account Type"::Vendor THEN BEGIN
+          AcctType := 'V';
+          AcctNo := "Account No.";
+        END ELSE
+          IF "Account Type" = "Account Type"::Customer THEN BEGIN
+            AcctType := 'C';
+            AcctNo := "Account No.";
+          END ELSE
+            IF "Bal. Account Type" = "Bal. Account Type"::Vendor THEN BEGIN
+              AcctType := 'V';
+              AcctNo := "Bal. Account No.";
+            END ELSE
+              IF "Bal. Account Type" = "Bal. Account Type"::Customer THEN BEGIN
+                AcctType := 'C';
+                AcctNo := "Bal. Account No.";
+              END ELSE
+                ERROR(ReferErr);
+
+        IF AcctType = 'V' THEN
+          GetRecipientDataFromVendor
+        ELSE
+          IF AcctType = 'C' THEN
+            GetRecipientDataFromCustomer;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetRecipientDataFromVendor@21();
+    VAR
+      VendorBankAccount@1030002 : Record 288;
+    BEGIN
+      IF AcctNo <> Vendor."No." THEN BEGIN
+        Vendor.GET(AcctNo);
+        Vendor.TESTFIELD(Blocked,Vendor.Blocked::" ");
+        Vendor.TESTFIELD("Privacy Blocked",FALSE);
+        PaymentsThisAcct := 0;
+      END ELSE
+        PaymentsThisAcct := PaymentsThisAcct + 1;
+      AcctName := COPYSTR(Vendor.Name,1,30);
+      AcctLanguage := Vendor."Bank Communication";
+      RecipientAddress := COPYSTR(Vendor.Address,1,35) + ' ' + COPYSTR(Vendor."Address 2",1,35);
+      RecipientCity := Vendor.City;
+      RecipientCountryCode := Vendor."Country/Region Code";
+      RecipientCounty := Vendor.County;
+      RecipientPostCode := Vendor."Post Code";
+      VendorBankAccount.SETRANGE("Vendor No.",AcctNo);
+      VendorBankAccount.SETRANGE("Use for Electronic Payments",TRUE);
+      IF VendorBankAccount.COUNT < 1 THEN
+        ERROR(VendorBankAccountErr);
+      IF VendorBankAccount.COUNT > 1 THEN
+        ERROR(VendorMoreThanOneBankAccErr);
+      VendorBankAccount.FINDFIRST;
+
+      VendorBankAccount.TESTFIELD("Bank Account No.");
+      RecipientBankNo := VendorBankAccount."Bank Branch No.";
+      RecipientTransitNo := VendorBankAccount."Transit No.";
+      RecipientBankAcctNo := VendorBankAccount."Bank Account No.";
+      RecipientBankAcctCurrencyCode := VendorBankAccount."Currency Code";
+      RecipientBankAcctCountryCode := VendorBankAccount."Country/Region Code";
+    END;
+
+    LOCAL PROCEDURE GetRecipientDataFromCustomer@22();
+    VAR
+      CustomerBankAccount@1030001 : Record 287;
+    BEGIN
+      IF AcctNo <> Customer."No." THEN BEGIN
+        Customer.GET(AcctNo);
+        IF Customer."Privacy Blocked" THEN
+          ERROR(PrivacyBlockedErr);
+        IF Customer.Blocked IN [Customer.Blocked::All] THEN
+          ERROR(IsBlockedErr);
+
+        PaymentsThisAcct := 0;
+      END ELSE
+        PaymentsThisAcct := PaymentsThisAcct + 1;
+      AcctName := COPYSTR(Customer.Name,1,30);
+      AcctLanguage := Customer."Bank Communication";
+      RecipientAddress := COPYSTR(Customer.Address,1,35) + ' ' + COPYSTR(Customer."Address 2",1,35);
+      RecipientCity := Customer.City;
+      RecipientCountryCode := Customer."Country/Region Code";
+      RecipientCounty := Customer.County;
+      RecipientPostCode := Customer."Post Code";
+      CustomerBankAccount.SETRANGE("Customer No.",AcctNo);
+      CustomerBankAccount.SETRANGE("Use for Electronic Payments",TRUE);
+      IF CustomerBankAccount.COUNT < 1 THEN
+        ERROR(CustomerBankAccountErr);
+
+      IF CustomerBankAccount.COUNT > 1 THEN
+        ERROR(CustomerMoreThanOneBankAccountErr);
+
+      CustomerBankAccount.FINDFIRST;
+
+      CustomerBankAccount.TESTFIELD("Bank Account No.");
+      RecipientBankNo := CustomerBankAccount."Bank Branch No.";
+      RecipientTransitNo := CustomerBankAccount."Transit No.";
+      RecipientBankAcctNo := CustomerBankAccount."Bank Account No.";
+      RecipientBankAcctCurrencyCode := CustomerBankAccount."Currency Code";
+      RecipientBankAcctCountryCode := CustomerBankAccount."Country/Region Code"
+    END;
+
+    PROCEDURE JulianDate@23(NormalDate@1020000 : Date) : Integer;
+    VAR
+      Year@1020002 : Integer;
+      Days@1020001 : Integer;
+    BEGIN
+      Year := DATE2DMY(NormalDate,3);
+      Days := (NormalDate - DMY2DATE(1,1,Year)) + 1;
+      EXIT(Year * 1000 + Days);
+    END;
+
+    LOCAL PROCEDURE WriteRecord@30(VAR TempEFTExportWorkset@1020000 : TEMPORARY Record 10811;PaymentAmount@1030005 : Decimal;SettleDate@1030006 : Date;DataExchEntryNo@1020002 : Integer;DataExchLineDefCode@1020003 : Code[20];IsParent@1020004 : Boolean;VAR EFTValues@1020005 : Codeunit 10340);
+    VAR
+      ACHRBDetail@1020001 : Record 10304;
+    BEGIN
+      WITH TempEFTExportWorkset DO BEGIN
+        IF IsParent THEN
+          EFTValues.SetTransactions(EFTValues.GetTransactions + 1);
+        EFTValues.SetNoOfRec(EFTValues.GetNoOfRec + 1);
+        EFTValues.SetTraceNo(EFTValues.GetNoOfRec);
+        EFTValues.SetDataExchEntryNo(DataExchEntryNo);
+
+        ACHRBDetail.GET(DataExchEntryNo,DataExchLineDefCode);
+        ACHRBDetail."Record Count" := EFTValues.GetNoOfRec;
+        ACHRBDetail."Transaction Code" := "Transaction Code";
+        ACHRBDetail."Client Number" := BankAccount."Client No.";
+        ACHRBDetail."Customer/Vendor Number" := AcctNo;
+        ACHRBDetail."Vendor/Customer Name" := AcctName;
+        ACHRBDetail."Payment Number" := PaymentsThisAcct;
+
+        IF RecipientBankAcctCountryCode = 'CA' THEN BEGIN
+          ACHRBDetail."Bank No." := RecipientBankNo;
+          ACHRBDetail."Transit Routing No." := RecipientTransitNo;
+        END ELSE
+          IF RecipientBankAcctCountryCode = 'US' THEN
+            ACHRBDetail."Transit Routing No." := RecipientTransitNo;
+
+        ACHRBDetail."Recipient Bank No." := RecipientBankAcctNo;
+        ACHRBDetail."Payment Amount" := PaymentAmount;
+        ACHRBDetail."Payment Date" := JulianDate(SettleDate);
+        ACHRBDetail."Language Code" := FORMAT(AcctLanguage);
+        ACHRBDetail."Client Name" := BankAccount."Client Name";
+
+        IF RecipientBankAcctCurrencyCode = '' THEN
+          ACHRBDetail."Currency Code" := CurrencyType
+        ELSE
+          ACHRBDetail."Currency Code" := RecipientBankAcctCurrencyCode;
+
+        IF RecipientCountryCode = 'CA' THEN
+          ACHRBDetail.Country := 'CAN'
+        ELSE
+          IF RecipientCountryCode = 'US' THEN
+            ACHRBDetail.Country := 'USA';
+
+        IF IsParent THEN
+          EFTValues.SetNoOfCustInfoRec(EFTValues.GetNoOfCustInfoRec + 1);
+        ACHRBDetail.AD1NoOfRec := EFTValues.GetNoOfRec;
+        ACHRBDetail."AD1Client No" := BankAccount."Client No.";
+        ACHRBDetail."AD1Company Name" := CompanyInformation.Name;
+        ACHRBDetail.AD1Address := COPYSTR(CompanyInformation.Address,1,35) + ' ' +
+          COPYSTR(CompanyInformation."Address 2",1,35);
+        ACHRBDetail."AD1City State" := CompanyInformation.City + '*' + CompanyInformation.County + '\';
+        ACHRBDetail."AD1Region Code/Post Code" := CompanyInformation."Country/Region Code" + '*' +
+          CompanyInformation."Post Code" + '\';
+
+        IF IsParent THEN
+          EFTValues.SetNoOfCustInfoRec(EFTValues.GetNoOfCustInfoRec + 1);
+        ACHRBDetail.AD2NoOfRec := EFTValues.GetNoOfRec;
+        ACHRBDetail."AD2Client No" := BankAccount."Client No.";
+        ACHRBDetail."AD2Recipient Address" := RecipientAddress;
+        ACHRBDetail."AD2Recipient City/County" := RecipientCity + '*' + RecipientCounty + '\';
+        ACHRBDetail."AD2Region Code/Post Code" := RecipientCountryCode + '*' + RecipientPostCode + '\';
+        ACHRBDetail."AD2Transaction Type Code" := FORMAT("Transaction Type Code");
+        ACHRBDetail."AD2Company Entry Description" := "Company Entry Description";
+
+        IF ("Payment Related Information 1" <> '') OR ("Payment Related Information 2" <> '') THEN BEGIN
+          ACHRBDetail."Client Number" := BankAccount."Client No.";
+          ACHRBDetail.RRNoOfRec := EFTValues.GetNoOfRec;
+          ACHRBDetail."RRClient No" := BankAccount."Client No.";
+          ACHRBDetail."RRPayment Related Info1" := "Payment Related Information 1";
+          ACHRBDetail."RRPayment Related Info2" := "Payment Related Information 2";
+          OnBeforeACHRBDetailModify(ACHRBDetail,TempEFTExportWorkset,BankAccount."No.",SettleDate);
+          ACHRBDetail.MODIFY;
+          EFTValues.SetNoOfCustInfoRec(EFTValues.GetNoOfCustInfoRec + 1);
+        END ELSE BEGIN
+          OnBeforeACHRBDetailModify(ACHRBDetail,TempEFTExportWorkset,BankAccount."No.",SettleDate);
+          ACHRBDetail.MODIFY;
+        END;
+      END;
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeACHRBDetailModify@1020002(VAR ACHRBDetail@1020000 : Record 10304;VAR TempEFTExportWorkset@1020001 : TEMPORARY Record 10811;BankAccNo@1020002 : Code[20];SettleDate@1020003 : Date);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeACHRBFooterModify@1020000(VAR ACHRBFooter@1020000 : Record 10305;BankAccNo@1020001 : Code[20]);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

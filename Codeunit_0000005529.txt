@@ -1,0 +1,943 @@
+OBJECT Codeunit 5529 Purch. Inv. Aggregator
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:25 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 122=rimd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      GraphMgtGeneralTools@1000 : Codeunit 5465;
+      DocumentIDNotSpecifiedErr@1008 : TextConst '@@@={Locked};ENU=You must specify a document id to get the lines.';
+      DocumentDoesNotExistErr@1007 : TextConst '@@@={Locked};ENU=No document with the specified ID exists.';
+      MultipleDocumentsFoundForIdErr@1006 : TextConst '@@@={Locked};ENU=Multiple documents have been found for the specified criteria.';
+      CannotModifyPostedInvioceErr@1005 : TextConst '@@@={Locked};ENU=The invoice has been posted and can no longer be modified.';
+      CannotInsertALineThatAlreadyExistsErr@1004 : TextConst '@@@={Locked};ENU=You cannot insert a line with a duplicate sequence number.';
+      CannotModifyALineThatDoesntExistErr@1003 : TextConst '@@@={Locked};ENU=You cannot modify a line that does not exist.';
+      CannotInsertPostedInvoiceErr@1002 : TextConst '@@@={Locked};ENU=Invoices created through the API must be in Draft state.';
+      CanOnlySetUOMForTypeItemErr@1001 : TextConst '@@@={Locked};ENU=Unit of Measure can be set only for lines with type Item.';
+      InvoiceIdIsNotSpecifiedErr@1012 : TextConst '@@@={Locked};ENU=Invoice ID is not specified.';
+      IntegrationRecordDoesNotExistErr@1011 : TextConst '@@@={Locked};ENU=No Integration Record with  the specified ID exists.';
+      EntityIsNotFoundErr@1010 : TextConst '@@@={Locked};ENU=Purchase Invoice Entity is not found.';
+      AggregatorCategoryLbl@1009 : TextConst '@@@={Locked};ENU=Purchase Invoice Aggregator';
+
+    [EventSubscriber(Table,38,OnAfterInsertEvent)]
+    LOCAL PROCEDURE OnAfterInsertPurchaseHeader@2(VAR Rec@1000 : Record 38;RunTrigger@1001 : Boolean);
+    BEGIN
+      IF NOT CheckValidRecord(Rec) OR (NOT GraphMgtGeneralTools.IsApiEnabled) THEN
+        EXIT;
+
+      InsertOrModifyFromPurchaseHeader(Rec);
+    END;
+
+    [EventSubscriber(Table,38,OnAfterModifyEvent)]
+    LOCAL PROCEDURE OnAfterModifyPurchaseHeader@3(VAR Rec@1000 : Record 38;VAR xRec@1001 : Record 38;RunTrigger@1002 : Boolean);
+    BEGIN
+      IF NOT CheckValidRecord(Rec) OR (NOT GraphMgtGeneralTools.IsApiEnabled) THEN
+        EXIT;
+
+      InsertOrModifyFromPurchaseHeader(Rec);
+    END;
+
+    [EventSubscriber(Table,38,OnAfterDeleteEvent)]
+    LOCAL PROCEDURE OnAfterDeletePurchaseHeader@5(VAR Rec@1000 : Record 38;RunTrigger@1001 : Boolean);
+    VAR
+      PurchInvEntityAggregate@1002 : Record 5477;
+    BEGIN
+      IF NOT CheckValidRecord(Rec) OR (NOT GraphMgtGeneralTools.IsApiEnabled) THEN
+        EXIT;
+
+      TransferIntegrationRecordID(Rec);
+
+      IF NOT PurchInvEntityAggregate.GET(Rec."No.",FALSE) THEN
+        EXIT;
+
+      PurchInvEntityAggregate.DELETE;
+    END;
+
+    [EventSubscriber(Codeunit,66,OnAfterResetRecalculateInvoiceDisc)]
+    LOCAL PROCEDURE OnAfterResetRecalculateInvoiceDisc@34(VAR PurchaseHeader@1000 : Record 38);
+    BEGIN
+      IF NOT CheckValidRecord(PurchaseHeader) OR (NOT GraphMgtGeneralTools.IsApiEnabled) THEN
+        EXIT;
+
+      InsertOrModifyFromPurchaseHeader(PurchaseHeader);
+    END;
+
+    [EventSubscriber(Table,39,OnAfterInsertEvent)]
+    LOCAL PROCEDURE OnAfterInsertPurchaseLine@71(VAR Rec@1000 : Record 39;RunTrigger@1001 : Boolean);
+    BEGIN
+      IF NOT CheckValidLineRecord(Rec) THEN
+        EXIT;
+
+      ModifyTotalsPurchaseLine(Rec);
+    END;
+
+    [EventSubscriber(Table,39,OnAfterModifyEvent)]
+    LOCAL PROCEDURE OnAfterModifyPurchaseLine@72(VAR Rec@1000 : Record 39;VAR xRec@1001 : Record 39;RunTrigger@1002 : Boolean);
+    BEGIN
+      IF NOT CheckValidLineRecord(Rec) THEN
+        EXIT;
+
+      ModifyTotalsPurchaseLine(Rec);
+    END;
+
+    [EventSubscriber(Table,39,OnAfterDeleteEvent)]
+    LOCAL PROCEDURE OnAfterDeletePurchaseLine@73(VAR Rec@1000 : Record 39;RunTrigger@1001 : Boolean);
+    VAR
+      PurchaseLine@1003 : Record 39;
+    BEGIN
+      PurchaseLine.SETRANGE("Document No.",Rec."Document No.");
+      PurchaseLine.SETRANGE("Document Type",Rec."Document Type");
+      PurchaseLine.SETRANGE("Recalculate Invoice Disc.",TRUE);
+
+      IF PurchaseLine.FINDFIRST THEN BEGIN
+        ModifyTotalsPurchaseLine(PurchaseLine);
+        EXIT;
+      END;
+
+      PurchaseLine.SETRANGE("Recalculate Invoice Disc.");
+
+      IF NOT PurchaseLine.FINDFIRST THEN
+        BlankTotals(Rec."Document No.",FALSE);
+    END;
+
+    [EventSubscriber(Table,122,OnAfterInsertEvent)]
+    LOCAL PROCEDURE OnAfterInsertPurchaseInvoiceHeader@20(VAR Rec@1000 : Record 122;RunTrigger@1001 : Boolean);
+    BEGIN
+      IF Rec.ISTEMPORARY OR (NOT GraphMgtGeneralTools.IsApiEnabled) THEN
+        EXIT;
+
+      InsertOrModifyFromPurchaseInvoiceHeader(Rec);
+    END;
+
+    [EventSubscriber(Table,122,OnAfterModifyEvent)]
+    LOCAL PROCEDURE OnAfterModifyPurchaseInvoiceHeader@21(VAR Rec@1000 : Record 122;VAR xRec@1001 : Record 122;RunTrigger@1002 : Boolean);
+    BEGIN
+      IF Rec.ISTEMPORARY OR (NOT GraphMgtGeneralTools.IsApiEnabled) THEN
+        EXIT;
+
+      InsertOrModifyFromPurchaseInvoiceHeader(Rec);
+    END;
+
+    [EventSubscriber(Table,122,OnAfterRenameEvent)]
+    LOCAL PROCEDURE OnAfterRenamePurchaseInvoiceHeader@22(VAR Rec@1000 : Record 122;VAR xRec@1001 : Record 122;RunTrigger@1002 : Boolean);
+    VAR
+      PurchInvEntityAggregate@1003 : Record 5477;
+    BEGIN
+      IF Rec.ISTEMPORARY OR (NOT GraphMgtGeneralTools.IsApiEnabled) THEN
+        EXIT;
+
+      IF NOT PurchInvEntityAggregate.GET(xRec."No.",TRUE) THEN
+        EXIT;
+
+      PurchInvEntityAggregate.SetIsRenameAllowed(TRUE);
+      PurchInvEntityAggregate.RENAME(Rec."No.",TRUE);
+    END;
+
+    [EventSubscriber(Table,122,OnAfterDeleteEvent)]
+    LOCAL PROCEDURE OnAfterDeletePurchaseInvoiceHeader@23(VAR Rec@1000 : Record 122;RunTrigger@1001 : Boolean);
+    VAR
+      PurchInvEntityAggregate@1002 : Record 5477;
+    BEGIN
+      IF Rec.ISTEMPORARY OR (NOT GraphMgtGeneralTools.IsApiEnabled) THEN
+        EXIT;
+
+      IF NOT PurchInvEntityAggregate.GET(Rec."No.",TRUE) THEN
+        EXIT;
+
+      PurchInvEntityAggregate.DELETE;
+    END;
+
+    [EventSubscriber(Codeunit,70,OnAfterCalcPurchaseDiscount)]
+    LOCAL PROCEDURE OnAfterCalculatePurchaseDiscountOnPurchaseHeader@36(VAR PurchaseHeader@1000 : Record 38);
+    BEGIN
+      IF NOT CheckValidRecord(PurchaseHeader) OR (NOT GraphMgtGeneralTools.IsApiEnabled) THEN
+        EXIT;
+
+      InsertOrModifyFromPurchaseHeader(PurchaseHeader);
+    END;
+
+    [EventSubscriber(Table,25,OnAfterInsertEvent)]
+    LOCAL PROCEDURE OnAfterInsertVendorLedgerEntry@11(VAR Rec@1000 : Record 25;RunTrigger@1001 : Boolean);
+    BEGIN
+      IF Rec.ISTEMPORARY OR (NOT GraphMgtGeneralTools.IsApiEnabled) THEN
+        EXIT;
+
+      SetStatusOptionFromVendLedgerEntry(Rec);
+    END;
+
+    [EventSubscriber(Table,25,OnAfterModifyEvent)]
+    LOCAL PROCEDURE OnAfterModifyVendorLedgerEntry@13(VAR Rec@1000 : Record 25;VAR xRec@1001 : Record 25;RunTrigger@1002 : Boolean);
+    BEGIN
+      IF Rec.ISTEMPORARY OR (NOT GraphMgtGeneralTools.IsApiEnabled) THEN
+        EXIT;
+
+      SetStatusOptionFromVendLedgerEntry(Rec);
+    END;
+
+    [EventSubscriber(Table,25,OnAfterRenameEvent)]
+    LOCAL PROCEDURE OnAfterRenameVendorLedgerEntry@14(VAR Rec@1000 : Record 25;VAR xRec@1001 : Record 25;RunTrigger@1002 : Boolean);
+    BEGIN
+      IF Rec.ISTEMPORARY OR (NOT GraphMgtGeneralTools.IsApiEnabled) THEN
+        EXIT;
+
+      SetStatusOptionFromVendLedgerEntry(Rec);
+    END;
+
+    [EventSubscriber(Table,25,OnAfterDeleteEvent)]
+    LOCAL PROCEDURE OnAfterDeleteVendorLedgerEntry@18(VAR Rec@1000 : Record 25;RunTrigger@1001 : Boolean);
+    BEGIN
+      IF Rec.ISTEMPORARY OR (NOT GraphMgtGeneralTools.IsApiEnabled) THEN
+        EXIT;
+
+      SetStatusOptionFromVendLedgerEntry(Rec);
+    END;
+
+    [EventSubscriber(Table,1900,OnAfterInsertEvent)]
+    LOCAL PROCEDURE OnAfterInsertCancelledDocument@29(VAR Rec@1000 : Record 1900;RunTrigger@1001 : Boolean);
+    BEGIN
+      IF Rec.ISTEMPORARY OR (NOT GraphMgtGeneralTools.IsApiEnabled) THEN
+        EXIT;
+
+      SetStatusOptionFromCancelledDocument(Rec);
+    END;
+
+    [EventSubscriber(Table,1900,OnAfterModifyEvent)]
+    LOCAL PROCEDURE OnAfterModifyCancelledDocument@28(VAR Rec@1000 : Record 1900;VAR xRec@1001 : Record 1900;RunTrigger@1002 : Boolean);
+    BEGIN
+      IF Rec.ISTEMPORARY OR (NOT GraphMgtGeneralTools.IsApiEnabled) THEN
+        EXIT;
+
+      SetStatusOptionFromCancelledDocument(Rec);
+    END;
+
+    [EventSubscriber(Table,1900,OnAfterRenameEvent)]
+    LOCAL PROCEDURE OnAfterRenameCancelledDocument@27(VAR Rec@1000 : Record 1900;VAR xRec@1001 : Record 1900;RunTrigger@1002 : Boolean);
+    BEGIN
+      IF Rec.ISTEMPORARY OR (NOT GraphMgtGeneralTools.IsApiEnabled) THEN
+        EXIT;
+
+      SetStatusOptionFromCancelledDocument(xRec);
+      SetStatusOptionFromCancelledDocument(Rec);
+    END;
+
+    [EventSubscriber(Table,1900,OnAfterDeleteEvent)]
+    LOCAL PROCEDURE OnAfterDeleteCancelledDocument@26(VAR Rec@1000 : Record 1900;RunTrigger@1001 : Boolean);
+    BEGIN
+      IF Rec.ISTEMPORARY OR (NOT GraphMgtGeneralTools.IsApiEnabled) THEN
+        EXIT;
+
+      SetStatusOptionFromCancelledDocument(Rec);
+    END;
+
+    [EventSubscriber(Codeunit,90,OnBeforePurchInvHeaderInsert)]
+    LOCAL PROCEDURE OnBeforePurchInvHeaderInsert@46(VAR PurchInvHeader@1000 : Record 122;VAR PurchHeader@1001 : Record 38;CommitIsSupressed@1002 : Boolean);
+    VAR
+      IntegrationRecord@1003 : Record 5151;
+      PurchInvEntityAggregate@1004 : Record 5477;
+      IsRenameAllowed@1005 : Boolean;
+    BEGIN
+      IF PurchInvHeader.ISTEMPORARY OR (NOT GraphMgtGeneralTools.IsApiEnabled) THEN
+        EXIT;
+
+      IF ISNULLGUID(PurchHeader.Id) THEN BEGIN
+        SENDTRACETAG('00006TQ',AggregatorCategoryLbl,VERBOSITY::Error,InvoiceIdIsNotSpecifiedErr,
+          DATACLASSIFICATION::SystemMetadata);
+        EXIT;
+      END;
+
+      IF PurchInvHeader."Pre-Assigned No." <> PurchHeader."No." THEN
+        EXIT;
+
+      IF PurchInvHeader.Id <> PurchHeader.Id THEN
+        EXIT;
+
+      IF NOT PurchInvEntityAggregate.GET(PurchHeader."No.",FALSE) THEN BEGIN
+        SENDTRACETAG('00006TR',AggregatorCategoryLbl,VERBOSITY::Error,EntityIsNotFoundErr,
+          DATACLASSIFICATION::SystemMetadata);
+        EXIT;
+      END;
+
+      IF PurchInvEntityAggregate.Id <> PurchHeader.Id THEN
+        EXIT;
+
+      IF NOT IntegrationRecord.GET(PurchHeader.Id) THEN BEGIN
+        SENDTRACETAG('00006TS',AggregatorCategoryLbl,VERBOSITY::Error,IntegrationRecordDoesNotExistErr,
+          DATACLASSIFICATION::SystemMetadata);
+        EXIT;
+      END;
+
+      // Posting will insert it again
+      IntegrationRecord.DELETE;
+
+      IsRenameAllowed := PurchInvEntityAggregate.GetIsRenameAllowed;
+      PurchInvEntityAggregate.SetIsRenameAllowed(TRUE);
+      PurchInvEntityAggregate.RENAME(PurchInvHeader."No.",TRUE);
+      PurchInvEntityAggregate.SetIsRenameAllowed(IsRenameAllowed);
+    END;
+
+    PROCEDURE PropagateOnInsert@15(VAR PurchInvEntityAggregate@1000 : Record 5477;VAR TempFieldBuffer@1003 : TEMPORARY Record 8450);
+    VAR
+      PurchaseHeader@1001 : Record 38;
+      TargetRecordRef@1004 : RecordRef;
+      DocTypeFieldRef@1006 : FieldRef;
+      NoFieldRef@1007 : FieldRef;
+    BEGIN
+      IF PurchInvEntityAggregate.ISTEMPORARY OR (NOT GraphMgtGeneralTools.IsApiEnabled) THEN
+        EXIT;
+
+      IF PurchInvEntityAggregate.Posted THEN
+        ERROR(CannotInsertPostedInvoiceErr);
+
+      TargetRecordRef.OPEN(DATABASE::"Purchase Header");
+
+      DocTypeFieldRef := TargetRecordRef.FIELD(PurchaseHeader.FIELDNO("Document Type"));
+      DocTypeFieldRef.VALUE(PurchaseHeader."Document Type"::Invoice);
+
+      NoFieldRef := TargetRecordRef.FIELD(PurchaseHeader.FIELDNO("No."));
+
+      TransferFieldsWithValidate(TempFieldBuffer,PurchInvEntityAggregate,TargetRecordRef);
+
+      TargetRecordRef.INSERT(TRUE);
+
+      PurchInvEntityAggregate."No." := NoFieldRef.VALUE;
+      PurchInvEntityAggregate.FIND;
+    END;
+
+    PROCEDURE PropagateOnModify@16(VAR PurchInvEntityAggregate@1000 : Record 5477;VAR TempFieldBuffer@1004 : TEMPORARY Record 8450);
+    VAR
+      PurchaseHeader@1001 : Record 38;
+      TargetRecordRef@1005 : RecordRef;
+      Exists@1003 : Boolean;
+    BEGIN
+      IF PurchInvEntityAggregate.ISTEMPORARY OR (NOT GraphMgtGeneralTools.IsApiEnabled) THEN
+        EXIT;
+
+      IF PurchInvEntityAggregate.Posted THEN
+        ERROR(CannotModifyPostedInvioceErr);
+
+      Exists := PurchaseHeader.GET(PurchaseHeader."Document Type"::Invoice,PurchInvEntityAggregate."No.");
+      IF Exists THEN
+        TargetRecordRef.GETTABLE(PurchaseHeader)
+      ELSE
+        TargetRecordRef.OPEN(DATABASE::"Purchase Header");
+
+      TransferFieldsWithValidate(TempFieldBuffer,PurchInvEntityAggregate,TargetRecordRef);
+
+      IF Exists THEN
+        TargetRecordRef.MODIFY(TRUE)
+      ELSE
+        TargetRecordRef.INSERT(TRUE);
+    END;
+
+    PROCEDURE PropagateOnDelete@17(VAR PurchInvEntityAggregate@1000 : Record 5477);
+    VAR
+      PurchInvHeader@1001 : Record 122;
+      PurchaseHeader@1002 : Record 38;
+    BEGIN
+      IF PurchInvEntityAggregate.ISTEMPORARY OR (NOT GraphMgtGeneralTools.IsApiEnabled) THEN
+        EXIT;
+
+      IF PurchInvEntityAggregate.Posted THEN BEGIN
+        PurchInvHeader.GET(PurchInvEntityAggregate."No.");
+        IF PurchInvHeader."No. Printed" = 0 THEN
+          PurchInvHeader."No. Printed" := 1;
+        PurchInvHeader.DELETE(TRUE);
+      END ELSE BEGIN
+        PurchaseHeader.GET(PurchaseHeader."Document Type"::Invoice,PurchInvEntityAggregate."No.");
+        PurchaseHeader.DELETE(TRUE);
+      END;
+    END;
+
+    PROCEDURE UpdateAggregateTableRecords@35();
+    VAR
+      PurchaseHeader@1000 : Record 38;
+      PurchInvHeader@1001 : Record 122;
+      PurchInvEntityAggregate@1002 : Record 5477;
+    BEGIN
+      PurchaseHeader.SETRANGE("Document Type",PurchaseHeader."Document Type"::Invoice);
+      IF PurchaseHeader.FINDSET THEN
+        REPEAT
+          InsertOrModifyFromPurchaseHeader(PurchaseHeader);
+        UNTIL PurchaseHeader.NEXT = 0;
+
+      IF PurchInvHeader.FINDSET THEN
+        REPEAT
+          InsertOrModifyFromPurchaseInvoiceHeader(PurchInvHeader);
+        UNTIL PurchInvHeader.NEXT = 0;
+
+      PurchInvEntityAggregate.SETRANGE(Posted,FALSE);
+      IF PurchInvEntityAggregate.FINDSET(TRUE,FALSE) THEN
+        REPEAT
+          IF NOT PurchaseHeader.GET(PurchaseHeader."Document Type"::Invoice,PurchInvEntityAggregate."No.") THEN
+            PurchInvEntityAggregate.DELETE(TRUE);
+        UNTIL PurchInvEntityAggregate.NEXT = 0;
+
+      PurchInvEntityAggregate.SETRANGE(Posted,TRUE);
+      IF PurchInvEntityAggregate.FINDSET(TRUE,FALSE) THEN
+        REPEAT
+          IF NOT PurchInvHeader.GET(PurchInvEntityAggregate."No.") THEN
+            PurchInvEntityAggregate.DELETE(TRUE);
+        UNTIL PurchInvEntityAggregate.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE InsertOrModifyFromPurchaseHeader@39(VAR PurchaseHeader@1000 : Record 38);
+    VAR
+      PurchInvEntityAggregate@1002 : Record 5477;
+      RecordExists@1001 : Boolean;
+    BEGIN
+      PurchInvEntityAggregate.LOCKTABLE;
+      RecordExists := PurchInvEntityAggregate.GET(PurchaseHeader."No.",FALSE);
+
+      PurchInvEntityAggregate.TRANSFERFIELDS(PurchaseHeader,TRUE);
+      PurchInvEntityAggregate.Posted := FALSE;
+      PurchInvEntityAggregate.Status := PurchInvEntityAggregate.Status::Draft;
+      AssignTotalsFromPurchaseHeader(PurchaseHeader,PurchInvEntityAggregate);
+      PurchInvEntityAggregate.UpdateReferencedRecordIds;
+
+      IF RecordExists THEN
+        PurchInvEntityAggregate.MODIFY(TRUE)
+      ELSE
+        PurchInvEntityAggregate.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE InsertOrModifyFromPurchaseInvoiceHeader@42(VAR PurchInvHeader@1000 : Record 122);
+    VAR
+      PurchInvEntityAggregate@1002 : Record 5477;
+      RecordExists@1001 : Boolean;
+    BEGIN
+      PurchInvEntityAggregate.LOCKTABLE;
+      RecordExists := PurchInvEntityAggregate.GET(PurchInvHeader."No.",TRUE);
+      PurchInvEntityAggregate.TRANSFERFIELDS(PurchInvHeader,TRUE);
+      PurchInvEntityAggregate.Posted := TRUE;
+      SetStatusOptionFromPurchaseInvoiceHeader(PurchInvHeader,PurchInvEntityAggregate);
+      AssignTotalsFromPurchaseInvoiceHeader(PurchInvHeader,PurchInvEntityAggregate);
+      PurchInvEntityAggregate.UpdateReferencedRecordIds;
+
+      IF RecordExists THEN
+        PurchInvEntityAggregate.MODIFY(TRUE)
+      ELSE
+        PurchInvEntityAggregate.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE SetStatusOptionFromPurchaseInvoiceHeader@9(VAR PurchInvHeader@1000 : Record 122;VAR PurchInvEntityAggregate@1001 : Record 5477);
+    BEGIN
+      PurchInvHeader.CALCFIELDS(Cancelled,Closed,Corrective);
+      IF PurchInvHeader.Cancelled THEN BEGIN
+        PurchInvEntityAggregate.Status := PurchInvEntityAggregate.Status::Canceled;
+        EXIT;
+      END;
+
+      IF PurchInvHeader.Corrective THEN BEGIN
+        PurchInvEntityAggregate.Status := PurchInvEntityAggregate.Status::Corrective;
+        EXIT;
+      END;
+
+      IF PurchInvHeader.Closed THEN BEGIN
+        PurchInvEntityAggregate.Status := PurchInvEntityAggregate.Status::Paid;
+        EXIT;
+      END;
+
+      PurchInvEntityAggregate.Status := PurchInvEntityAggregate.Status::Open;
+    END;
+
+    LOCAL PROCEDURE SetStatusOptionFromVendLedgerEntry@19(VAR VendorLedgerEntry@1000 : Record 25);
+    VAR
+      PurchInvEntityAggregate@1001 : Record 5477;
+    BEGIN
+      IF NOT GraphMgtGeneralTools.IsApiEnabled THEN
+        EXIT;
+
+      PurchInvEntityAggregate.SETRANGE("Vendor Ledger Entry No.",VendorLedgerEntry."Entry No.");
+      PurchInvEntityAggregate.SETRANGE(Posted,TRUE);
+
+      IF NOT PurchInvEntityAggregate.FINDSET(TRUE) THEN
+        EXIT;
+
+      REPEAT
+        UpdateStatusIfChanged(PurchInvEntityAggregate);
+      UNTIL PurchInvEntityAggregate.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE SetStatusOptionFromCancelledDocument@30(VAR CancelledDocument@1000 : Record 1900);
+    VAR
+      PurchInvEntityAggregate@1001 : Record 5477;
+    BEGIN
+      IF NOT GraphMgtGeneralTools.IsApiEnabled THEN
+        EXIT;
+
+      CASE CancelledDocument."Source ID" OF
+        DATABASE::"Purch. Inv. Header":
+          IF NOT PurchInvEntityAggregate.GET(CancelledDocument."Cancelled Doc. No.",TRUE) THEN
+            EXIT;
+        DATABASE::"Purch. Cr. Memo Hdr.":
+          IF NOT PurchInvEntityAggregate.GET(CancelledDocument."Cancelled By Doc. No.",TRUE) THEN
+            EXIT;
+        ELSE
+          EXIT;
+      END;
+
+      UpdateStatusIfChanged(PurchInvEntityAggregate);
+    END;
+
+    PROCEDURE UpdateUnitOfMeasure@43(VAR Item@1004 : Record 27;JSONUnitOfMeasureTxt@1001 : Text);
+    VAR
+      TempFieldSet@1000 : TEMPORARY Record 2000000041;
+      GraphCollectionMgtItem@1003 : Codeunit 5470;
+      ItemModified@1005 : Boolean;
+    BEGIN
+      GraphCollectionMgtItem.UpdateOrCreateItemUnitOfMeasureFromSalesDocument(JSONUnitOfMeasureTxt,Item,TempFieldSet,ItemModified);
+
+      IF ItemModified THEN
+        Item.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE UpdateStatusIfChanged@33(VAR PurchInvEntityAggregate@1000 : Record 5477);
+    VAR
+      PurchInvHeader@1001 : Record 122;
+      CurrentStatus@1002 : Option;
+    BEGIN
+      PurchInvHeader.GET(PurchInvEntityAggregate."No.");
+      CurrentStatus := PurchInvEntityAggregate.Status;
+
+      SetStatusOptionFromPurchaseInvoiceHeader(PurchInvHeader,PurchInvEntityAggregate);
+      IF CurrentStatus <> PurchInvEntityAggregate.Status THEN
+        PurchInvEntityAggregate.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE AssignTotalsFromPurchaseHeader@58(VAR PurchaseHeader@1000 : Record 38;VAR PurchInvEntityAggregate@1001 : Record 5477);
+    VAR
+      PurchaseLine@1006 : Record 39;
+    BEGIN
+      PurchaseLine.SETRANGE("Document No.",PurchaseHeader."No.");
+      PurchaseLine.SETRANGE("Document Type",PurchaseHeader."Document Type");
+
+      IF NOT PurchaseLine.FINDFIRST THEN BEGIN
+        BlankTotals(PurchaseLine."Document No.",FALSE);
+        EXIT;
+      END;
+
+      AssignTotalsFromPurchaseLine(PurchaseLine,PurchInvEntityAggregate,PurchaseHeader);
+    END;
+
+    LOCAL PROCEDURE AssignTotalsFromPurchaseInvoiceHeader@69(VAR PurchInvHeader@1000 : Record 122;VAR PurchInvEntityAggregate@1001 : Record 5477);
+    VAR
+      PurchInvLine@1006 : Record 123;
+    BEGIN
+      PurchInvLine.SETRANGE("Document No.",PurchInvHeader."No.");
+
+      IF NOT PurchInvLine.FINDFIRST THEN BEGIN
+        BlankTotals(PurchInvLine."Document No.",TRUE);
+        EXIT;
+      END;
+
+      AssignTotalsFromPurchaseInvoiceLine(PurchInvLine,PurchInvEntityAggregate);
+    END;
+
+    LOCAL PROCEDURE AssignTotalsFromPurchaseLine@76(VAR PurchaseLine@1000 : Record 39;VAR PurchInvEntityAggregate@1001 : Record 5477;VAR PurchaseHeader@1002 : Record 38);
+    VAR
+      TotalPurchaseLine@1003 : Record 39;
+      DocumentTotals@1004 : Codeunit 57;
+      VATAmount@1005 : Decimal;
+    BEGIN
+      IF PurchaseLine."VAT Calculation Type" = PurchaseLine."VAT Calculation Type"::"Sales Tax" THEN BEGIN
+        PurchInvEntityAggregate."Discount Applied Before Tax" := TRUE;
+        PurchInvEntityAggregate."Prices Including VAT" := FALSE;
+      END ELSE
+        PurchInvEntityAggregate."Discount Applied Before Tax" := NOT PurchaseHeader."Prices Including VAT";
+
+      DocumentTotals.CalculatePurchaseTotals(TotalPurchaseLine,VATAmount,PurchaseLine);
+
+      PurchInvEntityAggregate."Invoice Discount Amount" := TotalPurchaseLine."Inv. Discount Amount";
+      PurchInvEntityAggregate.Amount := TotalPurchaseLine.Amount;
+      PurchInvEntityAggregate."Total Tax Amount" := VATAmount;
+      PurchInvEntityAggregate."Amount Including VAT" := TotalPurchaseLine."Amount Including VAT";
+    END;
+
+    LOCAL PROCEDURE AssignTotalsFromPurchaseInvoiceLine@75(VAR PurchInvLine@1000 : Record 123;VAR PurchInvEntityAggregate@1001 : Record 5477);
+    VAR
+      PurchInvHeader@1003 : Record 122;
+      TotalPurchInvHeader@1006 : Record 122;
+      DocumentTotals@1004 : Codeunit 57;
+      VATAmount@1002 : Decimal;
+    BEGIN
+      IF PurchInvLine."VAT Calculation Type" = PurchInvLine."VAT Calculation Type"::"Sales Tax" THEN
+        PurchInvEntityAggregate."Discount Applied Before Tax" := TRUE
+      ELSE BEGIN
+        PurchInvHeader.GET(PurchInvLine."Document No.");
+        PurchInvEntityAggregate."Discount Applied Before Tax" := NOT PurchInvHeader."Prices Including VAT";
+      END;
+
+      DocumentTotals.CalculatePostedPurchInvoiceTotals(TotalPurchInvHeader,VATAmount,PurchInvLine);
+
+      PurchInvEntityAggregate."Invoice Discount Amount" := TotalPurchInvHeader."Invoice Discount Amount";
+      PurchInvEntityAggregate.Amount := TotalPurchInvHeader.Amount;
+      PurchInvEntityAggregate."Total Tax Amount" := VATAmount;
+      PurchInvEntityAggregate."Amount Including VAT" := TotalPurchInvHeader."Amount Including VAT";
+    END;
+
+    LOCAL PROCEDURE BlankTotals@25(DocumentNo@1000 : Code[20];Posted@1001 : Boolean);
+    VAR
+      PurchInvEntityAggregate@1002 : Record 5477;
+    BEGIN
+      IF NOT PurchInvEntityAggregate.GET(DocumentNo,Posted) THEN
+        EXIT;
+
+      PurchInvEntityAggregate."Invoice Discount Amount" := 0;
+      PurchInvEntityAggregate."Total Tax Amount" := 0;
+
+      PurchInvEntityAggregate.Amount := 0;
+      PurchInvEntityAggregate."Amount Including VAT" := 0;
+      PurchInvEntityAggregate.MODIFY;
+    END;
+
+    LOCAL PROCEDURE CheckValidRecord@8(VAR PurchaseHeader@1000 : Record 38) : Boolean;
+    BEGIN
+      IF PurchaseHeader.ISTEMPORARY THEN
+        EXIT(FALSE);
+
+      IF PurchaseHeader."Document Type" <> PurchaseHeader."Document Type"::Invoice THEN
+        EXIT(FALSE);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE ModifyTotalsPurchaseLine@12(VAR PurchaseLine@1000 : Record 39);
+    VAR
+      PurchInvEntityAggregate@1001 : Record 5477;
+      PurchaseHeader@1003 : Record 38;
+    BEGIN
+      IF PurchaseLine.ISTEMPORARY OR (NOT GraphMgtGeneralTools.IsApiEnabled) THEN
+        EXIT;
+
+      IF PurchaseLine."Document Type" <> PurchaseLine."Document Type"::Invoice THEN
+        EXIT;
+
+      IF NOT PurchInvEntityAggregate.GET(PurchaseLine."Document No.",FALSE) THEN
+        EXIT;
+
+      IF NOT PurchaseLine."Recalculate Invoice Disc." THEN
+        EXIT;
+
+      IF NOT PurchaseHeader.GET(PurchaseLine."Document Type",PurchaseLine."Document No.") THEN
+        EXIT;
+
+      AssignTotalsFromPurchaseLine(PurchaseLine,PurchInvEntityAggregate,PurchaseHeader);
+      PurchInvEntityAggregate.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE TransferPurchaseInvoiceLineAggregateToPurchaseLine@37(VAR PurchInvLineAggregate@1000 : Record 5478;VAR PurchaseLine@1001 : Record 39;VAR TempFieldBuffer@1002 : TEMPORARY Record 8450);
+    VAR
+      PurchaseLineRecordRef@1003 : RecordRef;
+    BEGIN
+      PurchaseLine."Document Type" := PurchaseLine."Document Type"::Invoice;
+      PurchaseLineRecordRef.GETTABLE(PurchaseLine);
+
+      TransferFieldsWithValidate(TempFieldBuffer,PurchInvLineAggregate,PurchaseLineRecordRef);
+
+      PurchaseLineRecordRef.SETTABLE(PurchaseLine);
+    END;
+
+    LOCAL PROCEDURE TransferIntegrationRecordID@10(VAR PurchaseHeader@1000 : Record 38);
+    VAR
+      PurchInvEntityAggregate@1006 : Record 5477;
+      PurchInvHeader@1001 : Record 122;
+      NewIntegrationRecord@1002 : Record 5151;
+      OldIntegrationRecord@1003 : Record 5151;
+      IntegrationManagement@1004 : Codeunit 5150;
+      PurchaseInvoiceHeaderRecordRef@1005 : RecordRef;
+      IsRenameAllowed@1007 : Boolean;
+    BEGIN
+      IF ISNULLGUID(PurchaseHeader.Id) THEN
+        EXIT;
+
+      PurchInvHeader.SETRANGE("Pre-Assigned No.",PurchaseHeader."No.");
+      IF NOT PurchInvHeader.FINDFIRST THEN
+        EXIT;
+
+      IF PurchInvHeader.Id = PurchaseHeader.Id THEN
+        EXIT;
+
+      IF OldIntegrationRecord.GET(PurchaseHeader.Id) THEN
+        OldIntegrationRecord.DELETE;
+
+      IF NewIntegrationRecord.GET(PurchInvHeader.Id) THEN
+        NewIntegrationRecord.DELETE;
+
+      IF PurchInvEntityAggregate.GET(PurchInvHeader."No.",TRUE) THEN
+        PurchInvEntityAggregate.DELETE(TRUE);
+
+      IF PurchInvEntityAggregate.GET(PurchaseHeader."No.",FALSE) THEN BEGIN
+        IsRenameAllowed := PurchInvEntityAggregate.GetIsRenameAllowed;
+        PurchInvEntityAggregate.SetIsRenameAllowed(TRUE);
+        PurchInvEntityAggregate.RENAME(PurchInvHeader."No.",TRUE);
+        PurchInvEntityAggregate.SetIsRenameAllowed(IsRenameAllowed);
+      END;
+
+      PurchInvHeader.Id := PurchaseHeader.Id;
+      PurchInvHeader.MODIFY(TRUE);
+      PurchaseInvoiceHeaderRecordRef.GETTABLE(PurchInvHeader);
+
+      IntegrationManagement.InsertUpdateIntegrationRecord(PurchaseInvoiceHeaderRecordRef,CURRENTDATETIME);
+    END;
+
+    LOCAL PROCEDURE TransferFieldsWithValidate@32(VAR TempFieldBuffer@1000 : TEMPORARY Record 8450;RecordVariant@1001 : Variant;VAR TargetTableRecRef@1002 : RecordRef);
+    VAR
+      DataTypeManagement@1006 : Codeunit 701;
+      SourceRecRef@1004 : RecordRef;
+      TargetFieldRef@1005 : FieldRef;
+      SourceFieldRef@1003 : FieldRef;
+    BEGIN
+      DataTypeManagement.GetRecordRef(RecordVariant,SourceRecRef);
+
+      TempFieldBuffer.RESET;
+      IF NOT TempFieldBuffer.FINDFIRST THEN
+        EXIT;
+
+      REPEAT
+        IF TargetTableRecRef.FIELDEXIST(TempFieldBuffer."Field ID") THEN BEGIN
+          SourceFieldRef := SourceRecRef.FIELD(TempFieldBuffer."Field ID");
+          TargetFieldRef := TargetTableRecRef.FIELD(TempFieldBuffer."Field ID");
+          TargetFieldRef.VALIDATE(SourceFieldRef.VALUE);
+        END;
+      UNTIL TempFieldBuffer.NEXT = 0;
+    END;
+
+    PROCEDURE RedistributeInvoiceDiscounts@31(VAR PurchInvEntityAggregate@1002 : Record 5477);
+    VAR
+      PurchaseLine@1001 : Record 39;
+    BEGIN
+      IF PurchInvEntityAggregate.Posted THEN
+        EXIT;
+
+      PurchaseLine.SETRANGE("Document Type",PurchaseLine."Document Type"::Invoice);
+      PurchaseLine.SETRANGE("Document No.",PurchInvEntityAggregate."No.");
+      PurchaseLine.SETRANGE("Recalculate Invoice Disc.",TRUE);
+      IF PurchaseLine.FINDFIRST THEN
+        CODEUNIT.RUN(CODEUNIT::"Purch - Calc Disc. By Type",PurchaseLine);
+
+      PurchInvEntityAggregate.FIND;
+    END;
+
+    PROCEDURE LoadLines@1(VAR PurchInvLineAggregate@1000 : Record 5478;DocumentIdFilter@1007 : Text);
+    VAR
+      PurchInvEntityAggregate@1004 : Record 5477;
+    BEGIN
+      IF DocumentIdFilter = '' THEN
+        ERROR(DocumentIDNotSpecifiedErr);
+
+      PurchInvEntityAggregate.SETFILTER(Id,DocumentIdFilter);
+      IF NOT PurchInvEntityAggregate.FINDFIRST THEN
+        EXIT;
+
+      IF PurchInvEntityAggregate.Posted THEN
+        LoadPurchaseInvoiceLines(PurchInvLineAggregate,PurchInvEntityAggregate)
+      ELSE
+        LoadPurchaseLines(PurchInvLineAggregate,PurchInvEntityAggregate);
+    END;
+
+    LOCAL PROCEDURE LoadPurchaseInvoiceLines@4(VAR PurchInvLineAggregate@1001 : Record 5478;VAR PurchInvEntityAggregate@1000 : Record 5477);
+    VAR
+      PurchInvLine@1002 : Record 123;
+    BEGIN
+      PurchInvLine.SETRANGE("Document No.",PurchInvEntityAggregate."No.");
+
+      IF PurchInvLine.FINDSET(FALSE,FALSE) THEN
+        REPEAT
+          CLEAR(PurchInvLineAggregate);
+          PurchInvLineAggregate.TRANSFERFIELDS(PurchInvLine,TRUE);
+          PurchInvLineAggregate."Document Id" := PurchInvEntityAggregate.Id;
+          IF PurchInvLine."VAT Calculation Type" = PurchInvLine."VAT Calculation Type"::"Sales Tax" THEN
+            PurchInvLineAggregate."Tax Code" := PurchInvLine."Tax Group Code"
+          ELSE
+            PurchInvLineAggregate."Tax Code" := PurchInvLine."VAT Identifier";
+
+          PurchInvLineAggregate."VAT %" := PurchInvLine."VAT %";
+          PurchInvLineAggregate."Tax Amount" := PurchInvLine."Amount Including VAT" - PurchInvLine."VAT Base Amount";
+          PurchInvLineAggregate."Currency Code" := PurchInvLine.GetCurrencyCode;
+          PurchInvLineAggregate."Prices Including Tax" := PurchInvEntityAggregate."Prices Including VAT";
+          PurchInvLineAggregate.UpdateReferencedRecordIds;
+          UpdateLineAmountsFromPurchaseInvoiceLine(PurchInvLineAggregate);
+          PurchInvLineAggregate.INSERT(TRUE);
+        UNTIL PurchInvLine.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE LoadPurchaseLines@38(VAR PurchInvLineAggregate@1002 : Record 5478;VAR PurchInvEntityAggregate@1000 : Record 5477);
+    VAR
+      PurchaseLine@1001 : Record 39;
+    BEGIN
+      PurchaseLine.SETRANGE("Document Type",PurchaseLine."Document Type"::Invoice);
+      PurchaseLine.SETRANGE("Document No.",PurchInvEntityAggregate."No.");
+
+      IF PurchaseLine.FINDSET(FALSE,FALSE) THEN
+        REPEAT
+          TransferFromPurchaseLine(PurchInvLineAggregate,PurchInvEntityAggregate,PurchaseLine);
+          PurchInvLineAggregate.INSERT(TRUE);
+        UNTIL PurchaseLine.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE TransferFromPurchaseLine@40(VAR PurchInvLineAggregate@1002 : Record 5478;VAR PurchInvEntityAggregate@1000 : Record 5477;VAR PurchaseLine@1001 : Record 39);
+    BEGIN
+      CLEAR(PurchInvLineAggregate);
+      PurchInvLineAggregate.TRANSFERFIELDS(PurchaseLine,TRUE);
+      PurchInvLineAggregate."Document Id" := PurchInvEntityAggregate.Id;
+      IF PurchaseLine."VAT Calculation Type" = PurchaseLine."VAT Calculation Type"::"Sales Tax" THEN
+        PurchInvLineAggregate."Tax Code" := PurchaseLine."Tax Group Code"
+      ELSE
+        PurchInvLineAggregate."Tax Code" := PurchaseLine."VAT Identifier";
+
+      PurchInvLineAggregate."VAT %" := PurchaseLine."VAT %";
+      PurchInvLineAggregate."Tax Amount" := PurchaseLine."Amount Including VAT" - PurchaseLine."VAT Base Amount";
+      PurchInvLineAggregate."Prices Including Tax" := PurchInvEntityAggregate."Prices Including VAT";
+      PurchInvLineAggregate.UpdateReferencedRecordIds;
+      UpdateLineAmountsFromPurchaseLine(PurchInvLineAggregate);
+    END;
+
+    PROCEDURE PropagateInsertLine@7(VAR PurchInvLineAggregate@1000 : Record 5478;VAR TempFieldBuffer@1005 : TEMPORARY Record 8450);
+    VAR
+      PurchInvEntityAggregate@1001 : Record 5477;
+      PurchaseLine@1002 : Record 39;
+      LastUsedPurchaseLine@1004 : Record 39;
+    BEGIN
+      VerifyCRUDIsPossibleForLine(PurchInvLineAggregate,PurchInvEntityAggregate);
+
+      PurchaseLine."Document Type" := PurchaseLine."Document Type"::Invoice;
+      PurchaseLine."Document No." := PurchInvEntityAggregate."No.";
+
+      IF PurchInvLineAggregate."Line No." = 0 THEN BEGIN
+        LastUsedPurchaseLine.SETRANGE("Document No.",PurchInvEntityAggregate."No.");
+        LastUsedPurchaseLine.SETRANGE("Document Type",PurchaseLine."Document Type"::Invoice);
+        IF LastUsedPurchaseLine.FINDLAST THEN
+          PurchInvLineAggregate."Line No." := LastUsedPurchaseLine."Line No." + 10000
+        ELSE
+          PurchInvLineAggregate."Line No." := 10000;
+
+        PurchaseLine."Line No." := PurchInvLineAggregate."Line No.";
+      END ELSE
+        IF PurchaseLine.GET(PurchaseLine."Document Type"::Invoice,PurchInvEntityAggregate."No.",PurchInvLineAggregate."Line No.") THEN
+          ERROR(CannotInsertALineThatAlreadyExistsErr);
+
+      TransferPurchaseInvoiceLineAggregateToPurchaseLine(PurchInvLineAggregate,PurchaseLine,TempFieldBuffer);
+      PurchaseLine.INSERT(TRUE);
+
+      RedistributeInvoiceDiscounts(PurchInvEntityAggregate);
+
+      PurchaseLine.FIND;
+      TransferFromPurchaseLine(PurchInvLineAggregate,PurchInvEntityAggregate,PurchaseLine);
+    END;
+
+    PROCEDURE PropagateModifyLine@24(VAR PurchInvLineAggregate@1000 : Record 5478;VAR TempFieldBuffer@1004 : TEMPORARY Record 8450);
+    VAR
+      PurchInvEntityAggregate@1001 : Record 5477;
+      PurchaseLine@1002 : Record 39;
+    BEGIN
+      VerifyCRUDIsPossibleForLine(PurchInvLineAggregate,PurchInvEntityAggregate);
+
+      IF NOT PurchaseLine.GET(PurchaseLine."Document Type"::Invoice,PurchInvEntityAggregate."No.",PurchInvLineAggregate."Line No.") THEN
+        ERROR(CannotModifyALineThatDoesntExistErr);
+
+      TransferPurchaseInvoiceLineAggregateToPurchaseLine(PurchInvLineAggregate,PurchaseLine,TempFieldBuffer);
+
+      PurchaseLine.MODIFY(TRUE);
+
+      RedistributeInvoiceDiscounts(PurchInvEntityAggregate);
+
+      PurchaseLine.FIND;
+      TransferFromPurchaseLine(PurchInvLineAggregate,PurchInvEntityAggregate,PurchaseLine);
+    END;
+
+    PROCEDURE PropagateDeleteLine@6(VAR PurchInvLineAggregate@1000 : Record 5478);
+    VAR
+      PurchInvEntityAggregate@1003 : Record 5477;
+      PurchaseLine@1002 : Record 39;
+    BEGIN
+      VerifyCRUDIsPossibleForLine(PurchInvLineAggregate,PurchInvEntityAggregate);
+
+      IF PurchaseLine.GET(PurchaseLine."Document Type"::Invoice,PurchInvEntityAggregate."No.",PurchInvLineAggregate."Line No.") THEN BEGIN
+        PurchaseLine.DELETE(TRUE);
+        RedistributeInvoiceDiscounts(PurchInvEntityAggregate);
+      END;
+    END;
+
+    LOCAL PROCEDURE VerifyCRUDIsPossibleForLine@60(VAR PurchInvLineAggregate@1001 : Record 5478;VAR PurchInvEntityAggregate@1000 : Record 5477);
+    VAR
+      SearchPurchInvEntityAggregate@1002 : Record 5477;
+      DocumentIDFilter@1003 : Text;
+    BEGIN
+      IF ISNULLGUID(PurchInvLineAggregate."Document Id") THEN BEGIN
+        DocumentIDFilter := PurchInvLineAggregate.GETFILTER("Document Id");
+        IF DocumentIDFilter = '' THEN
+          ERROR(DocumentIDNotSpecifiedErr);
+        PurchInvEntityAggregate.SETFILTER(Id,DocumentIDFilter);
+      END ELSE
+        PurchInvEntityAggregate.SETRANGE(Id,PurchInvLineAggregate."Document Id");
+
+      IF NOT PurchInvEntityAggregate.FINDFIRST THEN
+        ERROR(DocumentDoesNotExistErr);
+
+      SearchPurchInvEntityAggregate.COPY(PurchInvEntityAggregate);
+      IF SearchPurchInvEntityAggregate.NEXT <> 0 THEN
+        ERROR(MultipleDocumentsFoundForIdErr);
+
+      IF PurchInvEntityAggregate.Posted THEN
+        ERROR(CannotModifyPostedInvioceErr);
+    END;
+
+    LOCAL PROCEDURE UpdateLineAmountsFromPurchaseLine@44(VAR PurchInvLineAggregate@1000 : Record 5478);
+    BEGIN
+      PurchInvLineAggregate."Line Tax Amount" :=
+        PurchInvLineAggregate."Line Amount Including Tax" - PurchInvLineAggregate."Line Amount Excluding Tax";
+      UpdateInvoiceDiscountAmount(PurchInvLineAggregate);
+    END;
+
+    LOCAL PROCEDURE UpdateLineAmountsFromPurchaseInvoiceLine@49(VAR PurchInvLineAggregate@1000 : Record 5478);
+    BEGIN
+      PurchInvLineAggregate."Line Tax Amount" :=
+        PurchInvLineAggregate."Line Amount Including Tax" - PurchInvLineAggregate."Line Amount Excluding Tax";
+      UpdateInvoiceDiscountAmount(PurchInvLineAggregate);
+    END;
+
+    LOCAL PROCEDURE UpdateInvoiceDiscountAmount@48(VAR PurchInvLineAggregate@1000 : Record 5478);
+    BEGIN
+      IF PurchInvLineAggregate."Prices Including Tax" THEN
+        PurchInvLineAggregate."Inv. Discount Amount Excl. VAT" :=
+          PurchInvLineAggregate."Line Amount Excluding Tax" - PurchInvLineAggregate.Amount
+      ELSE
+        PurchInvLineAggregate."Inv. Discount Amount Excl. VAT" := PurchInvLineAggregate."Inv. Discount Amount";
+    END;
+
+    PROCEDURE VerifyCanUpdateUOM@45(VAR PurchInvLineAggregate@1000 : Record 5478);
+    BEGIN
+      IF PurchInvLineAggregate."API Type" <> PurchInvLineAggregate."API Type"::Item THEN
+        ERROR(CanOnlySetUOMForTypeItemErr);
+    END;
+
+    LOCAL PROCEDURE CheckValidLineRecord@41(VAR PurchaseLine@1000 : Record 39) : Boolean;
+    BEGIN
+      IF PurchaseLine.ISTEMPORARY THEN
+        EXIT(FALSE);
+
+      IF NOT GraphMgtGeneralTools.IsApiEnabled THEN
+        EXIT(FALSE);
+
+      IF PurchaseLine."Document Type" <> PurchaseLine."Document Type"::Invoice THEN
+        EXIT(FALSE);
+
+      EXIT(TRUE);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

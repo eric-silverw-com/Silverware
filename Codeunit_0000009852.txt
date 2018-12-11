@@ -1,0 +1,423 @@
+OBJECT Codeunit 9852 Effective Permissions Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:53 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      UserAccountHelper@1000 : DotNet "'Microsoft.Dynamics.Nav.NavUserAccount, Version=13.0.*.*, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.NavUserAccount.NavUserAccountHelper";
+      DialogFormatMsg@1001 : TextConst 'ENU=Reading objects...@1@@@@@@@@@@@@@@@@@@';
+      ChangeAffectsOthersMsg@1002 : TextConst '@@@="%1 = permission set ID that was changed";ENU=Your change in permission set %1 will affect other users that the permission set is assigned to.';
+      ChangeAffectsOthersNameTxt@1007 : TextConst 'ENU=Changing permission sets for other users';
+      ChangeAffectsOthersDescTxt@1008 : TextConst 'ENU=Show a warning when changing a permission set that is assigned to other users.';
+      UserListLbl@1004 : TextConst 'ENU=See users affected';
+      UndoChangeLbl@1003 : TextConst 'ENU=Undo change';
+      DontShowAgainLbl@1005 : TextConst 'ENU=Never show again';
+      RevertChangeQst@1006 : TextConst '@@@="%1 = the permission set ID that has been changed.";ENU=Do you want to revert the recent change to permission set %1?';
+
+    [External]
+    PROCEDURE OpenPageForUser@6(UserSID@1000 : GUID);
+    VAR
+      EffectivePermissions@1001 : Page 9852;
+    BEGIN
+      EffectivePermissions.SetUserSID(UserSID);
+      EffectivePermissions.RUN;
+    END;
+
+    [External]
+    PROCEDURE PopulatePermissionBuffer@2(VAR PermissionBuffer@1000 : Record 9852;PassedUserID@1004 : GUID;PassedCompanyName@1001 : Text[50];PassedObjectType@1003 : Integer;PassedObjectId@1002 : Integer);
+    VAR
+      AccessControl@1008 : Record 2000000053;
+      Permission@1007 : Record 2000000005;
+      TenantPermission@1006 : Record 2000000166;
+      PermissionSetBuffer@1005 : Record 9009;
+      PermissionManager@1011 : Codeunit 9002;
+      PermissionCommaStr@1012 : Text;
+      Read@1015 : Integer;
+      Insert@1014 : Integer;
+      Modify@1013 : Integer;
+      Delete@1010 : Integer;
+      Execute@1009 : Integer;
+    BEGIN
+      PermissionBuffer.RESET;
+      PermissionBuffer.DELETEALL;
+
+      Permission.SETRANGE("Object Type",PassedObjectType);
+      Permission.SETFILTER("Object ID",'%1|%2',0,PassedObjectId);
+      TenantPermission.SETRANGE("Object Type",PassedObjectType);
+      TenantPermission.SETFILTER("Object ID",'%1|%2',0,PassedObjectId);
+
+      // find permissions from all permission sets for this user
+      AccessControl.SETRANGE("User Security ID",PassedUserID);
+      AccessControl.SETFILTER("Company Name",'%1|%2','',PassedCompanyName);
+      IF AccessControl.FINDSET THEN
+        REPEAT
+          PermissionBuffer.INIT;
+          PermissionBuffer.Source := PermissionBuffer.Source::Normal;
+          PermissionBuffer."Permission Set" := AccessControl."Role ID";
+          PermissionBuffer.Type := PermissionSetBuffer.GetType(AccessControl.Scope,AccessControl."App ID");
+          IF AccessControl.Scope = AccessControl.Scope::System THEN BEGIN
+            Permission.SETRANGE("Role ID",AccessControl."Role ID");
+            IF Permission.FINDFIRST THEN BEGIN
+              FillPermissionBufferFromPermission(PermissionBuffer,Permission);
+              PermissionBuffer.INSERT;
+            END;
+          END ELSE BEGIN
+            TenantPermission.SETRANGE("App ID",AccessControl."App ID");
+            TenantPermission.SETRANGE("Role ID",AccessControl."Role ID");
+            IF TenantPermission.FINDFIRST THEN BEGIN
+              FillPermissionBufferFromTenantPermission(PermissionBuffer,TenantPermission);
+              PermissionBuffer.INSERT;
+            END;
+          END;
+        UNTIL AccessControl.NEXT = 0;
+
+      // find entitlement permission
+      IF NOT PermissionManager.SoftwareAsAService THEN
+        EXIT;
+      PermissionBuffer.INIT;
+      PermissionBuffer.Source := PermissionBuffer.Source::Entitlement;
+      PermissionBuffer."Permission Set" := '';
+      PermissionBuffer.Type := PermissionBuffer.Type::System;
+      PermissionCommaStr := UserAccountHelper.GetEntitlementPermissionForObject(PassedUserID,PassedObjectType,PassedObjectId);
+      ExtractPermissionsFromText(PermissionCommaStr,Read,Insert,Modify,Delete,Execute);
+      PermissionBuffer."Read Permission" := Read;
+      PermissionBuffer."Insert Permission" := Insert;
+      PermissionBuffer."Modify Permission" := Modify;
+      PermissionBuffer."Delete Permission" := Delete;
+      PermissionBuffer."Execute Permission" := Execute;
+      PermissionBuffer.INSERT;
+    END;
+
+    [External]
+    PROCEDURE PopulateEffectivePermissionsBuffer@1(VAR Permission@1000 : Record 2000000005;PassedUserID@1002 : GUID;PassedCompanyName@1001 : Text[50];PassedObjectType@1004 : Integer;PassedObjectId@1003 : Integer;ShowAllObjects@1009 : Boolean);
+    VAR
+      AllObj@1005 : Record 2000000038;
+      Window@1006 : Dialog;
+      TotalCount@1007 : Integer;
+      NumObjectsProcessed@1008 : Integer;
+    BEGIN
+      Permission.RESET;
+      Permission.DELETEALL;
+
+      IF PassedObjectId = 0 THEN BEGIN
+        Window.OPEN(DialogFormatMsg);
+        AllObj.SETFILTER("Object Type",'%1|%2|%3|%4|%5|%6|%7|%8|%9',
+          Permission."Object Type"::"Table Data",
+          Permission."Object Type"::Table,
+          Permission."Object Type"::Report,
+          Permission."Object Type"::Codeunit,
+          Permission."Object Type"::XMLport,
+          Permission."Object Type"::MenuSuite,
+          Permission."Object Type"::Page,
+          Permission."Object Type"::Query,
+          Permission."Object Type"::System);
+        IF NOT ShowAllObjects THEN
+          FilterOnlyObjectsPresentInUserPermissionSets(AllObj,PassedUserID,PassedCompanyName);
+        IF AllObj.FINDSET THEN BEGIN
+          TotalCount := AllObj.COUNT;
+          REPEAT
+            InsertEffectivePermissionForObject(Permission,PassedUserID,PassedCompanyName,
+              AllObj."Object Type",AllObj."Object ID");
+            NumObjectsProcessed += 1;
+            Window.UPDATE(1,ROUND(NumObjectsProcessed * 10000 / TotalCount,1));
+          UNTIL AllObj.NEXT = 0;
+          Permission.FINDFIRST;
+        END;
+        Window.CLOSE;
+      END ELSE
+        InsertEffectivePermissionForObject(Permission,PassedUserID,PassedCompanyName,PassedObjectType,PassedObjectId);
+    END;
+
+    LOCAL PROCEDURE FilterOnlyObjectsPresentInUserPermissionSets@4(VAR AllObj@1000 : Record 2000000038;PassedUserID@1002 : GUID;PassedCompanyName@1001 : Text[50]);
+    VAR
+      AccessControl@1003 : Record 2000000053;
+    BEGIN
+      AccessControl.SETRANGE("User Security ID",PassedUserID);
+      AccessControl.SETFILTER("Company Name",'%1|%2','',PassedCompanyName);
+      IF AccessControl.FINDSET THEN
+        REPEAT
+          CASE AccessControl.Scope OF
+            AccessControl.Scope::System:
+              MarkAllObjFromPermissionSet(AllObj,AccessControl."Role ID");
+            AccessControl.Scope::Tenant:
+              MarkAllObjFromTenantPermissionSet(AllObj,AccessControl."Role ID",AccessControl."App ID");
+          END;
+        UNTIL AccessControl.NEXT = 0;
+
+      AllObj.MARKEDONLY(TRUE);
+    END;
+
+    LOCAL PROCEDURE InsertEffectivePermissionForObject@3(VAR Permission@1004 : Record 2000000005;PassedUserID@1003 : GUID;PassedCompanyName@1002 : Text[50];PassedObjectType@1001 : Integer;PassedObjectId@1000 : Integer);
+    BEGIN
+      Permission.INIT;
+      Permission."Object Type" := PassedObjectType;
+      Permission."Object ID" := PassedObjectId;
+      PopulatePermissionRecordWithEffectivePermissionsForObject(Permission,PassedUserID,PassedCompanyName,
+        PassedObjectType,PassedObjectId);
+      Permission.INSERT;
+    END;
+
+    LOCAL PROCEDURE FillPermissionBufferFromPermission@5(VAR PermissionBuffer@1000 : Record 9852;Permission@1001 : Record 2000000005);
+    BEGIN
+      PermissionBuffer."Read Permission" := Permission."Read Permission";
+      PermissionBuffer."Insert Permission" := Permission."Insert Permission";
+      PermissionBuffer."Modify Permission" := Permission."Modify Permission";
+      PermissionBuffer."Delete Permission" := Permission."Delete Permission";
+      PermissionBuffer."Execute Permission" := Permission."Execute Permission";
+    END;
+
+    LOCAL PROCEDURE FillPermissionBufferFromTenantPermission@7(VAR PermissionBuffer@1000 : Record 9852;TenantPermission@1001 : Record 2000000166);
+    BEGIN
+      PermissionBuffer."Read Permission" := TenantPermission."Read Permission";
+      PermissionBuffer."Insert Permission" := TenantPermission."Insert Permission";
+      PermissionBuffer."Modify Permission" := TenantPermission."Modify Permission";
+      PermissionBuffer."Delete Permission" := TenantPermission."Delete Permission";
+      PermissionBuffer."Execute Permission" := TenantPermission."Execute Permission";
+    END;
+
+    LOCAL PROCEDURE MarkAllObjFromPermissionSet@10(VAR AllObj@1000 : Record 2000000038;PermissionSetID@1001 : Code[20]);
+    VAR
+      Permission@1002 : Record 2000000005;
+    BEGIN
+      Permission.SETRANGE("Role ID",PermissionSetID);
+      IF Permission.FINDSET THEN
+        REPEAT
+          MarkAllObj(AllObj,Permission."Object Type",Permission."Object ID");
+        UNTIL Permission.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE MarkAllObjFromTenantPermissionSet@12(VAR AllObj@1000 : Record 2000000038;PermissionSetID@1001 : Code[20];AppID@1003 : GUID);
+    VAR
+      TenantPermission@1002 : Record 2000000166;
+    BEGIN
+      TenantPermission.SETRANGE("App ID",AppID);
+      TenantPermission.SETRANGE("Role ID",PermissionSetID);
+      IF TenantPermission.FINDSET THEN
+        REPEAT
+          MarkAllObj(AllObj,TenantPermission."Object Type",TenantPermission."Object ID");
+        UNTIL TenantPermission.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE MarkAllObj@11(VAR AllObj@1002 : Record 2000000038;ObjectTypePassed@1000 : Integer;ObjectIDPassed@1001 : Integer);
+    BEGIN
+      IF ObjectIDPassed = 0 THEN BEGIN
+        AllObj.SETRANGE("Object Type",ObjectTypePassed);
+        IF AllObj.FINDSET THEN
+          REPEAT
+            AllObj.MARK(TRUE);
+          UNTIL AllObj.NEXT = 0;
+        AllObj.SETRANGE("Object Type");
+        EXIT;
+      END;
+
+      IF AllObj.GET(ObjectTypePassed,ObjectIDPassed) THEN
+        AllObj.MARK(TRUE);
+    END;
+
+    [External]
+    PROCEDURE PopulatePermissionRecordWithEffectivePermissionsForObject@13(VAR Permission@1004 : Record 2000000005;PassedUserID@1003 : GUID;PassedCompanyName@1002 : Text[50];PassedObjectType@1001 : Option;PassedObjectId@1000 : Integer);
+    VAR
+      PermissionCommaStr@1005 : Text;
+      Read@1010 : Integer;
+      Insert@1009 : Integer;
+      Modify@1008 : Integer;
+      Delete@1007 : Integer;
+      Execute@1006 : Integer;
+    BEGIN
+      PermissionCommaStr := UserAccountHelper.GetEffectivePermissionForObject(
+          PassedUserID,PassedCompanyName,PassedObjectType,PassedObjectId);
+      ExtractPermissionsFromText(PermissionCommaStr,Read,Insert,Modify,Delete,Execute);
+      Permission."Read Permission" := Read;
+      Permission."Insert Permission" := Insert;
+      Permission."Modify Permission" := Modify;
+      Permission."Delete Permission" := Delete;
+      Permission."Execute Permission" := Execute;
+    END;
+
+    LOCAL PROCEDURE ExtractPermissionsFromText@8(PermissionCommaStr@1005 : Text;VAR Read@1000 : Integer;VAR Insert@1001 : Integer;VAR Modify@1002 : Integer;VAR Delete@1003 : Integer;VAR Execute@1004 : Integer);
+    BEGIN
+      EVALUATE(Read,SELECTSTR(1,PermissionCommaStr));
+      EVALUATE(Insert,SELECTSTR(2,PermissionCommaStr));
+      EVALUATE(Modify,SELECTSTR(3,PermissionCommaStr));
+      EVALUATE(Delete,SELECTSTR(4,PermissionCommaStr));
+      EVALUATE(Execute,SELECTSTR(5,PermissionCommaStr));
+    END;
+
+    [External]
+    PROCEDURE ModifyPermission@16(FieldNumChanged@1000 : Integer;PermissionBuffer@1003 : Record 9852;PassedObjectType@1005 : Integer;PassedObjectId@1004 : Integer;PassedUserID@1006 : GUID);
+    VAR
+      TenantPermission@1001 : Record 2000000166;
+      CallModify@1002 : Boolean;
+      OldValue@1007 : Integer;
+    BEGIN
+      TenantPermission.GET(PermissionBuffer.GetAppID,PermissionBuffer."Permission Set",PassedObjectType,PassedObjectId);
+      CASE FieldNumChanged OF
+        TenantPermission.FIELDNO("Read Permission"):
+          BEGIN
+            OldValue := TenantPermission."Read Permission";
+            CallModify := TenantPermission."Read Permission" <> PermissionBuffer."Read Permission";
+            TenantPermission."Read Permission" := PermissionBuffer."Read Permission";
+          END;
+        TenantPermission.FIELDNO("Insert Permission"):
+          BEGIN
+            OldValue := TenantPermission."Insert Permission";
+            CallModify := TenantPermission."Insert Permission" <> PermissionBuffer."Insert Permission";
+            TenantPermission."Insert Permission" := PermissionBuffer."Insert Permission";
+          END;
+        TenantPermission.FIELDNO("Modify Permission"):
+          BEGIN
+            OldValue := TenantPermission."Modify Permission";
+            CallModify := TenantPermission."Modify Permission" <> PermissionBuffer."Modify Permission";
+            TenantPermission."Modify Permission" := PermissionBuffer."Modify Permission";
+          END;
+        TenantPermission.FIELDNO("Delete Permission"):
+          BEGIN
+            OldValue := TenantPermission."Delete Permission";
+            CallModify := TenantPermission."Delete Permission" <> PermissionBuffer."Delete Permission";
+            TenantPermission."Delete Permission" := PermissionBuffer."Delete Permission";
+          END;
+        TenantPermission.FIELDNO("Execute Permission"):
+          BEGIN
+            OldValue := TenantPermission."Execute Permission";
+            CallModify := TenantPermission."Execute Permission" <> PermissionBuffer."Execute Permission";
+            TenantPermission."Execute Permission" := PermissionBuffer."Execute Permission";
+          END;
+      END;
+      IF NOT CallModify THEN
+        EXIT;
+      TenantPermission.MODIFY;
+      SendNotification(PermissionBuffer."Permission Set",PassedObjectType,PassedObjectId,PassedUserID,FieldNumChanged,OldValue);
+      OnTenantPermissionModified(TenantPermission."Role ID");
+    END;
+
+    LOCAL PROCEDURE SendNotification@15(PermissionSetID@1001 : Code[20];PassedObjectType@1007 : Integer;PassedObjectId@1006 : Integer;UserOnPage@1002 : GUID;FieldNumChanged@1003 : Integer;OldValue@1004 : Integer);
+    VAR
+      User@1005 : Record 2000000120;
+      MyNotifications@1008 : Record 1518;
+      Notification@1000 : Notification;
+      NotificationID@1009 : GUID;
+    BEGIN
+      MarkUsersWithAssignedPermissionSet(User,PermissionSetID);
+      User.SETFILTER("User Security ID",'<>%1',UserOnPage);
+      IF User.ISEMPTY THEN
+        EXIT;
+
+      NotificationID := GetPermissionChangeNotificationId;
+      IF NOT MyNotifications.IsEnabled(NotificationID) THEN
+        EXIT;
+
+      Notification.ID := NotificationID;
+      Notification.MESSAGE := STRSUBSTNO(ChangeAffectsOthersMsg,PermissionSetID);
+      Notification.SETDATA('UserOnPage',UserOnPage);
+      Notification.SETDATA('PermissionSetID',PermissionSetID);
+      Notification.SETDATA('ObjectType',FORMAT(PassedObjectType));
+      Notification.SETDATA('ObjectID',FORMAT(PassedObjectId));
+      Notification.SETDATA('FieldNumChanged',FORMAT(FieldNumChanged));
+      Notification.SETDATA('OldValue',FORMAT(OldValue));
+      Notification.ADDACTION(UserListLbl,CODEUNIT::"Effective Permissions Mgt.",'NotificationShowUsers');
+      Notification.ADDACTION(UndoChangeLbl,CODEUNIT::"Effective Permissions Mgt.",'NotificationUndoChange');
+      Notification.ADDACTION(DontShowAgainLbl,CODEUNIT::"Effective Permissions Mgt.",'DisableNotification');
+      Notification.SEND;
+    END;
+
+    [External]
+    PROCEDURE NotificationShowUsers@14(Notification@1000 : Notification);
+    VAR
+      User@1001 : Record 2000000120;
+      PermissionSetID@1002 : Code[20];
+    BEGIN
+      PermissionSetID := Notification.GETDATA('PermissionSetID');
+      MarkUsersWithAssignedPermissionSet(User,PermissionSetID);
+      User.SETFILTER("User Security ID",'<>%1',Notification.GETDATA('UserOnPage'));
+      PAGE.RUNMODAL(PAGE::Users,User);
+      IF CONFIRM(STRSUBSTNO(RevertChangeQst,PermissionSetID),FALSE) THEN
+        NotificationUndoChange(Notification);
+    END;
+
+    [External]
+    PROCEDURE NotificationUndoChange@9(Notification@1000 : Notification);
+    VAR
+      TenantPermission@1001 : Record 2000000166;
+      ZeroGUID@1002 : GUID;
+      ObjType@1003 : Integer;
+      ObjID@1004 : Integer;
+      FieldNumChanged@1006 : Integer;
+      OldValue@1005 : Integer;
+    BEGIN
+      EVALUATE(ObjType,Notification.GETDATA('ObjectType'));
+      EVALUATE(ObjID,Notification.GETDATA('ObjectID'));
+      TenantPermission.GET(ZeroGUID,Notification.GETDATA('PermissionSetID'),ObjType,ObjID);
+
+      EVALUATE(FieldNumChanged,Notification.GETDATA('FieldNumChanged'));
+      EVALUATE(OldValue,Notification.GETDATA('OldValue'));
+      CASE FieldNumChanged OF
+        TenantPermission.FIELDNO("Read Permission"):
+          TenantPermission."Read Permission" := OldValue;
+        TenantPermission.FIELDNO("Insert Permission"):
+          TenantPermission."Insert Permission" := OldValue;
+        TenantPermission.FIELDNO("Modify Permission"):
+          TenantPermission."Modify Permission" := OldValue;
+        TenantPermission.FIELDNO("Delete Permission"):
+          TenantPermission."Delete Permission" := OldValue;
+        TenantPermission.FIELDNO("Execute Permission"):
+          TenantPermission."Execute Permission" := OldValue;
+      END;
+      TenantPermission.MODIFY;
+    END;
+
+    [External]
+    PROCEDURE DisableNotification@19(Notification@1000 : Notification);
+    VAR
+      MyNotifications@1001 : Record 1518;
+    BEGIN
+      MyNotifications.Disable(GetPermissionChangeNotificationId);
+    END;
+
+    LOCAL PROCEDURE MarkUsersWithAssignedPermissionSet@22(VAR User@1000 : Record 2000000120;PermissionSetID@1002 : Code[20]);
+    VAR
+      AccessControl@1001 : Record 2000000053;
+    BEGIN
+      AccessControl.SETRANGE("Role ID",PermissionSetID);
+      IF AccessControl.FINDSET THEN
+        REPEAT
+          IF User.GET(AccessControl."User Security ID") THEN
+            User.MARK(TRUE);
+        UNTIL AccessControl.NEXT = 0;
+
+      User.MARKEDONLY(TRUE);
+    END;
+
+    LOCAL PROCEDURE GetPermissionChangeNotificationId@18() : GUID;
+    BEGIN
+      EXIT('7E18A509-6579-471A-BF8D-4A9BDABB6008');
+    END;
+
+    [EventSubscriber(Page,1518,OnInitializingNotificationWithDefaultState)]
+    LOCAL PROCEDURE OnInitializingNotificationWithDefaultState@23();
+    VAR
+      MyNotifications@1000 : Record 1518;
+    BEGIN
+      MyNotifications.InsertDefault(GetPermissionChangeNotificationId,ChangeAffectsOthersNameTxt,ChangeAffectsOthersDescTxt,TRUE);
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnTenantPermissionModified@17(PermissionSetId@1000 : Code[20]);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

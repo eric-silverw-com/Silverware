@@ -1,0 +1,695 @@
+OBJECT Table 10121 Bank Rec. Line
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:15:50 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnInsert=BEGIN
+               IF "Document No." = '' THEN
+                 GenerateDocNo;
+               UpdateLedgers;
+             END;
+
+    OnModify=BEGIN
+               UpdateLedgers;
+             END;
+
+    OnDelete=VAR
+               BankRecSubLine@1020000 : Record 10126;
+             BEGIN
+               BankRecCommentLine.SETRANGE("Table Name",BankRecCommentLine."Table Name"::"Bank Rec.");
+               BankRecCommentLine.SETRANGE("Bank Account No.","Bank Account No.");
+               BankRecCommentLine.SETRANGE("No.","Statement No.");
+               BankRecCommentLine.SETRANGE("Line No.","Line No.");
+               BankRecCommentLine.DELETEALL;
+               BankRecPost.UpdateLedgers(Rec,SetStatus::Open);
+
+               IF "Record Type" = "Record Type"::Deposit THEN BEGIN
+                 BankRecSubLine.SETRANGE("Bank Account No.","Bank Account No.");
+                 BankRecSubLine.SETRANGE("Statement No.","Statement No.");
+                 BankRecSubLine.SETRANGE("Bank Rec. Line No.","Line No.");
+                 BankRecSubLine.DELETEALL;
+               END;
+             END;
+
+    OnRename=BEGIN
+               ERROR(Text003,TABLECAPTION);
+             END;
+
+    CaptionML=ENU=Bank Rec. Line;
+    LookupPageID=Page10133;
+    DrillDownPageID=Page10133;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Bank Account No.    ;Code20        ;TableRelation="Bank Account";
+                                                   CaptionML=ENU=Bank Account No. }
+    { 2   ;   ;Statement No.       ;Code20        ;TableRelation="Bank Rec. Header"."Statement No." WHERE (Bank Account No.=FIELD(Bank Account No.));
+                                                   CaptionML=ENU=Statement No. }
+    { 3   ;   ;Line No.            ;Integer       ;CaptionML=ENU=Line No. }
+    { 4   ;   ;Record Type         ;Option        ;CaptionML=ENU=Record Type;
+                                                   OptionCaptionML=ENU=Check,Deposit,Adjustment;
+                                                   OptionString=Check,Deposit,Adjustment }
+    { 5   ;   ;Posting Date        ;Date          ;CaptionML=ENU=Posting Date }
+    { 6   ;   ;Document Type       ;Option        ;CaptionML=ENU=Document Type;
+                                                   OptionCaptionML=ENU=" ,Payment,Invoice,Credit Memo,Finance Charge Memo,Reminder,Refund";
+                                                   OptionString=[ ,Payment,Invoice,Credit Memo,Finance Charge Memo,Reminder,Refund] }
+    { 7   ;   ;Document No.        ;Code20        ;OnValidate=BEGIN
+                                                                IF "Document No." = '' THEN
+                                                                  GenerateDocNo;
+                                                              END;
+
+                                                   CaptionML=ENU=Document No. }
+    { 8   ;   ;Account Type        ;Option        ;CaptionML=ENU=Account Type;
+                                                   OptionCaptionML=ENU=G/L Account,Customer,Vendor,Bank Account,Fixed Asset;
+                                                   OptionString=G/L Account,Customer,Vendor,Bank Account,Fixed Asset }
+    { 9   ;   ;Account No.         ;Code20        ;TableRelation=IF (Account Type=CONST(G/L Account)) "G/L Account"
+                                                                 ELSE IF (Account Type=CONST(Customer)) Customer
+                                                                 ELSE IF (Account Type=CONST(Vendor)) Vendor
+                                                                 ELSE IF (Account Type=CONST(Bank Account)) "Bank Account"
+                                                                 ELSE IF (Account Type=CONST(Fixed Asset)) "Fixed Asset";
+                                                   OnValidate=BEGIN
+                                                                IF "Account No." = '' THEN BEGIN
+                                                                  CreateDim(
+                                                                    DimMgt.TypeToTableID1("Account Type"),"Account No.",
+                                                                    DimMgt.TypeToTableID1("Bal. Account Type"),"Bal. Account No.",
+                                                                    0,'',
+                                                                    0,'',
+                                                                    0,'');
+                                                                  EXIT;
+                                                                END;
+
+                                                                CASE "Account Type" OF
+                                                                  "Account Type"::"G/L Account":
+                                                                    BEGIN
+                                                                      GLAcc.GET("Account No.");
+                                                                      CheckGLAcc;
+                                                                      ReplaceInfo := "Bal. Account No." = '';
+                                                                      IF ReplaceInfo THEN
+                                                                        Description := GLAcc.Name;
+
+                                                                      IF "Bal. Account No." = '' THEN
+                                                                        "Currency Code" := '';
+                                                                    END;
+                                                                  "Account Type"::Customer:
+                                                                    BEGIN
+                                                                      Cust.GET("Account No.");
+                                                                      IF Cust."Privacy Blocked" THEN
+                                                                        ERROR(PrivacyBlockedErr,"Account Type");
+                                                                      IF Cust.Blocked IN [Cust.Blocked::All] THEN
+                                                                        ERROR(Text1020100,"Account Type",Cust.Blocked);
+                                                                      Description := Cust.Name;
+                                                                      IF SetCurrencyCode("Bal. Account Type","Bal. Account No.") THEN
+                                                                        Cust.TESTFIELD("Currency Code","Currency Code")
+                                                                      ELSE
+                                                                        "Currency Code" := Cust."Currency Code";
+                                                                      IF Cust."Bill-to Customer No." <> '' THEN BEGIN
+                                                                        Ok := CONFIRM(Text014,FALSE,Cust.TABLECAPTION,Cust."No.",Cust.FIELDCAPTION("Bill-to Customer No."),
+                                                                            Cust."Bill-to Customer No.");
+                                                                        IF NOT Ok THEN
+                                                                          ERROR('');
+                                                                      END;
+                                                                    END;
+                                                                  "Account Type"::Vendor:
+                                                                    BEGIN
+                                                                      Vend.GET("Account No.");
+                                                                      Vend.TESTFIELD("Privacy Blocked",FALSE);
+                                                                      Vend.TESTFIELD(Blocked,Vend.Blocked::" ");
+                                                                      Description := Vend.Name;
+                                                                      IF SetCurrencyCode("Bal. Account Type","Bal. Account No.") THEN
+                                                                        Vend.TESTFIELD("Currency Code","Currency Code")
+                                                                      ELSE
+                                                                        "Currency Code" := Vend."Currency Code";
+                                                                      IF Vend."Pay-to Vendor No." <> '' THEN BEGIN
+                                                                        Ok := CONFIRM(Text014,FALSE,Vend.TABLECAPTION,Vend."No.",Vend.FIELDCAPTION("Pay-to Vendor No."),
+                                                                            Vend."Pay-to Vendor No.");
+                                                                        IF NOT Ok THEN
+                                                                          ERROR('');
+                                                                      END;
+                                                                    END;
+                                                                  "Account Type"::"Bank Account":
+                                                                    BEGIN
+                                                                      BankAcc.GET("Account No.");
+                                                                      BankAcc.TESTFIELD(Blocked,FALSE);
+                                                                      ReplaceInfo := "Bal. Account No." = '';
+                                                                      IF ReplaceInfo THEN
+                                                                        Description := BankAcc.Name;
+
+                                                                      IF BankAcc."Currency Code" = '' THEN BEGIN
+                                                                        IF "Bal. Account No." = '' THEN
+                                                                          "Currency Code" := '';
+                                                                      END ELSE
+                                                                        IF SetCurrencyCode("Bal. Account Type","Bal. Account No.") THEN
+                                                                          BankAcc.TESTFIELD("Currency Code","Currency Code")
+                                                                        ELSE
+                                                                          "Currency Code" := BankAcc."Currency Code";
+                                                                    END;
+                                                                  "Account Type"::"Fixed Asset":
+                                                                    BEGIN
+                                                                      FA.GET("Account No.");
+                                                                      FA.TESTFIELD(Blocked,FALSE);
+                                                                      FA.TESTFIELD(Inactive,FALSE);
+                                                                      FA.TESTFIELD("Budgeted Asset",FALSE);
+                                                                      Description := FA.Description;
+                                                                    END;
+                                                                END;
+
+                                                                VALIDATE("Currency Code");
+                                                                CreateDim(
+                                                                  DimMgt.TypeToTableID1("Account Type"),"Account No.",
+                                                                  DimMgt.TypeToTableID1("Bal. Account Type"),"Bal. Account No.",
+                                                                  0,'',
+                                                                  0,'',
+                                                                  0,'');
+                                                              END;
+
+                                                   CaptionML=ENU=Account No. }
+    { 10  ;   ;Description         ;Text50        ;CaptionML=ENU=Description }
+    { 11  ;   ;Amount              ;Decimal       ;OnValidate=BEGIN
+                                                                IF Cleared AND ("Record Type" = "Record Type"::Adjustment) THEN
+                                                                  "Cleared Amount" := Amount;
+                                                              END;
+
+                                                   CaptionML=ENU=Amount }
+    { 12  ;   ;Cleared             ;Boolean       ;OnValidate=BEGIN
+                                                                IF Cleared THEN
+                                                                  "Cleared Amount" := Amount
+                                                                ELSE
+                                                                  "Cleared Amount" := 0;
+                                                              END;
+
+                                                   CaptionML=ENU=Cleared }
+    { 13  ;   ;Cleared Amount      ;Decimal       ;CaptionML=ENU=Cleared Amount }
+    { 14  ;   ;Bal. Account Type   ;Option        ;CaptionML=ENU=Bal. Account Type;
+                                                   OptionCaptionML=ENU=G/L Account,Customer,Vendor,Bank Account,Fixed Asset;
+                                                   OptionString=G/L Account,Customer,Vendor,Bank Account,Fixed Asset }
+    { 15  ;   ;Bal. Account No.    ;Code20        ;TableRelation=IF (Bal. Account Type=CONST(G/L Account)) "G/L Account"
+                                                                 ELSE IF (Bal. Account Type=CONST(Customer)) Customer
+                                                                 ELSE IF (Bal. Account Type=CONST(Vendor)) Vendor
+                                                                 ELSE IF (Bal. Account Type=CONST(Bank Account)) "Bank Account"
+                                                                 ELSE IF (Bal. Account Type=CONST(Fixed Asset)) "Fixed Asset";
+                                                   OnValidate=BEGIN
+                                                                IF "Bal. Account No." = '' THEN BEGIN
+                                                                  CreateDim(
+                                                                    DimMgt.TypeToTableID1("Bal. Account Type"),"Bal. Account No.",
+                                                                    DimMgt.TypeToTableID1("Account Type"),"Account No.",
+                                                                    0,'',
+                                                                    0,'',
+                                                                    0,'');
+                                                                  EXIT;
+                                                                END;
+
+                                                                CASE "Bal. Account Type" OF
+                                                                  "Bal. Account Type"::"G/L Account":
+                                                                    BEGIN
+                                                                      GLAcc.GET("Bal. Account No.");
+                                                                      CheckGLAcc;
+                                                                      IF "Account No." = '' THEN BEGIN
+                                                                        Description := GLAcc.Name;
+                                                                        "Currency Code" := '';
+                                                                      END;
+                                                                    END;
+                                                                  "Bal. Account Type"::Customer:
+                                                                    BEGIN
+                                                                      Cust.GET("Bal. Account No.");
+                                                                      IF Cust."Privacy Blocked" THEN
+                                                                        ERROR(PrivacyBlockedErr,"Account Type");
+                                                                      IF Cust.Blocked IN [Cust.Blocked::All] THEN
+                                                                        ERROR(Text1020100,"Account Type",Cust.Blocked);
+                                                                      IF "Account No." = '' THEN
+                                                                        Description := Cust.Name;
+
+                                                                      IF ("Account No." = '') OR ("Account Type" = "Account Type"::"G/L Account") THEN
+                                                                        "Currency Code" := Cust."Currency Code";
+                                                                      IF ("Account Type" = "Account Type"::"Bank Account") AND ("Currency Code" = '') THEN
+                                                                        "Currency Code" := Cust."Currency Code";
+                                                                      IF Cust."Bill-to Customer No." <> '' THEN BEGIN
+                                                                        Ok := CONFIRM(Text014,FALSE,Cust.TABLECAPTION,Cust."No.",Cust.FIELDCAPTION("Bill-to Customer No."),
+                                                                            Cust."Bill-to Customer No.");
+                                                                        IF NOT Ok THEN
+                                                                          ERROR('');
+                                                                      END;
+                                                                    END;
+                                                                  "Bal. Account Type"::Vendor:
+                                                                    BEGIN
+                                                                      Vend.GET("Bal. Account No.");
+                                                                      Vend.TESTFIELD("Privacy Blocked",FALSE);
+                                                                      Vend.TESTFIELD(Blocked,Vend.Blocked::" ");
+                                                                      IF "Account No." = '' THEN
+                                                                        Description := Vend.Name;
+
+                                                                      IF ("Account No." = '') OR ("Account Type" = "Account Type"::"G/L Account") THEN
+                                                                        "Currency Code" := Vend."Currency Code";
+                                                                      IF ("Account Type" = "Account Type"::"Bank Account") AND ("Currency Code" = '') THEN
+                                                                        "Currency Code" := Vend."Currency Code";
+                                                                      IF Vend."Pay-to Vendor No." <> '' THEN BEGIN
+                                                                        Ok := CONFIRM(Text014,FALSE,Vend.TABLECAPTION,Vend."No.",Vend.FIELDCAPTION("Pay-to Vendor No."),
+                                                                            Vend."Pay-to Vendor No.");
+                                                                        IF NOT Ok THEN
+                                                                          ERROR('');
+                                                                      END;
+                                                                    END;
+                                                                  "Bal. Account Type"::"Bank Account":
+                                                                    BEGIN
+                                                                      BankAcc.GET("Bal. Account No.");
+                                                                      BankAcc.TESTFIELD(Blocked,FALSE);
+                                                                      IF "Account No." = '' THEN BEGIN
+                                                                        Description := BankAcc.Name;
+                                                                        "Currency Code" := BankAcc."Currency Code";
+                                                                      END;
+                                                                      IF BankAcc."Currency Code" = '' THEN BEGIN
+                                                                        IF "Account No." = '' THEN
+                                                                          "Currency Code" := '';
+                                                                      END ELSE
+                                                                        IF SetCurrencyCode("Bal. Account Type","Bal. Account No.") THEN
+                                                                          BankAcc.TESTFIELD("Currency Code","Currency Code")
+                                                                        ELSE
+                                                                          "Currency Code" := BankAcc."Currency Code";
+                                                                    END;
+                                                                  "Bal. Account Type"::"Fixed Asset":
+                                                                    BEGIN
+                                                                      FA.GET("Bal. Account No.");
+                                                                      FA.TESTFIELD(Blocked,FALSE);
+                                                                      FA.TESTFIELD(Inactive,FALSE);
+                                                                      FA.TESTFIELD("Budgeted Asset",FALSE);
+                                                                      IF "Account No." = '' THEN
+                                                                        Description := FA.Description;
+                                                                    END;
+                                                                END;
+
+                                                                VALIDATE("Currency Code");
+                                                                CreateDim(
+                                                                  DimMgt.TypeToTableID1("Bal. Account Type"),"Bal. Account No.",
+                                                                  DimMgt.TypeToTableID1("Account Type"),"Account No.",
+                                                                  0,'',
+                                                                  0,'',
+                                                                  0,'');
+                                                              END;
+
+                                                   CaptionML=ENU=Bal. Account No. }
+    { 16  ;   ;Currency Code       ;Code10        ;TableRelation=Currency;
+                                                   OnValidate=BEGIN
+                                                                IF "Currency Code" <> '' THEN BEGIN
+                                                                  BankRecHdr.GET("Bank Account No.","Statement No.");
+                                                                  Currency.GET("Currency Code");
+                                                                  "Currency Factor" := CurrExchRate.ExchangeRate(BankRecHdr."Statement Date","Currency Code");
+                                                                END ELSE
+                                                                  "Currency Factor" := 0;
+                                                                VALIDATE("Currency Factor");
+                                                              END;
+
+                                                   CaptionML=ENU=Currency Code;
+                                                   Editable=No }
+    { 17  ;   ;Currency Factor     ;Decimal       ;OnValidate=BEGIN
+                                                                IF ("Currency Code" = '') AND ("Currency Factor" <> 0) THEN
+                                                                  FIELDERROR("Currency Factor",STRSUBSTNO(Text002,FIELDCAPTION("Currency Code")));
+                                                              END;
+
+                                                   CaptionML=ENU=Currency Factor }
+    { 18  ;   ;External Document No.;Code35       ;CaptionML=ENU=External Document No. }
+    { 19  ;   ;Bank Ledger Entry No.;Integer      ;TableRelation="Bank Account Ledger Entry"."Entry No.";
+                                                   CaptionML=ENU=Bank Ledger Entry No. }
+    { 20  ;   ;Check Ledger Entry No.;Integer     ;TableRelation="Check Ledger Entry"."Entry No.";
+                                                   CaptionML=ENU=Check Ledger Entry No. }
+    { 21  ;   ;Adj. Source Record ID;Option       ;CaptionML=ENU=Adj. Source Record ID;
+                                                   OptionCaptionML=ENU=Check,Deposit,Adjustment;
+                                                   OptionString=Check,Deposit,Adjustment }
+    { 22  ;   ;Adj. Source Document No.;Code20    ;CaptionML=ENU=Adj. Source Document No. }
+    { 23  ;   ;Adj. No. Series     ;Code20        ;TableRelation="No. Series";
+                                                   CaptionML=ENU=Adj. No. Series }
+    { 24  ;   ;Shortcut Dimension 1 Code;Code20   ;TableRelation="Dimension Value".Code WHERE (Global Dimension No.=CONST(1));
+                                                   OnValidate=BEGIN
+                                                                ValidateShortcutDimCode(1,"Shortcut Dimension 1 Code");
+                                                              END;
+
+                                                   CaptionML=ENU=Shortcut Dimension 1 Code;
+                                                   CaptionClass='1,2,1' }
+    { 25  ;   ;Shortcut Dimension 2 Code;Code20   ;TableRelation="Dimension Value".Code WHERE (Global Dimension No.=CONST(2));
+                                                   OnValidate=BEGIN
+                                                                ValidateShortcutDimCode(2,"Shortcut Dimension 2 Code");
+                                                              END;
+
+                                                   CaptionML=ENU=Shortcut Dimension 2 Code;
+                                                   CaptionClass='1,2,2' }
+    { 26  ;   ;Collapse Status     ;Option        ;CaptionML=ENU=Collapse Status;
+                                                   OptionCaptionML=ENU=" ,Collapsed Deposit,Expanded Deposit Line";
+                                                   OptionString=[ ,Collapsed Deposit,Expanded Deposit Line];
+                                                   Editable=No }
+    { 27  ;   ;Positive            ;Boolean       ;CaptionML=ENU=Positive;
+                                                   Editable=No }
+    { 480 ;   ;Dimension Set ID    ;Integer       ;TableRelation="Dimension Set Entry";
+                                                   OnValidate=BEGIN
+                                                                DimMgt.UpdateGlobalDimFromDimSetID("Dimension Set ID","Shortcut Dimension 1 Code","Shortcut Dimension 2 Code");
+                                                              END;
+
+                                                   OnLookup=BEGIN
+                                                              ShowDimensions;
+                                                            END;
+
+                                                   CaptionML=ENU=Dimension Set ID;
+                                                   Editable=No }
+  }
+  KEYS
+  {
+    {    ;Bank Account No.,Statement No.,Record Type,Line No.;
+                                                   SumIndexFields=Amount;
+                                                   Clustered=Yes }
+    {    ;Bank Account No.,Statement No.,Record Type,Cleared;
+                                                   SumIndexFields=Amount,Cleared Amount }
+    {    ;Bank Account No.,Statement No.,Record Type,Positive;
+                                                   SumIndexFields=Amount }
+    {    ;Bank Account No.,Statement No.,Posting Date,Document Type,Document No.,External Document No. }
+    {    ;Bank Account No.,Statement No.,Cleared   }
+    {    ;Bank Account No.,Statement No.,Record Type,Bal. Account No.;
+                                                   SumIndexFields=Amount }
+    {    ;Bank Account No.,Statement No.,Record Type,Account Type,Bal. Account Type,Bal. Account No.,Positive;
+                                                   SumIndexFields=Amount }
+    {    ;Bank Account No.,Statement No.,Record Type,Account Type,Account No.,Positive;
+                                                   SumIndexFields=Amount }
+    {    ;Bank Account No.,Statement No.,Record Type,External Document No. }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      Ok@1020010 : Boolean;
+      ReplaceInfo@1020007 : Boolean;
+      SetStatus@1020015 : 'Open,Cleared,Posted';
+      GLAcc@1020006 : Record 15;
+      Cust@1020008 : Record 18;
+      Vend@1020009 : Record 23;
+      BankAcc@1020012 : Record 270;
+      FA@1020013 : Record 5600;
+      GLSetup@1020005 : Record 98;
+      BankRecHdr@1020018 : Record 10120;
+      BankRecLine@1020003 : Record 10121;
+      BankRecCommentLine@1020000 : Record 10122;
+      Currency@1020017 : Record 4;
+      CurrExchRate@1020016 : Record 330;
+      DimMgt@1020002 : Codeunit 408;
+      NoSeriesMgt@1020004 : Codeunit 396;
+      Text002@1020019 : TextConst 'ENU=cannot be specified without %1';
+      Text003@1480000 : TextConst 'ENU=You cannot rename a %1.';
+      Text014@1020011 : TextConst 'ENU=The %1 %2 has a %3 %4.\Do you still want to use %1 %2 in this journal line?';
+      Text1020100@1020100 : TextConst '@@@="%1 = account type, %2 = Customer.blocked";ENU=%1 is blocked for %2 processing.';
+      PrivacyBlockedErr@1234567 : TextConst '@@@="%1 = customer";ENU=%1 is blocked for privacy.';
+      BankRecPost@1020014 : Codeunit 10120;
+
+    [External]
+    PROCEDURE SetUpNewLine@9(LastBankRecLine@1000 : Record 10121;Balance@1001 : Decimal;BottomLine@1002 : Boolean);
+    BEGIN
+      GLSetup.GET;
+      BankRecLine.SETRANGE("Bank Account No.","Bank Account No.");
+      BankRecLine.SETRANGE("Statement No.","Statement No.");
+      BankRecLine.SETRANGE("Record Type","Record Type");
+      IF BankRecLine.FINDLAST THEN BEGIN
+        "Posting Date" := LastBankRecLine."Posting Date";
+        "Document No." := LastBankRecLine."Document No.";
+        "Document No." := INCSTR("Document No.");
+        "Account Type" := LastBankRecLine."Account Type";
+      END ELSE BEGIN
+        "Posting Date" := WORKDATE;
+        IF GLSetup."Bank Rec. Adj. Doc. Nos." <> '' THEN BEGIN
+          CLEAR(NoSeriesMgt);
+          "Document No." := NoSeriesMgt.TryGetNextNo(GLSetup."Bank Rec. Adj. Doc. Nos.","Posting Date");
+        END;
+        "Account Type" := "Account Type"::"Bank Account";
+        VALIDATE("Account No.","Bank Account No.");
+      END;
+      "Adj. No. Series" := GLSetup."Bank Rec. Adj. Doc. Nos.";
+      "Bal. Account Type" := LastBankRecLine."Bal. Account Type";
+      "Document Type" := LastBankRecLine."Document Type";
+      IF ("Account Type" IN ["Account Type"::Customer,"Account Type"::Vendor,"Account Type"::"Fixed Asset"]) AND
+         ("Bal. Account Type" IN ["Bal. Account Type"::Customer,"Bal. Account Type"::Vendor,"Bal. Account Type"::"Fixed Asset"])
+      THEN BEGIN
+        "Account Type" := "Account Type"::"G/L Account";
+        "Account No." := '';
+        Description := '';
+      END;
+      IF "Record Type" = "Record Type"::Adjustment THEN BEGIN
+        Cleared := TRUE;
+        "Cleared Amount" := Amount;
+      END;
+    END;
+
+    LOCAL PROCEDURE GenerateDocNo@1020000();
+    BEGIN
+      IF "Posting Date" = 0D THEN
+        "Posting Date" := WORKDATE;
+      GLSetup.GET;
+      CLEAR(NoSeriesMgt);
+      "Document No." := NoSeriesMgt.TryGetNextNo(GLSetup."Bank Rec. Adj. Doc. Nos.","Posting Date");
+    END;
+
+    LOCAL PROCEDURE CheckGLAcc@7();
+    BEGIN
+      GLAcc.CheckGLAcc;
+      IF GLAcc."Direct Posting" THEN
+        EXIT;
+      IF "Posting Date" <> 0D THEN
+        IF "Posting Date" = CLOSINGDATE("Posting Date") THEN
+          EXIT;
+      GLAcc.TESTFIELD("Direct Posting",TRUE);
+    END;
+
+    LOCAL PROCEDURE SetCurrencyCode@4(AccType2@1000 : 'G/L Account,Customer,Vendor,Bank Account';AccNo2@1001 : Code[20]) : Boolean;
+    VAR
+      Cust2@1020000 : Record 18;
+      Vend2@1020001 : Record 23;
+      BankAcc2@1020002 : Record 270;
+    BEGIN
+      "Currency Code" := '';
+      IF AccNo2 <> '' THEN
+        CASE AccType2 OF
+          AccType2::Customer:
+            IF Cust2.GET(AccNo2) THEN
+              "Currency Code" := Cust2."Currency Code";
+          AccType2::Vendor:
+            IF Vend2.GET(AccNo2) THEN
+              "Currency Code" := Vend2."Currency Code";
+          AccType2::"Bank Account":
+            IF BankAcc2.GET(AccNo2) THEN
+              "Currency Code" := BankAcc2."Currency Code";
+        END;
+      EXIT("Currency Code" <> '');
+    END;
+
+    [External]
+    PROCEDURE CreateDim@13(Type1@1000 : Integer;No1@1001 : Code[20];Type2@1002 : Integer;No2@1003 : Code[20];Type3@1004 : Integer;No3@1005 : Code[20];Type4@1006 : Integer;No4@1007 : Code[20];Type5@1008 : Integer;No5@1009 : Code[20]);
+    VAR
+      TableID@1010 : ARRAY [10] OF Integer;
+      No@1011 : ARRAY [10] OF Code[20];
+    BEGIN
+      TableID[1] := Type1;
+      No[1] := No1;
+      TableID[2] := Type2;
+      No[2] := No2;
+      TableID[3] := Type3;
+      No[3] := No3;
+      TableID[4] := Type4;
+      No[4] := No4;
+      TableID[5] := Type5;
+      No[5] := No5;
+      "Shortcut Dimension 1 Code" := '';
+      "Shortcut Dimension 2 Code" := '';
+      "Dimension Set ID" :=
+        DimMgt.GetDefaultDimID(TableID,No,'',"Shortcut Dimension 1 Code","Shortcut Dimension 2 Code",0,0);
+    END;
+
+    [External]
+    PROCEDURE ValidateShortcutDimCode@14(FieldNumber@1000 : Integer;VAR ShortcutDimCode@1001 : Code[20]);
+    BEGIN
+      DimMgt.ValidateShortcutDimValues(FieldNumber,ShortcutDimCode,"Dimension Set ID");
+    END;
+
+    [External]
+    PROCEDURE LookupShortcutDimCode@18(FieldNumber@1000 : Integer;VAR ShortcutDimCode@1001 : Code[20]);
+    BEGIN
+      DimMgt.LookupDimValueCode(FieldNumber,ShortcutDimCode);
+      ValidateShortcutDimCode(FieldNumber,ShortcutDimCode);
+    END;
+
+    [External]
+    PROCEDURE ShowShortcutDimCode@15(VAR ShortcutDimCode@1000 : ARRAY [8] OF Code[20]);
+    BEGIN
+      DimMgt.GetShortcutDimensions("Dimension Set ID",ShortcutDimCode);
+    END;
+
+    [External]
+    PROCEDURE ExpandLine@1480001(VAR DepositBankRecLine@1480000 : Record 10121);
+    VAR
+      BankRecLine@1480003 : Record 10121;
+      BankRecSubLine@1480002 : Record 10126;
+      BankLedgerEntry@1480005 : Record 271;
+      NextBankRecLineNo@1480001 : Integer;
+    BEGIN
+      WITH DepositBankRecLine DO BEGIN
+        IF ("Record Type" <> "Record Type"::Deposit) OR
+           ("Collapse Status" <> "Collapse Status"::"Collapsed Deposit") OR
+           ("External Document No." = '')
+        THEN
+          EXIT;
+        DELETE;
+
+        BankRecLine.SETCURRENTKEY("Bank Account No.","Statement No.","Record Type","Line No.");
+        BankRecLine.SETRANGE("Bank Account No.","Bank Account No.");
+        BankRecLine.SETRANGE("Statement No.","Statement No.");
+        BankRecLine.SETRANGE("Record Type","Record Type");
+        BankRecLine.LOCKTABLE;
+        IF BankRecLine.FINDLAST THEN
+          NextBankRecLineNo := BankRecLine."Line No." + 10000
+        ELSE
+          NextBankRecLineNo := 10000;
+        BankRecLine.RESET;
+
+        BankRecSubLine.SETRANGE("Bank Account No.","Bank Account No.");
+        BankRecSubLine.SETRANGE("Statement No.","Statement No.");
+        BankRecSubLine.SETRANGE("Bank Rec. Line No.","Line No.");
+        BankRecSubLine.FIND('-');
+        REPEAT
+          BankRecLine.INIT;
+          BankRecLine."Bank Account No." := "Bank Account No.";
+          BankRecLine."Statement No." := "Statement No.";
+          BankRecLine."Record Type" := "Record Type"::Deposit;
+          BankRecLine."Line No." := NextBankRecLineNo;
+          BankRecLine."Posting Date" := BankRecSubLine."Posting Date";
+          BankRecLine."Document Type" := BankRecSubLine."Document Type";
+          BankRecLine."Document No." := BankRecSubLine."Document No.";
+          BankRecLine.Description := BankRecSubLine.Description;
+          BankRecLine.Amount := BankRecSubLine.Amount;
+          BankRecLine.VALIDATE("Currency Code",BankRecSubLine."Currency Code");
+          BankRecLine."External Document No." := BankRecSubLine."External Document No.";
+          BankRecLine."Bank Ledger Entry No." := BankRecSubLine."Bank Ledger Entry No.";
+          BankRecLine."Collapse Status" := "Collapse Status"::"Expanded Deposit Line";
+          BankLedgerEntry.GET(BankRecLine."Bank Ledger Entry No.");
+          BankRecLine."Shortcut Dimension 1 Code" := BankLedgerEntry."Global Dimension 1 Code";
+          BankRecLine."Shortcut Dimension 2 Code" := BankLedgerEntry."Global Dimension 2 Code";
+          BankRecLine."Dimension Set ID" := BankLedgerEntry."Dimension Set ID";
+          BankRecLine.VALIDATE(Cleared,Cleared);
+          BankRecLine.INSERT(TRUE);
+          BankRecSubLine.DELETE;
+          NextBankRecLineNo := NextBankRecLineNo + 10000;
+        UNTIL BankRecSubLine.NEXT = 0;
+      END;
+      DepositBankRecLine := BankRecLine;
+    END;
+
+    [External]
+    PROCEDURE CollapseLines@1480002(VAR DepositBankRecLine@1480000 : Record 10121);
+    VAR
+      BankRecLine@1480004 : Record 10121;
+      BankRecSubLine@1480001 : Record 10126;
+      TempBankRecSubLine@1020000 : TEMPORARY Record 10126;
+      TotalDepositAmount@1480002 : Decimal;
+      NextSubLineNo@1480003 : Integer;
+    BEGIN
+      WITH DepositBankRecLine DO BEGIN
+        IF ("Record Type" <> "Record Type"::Deposit) OR
+           ("Collapse Status" <> "Collapse Status"::"Expanded Deposit Line") OR
+           ("External Document No." = '')
+        THEN
+          EXIT;
+
+        BankRecLine.SETCURRENTKEY("Bank Account No.","Statement No.","Record Type","External Document No.");
+        BankRecLine.SETRANGE("Bank Account No.","Bank Account No.");
+        BankRecLine.SETRANGE("Statement No.","Statement No.");
+        BankRecLine.SETRANGE("Record Type","Record Type");
+        BankRecLine.SETRANGE("External Document No.","External Document No.");
+        IF BankRecLine.COUNT > 1 THEN BEGIN
+          BankRecSubLine.SETRANGE("Bank Account No.","Bank Account No.");
+          BankRecSubLine.SETRANGE("Statement No.","Statement No.");
+
+          TotalDepositAmount := 0;
+          NextSubLineNo := 1;
+          BankRecLine.FINDSET;
+          REPEAT
+            BankRecSubLine.SETRANGE("Bank Rec. Line No.",BankRecLine."Line No.");
+            IF NOT BankRecSubLine.FINDSET THEN BEGIN
+              BankRecSubLine.INIT;
+              BankRecSubLine.TRANSFERFIELDS(BankRecLine,FALSE);
+              BankRecSubLine."Bank Account No." := "Bank Account No.";
+              BankRecSubLine."Statement No." := "Statement No.";
+              BankRecSubLine."Bank Rec. Line No." := "Line No.";
+              BankRecSubLine."Line No." := NextSubLineNo;
+              BankRecSubLine.INSERT;
+              NextSubLineNo += 1;
+              CopyBankRecSubLineToTemp(TempBankRecSubLine,BankRecSubLine);
+              BankRecSubLine.DELETE;
+            END ELSE
+              REPEAT
+                CopyBankRecSubLineToTemp(TempBankRecSubLine,BankRecSubLine);
+              UNTIL BankRecSubLine.NEXT = 0;
+            BankRecSubLine.DELETEALL;
+            TotalDepositAmount := TotalDepositAmount + BankRecLine.Amount;
+            BankRecLine.DELETE;
+          UNTIL BankRecLine.NEXT = 0;
+          CopyBankRecSubLineFromTemp(TempBankRecSubLine,"Line No.");
+
+          UpdateLedgers;
+          "Document Type" := 0;
+          "Document No." := '';
+          Amount := TotalDepositAmount;
+          Cleared := FALSE;
+          "Cleared Amount" := 0;
+          "Bank Ledger Entry No." := 0;
+          "Check Ledger Entry No." := 0;
+          "Shortcut Dimension 1 Code" := '';
+          "Shortcut Dimension 2 Code" := '';
+          "Collapse Status" := "Collapse Status"::"Collapsed Deposit";
+
+          INSERT;
+        END ELSE BEGIN
+          "Collapse Status" := 0;
+          MODIFY;
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE ShowDimensions@1020002();
+    BEGIN
+      "Dimension Set ID" :=
+        DimMgt.EditDimensionSet2("Dimension Set ID",STRSUBSTNO('%1 %2 %3',"Document Type","Document No.","Line No."),
+          "Shortcut Dimension 1 Code","Shortcut Dimension 2 Code");
+    END;
+
+    LOCAL PROCEDURE UpdateLedgers@1020003();
+    BEGIN
+      Positive := (Amount > 0);
+      BankRecPost.UpdateLedgers(Rec,SetStatus::Cleared);
+    END;
+
+    LOCAL PROCEDURE CopyBankRecSubLineToTemp@1020001(VAR TempBankRecSubLine@1020001 : TEMPORARY Record 10126;BankRecSubLine@1020000 : Record 10126);
+    BEGIN
+      TempBankRecSubLine := BankRecSubLine;
+      TempBankRecSubLine.INSERT;
+    END;
+
+    LOCAL PROCEDURE CopyBankRecSubLineFromTemp@1020007(VAR TempBankRecSubLine@1020002 : TEMPORARY Record 10126;LineNo@1020003 : Integer);
+    VAR
+      BankRecSubLine@1020000 : Record 10126;
+      NextSubLineNo@1020001 : Integer;
+    BEGIN
+      IF TempBankRecSubLine.FINDSET THEN BEGIN
+        REPEAT
+          NextSubLineNo += 1;
+          BankRecSubLine := TempBankRecSubLine;
+          BankRecSubLine."Bank Rec. Line No." := LineNo;
+          BankRecSubLine."Line No." := NextSubLineNo;
+          BankRecSubLine.INSERT;
+        UNTIL TempBankRecSubLine.NEXT = 0;
+        TempBankRecSubLine.DELETEALL;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

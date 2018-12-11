@@ -1,0 +1,370 @@
+OBJECT Table 2115 O365 Coupon Claim
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:14:36 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 2117=imd;
+    OnInsert=BEGIN
+               SetLastModifiedDateTime;
+             END;
+
+    OnModify=BEGIN
+               SetLastModifiedDateTime;
+             END;
+
+    OnRename=BEGIN
+               SetLastModifiedDateTime;
+             END;
+
+    CaptionML=ENU=O365 Coupon Claim;
+    LookupPageID=Page2165;
+    DrillDownPageID=Page2165;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Claim ID            ;Text150       ;CaptionML=ENU=Claim ID }
+    { 2   ;   ;Graph Contact ID    ;Text250       ;OnValidate=BEGIN
+                                                                UpdateCustomerId;
+                                                              END;
+
+                                                   CaptionML=ENU=Graph Contact ID }
+    { 3   ;   ;Usage               ;Option        ;CaptionML=ENU=Usage;
+                                                   OptionCaptionML=ENU=oneTime,multiUse;
+                                                   OptionString=oneTime,multiUse }
+    { 4   ;   ;Offer               ;Text250       ;CaptionML=ENU=Offer }
+    { 5   ;   ;Terms               ;Text250       ;CaptionML=ENU=Terms }
+    { 6   ;   ;Code                ;Text30        ;CaptionML=ENU=Code }
+    { 7   ;   ;Expiration          ;Date          ;CaptionML=ENU=Expiration }
+    { 8   ;   ;Discount Value      ;Decimal       ;OnValidate=BEGIN
+                                                                UpdateAmountText;
+                                                              END;
+
+                                                   CaptionML=ENU=Discount Value;
+                                                   AutoFormatType=1 }
+    { 9   ;   ;Discount Type       ;Option        ;OnValidate=BEGIN
+                                                                UpdateAmountText;
+                                                              END;
+
+                                                   CaptionML=ENU=Discount Type;
+                                                   OptionCaptionML=ENU=Custom,%,Amount;
+                                                   OptionString=Custom,%,Amount }
+    { 10  ;   ;Created DateTime    ;DateTime      ;CaptionML=ENU=Created DateTime }
+    { 11  ;   ;Is Valid            ;Boolean       ;CaptionML=ENU=Is Valid }
+    { 12  ;   ;Status Text         ;Text50        ;CaptionML=ENU=Status }
+    { 13  ;   ;Amount Text         ;Text30        ;CaptionML=ENU=Discount }
+    { 14  ;   ;Is applied          ;Boolean       ;FieldClass=FlowField;
+                                                   CalcFormula=Exist("O365 Coupon Claim Doc. Link" WHERE (Claim ID=FIELD(Claim ID),
+                                                                                                          Document Type=FIELD(Document Type Filter),
+                                                                                                          Document No.=FIELD(Document No. Filter),
+                                                                                                          Graph Contact ID=FIELD(Graph Contact ID)));
+                                                   CaptionML=ENU=Is applied }
+    { 15  ;   ;Document Type Filter;Option        ;FieldClass=FlowFilter;
+                                                   TableRelation="Sales Header"."Document Type";
+                                                   CaptionML=ENU=Document Type Filter;
+                                                   OptionCaptionML=ENU=Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order;
+                                                   OptionString=Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order }
+    { 16  ;   ;Document No. Filter ;Code20        ;FieldClass=FlowFilter;
+                                                   TableRelation="Sales Header".No.;
+                                                   CaptionML=ENU=Document No. Filter }
+    { 17  ;   ;Offer Blob          ;BLOB          ;CaptionML=ENU=Offer Blob }
+    { 18  ;   ;Terms Blob          ;BLOB          ;CaptionML=ENU=Terms Blob }
+    { 8001;   ;Last Modified DateTime;DateTime    ;CaptionML=ENU=Last Modified DateTime }
+    { 8002;   ;Customer Id         ;GUID          ;CaptionML=ENU=Customer Id }
+  }
+  KEYS
+  {
+    {    ;Claim ID,Graph Contact ID               ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+    { 1   ;Brick               ;Status Text,Code,Amount Text,Offer       }
+  }
+  CODE
+  {
+    VAR
+      O365Discounts@1000 : Codeunit 2155;
+      AppliedTxt@1001 : TextConst 'ENU=Applied';
+      ClaimedTxt@1006 : TextConst 'ENU=Claimed';
+      ExpiresTodayTxt@1002 : TextConst 'ENU=Expires today';
+      ExpiresTomorrowTxt@1003 : TextConst 'ENU=Expires tomorrow';
+      ExpiresInTxt@1004 : TextConst '@@@="%1 = a number of days, larger than 2, ex. 5";ENU=Expires in %1 days';
+      ExpiredTxt@1005 : TextConst 'ENU=Expired';
+      MustApplyDiscountManuallyMsg@1008 : TextConst 'ENU=You must apply this discount manually.';
+      CouponHasAlreadyBeenAppliedErr@1009 : TextConst 'ENU=This coupon has already been applied.';
+      MustUnapplyDiscountManuallyMsg@1011 : TextConst 'ENU=You must unapply this discount manually.';
+      UnapplyDiscountPercentageOptionStringTxt@1010 : TextConst 'ENU=Clear invoice discount,Let me change discount';
+      PercentDiscountTxt@1013 : TextConst '@@@="%1 = a number indicating the discount value, ex. 8";ENU=%1% off';
+      AmountDiscountTxt@1014 : TextConst '@@@="%1 = currency symbol, ex. $. %2 = a number indicating the discount value, ex. 8";ENU=%1%2 off';
+      GraphIntContact@1015 : Codeunit 5461;
+      CouponAlreadyUsedOnInvoiceErr@1007 : TextConst '@@@="%1 = document no.";ENU=This coupon has already been applied to invoice %1. Remove it there, and then use it here.';
+      CouponAlreadyUsedOnEstimateErr@1017 : TextConst '@@@="%1 = document no.";ENU=This coupon has already been applied to estimate %1. Remove it there, and then use it here.';
+      NoCouponsTxt@1012 : TextConst 'ENU=You have one or more coupons that you can apply.';
+
+    PROCEDURE GetAppliedClaimsForSalesDocument@6(SalesHeader@1000 : Record 36) CouponCodes : Text;
+    BEGIN
+      SETRANGE("Document Type Filter",SalesHeader."Document Type");
+      SETRANGE("Document No. Filter",SalesHeader."No.");
+      SETRANGE("Is applied",TRUE);
+      IF NOT FINDSET THEN
+        EXIT(NoCouponsTxt);
+
+      UpdateAmountText;
+      IF Code <> '' THEN
+        CouponCodes := Code
+      ELSE
+        CouponCodes := "Amount Text";
+      IF NEXT <> 0 THEN
+        REPEAT
+          CouponCodes += STRSUBSTNO(', %1',GetCouponPseudoCode);
+        UNTIL NEXT = 0;
+    END;
+
+    PROCEDURE GetOffer@14() : Text;
+    VAR
+      TempBlob@1000 : Record 99008535;
+      CR@1001 : Text[1];
+    BEGIN
+      CALCFIELDS("Offer Blob");
+      IF NOT "Offer Blob".HASVALUE THEN
+        EXIT(Offer);
+      CR[1] := 10;
+      TempBlob.Blob := "Offer Blob";
+      EXIT(TempBlob.ReadAsText(CR,TEXTENCODING::Windows));
+    END;
+
+    PROCEDURE SetOffer@15(NewOffer@1001 : Text);
+    VAR
+      TempBlob@1000 : Record 99008535;
+    BEGIN
+      CLEAR("Offer Blob");
+      Offer := COPYSTR(NewOffer,1,MAXSTRLEN(Offer));
+      IF STRLEN(NewOffer) <= MAXSTRLEN(Offer) THEN
+        EXIT; // No need to store anything in the blob
+      IF NewOffer = '' THEN
+        EXIT;
+      TempBlob.WriteAsText(NewOffer,TEXTENCODING::Windows);
+      "Offer Blob" := TempBlob.Blob;
+      MODIFY;
+    END;
+
+    PROCEDURE GetTerms@16() : Text;
+    VAR
+      TempBlob@1000 : Record 99008535;
+      CR@1001 : Text[1];
+    BEGIN
+      CALCFIELDS("Terms Blob");
+      IF NOT "Terms Blob".HASVALUE THEN
+        EXIT(Terms);
+      CR[1] := 10;
+      TempBlob.Blob := "Terms Blob";
+      EXIT(TempBlob.ReadAsText(CR,TEXTENCODING::Windows));
+    END;
+
+    PROCEDURE SetTerms@17(NewTerms@1001 : Text);
+    VAR
+      TempBlob@1000 : Record 99008535;
+    BEGIN
+      CLEAR("Terms Blob");
+      Terms := COPYSTR(NewTerms,1,MAXSTRLEN(Terms));
+      IF STRLEN(NewTerms) <= MAXSTRLEN(Terms) THEN
+        EXIT; // No need to store anything in the blob
+      IF NewTerms = '' THEN
+        EXIT;
+      TempBlob.WriteAsText(NewTerms,TEXTENCODING::Windows);
+      "Terms Blob" := TempBlob.Blob;
+      MODIFY;
+    END;
+
+    PROCEDURE GetCouponPseudoCode@11() : Text;
+    BEGIN
+      IF Code <> '' THEN
+        EXIT(Code);
+
+      UpdateAmountText;
+      EXIT("Amount Text");
+    END;
+
+    LOCAL PROCEDURE UpdateAmountText@2();
+    VAR
+      Currency@1000 : Record 4;
+    BEGIN
+      CLEAR("Amount Text");
+      IF "Discount Value" = 0 THEN
+        EXIT;
+
+      IF "Discount Type" = "Discount Type"::"%" THEN
+        "Amount Text" := STRSUBSTNO(PercentDiscountTxt,"Discount Value");
+
+      IF "Discount Type" = "Discount Type"::Amount THEN
+        "Amount Text" := STRSUBSTNO(AmountDiscountTxt,Currency.ResolveGLCurrencySymbol(''),"Discount Value");
+    END;
+
+    PROCEDURE UpdateStatusText@1();
+    BEGIN
+      "Status Text" := GetStatusText;
+    END;
+
+    PROCEDURE Apply@3() : Boolean;
+    VAR
+      O365CouponClaimDocLink@1002 : Record 2116;
+      SalesHeader@1001 : Record 36;
+      O365SalesInvoiceDiscount@1005 : Page 2155;
+    BEGIN
+      IF "Is applied" THEN
+        EXIT;
+
+      IF NOT SalesHeader.GET(GETRANGEMIN("Document Type Filter"),GETRANGEMIN("Document No. Filter")) THEN
+        EXIT;
+
+      IF Usage = Usage::oneTime THEN BEGIN
+        O365CouponClaimDocLink.SETRANGE("Claim ID","Claim ID");
+        O365CouponClaimDocLink.SETRANGE("Graph Contact ID","Graph Contact ID");
+        IF O365CouponClaimDocLink.FINDFIRST THEN BEGIN
+          IF O365CouponClaimDocLink."Document Type" = O365CouponClaimDocLink."Document Type"::Invoice THEN
+            ERROR(CouponAlreadyUsedOnInvoiceErr,O365CouponClaimDocLink."Document No.");
+          ERROR(CouponAlreadyUsedOnEstimateErr,O365CouponClaimDocLink."Document No.");
+        END;
+      END;
+
+      IF ("Discount Value" > 0) AND
+         ("Discount Type" = "Discount Type"::"%") AND (SalesHeader."Invoice Discount Value" = 0)
+      THEN BEGIN
+        O365SalesInvoiceDiscount.SETRECORD(SalesHeader);
+        O365SalesInvoiceDiscount.SetInitialDiscountPercentage("Discount Value");
+        O365SalesInvoiceDiscount.LOOKUPMODE := TRUE;
+        IF O365SalesInvoiceDiscount.RUNMODAL <> ACTION::LookupOK THEN
+          EXIT;
+      END ELSE BEGIN
+        MESSAGE(MustApplyDiscountManuallyMsg);
+        IF PAGE.RUNMODAL(PAGE::"O365 Sales Invoice Discount",SalesHeader) <> ACTION::LookupOK THEN
+          EXIT; // The user did not apply any discount
+      END;
+
+      O365CouponClaimDocLink."Claim ID" := "Claim ID";
+      O365CouponClaimDocLink."Graph Contact ID" := "Graph Contact ID";
+      O365CouponClaimDocLink."Document Type" := GETRANGEMIN("Document Type Filter");
+      O365CouponClaimDocLink."Document No." := GETRANGEMIN("Document No. Filter");
+      IF NOT O365CouponClaimDocLink.INSERT THEN
+        ERROR(CouponHasAlreadyBeenAppliedErr);
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE Unapply@5() : Boolean;
+    VAR
+      O365CouponClaimDocLink@1002 : Record 2116;
+      SalesHeader@1001 : Record 36;
+      Choice@1000 : Integer;
+      OptionString@1003 : Text;
+    BEGIN
+      IF NOT O365CouponClaimDocLink.GET(
+           "Claim ID","Graph Contact ID",GETRANGEMIN("Document Type Filter"),GETRANGEMIN("Document No. Filter"))
+      THEN
+        EXIT;
+
+      IF NOT SalesHeader.GET(GETRANGEMIN("Document Type Filter"),GETRANGEMIN("Document No. Filter")) THEN
+        EXIT;
+
+      IF ("Discount Value" > 0) AND ("Discount Type" = "Discount Type"::"%") THEN BEGIN
+        OptionString := UnapplyDiscountPercentageOptionStringTxt;
+        Choice := STRMENU(OptionString);
+        CASE Choice OF
+          0:
+            EXIT(FALSE); // Cancel
+          1:
+            O365Discounts.ApplyInvoiceDiscountPercentage(SalesHeader,0);
+          2:
+            IF PAGE.RUNMODAL(PAGE::"O365 Sales Invoice Discount",SalesHeader) <> ACTION::LookupOK THEN
+              EXIT; // The user did not unapply any discount;
+        END;
+      END ELSE BEGIN
+        MESSAGE(MustUnapplyDiscountManuallyMsg);
+        IF PAGE.RUNMODAL(PAGE::"O365 Sales Invoice Discount",SalesHeader) <> ACTION::LookupOK THEN
+          EXIT; // The user did not apply any discount
+      END;
+
+      O365CouponClaimDocLink.DELETE;
+      EXIT(TRUE);
+    END;
+
+    [External]
+    PROCEDURE RedeemCouponsForSalesDocument@7(PostedSalesHeader@1000 : Record 36);
+    BEGIN
+      IF PostedSalesHeader."No." <> '' THEN
+        EXIT;
+    END;
+
+    [External]
+    PROCEDURE RedeemCoupon@8(CustomerNo@1001 : Code[20]);
+    BEGIN
+      IF CustomerNo <> '' THEN
+        EXIT;
+    END;
+
+    LOCAL PROCEDURE GetStatusText@4() : Text[50];
+    VAR
+      DaysUntilExpiration@1001 : Integer;
+    BEGIN
+      CALCFIELDS("Is applied");
+      IF "Is applied" THEN
+        EXIT(AppliedTxt);
+
+      IF NOT "Is Valid" THEN
+        EXIT(ClaimedTxt);
+
+      DaysUntilExpiration := Expiration - WORKDATE;
+
+      IF DaysUntilExpiration < 0 THEN
+        EXIT(ExpiredTxt);
+
+      IF DaysUntilExpiration = 0 THEN
+        EXIT(ExpiresTodayTxt);
+
+      IF DaysUntilExpiration = 1 THEN
+        EXIT(ExpiresTomorrowTxt);
+
+      EXIT(STRSUBSTNO(ExpiresInTxt,DaysUntilExpiration));
+    END;
+
+    PROCEDURE AppliedStatusText@13() : Text[50];
+    BEGIN
+      EXIT(AppliedTxt);
+    END;
+
+    PROCEDURE CouponsExistForCustomer@9(CustomerNo@1000 : Code[20]) : Boolean;
+    VAR
+      O365CouponClaim@1002 : Record 2115;
+      GraphContactID@1001 : Text[250];
+    BEGIN
+      IF NOT GraphIntContact.FindGraphContactIdFromCustomerNo(GraphContactID,CustomerNo) THEN
+        EXIT;
+
+      O365CouponClaim.SETRANGE("Graph Contact ID",GraphContactID);
+      EXIT(NOT O365CouponClaim.ISEMPTY);
+    END;
+
+    PROCEDURE UpdateCustomerId@12();
+    VAR
+      Customer@1000 : Record 18;
+      Contact@1001 : Record 5050;
+    BEGIN
+      IF NOT GraphIntContact.FindOrCreateCustomerFromGraphContactSafe("Graph Contact ID",Customer,Contact) THEN
+        EXIT;
+
+      "Customer Id" := Customer.Id;
+    END;
+
+    LOCAL PROCEDURE SetLastModifiedDateTime@10();
+    BEGIN
+      "Last Modified DateTime" := CURRENTDATETIME;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

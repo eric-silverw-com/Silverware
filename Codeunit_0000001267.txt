@@ -1,0 +1,198 @@
+OBJECT Codeunit 1267 Password Helper
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:05 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      InsufficientPassLengthErr@1000 : TextConst 'ENU=The password must contain at least 8 characters.';
+      CharacterSetOption@1001 : 'Uppercase,Lowercase,Number,SpecialCharacter';
+
+    [External]
+    PROCEDURE GeneratePassword@3(Length@1000 : Integer) : Text;
+    VAR
+      RNGCryptoServiceProvider@1001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Security.Cryptography.RNGCryptoServiceProvider";
+      DotNetArray@1004 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array";
+      DotNetType@1007 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Type";
+      Result@1003 : Text;
+      I@1006 : Integer;
+      Step@1013 : Integer;
+      CharacterIndex@1008 : Integer;
+      CharacterModValue@1015 : Integer;
+      CharacterSet@1002 : Integer;
+      UpercaseCharacterIncluded@1009 : Boolean;
+      LowercaseCharacterIncluded@1010 : Boolean;
+      NumericCharacterIncluded@1011 : Boolean;
+      SpecialCharacterIncluded@1012 : Boolean;
+      ByteValue@1005 : Byte;
+    BEGIN
+      IF Length < 8 THEN
+        ERROR(InsufficientPassLengthErr);
+
+      Result := '';
+
+      // RNGCryptoServiceProvider ensures randomness of data
+      RNGCryptoServiceProvider := RNGCryptoServiceProvider.RNGCryptoServiceProvider;
+      DotNetType := DotNetType.GetType('System.Byte',FALSE);
+      DotNetArray := DotNetArray.CreateInstance(DotNetType,Length * 2);
+      RNGCryptoServiceProvider.GetNonZeroBytes(DotNetArray);
+
+      I := 0;
+      Step := 2;
+      REPEAT
+        CharacterSet := DotNetArray.GetValue(I);
+        CharacterSet := CharacterSet MOD 4;
+
+        // We must ensure we have included all types of character.
+        // If we are within the last 4 characters of the string we will check.
+        // If we are missing one, use that set instead.
+        IF STRLEN(Result) >= Length - 4 THEN BEGIN
+          IF NOT LowercaseCharacterIncluded THEN
+            CharacterSet := CharacterSetOption::Lowercase;
+
+          IF NOT UpercaseCharacterIncluded THEN
+            CharacterSet := CharacterSetOption::Uppercase;
+
+          IF NOT NumericCharacterIncluded THEN
+            CharacterSet := CharacterSetOption::Number;
+
+          IF NOT SpecialCharacterIncluded THEN
+            CharacterSet := CharacterSetOption::SpecialCharacter;
+
+          // Write back updated character set
+          ByteValue := CharacterSet;
+          DotNetArray.SetValue(ByteValue,I);
+        END;
+
+        CASE CharacterSet OF
+          CharacterSetOption::Lowercase:
+            LowercaseCharacterIncluded := TRUE;
+          CharacterSetOption::Uppercase:
+            UpercaseCharacterIncluded := TRUE;
+          CharacterSetOption::Number:
+            NumericCharacterIncluded := TRUE;
+          CharacterSetOption::SpecialCharacter:
+            SpecialCharacterIncluded := TRUE;
+        END;
+
+        CharacterIndex := DotNetArray.GetValue(I + 1);
+        CharacterModValue := GetCharacterSetSize(CharacterSet);
+
+        // We must ensure we meet certain complexity requirements used by several online services.
+        // If the previous 2 characters are also the same type as this one
+        // and the previous 2 characters are sequential from (or the same as) the current value.
+        // We will pick the next character instead.
+        IF STRLEN(Result) >= 2 THEN
+          IF IsCharacterSetEqual(CharacterSet,DotNetArray.GetValue(I - Step),DotNetArray.GetValue(I - 2 * Step)) THEN
+            IF IsCharacterValuesEqualOrSequential(
+                 CharacterIndex,DotNetArray.GetValue(I - Step + 1),DotNetArray.GetValue(I - 2 * Step + 1),CharacterSet)
+            THEN BEGIN
+              CharacterIndex := (CharacterIndex + 1) MOD CharacterModValue;
+
+              // Write back updated character index
+              ByteValue := CharacterIndex;
+              DotNetArray.SetValue(ByteValue,I + 1);
+            END;
+
+        CharacterIndex := CharacterIndex MOD CharacterModValue;
+
+        Result += GetCharacterFromCharacterSet(CharacterSet,CharacterIndex);
+
+        I += Step;
+      UNTIL I >= DotNetArray.Length - 1;
+
+      EXIT(Result);
+    END;
+
+    LOCAL PROCEDURE GetCharacterSetSize@4(CharacterSet@1000 : Integer) : Integer;
+    BEGIN
+      CASE CharacterSet OF
+        CharacterSetOption::Lowercase:
+          EXIT(STRLEN(GetCharacterPool));
+        CharacterSetOption::Uppercase:
+          EXIT(STRLEN(GetCharacterPool));
+        CharacterSetOption::Number:
+          EXIT(10);
+        CharacterSetOption::SpecialCharacter:
+          EXIT(STRLEN(GetSpecialCharacterPool));
+      END;
+    END;
+
+    LOCAL PROCEDURE GetCharacterPool@5() : Text;
+    BEGIN
+      EXIT('ABCDEFGHIJKLNOPQRSTUVWXYZ');
+    END;
+
+    LOCAL PROCEDURE GetSpecialCharacterPool@8() : Text;
+    BEGIN
+      EXIT('!@#$*');
+    END;
+
+    LOCAL PROCEDURE GetCharacterFromCharacterSet@20(CharacterSet@1000 : Integer;CharacterIndex@1001 : Integer) : Text;
+    BEGIN
+      CASE CharacterSet OF
+        CharacterSetOption::Lowercase:
+          EXIT(LOWERCASE(FORMAT(GetCharacterPool[CharacterIndex + 1])));
+        CharacterSetOption::Uppercase:
+          EXIT(UPPERCASE(FORMAT(GetCharacterPool[CharacterIndex + 1])));
+        CharacterSetOption::Number:
+          EXIT(FORMAT(CharacterIndex));
+        CharacterSetOption::SpecialCharacter:
+          EXIT(FORMAT(GetSpecialCharacterPool[CharacterIndex + 1]));
+      END;
+    END;
+
+    LOCAL PROCEDURE IsCharacterSetEqual@6(Type1@1000 : Integer;Type2@1001 : Integer;Type3@1002 : Integer) : Boolean;
+    VAR
+      NumberOfSets@1003 : Integer;
+    BEGIN
+      NumberOfSets := 4;
+      Type1 := Type1 MOD NumberOfSets;
+      Type2 := Type2 MOD NumberOfSets;
+      Type3 := Type3 MOD NumberOfSets;
+
+      IF (Type1 = Type2) AND (Type1 = Type3) THEN
+        EXIT(TRUE);
+
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE IsCharacterValuesEqualOrSequential@7(Character1@1000 : Integer;Character2@1001 : Integer;Character3@1002 : Integer;CharacterSet@1003 : Integer) : Boolean;
+    VAR
+      CharacterModValue@1004 : Integer;
+    BEGIN
+      CharacterModValue := GetCharacterSetSize(CharacterSet);
+      Character1 := Character1 MOD CharacterModValue;
+      Character2 := Character2 MOD CharacterModValue;
+      Character3 := Character3 MOD CharacterModValue;
+
+      // e.g. 'aaa'
+      IF (Character1 = Character2) AND (Character1 = Character3) THEN
+        EXIT(TRUE);
+
+      // e.g. 'cba'
+      IF (Character1 = Character2 + 1) AND (Character1 = Character3 + 2) THEN
+        EXIT(TRUE);
+
+      // e.g. 'abc'
+      IF (Character1 = Character2 - 1) AND (Character1 = Character3 - 2) THEN
+        EXIT(TRUE);
+
+      EXIT(FALSE);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

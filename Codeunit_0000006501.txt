@@ -1,0 +1,1201 @@
+OBJECT Codeunit 6501 Item Tracking Data Collection
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:39 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 6507=rd,
+                TableData 6508=rd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text004@1003 : TextConst 'ENU=Counting records...';
+      TempGlobalReservEntry@1010 : TEMPORARY Record 337;
+      TempGlobalAdjustEntry@1006 : TEMPORARY Record 337;
+      TempGlobalEntrySummary@1001 : TEMPORARY Record 338;
+      TempGlobalChangedEntrySummary@1012 : TEMPORARY Record 338;
+      CurrItemTrackingCode@1002 : Record 6502;
+      TempGlobalTrackingSpec@1005 : TEMPORARY Record 336;
+      CurrBinCode@1000 : Code[20];
+      LastSummaryEntryNo@1018 : Integer;
+      LastReservEntryNo@1020 : Integer;
+      FullGlobalDataSetExists@1011 : Boolean;
+      AvailabilityWarningsMsg@1013 : TextConst 'ENU=The data used for availability calculation has been updated.\There are availability warnings on one or more lines.';
+      NoAvailabilityWarningsMsg@1014 : TextConst 'ENU=The data used for availability calculation has been updated.\There are no availability warnings.';
+      Text009@1015 : TextConst 'ENU=%1 List';
+      Text010@1016 : TextConst 'ENU=%1 %2 - Availability';
+      Text011@1017 : TextConst 'ENU=Item Tracking - Select Entries';
+      PartialGlobalDataSetExists@1019 : Boolean;
+      SkipLot@1023 : Boolean;
+      Text013@1024 : TextConst 'ENU=Neutralize consumption/output';
+      LotNoBySNNotFoundErr@1004 : TextConst '@@@=%1 - serial number.;ENU=A lot number could not be found for serial number %1.';
+
+    [External]
+    PROCEDURE AssistEditTrackingNo@1026(VAR TempTrackingSpecification@1000 : TEMPORARY Record 336;SearchForSupply@1002 : Boolean;CurrentSignFactor@1003 : Integer;LookupMode@1004 : 'Serial No.,Lot No.';MaxQuantity@1005 : Decimal);
+    VAR
+      ItemTrackingSummaryForm@1006 : Page 6500;
+      Window@1001 : Dialog;
+      AvailableQty@1007 : Decimal;
+      AdjustmentQty@1008 : Decimal;
+      QtyOnLine@1010 : Decimal;
+      QtyHandledOnLine@1011 : Decimal;
+      NewQtyOnLine@1009 : Decimal;
+    BEGIN
+      OnBeforeAssistEditTrackingNo(TempTrackingSpecification,SearchForSupply,CurrentSignFactor,LookupMode,MaxQuantity);
+
+      Window.OPEN(Text004);
+
+      IF NOT FullGlobalDataSetExists THEN
+        RetrieveLookupData(TempTrackingSpecification,TRUE);
+
+      TempGlobalReservEntry.RESET;
+      TempGlobalEntrySummary.RESET;
+
+      // Select the proper key on form
+      TempGlobalEntrySummary.SETCURRENTKEY("Expiration Date");
+      TempGlobalEntrySummary.SETFILTER("Expiration Date",'<>%1',0D);
+      IF TempGlobalEntrySummary.ISEMPTY THEN
+        TempGlobalEntrySummary.SETCURRENTKEY("Lot No.","Serial No.");
+      TempGlobalEntrySummary.SETRANGE("Expiration Date");
+      ItemTrackingSummaryForm.SETTABLEVIEW(TempGlobalEntrySummary);
+
+      TempGlobalEntrySummary.SETCURRENTKEY("Lot No.","Serial No.");
+      CASE LookupMode OF
+        LookupMode::"Serial No.":
+          BEGIN
+            IF TempTrackingSpecification."Lot No." <> '' THEN
+              TempGlobalEntrySummary.SETRANGE("Lot No.",TempTrackingSpecification."Lot No.");
+            TempGlobalEntrySummary.SETRANGE("Serial No.",TempTrackingSpecification."Serial No.");
+            IF TempGlobalEntrySummary.FINDFIRST THEN
+              ItemTrackingSummaryForm.SETRECORD(TempGlobalEntrySummary);
+            TempGlobalEntrySummary.SETFILTER("Serial No.",'<>%1','');
+            TempGlobalEntrySummary.SETFILTER("Table ID",'<>%1',0);
+            ItemTrackingSummaryForm.CAPTION := STRSUBSTNO(Text009,TempGlobalReservEntry.FIELDCAPTION("Serial No."));
+          END;
+        LookupMode::"Lot No.":
+          BEGIN
+            IF TempTrackingSpecification."Serial No." <> '' THEN
+              TempGlobalEntrySummary.SETRANGE("Serial No.",TempTrackingSpecification."Serial No.")
+            ELSE
+              TempGlobalEntrySummary.SETRANGE("Serial No.",'');
+            TempGlobalEntrySummary.SETRANGE("Lot No.",TempTrackingSpecification."Lot No.");
+            IF TempGlobalEntrySummary.FINDFIRST THEN
+              ItemTrackingSummaryForm.SETRECORD(TempGlobalEntrySummary);
+            TempGlobalEntrySummary.SETFILTER("Lot No.",'<>%1','');
+            ItemTrackingSummaryForm.CAPTION := STRSUBSTNO(Text009,TempGlobalEntrySummary.FIELDCAPTION("Lot No."));
+          END;
+      END;
+
+      ItemTrackingSummaryForm.SetCurrentBinAndItemTrkgCode(CurrBinCode,CurrItemTrackingCode);
+      ItemTrackingSummaryForm.SetSources(TempGlobalReservEntry,TempGlobalEntrySummary);
+      ItemTrackingSummaryForm.LOOKUPMODE(SearchForSupply);
+      ItemTrackingSummaryForm.SetSelectionMode(FALSE);
+
+      Window.CLOSE;
+      IF ItemTrackingSummaryForm.RUNMODAL = ACTION::LookupOK THEN BEGIN
+        ItemTrackingSummaryForm.GETRECORD(TempGlobalEntrySummary);
+
+        IF TempGlobalEntrySummary."Bin Active" THEN
+          AvailableQty := MinValueAbs(TempGlobalEntrySummary."Bin Content",TempGlobalEntrySummary."Total Available Quantity")
+        ELSE
+          AvailableQty := TempGlobalEntrySummary."Total Available Quantity";
+        QtyHandledOnLine := TempTrackingSpecification."Quantity Handled (Base)";
+        QtyOnLine := TempTrackingSpecification."Quantity (Base)" - QtyHandledOnLine;
+
+        IF CurrentSignFactor > 0 THEN BEGIN
+          AvailableQty := -AvailableQty;
+          QtyHandledOnLine := -QtyHandledOnLine;
+          QtyOnLine := -QtyOnLine;
+        END;
+
+        IF MaxQuantity < 0 THEN BEGIN
+          AdjustmentQty := MaxQuantity;
+          IF AvailableQty < 0 THEN
+            IF AdjustmentQty > AvailableQty THEN
+              AdjustmentQty := AvailableQty;
+          IF QtyOnLine + AdjustmentQty < 0 THEN
+            AdjustmentQty := -QtyOnLine;
+        END ELSE BEGIN
+          AdjustmentQty := AvailableQty;
+          IF AvailableQty < 0 THEN BEGIN
+            IF QtyOnLine + AdjustmentQty < 0 THEN
+              AdjustmentQty := -QtyOnLine;
+          END ELSE
+            AdjustmentQty := MinValueAbs(MaxQuantity,AvailableQty);
+        END;
+        IF LookupMode = LookupMode::"Serial No." THEN
+          TempTrackingSpecification.VALIDATE("Serial No.",TempGlobalEntrySummary."Serial No.");
+        TempTrackingSpecification.VALIDATE("Lot No.",TempGlobalEntrySummary."Lot No.");
+
+        TransferExpDateFromSummary(TempTrackingSpecification,TempGlobalEntrySummary);
+        IF TempTrackingSpecification.IsReclass THEN BEGIN
+          TempTrackingSpecification."New Serial No." := TempTrackingSpecification."Serial No.";
+          TempTrackingSpecification."New Lot No." := TempTrackingSpecification."Lot No.";
+        END;
+
+        NewQtyOnLine := QtyOnLine + AdjustmentQty + QtyHandledOnLine;
+        IF TempTrackingSpecification."Serial No." <> '' THEN
+          IF ABS(NewQtyOnLine) > 1 THEN
+            NewQtyOnLine := NewQtyOnLine / ABS(NewQtyOnLine); // Set to a signed value of 1.
+
+        TempTrackingSpecification.VALIDATE("Quantity (Base)",NewQtyOnLine);
+
+        OnAfterAssistEditTrackingNo(TempTrackingSpecification,TempGlobalEntrySummary);
+      END;
+    END;
+
+    [External]
+    PROCEDURE SelectMultipleTrackingNo@55(VAR TempTrackingSpecification@1004 : TEMPORARY Record 336;MaxQuantity@1000 : Decimal;CurrentSignFactor@1003 : Integer);
+    VAR
+      TempEntrySummary@1006 : TEMPORARY Record 338;
+      ItemTrackingSummaryForm@1002 : Page 6500;
+      Window@1001 : Dialog;
+      LookupMode@1005 : 'Serial No.,Lot No.,All';
+    BEGIN
+      CLEAR(ItemTrackingSummaryForm);
+      Window.OPEN(Text004);
+      LookupMode := LookupMode::All;
+      IF NOT FullGlobalDataSetExists THEN
+        RetrieveLookupData(TempTrackingSpecification,TRUE);
+
+      TempGlobalReservEntry.RESET;
+      TempGlobalEntrySummary.RESET;
+
+      // Swap sign if negative supply lines
+      IF CurrentSignFactor > 0 THEN
+        MaxQuantity := -MaxQuantity;
+
+      // Select the proper key
+      TempGlobalEntrySummary.SETCURRENTKEY("Expiration Date");
+      TempGlobalEntrySummary.SETFILTER("Expiration Date",'<>%1',0D);
+      IF TempGlobalEntrySummary.ISEMPTY THEN
+        TempGlobalEntrySummary.SETCURRENTKEY("Lot No.","Serial No.");
+      TempGlobalEntrySummary.SETRANGE("Expiration Date");
+
+      // Initialize form
+      ItemTrackingSummaryForm.CAPTION := Text011;
+      ItemTrackingSummaryForm.SETTABLEVIEW(TempGlobalEntrySummary);
+      TempGlobalEntrySummary.SETFILTER("Table ID",'<>%1',0); // Filter out summations
+      ItemTrackingSummaryForm.SetSources(TempGlobalReservEntry,TempGlobalEntrySummary);
+      ItemTrackingSummaryForm.SetSelectionMode(MaxQuantity <> 0);
+      ItemTrackingSummaryForm.LOOKUPMODE(TRUE);
+      ItemTrackingSummaryForm.SetMaxQuantity(MaxQuantity);
+      ItemTrackingSummaryForm.SetCurrentBinAndItemTrkgCode(CurrBinCode,CurrItemTrackingCode);
+
+      // Run preselection on form
+      ItemTrackingSummaryForm.AutoSelectTrackingNo;
+
+      Window.CLOSE;
+
+      IF NOT (ItemTrackingSummaryForm.RUNMODAL = ACTION::LookupOK) THEN
+        EXIT;
+      ItemTrackingSummaryForm.GetSelected(TempEntrySummary);
+      IF TempEntrySummary.ISEMPTY THEN
+        EXIT;
+
+      // Swap sign on the selected entries if parent is a negative supply line
+      IF CurrentSignFactor > 0 THEN // Negative supply lines
+        IF TempEntrySummary.FIND('-') THEN
+          REPEAT
+            TempEntrySummary."Selected Quantity" := -TempEntrySummary."Selected Quantity";
+            TempEntrySummary.MODIFY;
+          UNTIL TempEntrySummary.NEXT = 0;
+
+      // Modify the item tracking lines with the selected quantities
+      AddSelectedTrackingToDataSet(TempEntrySummary,TempTrackingSpecification,CurrentSignFactor);
+    END;
+
+    [External]
+    PROCEDURE LookupTrackingAvailability@62(VAR TempTrackingSpecification@1000 : TEMPORARY Record 336;LookupMode@1004 : 'Serial No.,Lot No.');
+    VAR
+      ItemTrackingSummaryForm@1001 : Page 6500;
+      Window@1012 : Dialog;
+    BEGIN
+      CASE LookupMode OF
+        LookupMode::"Serial No.":
+          IF TempTrackingSpecification."Serial No." = '' THEN
+            EXIT;
+        LookupMode::"Lot No.":
+          IF TempTrackingSpecification."Lot No." = '' THEN
+            EXIT;
+      END;
+
+      CLEAR(ItemTrackingSummaryForm);
+      Window.OPEN(Text004);
+      TempGlobalChangedEntrySummary.RESET;
+
+      IF NOT (PartialGlobalDataSetExists OR FullGlobalDataSetExists) THEN
+        RetrieveLookupData(TempTrackingSpecification,TRUE);
+
+      TempGlobalEntrySummary.RESET;
+      TempGlobalEntrySummary.SETCURRENTKEY("Lot No.","Serial No.");
+
+      TempGlobalReservEntry.RESET;
+
+      CASE LookupMode OF
+        LookupMode::"Serial No.":
+          BEGIN
+            TempGlobalEntrySummary.SETRANGE("Serial No.",TempTrackingSpecification."Serial No.");
+            TempGlobalEntrySummary.SETFILTER("Table ID",'<>%1',0); // Filter out summations
+            TempGlobalReservEntry.SETRANGE("Serial No.",TempTrackingSpecification."Serial No.");
+            ItemTrackingSummaryForm.CAPTION := STRSUBSTNO(
+                Text010,TempTrackingSpecification.FIELDCAPTION("Serial No."),TempTrackingSpecification."Serial No.");
+          END;
+        LookupMode::"Lot No.":
+          BEGIN
+            TempGlobalEntrySummary.SETRANGE("Serial No.",'');
+            TempGlobalEntrySummary.SETRANGE("Lot No.",TempTrackingSpecification."Lot No.");
+            TempGlobalReservEntry.SETRANGE("Lot No.",TempTrackingSpecification."Lot No.");
+            ItemTrackingSummaryForm.CAPTION := STRSUBSTNO(
+                Text010,TempTrackingSpecification.FIELDCAPTION("Lot No."),TempTrackingSpecification."Lot No.");
+          END;
+      END;
+
+      ItemTrackingSummaryForm.SetSources(TempGlobalReservEntry,TempGlobalEntrySummary);
+      ItemTrackingSummaryForm.SetCurrentBinAndItemTrkgCode(CurrBinCode,CurrItemTrackingCode);
+      ItemTrackingSummaryForm.LOOKUPMODE(FALSE);
+      ItemTrackingSummaryForm.SetSelectionMode(FALSE);
+      Window.CLOSE;
+      ItemTrackingSummaryForm.RUNMODAL;
+    END;
+
+    [External]
+    PROCEDURE RetrieveLookupData@54(VAR TrackingSpecification@1000 : TEMPORARY Record 336;FullDataSet@1005 : Boolean);
+    VAR
+      ItemLedgEntry@1001 : Record 32;
+      ReservEntry@1007 : Record 337;
+      TempReservEntry@1002 : TEMPORARY Record 337;
+      xTrackingSpecification@1006 : TEMPORARY Record 336;
+    BEGIN
+      LastSummaryEntryNo := 0;
+      LastReservEntryNo := 0;
+      xTrackingSpecification := TrackingSpecification;
+      TempGlobalReservEntry.RESET;
+      TempGlobalReservEntry.DELETEALL;
+      TempGlobalEntrySummary.RESET;
+      TempGlobalEntrySummary.DELETEALL;
+
+      ReservEntry.RESET;
+      IF ReservEntry.FINDLAST THEN
+        LastReservEntryNo := ReservEntry."Entry No.";
+      ReservEntry.SETCURRENTKEY(
+        "Item No.","Variant Code","Location Code","Item Tracking","Reservation Status","Lot No.","Serial No.");
+      ReservEntry.SETRANGE("Item No.",TrackingSpecification."Item No.");
+      ReservEntry.SETRANGE("Variant Code",TrackingSpecification."Variant Code");
+      ReservEntry.SETRANGE("Location Code",TrackingSpecification."Location Code");
+      ReservEntry.SETFILTER("Item Tracking",'<>%1',ReservEntry."Item Tracking"::None);
+
+      IF ReservEntry.FINDSET THEN
+        REPEAT
+          TempReservEntry := ReservEntry;
+          IF CanIncludeReservEntryToTrackingSpec(TempReservEntry) THEN
+            TempReservEntry.INSERT;
+        UNTIL ReservEntry.NEXT = 0;
+
+      ItemLedgEntry.RESET;
+      ItemLedgEntry.SETCURRENTKEY("Item No.",Open,"Variant Code","Location Code","Item Tracking",
+        "Lot No.","Serial No.");
+      ItemLedgEntry.SETRANGE("Item No.",TrackingSpecification."Item No.");
+      ItemLedgEntry.SETRANGE("Variant Code",TrackingSpecification."Variant Code");
+      ItemLedgEntry.SETRANGE(Open,TRUE);
+      ItemLedgEntry.SETRANGE("Location Code",TrackingSpecification."Location Code");
+
+      IF FullDataSet THEN BEGIN
+        TransferReservEntryToTempRec(TempReservEntry,TrackingSpecification);
+        TransferItemLedgToTempRec(ItemLedgEntry,TrackingSpecification);
+      END ELSE BEGIN
+        IF TrackingSpecification.FIND('-') THEN
+          REPEAT
+            ItemLedgEntry.SetTrackingFilterFromSpec(TrackingSpecification);
+            ReservEntry.SetTrackingFilterFromSpec(TrackingSpecification);
+            TransferReservEntryToTempRec(TempReservEntry,TrackingSpecification);
+            TransferItemLedgToTempRec(ItemLedgEntry,TrackingSpecification);
+          UNTIL TrackingSpecification.NEXT = 0;
+      END;
+
+      TempGlobalEntrySummary.RESET;
+      UpdateCurrentPendingQty;
+      TrackingSpecification := xTrackingSpecification;
+
+      PartialGlobalDataSetExists := TRUE;
+      FullGlobalDataSetExists := FullDataSet;
+      AdjustForDoubleEntries;
+
+      OnAfterRetrieveLookupData(TrackingSpecification,FullDataSet,TempGlobalReservEntry,TempGlobalEntrySummary);
+    END;
+
+    LOCAL PROCEDURE TransferItemLedgToTempRec@67(VAR ItemLedgEntry@1000 : Record 32;VAR TrackingSpecification@1001 : TEMPORARY Record 336);
+    VAR
+      IsHandled@1002 : Boolean;
+    BEGIN
+      IF ItemLedgEntry.FINDSET THEN
+        REPEAT
+          IF ItemLedgEntry.TrackingExists THEN BEGIN
+            TempGlobalReservEntry.INIT;
+            TempGlobalReservEntry."Entry No." := -ItemLedgEntry."Entry No.";
+            TempGlobalReservEntry."Reservation Status" := TempGlobalReservEntry."Reservation Status"::Surplus;
+            TempGlobalReservEntry.Positive := ItemLedgEntry.Positive;
+            TempGlobalReservEntry."Item No." := ItemLedgEntry."Item No.";
+            TempGlobalReservEntry."Location Code" := ItemLedgEntry."Location Code";
+            TempGlobalReservEntry."Quantity (Base)" := ItemLedgEntry."Remaining Quantity";
+            TempGlobalReservEntry."Source Type" := DATABASE::"Item Ledger Entry";
+            TempGlobalReservEntry."Source Ref. No." := ItemLedgEntry."Entry No.";
+            TempGlobalReservEntry."Serial No." := ItemLedgEntry."Serial No.";
+            TempGlobalReservEntry."Lot No." := ItemLedgEntry."Lot No.";
+            TempGlobalReservEntry."Variant Code" := ItemLedgEntry."Variant Code";
+
+            IF TempGlobalReservEntry.Positive THEN BEGIN
+              TempGlobalReservEntry."Warranty Date" := ItemLedgEntry."Warranty Date";
+              TempGlobalReservEntry."Expiration Date" := ItemLedgEntry."Expiration Date";
+              TempGlobalReservEntry."Expected Receipt Date" := 0D
+            END ELSE
+              TempGlobalReservEntry."Shipment Date" := DMY2DATE(31,12,9999);
+
+            IsHandled := FALSE;
+            OnTransferItemLedgToTempRecOnBeforeInsert(TempGlobalReservEntry,ItemLedgEntry,TrackingSpecification,IsHandled);
+            IF NOT IsHandled THEN
+              IF TempGlobalReservEntry.INSERT THEN
+                CreateEntrySummary(TrackingSpecification,TempGlobalReservEntry);
+          END;
+        UNTIL ItemLedgEntry.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE TransferReservEntryToTempRec@70(VAR TempReservEntry@1000 : TEMPORARY Record 337;VAR TrackingSpecification@1001 : TEMPORARY Record 336);
+    BEGIN
+      IF TempReservEntry.FINDSET THEN
+        REPEAT
+          TempGlobalReservEntry := TempReservEntry;
+          TempGlobalReservEntry."Transferred from Entry No." := 0;
+          OnAfterTransferReservEntryToTempRec(TempGlobalReservEntry,TempReservEntry);
+          IF TempGlobalReservEntry.INSERT THEN
+            CreateEntrySummary(TrackingSpecification,TempGlobalReservEntry);
+        UNTIL TempReservEntry.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE CreateEntrySummary@65(TrackingSpecification@1005 : TEMPORARY Record 336;TempReservEntry@1002 : TEMPORARY Record 337);
+    VAR
+      LookupMode@1000 : 'Serial No.,Lot No.';
+    BEGIN
+      CreateEntrySummary2(TrackingSpecification,LookupMode::"Serial No.",TempReservEntry);
+      CreateEntrySummary2(TrackingSpecification,LookupMode::"Lot No.",TempReservEntry);
+
+      OnAfterCreateEntrySummary(TrackingSpecification,TempGlobalEntrySummary);
+    END;
+
+    LOCAL PROCEDURE CreateEntrySummary2@68(TrackingSpecification@1005 : TEMPORARY Record 336;LookupMode@1003 : 'Serial No.,Lot No.';TempReservEntry@1002 : TEMPORARY Record 337);
+    VAR
+      DoInsert@1000 : Boolean;
+    BEGIN
+      TempGlobalEntrySummary.RESET;
+      TempGlobalEntrySummary.SETCURRENTKEY("Lot No.","Serial No.");
+
+      // Set filters
+      CASE LookupMode OF
+        LookupMode::"Serial No.":
+          BEGIN
+            IF TempReservEntry."Serial No." = '' THEN
+              EXIT;
+            TempGlobalEntrySummary.SetTrackingFilterFromReservEntry(TempReservEntry);
+          END;
+        LookupMode::"Lot No.":
+          BEGIN
+            TempGlobalEntrySummary.SetTrackingFilter('',TempReservEntry."Lot No.");
+            IF TempReservEntry."Serial No." <> '' THEN
+              TempGlobalEntrySummary.SETRANGE("Table ID",0)
+            ELSE
+              TempGlobalEntrySummary.SETFILTER("Table ID",'<>%1',0);
+          END;
+      END;
+
+      // If no summary exists, create new record
+      IF NOT TempGlobalEntrySummary.FINDFIRST THEN BEGIN
+        TempGlobalEntrySummary.INIT;
+        TempGlobalEntrySummary."Entry No." := LastSummaryEntryNo + 1;
+        LastSummaryEntryNo := TempGlobalEntrySummary."Entry No.";
+
+        IF (LookupMode = LookupMode::"Lot No.") AND (TempReservEntry."Serial No." <> '') THEN
+          TempGlobalEntrySummary."Table ID" := 0 // Mark as summation
+        ELSE
+          TempGlobalEntrySummary."Table ID" := TempReservEntry."Source Type";
+        IF LookupMode = LookupMode::"Serial No." THEN
+          TempGlobalEntrySummary."Serial No." := TempReservEntry."Serial No."
+        ELSE
+          TempGlobalEntrySummary."Serial No." := '';
+        TempGlobalEntrySummary."Lot No." := TempReservEntry."Lot No.";
+        TempGlobalEntrySummary."Bin Active" := CurrBinCode <> '';
+        OnBeforeUpdateBinContent(TempGlobalEntrySummary,TempReservEntry);
+        UpdateBinContent(TempGlobalEntrySummary);
+
+        // If consumption/output fill in double entry value here:
+        TempGlobalEntrySummary."Double-entry Adjustment" :=
+          MaxDoubleEntryAdjustQty(TrackingSpecification,TempGlobalEntrySummary);
+
+        DoInsert := TRUE;
+      END;
+
+      // Sum up values
+      IF TempReservEntry.Positive THEN BEGIN
+        TempGlobalEntrySummary."Warranty Date" := TempReservEntry."Warranty Date";
+        TempGlobalEntrySummary."Expiration Date" := TempReservEntry."Expiration Date";
+        IF TempReservEntry."Entry No." < 0 THEN // The record represents an Item ledger entry
+          TempGlobalEntrySummary."Total Quantity" += TempReservEntry."Quantity (Base)";
+        IF TempReservEntry."Reservation Status" = TempReservEntry."Reservation Status"::Reservation THEN
+          TempGlobalEntrySummary."Total Reserved Quantity" += TempReservEntry."Quantity (Base)";
+      END ELSE BEGIN
+        TempGlobalEntrySummary."Total Requested Quantity" -= TempReservEntry."Quantity (Base)";
+        IF TempReservEntry.HasSamePointerWithSpec(TrackingSpecification) THEN BEGIN
+          IF TempReservEntry."Reservation Status" = TempReservEntry."Reservation Status"::Reservation THEN
+            TempGlobalEntrySummary."Current Reserved Quantity" -= TempReservEntry."Quantity (Base)";
+          IF TempReservEntry."Entry No." > 0 THEN // The record represents a reservation entry
+            TempGlobalEntrySummary."Current Requested Quantity" -= TempReservEntry."Quantity (Base)";
+        END;
+      END;
+
+      // Update available quantity on the record
+      TempGlobalEntrySummary.UpdateAvailable;
+      IF DoInsert THEN
+        TempGlobalEntrySummary.INSERT
+      ELSE
+        TempGlobalEntrySummary.MODIFY;
+
+      OnAfterCreateEntrySummary2(TempGlobalEntrySummary,TempReservEntry);
+    END;
+
+    LOCAL PROCEDURE MinValueAbs@20(Value1@1000 : Decimal;Value2@1001 : Decimal) : Decimal;
+    BEGIN
+      IF ABS(Value1) < ABS(Value2) THEN
+        EXIT(Value1);
+
+      EXIT(Value2);
+    END;
+
+    [External]
+    PROCEDURE AddSelectedTrackingToDataSet@53(VAR TempEntrySummary@1000 : TEMPORARY Record 338;VAR TempTrackingSpecification@1001 : TEMPORARY Record 336;CurrentSignFactor@1005 : Integer);
+    VAR
+      TrackingSpecification2@1002 : Record 336;
+      LastEntryNo@1003 : Integer;
+      ChangeType@1004 : 'Insert,Modify,Delete';
+    BEGIN
+      TempEntrySummary.RESET;
+      TempEntrySummary.SETFILTER("Selected Quantity",'<>%1',0);
+      IF TempEntrySummary.ISEMPTY THEN
+        EXIT;
+
+      // To save general and pointer information
+      TrackingSpecification2.INIT;
+      TrackingSpecification2."Item No." := TempTrackingSpecification."Item No.";
+      TrackingSpecification2."Location Code" := TempTrackingSpecification."Location Code";
+      TrackingSpecification2."Source Type" := TempTrackingSpecification."Source Type";
+      TrackingSpecification2."Source Subtype" := TempTrackingSpecification."Source Subtype";
+      TrackingSpecification2."Source ID" := TempTrackingSpecification."Source ID";
+      TrackingSpecification2."Source Batch Name" := TempTrackingSpecification."Source Batch Name";
+      TrackingSpecification2."Source Prod. Order Line" := TempTrackingSpecification."Source Prod. Order Line";
+      TrackingSpecification2."Source Ref. No." := TempTrackingSpecification."Source Ref. No.";
+      TrackingSpecification2.Positive := TempTrackingSpecification.Positive;
+      TrackingSpecification2."Qty. per Unit of Measure" := TempTrackingSpecification."Qty. per Unit of Measure";
+      TrackingSpecification2."Variant Code" := TempTrackingSpecification."Variant Code";
+
+      TempTrackingSpecification.RESET;
+      IF TempTrackingSpecification.FINDLAST THEN
+        LastEntryNo := TempTrackingSpecification."Entry No.";
+
+      TempEntrySummary.FINDFIRST;
+      REPEAT
+        TempTrackingSpecification.SetTrackingFilterFromEntrySummary(TempEntrySummary);
+        IF TempTrackingSpecification.FINDFIRST THEN BEGIN
+          TempTrackingSpecification.VALIDATE("Quantity (Base)",
+            TempTrackingSpecification."Quantity (Base)" + TempEntrySummary."Selected Quantity");
+          TempTrackingSpecification."Buffer Status" := TempTrackingSpecification."Buffer Status"::MODIFY;
+          TransferExpDateFromSummary(TempTrackingSpecification,TempEntrySummary);
+          TempTrackingSpecification.MODIFY;
+          UpdateTrackingDataSetWithChange(TempTrackingSpecification,TRUE,CurrentSignFactor,ChangeType::Modify);
+        END ELSE BEGIN
+          TempTrackingSpecification := TrackingSpecification2;
+          TempTrackingSpecification."Entry No." := LastEntryNo + 1;
+          LastEntryNo := TempTrackingSpecification."Entry No.";
+          TempTrackingSpecification."Serial No." := TempEntrySummary."Serial No.";
+          TempTrackingSpecification."Lot No." := TempEntrySummary."Lot No.";
+          TempTrackingSpecification."Buffer Status" := TempTrackingSpecification."Buffer Status"::INSERT;
+          TransferExpDateFromSummary(TempTrackingSpecification,TempEntrySummary);
+          IF TempTrackingSpecification.IsReclass THEN BEGIN
+            TempTrackingSpecification."New Serial No." := TempTrackingSpecification."Serial No.";
+            TempTrackingSpecification."New Lot No." := TempTrackingSpecification."Lot No.";
+          END;
+          TempTrackingSpecification.VALIDATE("Quantity (Base)",TempEntrySummary."Selected Quantity");
+          OnBeforeTempTrackingSpecificationInsert(TempTrackingSpecification,TempEntrySummary);
+          TempTrackingSpecification.INSERT;
+          UpdateTrackingDataSetWithChange(TempTrackingSpecification,TRUE,CurrentSignFactor,ChangeType::Insert);
+        END;
+      UNTIL TempEntrySummary.NEXT = 0;
+
+      TempTrackingSpecification.RESET;
+    END;
+
+    [External]
+    PROCEDURE TrackingAvailable@57(TempTrackingSpecification@1000 : TEMPORARY Record 336;LookupMode@1003 : 'Serial No.,Lot No.') : Boolean;
+    BEGIN
+      CurrItemTrackingCode.TESTFIELD(Code);
+      CASE LookupMode OF
+        LookupMode::"Serial No.":
+          IF (TempTrackingSpecification."Serial No." = '') OR (NOT CurrItemTrackingCode."SN Specific Tracking") THEN
+            EXIT(TRUE);
+        LookupMode::"Lot No.":
+          IF (TempTrackingSpecification."Lot No." = '') OR (NOT CurrItemTrackingCode."Lot Specific Tracking") THEN
+            EXIT(TRUE);
+      END;
+
+      IF NOT (PartialGlobalDataSetExists OR FullGlobalDataSetExists) THEN
+        RetrieveLookupData(TempTrackingSpecification,TRUE);
+
+      TempGlobalEntrySummary.RESET;
+      TempGlobalEntrySummary.SETCURRENTKEY("Lot No.","Serial No.");
+
+      CASE LookupMode OF
+        LookupMode::"Serial No.":
+          BEGIN
+            TempGlobalEntrySummary.SETRANGE("Serial No.",TempTrackingSpecification."Serial No.");
+            TempGlobalEntrySummary.SETFILTER("Total Available Quantity",'< %1',0);
+            IF CheckJobInPurchLine(TempTrackingSpecification) THEN
+              EXIT(TempGlobalEntrySummary.FINDFIRST);
+            EXIT(TempGlobalEntrySummary.ISEMPTY);
+          END;
+        LookupMode::"Lot No.":
+          BEGIN
+            TempGlobalEntrySummary.SetTrackingFilter('',TempTrackingSpecification."Lot No.");
+            TempGlobalEntrySummary.CALCSUMS("Total Available Quantity");
+            IF CheckJobInPurchLine(TempTrackingSpecification) THEN
+              EXIT(TempGlobalEntrySummary.FINDFIRST);
+            EXIT(TempGlobalEntrySummary."Total Available Quantity" >= 0);
+          END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE UpdateTrackingDataSetWithChange@63(VAR TempTrackingSpecificationChanged@1000 : TEMPORARY Record 336;LineIsDemand@1010 : Boolean;CurrentSignFactor@1007 : Integer;ChangeType@1001 : 'Insert,Modify,Delete');
+    VAR
+      LastEntryNo@1003 : Integer;
+    BEGIN
+      IF NOT TempTrackingSpecificationChanged.TrackingExists THEN
+        EXIT;
+
+      LastEntryNo := UpdateTrackingGlobalChangeRec(TempTrackingSpecificationChanged,LineIsDemand,CurrentSignFactor,ChangeType);
+      TempGlobalChangedEntrySummary.GET(LastEntryNo);
+      UpdateTempSummaryWithChange(TempGlobalChangedEntrySummary);
+    END;
+
+    LOCAL PROCEDURE UpdateTrackingGlobalChangeRec@69(VAR TempTrackingSpecificationChanged@1000 : TEMPORARY Record 336;LineIsDemand@1010 : Boolean;CurrentSignFactor@1007 : Integer;ChangeType@1001 : 'Insert,Modify,Delete') : Integer;
+    VAR
+      NewQuantity@1005 : Decimal;
+      LastEntryNo@1003 : Integer;
+    BEGIN
+      IF (ChangeType = ChangeType::Delete) OR NOT LineIsDemand THEN
+        NewQuantity := 0
+      ELSE
+        NewQuantity := TempTrackingSpecificationChanged."Quantity (Base)" - TempTrackingSpecificationChanged."Quantity Handled (Base)";
+
+      IF CurrentSignFactor > 0 THEN // Negative supply lines
+        NewQuantity := -NewQuantity;
+
+      TempGlobalChangedEntrySummary.RESET;
+      TempGlobalChangedEntrySummary.SETCURRENTKEY("Lot No.","Serial No.");
+      TempGlobalChangedEntrySummary.SetTrackingFilterFromSpec(TempTrackingSpecificationChanged);
+      IF NOT TempGlobalChangedEntrySummary.FINDFIRST THEN BEGIN
+        TempGlobalChangedEntrySummary.RESET;
+        IF TempGlobalChangedEntrySummary.FINDLAST THEN
+          LastEntryNo := TempGlobalChangedEntrySummary."Entry No.";
+        TempGlobalChangedEntrySummary.INIT;
+        TempGlobalChangedEntrySummary."Entry No." := LastEntryNo + 1;
+        TempGlobalChangedEntrySummary."Lot No." := TempTrackingSpecificationChanged."Lot No.";
+        TempGlobalChangedEntrySummary."Serial No." := TempTrackingSpecificationChanged."Serial No.";
+        TempGlobalChangedEntrySummary."Current Pending Quantity" := NewQuantity;
+        IF TempTrackingSpecificationChanged."Serial No." <> '' THEN
+          TempGlobalChangedEntrySummary."Table ID" := DATABASE::"Tracking Specification"; // Not a summary line
+        OnBeforeTempGlobalChangedEntrySummaryInsert(TempGlobalChangedEntrySummary,TempTrackingSpecificationChanged);
+        TempGlobalChangedEntrySummary.INSERT;
+        PartialGlobalDataSetExists := FALSE; // The partial data set does not cover the new line
+      END ELSE
+        IF LineIsDemand THEN BEGIN
+          TempGlobalChangedEntrySummary."Current Pending Quantity" := NewQuantity;
+          TempGlobalChangedEntrySummary.MODIFY;
+        END;
+      EXIT(TempGlobalChangedEntrySummary."Entry No.");
+    END;
+
+    LOCAL PROCEDURE UpdateCurrentPendingQty@64();
+    VAR
+      TempLastGlobalEntrySummary@1000 : TEMPORARY Record 338;
+    BEGIN
+      TempGlobalChangedEntrySummary.RESET;
+      TempGlobalChangedEntrySummary.SETCURRENTKEY("Lot No.","Serial No.");
+      IF TempGlobalChangedEntrySummary.FINDSET THEN
+        REPEAT
+          IF TempGlobalChangedEntrySummary."Lot No." <> '' THEN BEGIN
+            // only last record with Lot Number updates Summary
+            IF TempGlobalChangedEntrySummary."Lot No." <> TempLastGlobalEntrySummary."Lot No." THEN
+              FindLastGlobalEntrySummary(TempGlobalChangedEntrySummary,TempLastGlobalEntrySummary);
+            SkipLot := NOT (TempGlobalChangedEntrySummary."Entry No." = TempLastGlobalEntrySummary."Entry No.");
+          END;
+          UpdateTempSummaryWithChange(TempGlobalChangedEntrySummary);
+        UNTIL TempGlobalChangedEntrySummary.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE UpdateTempSummaryWithChange@73(VAR ChangedEntrySummary@1002 : TEMPORARY Record 338);
+    VAR
+      LastEntryNo@1000 : Integer;
+      SumOfSNPendingQuantity@1003 : Decimal;
+      SumOfSNRequestedQuantity@1001 : Decimal;
+    BEGIN
+      TempGlobalEntrySummary.RESET;
+      IF TempGlobalEntrySummary.FINDLAST THEN
+        LastEntryNo := TempGlobalEntrySummary."Entry No.";
+
+      TempGlobalEntrySummary.SETCURRENTKEY("Lot No.","Serial No.");
+      IF ChangedEntrySummary."Serial No." <> '' THEN BEGIN
+        TempGlobalEntrySummary.SetTrackingFilterFromEntrySummary(ChangedEntrySummary);
+        IF TempGlobalEntrySummary.FINDFIRST THEN BEGIN
+          TempGlobalEntrySummary."Current Pending Quantity" := ChangedEntrySummary."Current Pending Quantity" -
+            TempGlobalEntrySummary."Current Requested Quantity";
+          TempGlobalEntrySummary.UpdateAvailable;
+          TempGlobalEntrySummary.MODIFY;
+        END ELSE BEGIN
+          TempGlobalEntrySummary := ChangedEntrySummary;
+          TempGlobalEntrySummary."Entry No." := LastEntryNo + 1;
+          LastEntryNo := TempGlobalEntrySummary."Entry No.";
+          TempGlobalEntrySummary."Bin Active" := CurrBinCode <> '';
+          UpdateBinContent(TempGlobalEntrySummary);
+          TempGlobalEntrySummary.UpdateAvailable;
+          TempGlobalEntrySummary.INSERT;
+        END;
+
+        IF (ChangedEntrySummary."Lot No." <> '') AND NOT SkipLot THEN BEGIN
+          TempGlobalEntrySummary.SETFILTER("Serial No.",'<>%1','');
+          TempGlobalEntrySummary.SETRANGE("Lot No.",ChangedEntrySummary."Lot No.");
+          TempGlobalEntrySummary.CALCSUMS("Current Pending Quantity","Current Requested Quantity");
+          SumOfSNPendingQuantity := TempGlobalEntrySummary."Current Pending Quantity";
+          SumOfSNRequestedQuantity := TempGlobalEntrySummary."Current Requested Quantity";
+        END;
+      END;
+
+      IF (ChangedEntrySummary."Lot No." <> '') AND NOT SkipLot THEN BEGIN
+        TempGlobalEntrySummary.SetTrackingFilter('',ChangedEntrySummary."Lot No.");
+
+        IF ChangedEntrySummary."Serial No." <> '' THEN
+          TempGlobalEntrySummary.SETRANGE("Table ID",0)
+        ELSE
+          TempGlobalEntrySummary.SETFILTER("Table ID",'<>%1',0);
+
+        IF TempGlobalEntrySummary.FINDFIRST THEN BEGIN
+          IF ChangedEntrySummary."Serial No." <> '' THEN BEGIN
+            TempGlobalEntrySummary."Current Pending Quantity" := SumOfSNPendingQuantity;
+            TempGlobalEntrySummary."Current Requested Quantity" := SumOfSNRequestedQuantity;
+          END ELSE
+            TempGlobalEntrySummary."Current Pending Quantity" := ChangedEntrySummary."Current Pending Quantity" -
+              TempGlobalEntrySummary."Current Requested Quantity";
+
+          TempGlobalEntrySummary.UpdateAvailable;
+          TempGlobalEntrySummary.MODIFY;
+        END ELSE BEGIN
+          TempGlobalEntrySummary := ChangedEntrySummary;
+          TempGlobalEntrySummary."Entry No." := LastEntryNo + 1;
+          TempGlobalEntrySummary."Serial No." := '';
+          IF ChangedEntrySummary."Serial No." <> '' THEN // Mark as summation
+            TempGlobalEntrySummary."Table ID" := 0
+          ELSE
+            TempGlobalEntrySummary."Table ID" := DATABASE::"Tracking Specification";
+          TempGlobalEntrySummary."Bin Active" := CurrBinCode <> '';
+          UpdateBinContent(TempGlobalEntrySummary);
+          TempGlobalEntrySummary.UpdateAvailable;
+          TempGlobalEntrySummary.INSERT;
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE RefreshTrackingAvailability@59(VAR TempTrackingSpecification@1001 : TEMPORARY Record 336;ShowMessage@1003 : Boolean) AvailabilityOK : Boolean;
+    VAR
+      TrackingSpecification2@1002 : Record 336;
+      LookupMode@1000 : 'Serial No.,Lot No.';
+      PreviousLotNo@1004 : Code[50];
+    BEGIN
+      AvailabilityOK := TRUE;
+      IF TempTrackingSpecification.Positive THEN
+        EXIT;
+
+      TrackingSpecification2.COPY(TempTrackingSpecification);
+      TempTrackingSpecification.RESET;
+      IF TempTrackingSpecification.ISEMPTY THEN BEGIN
+        TempTrackingSpecification.COPY(TrackingSpecification2);
+        EXIT;
+      END;
+
+      FullGlobalDataSetExists := FALSE;
+      PartialGlobalDataSetExists := FALSE;
+      RetrieveLookupData(TempTrackingSpecification,FALSE);
+
+      TempTrackingSpecification.SETCURRENTKEY("Lot No.","Serial No.");
+      TempTrackingSpecification.FIND('-');
+      LookupMode := LookupMode::"Serial No.";
+      REPEAT
+        IF TempTrackingSpecification."Lot No." <> PreviousLotNo THEN BEGIN
+          PreviousLotNo := TempTrackingSpecification."Lot No.";
+          LookupMode := LookupMode::"Lot No.";
+
+          IF NOT TrackingAvailable(TempTrackingSpecification,LookupMode) THEN
+            AvailabilityOK := FALSE;
+
+          LookupMode := LookupMode::"Serial No.";
+        END;
+
+        IF NOT TrackingAvailable(TempTrackingSpecification,LookupMode) THEN
+          AvailabilityOK := FALSE;
+      UNTIL TempTrackingSpecification.NEXT = 0;
+
+      IF ShowMessage THEN
+        IF AvailabilityOK THEN
+          MESSAGE(NoAvailabilityWarningsMsg)
+        ELSE
+          MESSAGE(AvailabilityWarningsMsg);
+
+      TempTrackingSpecification.COPY(TrackingSpecification2);
+    END;
+
+    [External]
+    PROCEDURE SetCurrentBinAndItemTrkgCode@8(BinCode@1000 : Code[20];ItemTrackingCode@1001 : Record 6502);
+    VAR
+      xBinCode@1002 : Code[20];
+    BEGIN
+      xBinCode := CurrBinCode;
+      CurrBinCode := BinCode;
+      CurrItemTrackingCode := ItemTrackingCode;
+
+      IF xBinCode <> BinCode THEN
+        IF PartialGlobalDataSetExists THEN
+          RefreshBinContent(TempGlobalEntrySummary);
+    END;
+
+    LOCAL PROCEDURE UpdateBinContent@1(VAR TempEntrySummary@1001 : TEMPORARY Record 338);
+    VAR
+      WarehouseEntry@1000 : Record 7312;
+    BEGIN
+      IF CurrBinCode = '' THEN
+        EXIT;
+      CurrItemTrackingCode.TESTFIELD(Code);
+      WarehouseEntry.RESET;
+      WarehouseEntry.SETCURRENTKEY(
+        "Item No.","Bin Code","Location Code","Variant Code",
+        "Unit of Measure Code","Lot No.","Serial No.");
+      WarehouseEntry.SETRANGE("Item No.",TempGlobalReservEntry."Item No.");
+      WarehouseEntry.SETRANGE("Bin Code",CurrBinCode);
+      WarehouseEntry.SETRANGE("Location Code",TempGlobalReservEntry."Location Code");
+      WarehouseEntry.SETRANGE("Variant Code",TempGlobalReservEntry."Variant Code");
+      IF CurrItemTrackingCode."SN Warehouse Tracking" THEN
+        IF TempEntrySummary."Serial No." <> '' THEN
+          WarehouseEntry.SETRANGE("Serial No.",TempEntrySummary."Serial No.");
+      IF CurrItemTrackingCode."Lot Warehouse Tracking" THEN
+        IF TempEntrySummary."Lot No." <> '' THEN
+          WarehouseEntry.SETRANGE("Lot No.",TempEntrySummary."Lot No.");
+      WarehouseEntry.CALCSUMS("Qty. (Base)");
+
+      TempEntrySummary."Bin Content" := WarehouseEntry."Qty. (Base)";
+    END;
+
+    LOCAL PROCEDURE RefreshBinContent@3(VAR TempEntrySummary@1001 : TEMPORARY Record 338);
+    BEGIN
+      TempEntrySummary.RESET;
+      IF TempEntrySummary.FINDSET THEN
+        REPEAT
+          IF CurrBinCode <> '' THEN
+            UpdateBinContent(TempEntrySummary)
+          ELSE
+            TempEntrySummary."Bin Content" := 0;
+          TempEntrySummary.MODIFY;
+        UNTIL TempEntrySummary.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE TransferExpDateFromSummary@2(VAR TrackingSpecification@1000 : TEMPORARY Record 336;VAR TempEntrySummary@1001 : TEMPORARY Record 338);
+    BEGIN
+      // Handle Expiration Date
+      IF TempEntrySummary."Total Quantity" <> 0 THEN BEGIN
+        TrackingSpecification."Buffer Status2" := TrackingSpecification."Buffer Status2"::"ExpDate blocked";
+        TrackingSpecification."Expiration Date" := TempEntrySummary."Expiration Date";
+        IF TrackingSpecification.IsReclass THEN
+          TrackingSpecification."New Expiration Date" := TrackingSpecification."Expiration Date"
+        ELSE
+          TrackingSpecification."New Expiration Date" := 0D;
+      END ELSE BEGIN
+        TrackingSpecification."Buffer Status2" := 0;
+        TrackingSpecification."Expiration Date" := 0D;
+        TrackingSpecification."New Expiration Date" := 0D;
+      END;
+
+      OnAfterTransferExpDateFromSummary(TrackingSpecification,TempEntrySummary);
+    END;
+
+    LOCAL PROCEDURE AdjustForDoubleEntries@34();
+    BEGIN
+      TempGlobalAdjustEntry.RESET;
+      TempGlobalAdjustEntry.DELETEALL;
+
+      TempGlobalTrackingSpec.RESET;
+      TempGlobalTrackingSpec.DELETEALL;
+
+      // Check if there is any need to investigate:
+      TempGlobalReservEntry.RESET;
+      TempGlobalReservEntry.SETCURRENTKEY("Source ID","Source Ref. No.","Source Type","Source Subtype","Source Batch Name");
+      TempGlobalReservEntry.SETRANGE("Reservation Status",TempGlobalReservEntry."Reservation Status"::Prospect);
+      TempGlobalReservEntry.SETRANGE("Source Type",DATABASE::"Item Journal Line");
+      TempGlobalReservEntry.SETRANGE("Source Subtype",5,6); // Consumption, Output
+      IF TempGlobalReservEntry.ISEMPTY THEN  // No journal lines with consumption or output exist
+        EXIT;
+
+      TempGlobalReservEntry.RESET;
+      TempGlobalReservEntry.SETCURRENTKEY("Source ID","Source Ref. No.","Source Type","Source Subtype","Source Batch Name");
+      TempGlobalReservEntry.SETRANGE("Source Type",DATABASE::"Prod. Order Line");
+      TempGlobalReservEntry.SETRANGE("Source Subtype",3); // Released order
+      IF TempGlobalReservEntry.FINDSET THEN
+        REPEAT
+          // Sum up per prod. order line per lot/sn
+          SumUpTempTrkgSpec(TempGlobalTrackingSpec,TempGlobalReservEntry);
+        UNTIL TempGlobalReservEntry.NEXT = 0;
+
+      TempGlobalReservEntry.RESET;
+      TempGlobalReservEntry.SETCURRENTKEY("Source ID","Source Ref. No.","Source Type","Source Subtype","Source Batch Name");
+      TempGlobalReservEntry.SETRANGE("Source Type",DATABASE::"Prod. Order Component");
+      TempGlobalReservEntry.SETRANGE("Source Subtype",3); // Released order
+      IF TempGlobalReservEntry.FINDSET THEN
+        REPEAT
+          // Sum up per prod. order component per lot/sn
+          SumUpTempTrkgSpec(TempGlobalTrackingSpec,TempGlobalReservEntry);
+        UNTIL TempGlobalReservEntry.NEXT = 0;
+
+      TempGlobalReservEntry.RESET;
+      TempGlobalReservEntry.SETCURRENTKEY("Source ID","Source Ref. No.","Source Type","Source Subtype","Source Batch Name");
+      TempGlobalReservEntry.SETRANGE("Reservation Status",TempGlobalReservEntry."Reservation Status"::Prospect);
+      TempGlobalReservEntry.SETRANGE("Source Type",DATABASE::"Item Journal Line");
+      TempGlobalReservEntry.SETRANGE("Source Subtype",5,6); // Consumption, Output
+
+      IF TempGlobalReservEntry.FINDSET THEN
+        REPEAT
+          // Sum up per Component line per lot/sn
+          RelateJnlLineToTempTrkgSpec(TempGlobalReservEntry,TempGlobalTrackingSpec);
+        UNTIL TempGlobalReservEntry.NEXT = 0;
+
+      InsertAdjustmentEntries;
+    END;
+
+    LOCAL PROCEDURE SumUpTempTrkgSpec@39(VAR TempTrackingSpecification@1000 : TEMPORARY Record 336;ReservEntry@1001 : Record 337);
+    VAR
+      ItemTrackingMgt@1003 : Codeunit 6500;
+    BEGIN
+      TempTrackingSpecification.SetSourceFilter(
+        ReservEntry."Source Type",ReservEntry."Source Subtype",ReservEntry."Source ID",ReservEntry."Source Ref. No.",FALSE);
+      TempTrackingSpecification.SetSourceFilter2(ReservEntry."Source Batch Name",ReservEntry."Source Prod. Order Line");
+      TempTrackingSpecification.SetTrackingFilterFromReservEntry(ReservEntry);
+      IF TempTrackingSpecification.FINDFIRST THEN BEGIN
+        TempTrackingSpecification."Quantity (Base)" += ReservEntry."Quantity (Base)";
+        TempTrackingSpecification.MODIFY;
+      END ELSE BEGIN
+        ItemTrackingMgt.CreateTrackingSpecification(ReservEntry,TempTrackingSpecification);
+        IF NOT ReservEntry.Positive THEN               // To avoid inserting existing entry when both sides of the reservation
+          TempTrackingSpecification."Entry No." *= -1; // are handled.
+        TempTrackingSpecification.INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE RelateJnlLineToTempTrkgSpec@37(VAR ReservEntry@1000 : Record 337;VAR TempTrackingSpecification@1001 : TEMPORARY Record 336);
+    VAR
+      ItemJnlLine@1002 : Record 83;
+      RemainingQty@1004 : Decimal;
+      AdjustQty@1005 : Decimal;
+      QtyOnJnlLine@1006 : Decimal;
+    BEGIN
+      // Pre-check
+      ReservEntry.TESTFIELD("Reservation Status",ReservEntry."Reservation Status"::Prospect);
+      ReservEntry.TESTFIELD("Source Type",DATABASE::"Item Journal Line");
+      IF NOT (ReservEntry."Source Subtype" IN [5,6]) THEN
+        ReservEntry.FIELDERROR("Source Subtype");
+
+      IF NOT ItemJnlLine.GET(ReservEntry."Source ID",
+           ReservEntry."Source Batch Name",ReservEntry."Source Ref. No.")
+      THEN
+        EXIT;
+
+      IF (ItemJnlLine."Order Type" <> ItemJnlLine."Order Type"::Production) OR
+         (ItemJnlLine."Order No." = '') OR
+         (ItemJnlLine."Order Line No." = 0)
+      THEN
+        EXIT;
+
+      // Buffer fields are used as follows:
+      // "Buffer Value1" : Summed up quantity on journal line(s)
+      // "Buffer Value2" : Adjustment needed to neutralize double entries
+
+      IF FindRelatedParentTrkgSpec(ItemJnlLine,TempTrackingSpecification,
+           ReservEntry."Serial No.",ReservEntry."Lot No.")
+      THEN BEGIN
+        RemainingQty := TempTrackingSpecification."Quantity (Base)" + TempTrackingSpecification."Buffer Value2";
+        QtyOnJnlLine := ReservEntry."Quantity (Base)";
+        ReservEntry."Transferred from Entry No." := ABS(TempTrackingSpecification."Entry No.");
+        ReservEntry.MODIFY;
+
+        IF (RemainingQty <> 0) AND (RemainingQty * QtyOnJnlLine > 0) THEN BEGIN
+          IF ABS(QtyOnJnlLine) <= ABS(RemainingQty) THEN
+            AdjustQty := -QtyOnJnlLine
+          ELSE
+            AdjustQty := -RemainingQty;
+        END;
+
+        TempTrackingSpecification."Buffer Value1" += QtyOnJnlLine;
+        TempTrackingSpecification."Buffer Value2" += AdjustQty;
+        TempTrackingSpecification.MODIFY;
+        AddToAdjustmentEntryDataSet(ReservEntry,AdjustQty);
+      END;
+    END;
+
+    LOCAL PROCEDURE FindRelatedParentTrkgSpec@40(ItemJnlLine@1001 : Record 83;VAR TempTrackingSpecification@1000 : TEMPORARY Record 336;SerialNo@1002 : Code[50];LotNo@1003 : Code[50]) : Boolean;
+    BEGIN
+      ItemJnlLine.TESTFIELD("Order Type",ItemJnlLine."Order Type"::Production);
+      TempTrackingSpecification.RESET;
+      CASE ItemJnlLine."Entry Type" OF
+        ItemJnlLine."Entry Type"::Consumption:
+          BEGIN
+            IF ItemJnlLine."Prod. Order Comp. Line No." = 0 THEN
+              EXIT;
+            TempTrackingSpecification.SetSourceFilter(
+              DATABASE::"Prod. Order Component",3,ItemJnlLine."Order No.",ItemJnlLine."Prod. Order Comp. Line No.",FALSE);
+            TempTrackingSpecification.SetSourceFilter2('',ItemJnlLine."Order Line No.");
+          END;
+        ItemJnlLine."Entry Type"::Output:
+          BEGIN
+            TempTrackingSpecification.SetSourceFilter(DATABASE::"Prod. Order Line",3,ItemJnlLine."Order No.",-1,FALSE);
+            TempTrackingSpecification.SetSourceFilter2('',ItemJnlLine."Order Line No.");
+          END;
+      END;
+      TempTrackingSpecification.SetTrackingFilter(SerialNo,LotNo);
+      EXIT(TempTrackingSpecification.FINDFIRST);
+    END;
+
+    LOCAL PROCEDURE AddToAdjustmentEntryDataSet@44(VAR ReservEntry@1000 : Record 337;AdjustQty@1001 : Decimal);
+    BEGIN
+      IF AdjustQty = 0 THEN
+        EXIT;
+
+      TempGlobalAdjustEntry := ReservEntry;
+      TempGlobalAdjustEntry."Source Type" := -ReservEntry."Source Type";
+      TempGlobalAdjustEntry.Description := COPYSTR(Text013,1,MAXSTRLEN(TempGlobalAdjustEntry.Description));
+      TempGlobalAdjustEntry."Quantity (Base)" := AdjustQty;
+      TempGlobalAdjustEntry."Entry No." += LastReservEntryNo; // Use last entry no as offset to avoid inserting existing entry
+      TempGlobalAdjustEntry.INSERT;
+    END;
+
+    LOCAL PROCEDURE InsertAdjustmentEntries@45();
+    VAR
+      TempTrackingSpecification@1000 : TEMPORARY Record 336;
+    BEGIN
+      TempGlobalAdjustEntry.RESET;
+      IF NOT TempGlobalAdjustEntry.FINDSET THEN
+        EXIT;
+
+      TempTrackingSpecification.INIT;
+      TempTrackingSpecification.INSERT;
+      REPEAT
+        CreateEntrySummary(TempTrackingSpecification,TempGlobalAdjustEntry); // TrackingSpecification is a dummy record
+        TempGlobalReservEntry := TempGlobalAdjustEntry;
+        TempGlobalReservEntry.INSERT;
+      UNTIL TempGlobalAdjustEntry.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE MaxDoubleEntryAdjustQty@46(VAR TempItemTrackLineChanged@1000 : TEMPORARY Record 336;VAR ChangedEntrySummary@1001 : TEMPORARY Record 338) : Decimal;
+    VAR
+      ItemJnlLine@1002 : Record 83;
+    BEGIN
+      IF NOT (TempItemTrackLineChanged."Source Type" = DATABASE::"Item Journal Line") THEN
+        EXIT;
+
+      IF NOT (TempItemTrackLineChanged."Source Subtype" IN [5,6]) THEN
+        EXIT;
+
+      IF NOT ItemJnlLine.GET(TempItemTrackLineChanged."Source ID",
+           TempItemTrackLineChanged."Source Batch Name",TempItemTrackLineChanged."Source Ref. No.")
+      THEN
+        EXIT;
+
+      TempGlobalTrackingSpec.RESET;
+
+      IF FindRelatedParentTrkgSpec(ItemJnlLine,TempGlobalTrackingSpec,
+           ChangedEntrySummary."Serial No.",ChangedEntrySummary."Lot No.")
+      THEN
+        EXIT(-TempGlobalTrackingSpec."Quantity (Base)" - TempGlobalTrackingSpec."Buffer Value2");
+    END;
+
+    [External]
+    PROCEDURE CurrentDataSetMatches@7(ItemNo@1001 : Code[20];VariantCode@1000 : Code[20];LocationCode@1002 : Code[10]) : Boolean;
+    BEGIN
+      EXIT(
+        (TempGlobalReservEntry."Item No." = ItemNo) AND
+        (TempGlobalReservEntry."Variant Code" = VariantCode) AND
+        (TempGlobalReservEntry."Location Code" = LocationCode));
+    END;
+
+    LOCAL PROCEDURE CheckJobInPurchLine@9(TrackingSpecification@1000 : Record 336) : Boolean;
+    VAR
+      PurchLine@1001 : Record 39;
+    BEGIN
+      WITH TrackingSpecification DO BEGIN
+        IF ("Source Type" = DATABASE::"Purchase Line") AND ("Source Subtype" = "Source Subtype"::"3") THEN BEGIN
+          PurchLine.RESET;
+          PurchLine.SETRANGE("Document Type","Source Subtype");
+          PurchLine.SETRANGE("Document No.","Source ID");
+          PurchLine.SETRANGE("Line No.","Source Ref. No.");
+          IF PurchLine.FINDFIRST THEN
+            EXIT(PurchLine."Job No." <> '');
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE FindLotNoBySN@11(TrackingSpecification@1000 : Record 336) : Code[20];
+    VAR
+      LotNo@1001 : Code[20];
+    BEGIN
+      IF FindLotNoBySNSilent(LotNo,TrackingSpecification) THEN
+        EXIT(LotNo);
+
+      ERROR(LotNoBySNNotFoundErr,TrackingSpecification."Serial No.");
+    END;
+
+    [External]
+    PROCEDURE FindLotNoBySNSilent@4(VAR LotNo@1001 : Code[50];TrackingSpecification@1000 : Record 336) : Boolean;
+    BEGIN
+      IF NOT (PartialGlobalDataSetExists OR FullGlobalDataSetExists) THEN
+        RetrieveLookupData(TrackingSpecification,TRUE);
+
+      TempGlobalEntrySummary.RESET;
+      TempGlobalEntrySummary.SETCURRENTKEY("Lot No.","Serial No.");
+      TempGlobalEntrySummary.SETRANGE("Serial No.",TrackingSpecification."Serial No.");
+      IF NOT TempGlobalEntrySummary.FINDFIRST THEN
+        EXIT(FALSE);
+
+      LotNo := TempGlobalEntrySummary."Lot No.";
+      EXIT(TRUE);
+    END;
+
+    [External]
+    PROCEDURE GetAvailableLotQty@21(TrackingSpecification@1000 : Record 336) : Decimal;
+    BEGIN
+      IF TrackingSpecification."Lot No." = '' THEN
+        EXIT(0);
+
+      IF NOT (PartialGlobalDataSetExists OR FullGlobalDataSetExists) THEN
+        RetrieveLookupData(TrackingSpecification,TRUE);
+
+      TempGlobalEntrySummary.RESET;
+      TempGlobalEntrySummary.SETCURRENTKEY("Lot No.","Serial No.");
+      TempGlobalEntrySummary.SETRANGE("Lot No.",TrackingSpecification."Lot No.");
+      TempGlobalEntrySummary.CALCSUMS("Total Available Quantity");
+      EXIT(TempGlobalEntrySummary."Total Available Quantity");
+    END;
+
+    [External]
+    PROCEDURE SetSkipLot@14(SkipLot2@1000 : Boolean);
+    BEGIN
+      // only last record with Lot Number updates Summary.
+      SkipLot := SkipLot2;
+    END;
+
+    LOCAL PROCEDURE FindLastGlobalEntrySummary@16(VAR GlobalChangedEntrySummary@1000 : Record 338;VAR LastGlobalEntrySummary@1001 : Record 338);
+    VAR
+      TempGlobalChangedEntrySummary2@1002 : TEMPORARY Record 338;
+    BEGIN
+      TempGlobalChangedEntrySummary2 := GlobalChangedEntrySummary;
+      GlobalChangedEntrySummary.SETRANGE("Lot No.",GlobalChangedEntrySummary."Lot No.");
+      IF GlobalChangedEntrySummary.FINDLAST THEN
+        LastGlobalEntrySummary := GlobalChangedEntrySummary;
+      GlobalChangedEntrySummary.COPY(TempGlobalChangedEntrySummary2);
+    END;
+
+    LOCAL PROCEDURE CanIncludeReservEntryToTrackingSpec@22(TempReservEntry@1000 : TEMPORARY Record 337) : Boolean;
+    VAR
+      SalesLine@1001 : Record 37;
+    BEGIN
+      WITH TempReservEntry DO
+        IF ("Reservation Status" = "Reservation Status"::Prospect) AND
+           ("Source Type" = DATABASE::"Sales Line") AND
+           ("Source Subtype" = 2)
+        THEN BEGIN
+          SalesLine.GET("Source Subtype","Source ID","Source Ref. No.");
+          IF SalesLine."Shipment No." <> '' THEN
+            EXIT(FALSE);
+        END;
+
+      EXIT(TRUE);
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeAssistEditTrackingNo@23(VAR TempTrackingSpecification@1000 : TEMPORARY Record 336;VAR SearchForSupply@1001 : Boolean;CurrentSignFactor@1003 : Integer;LookupMode@1004 : 'Serial No.,Lot No.';MaxQuantity@1005 : Decimal);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterAssistEditTrackingNo@24(VAR TrackingSpecification@1000 : Record 336;VAR TempGlobalEntrySummary@1001 : TEMPORARY Record 338);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterCreateEntrySummary@13(TrackingSpecification@1000 : Record 336;VAR TempGlobalEntrySummary@1001 : TEMPORARY Record 338);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterCreateEntrySummary2@10(VAR TempGlobalEntrySummary@1000 : TEMPORARY Record 338;VAR TempGlobalReservEntry@1001 : TEMPORARY Record 337);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterRetrieveLookupData@12(VAR TrackingSpecification@1000 : Record 336;FullDataSet@1001 : Boolean;VAR TempGlobalReservEntry@1002 : TEMPORARY Record 337;VAR TempGlobalEntrySummary@1003 : TEMPORARY Record 338);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterTransferExpDateFromSummary@17(VAR TrackingSpecification@1000 : Record 336;VAR TempEntrySummary@1001 : TEMPORARY Record 338);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterTransferReservEntryToTempRec@18(VAR GlobalReservEntry@1000 : Record 337;ReservEntry@1001 : Record 337);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeTempTrackingSpecificationInsert@6(VAR TempTrackingSpecification@1000 : TEMPORARY Record 336;VAR TempEntrySummary@1001 : TEMPORARY Record 338);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeTempGlobalChangedEntrySummaryInsert@19(VAR TempGlobalChangedEntrySummary@1000 : TEMPORARY Record 338;VAR TempTrackingSpecificationChanged@1001 : TEMPORARY Record 336);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeUpdateBinContent@15(VAR TempEntrySummary@1000 : TEMPORARY Record 338;VAR TempReservationEntry@1001 : TEMPORARY Record 337);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnTransferItemLedgToTempRecOnBeforeInsert@5(VAR TempGlobalReservEntry@1000 : TEMPORARY Record 337;ItemLedgerEntry@1001 : Record 32;TrackingSpecification@1002 : Record 336;VAR IsHandled@1003 : Boolean);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

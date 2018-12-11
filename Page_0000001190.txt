@@ -1,0 +1,385 @@
+OBJECT Page 1190 Create Payment
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:10:36 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Create Payment;
+    SaveValues=Yes;
+    PageType=StandardDialog;
+    OnOpenPage=BEGIN
+                 SetJournalTemplate;
+                 SetNextNo;
+                 PostingDate := WORKDATE;
+               END;
+
+    OnQueryClosePage=BEGIN
+                       IF CloseAction = ACTION::OK THEN BEGIN
+                         IF JournalBatchName = '' THEN
+                           ERROR(BatchNumberNotFilledErr);
+                         IF FORMAT(PostingDate) = '' THEN
+                           ERROR(PostingDateNotFilledErr);
+                         IF NextDocNo = '' THEN
+                           ERROR(SpecifyStartingDocNumErr);
+                       END;
+                     END;
+
+  }
+  CONTROLS
+  {
+    { 1   ;    ;Container ;
+                Name=Options;
+                ContainerType=ContentArea }
+
+    { 6   ;1   ;Group     ;
+                GroupType=Group }
+
+    { 5   ;2   ;Field     ;
+                Name=Batch Name;
+                CaptionML=ENU=Batch Name;
+                ToolTipML=ENU=Specifies the name of the journal batch.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=JournalBatchName;
+                TableRelation="Gen. Journal Batch".Name WHERE (Template Type=CONST(Payments),
+                                                               Recurring=CONST(No));
+                OnValidate=BEGIN
+                             SetJournalTemplate;
+                             SetNextNo;
+                           END;
+
+                ShowMandatory=TRUE }
+
+    { 2   ;2   ;Field     ;
+                Name=Posting Date;
+                CaptionML=ENU=Posting Date;
+                ToolTipML=ENU=Specifies the entry's posting date.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=PostingDate;
+                ShowMandatory=TRUE }
+
+    { 7   ;2   ;Field     ;
+                Name=Starting Document No.;
+                CaptionML=ENU=Starting Document No.;
+                ToolTipML=ENU=Specifies a document number for the journal line.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=NextDocNo;
+                OnValidate=VAR
+                             TextManagement@1000 : Codeunit 41;
+                           BEGIN
+                             IF NextDocNo <> '' THEN
+                               TextManagement.EvaluateIncStr(NextDocNo,StartingDocumentNoErr);
+                           END;
+
+                ShowMandatory=TRUE }
+
+    { 3   ;2   ;Field     ;
+                Name=Bank Account;
+                CaptionML=ENU=Bank Account;
+                ToolTipML=ENU=Specifies the bank account to which a balancing entry for the journal line will be posted.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=BalAccountNo;
+                TableRelation="Bank Account" }
+
+    { 4   ;2   ;Field     ;
+                Name=Payment Type;
+                CaptionML=ENU=Payment Type;
+                ToolTipML=ENU=Specifies the code for the payment type to be used for the entry on the payment journal line.;
+                OptionCaptionML=ENU=" ,Computer Check,Manual Check,Electronic Payment,Electronic Payment-IAT";
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=BankPaymentType }
+
+  }
+  CODE
+  {
+    VAR
+      PostingDate@1001 : Date;
+      BalAccountNo@1002 : Code[20];
+      NextDocNo@1004 : Code[20];
+      JournalBatchName@1005 : Code[10];
+      JournalTemplateName@1006 : Code[10];
+      BankPaymentType@1003 : ' ,Computer Check,Manual Check,Electronic Payment,Electronic Payment-IAT';
+      StartingDocumentNoErr@1007 : TextConst 'ENU=Starting Document No.';
+      BatchNumberNotFilledErr@1008 : TextConst 'ENU=You must fill the Batch Name field.';
+      PostingDateNotFilledErr@1009 : TextConst 'ENU=You must fill the Posting Date field.';
+      SpecifyStartingDocNumErr@1010 : TextConst 'ENU=In the Starting Document No. field, specify the first document number to be used.';
+      MessageToRecipientMsg@1000 : TextConst '@@@=%1 document type, %2 Document No.;ENU="Payment of %1 %2 "';
+
+    PROCEDURE GetPostingDate@2() : Date;
+    BEGIN
+      EXIT(PostingDate);
+    END;
+
+    PROCEDURE GetBankAccount@3() : Text;
+    BEGIN
+      EXIT(FORMAT(BalAccountNo));
+    END;
+
+    PROCEDURE GetBankPaymentType@4() : Integer;
+    BEGIN
+      EXIT(BankPaymentType);
+    END;
+
+    PROCEDURE GetBatchNumber@6() : Code[10];
+    BEGIN
+      EXIT(JournalBatchName);
+    END;
+
+    PROCEDURE MakeGenJnlLines@5(VAR VendorLedgerEntry@1012 : Record 25);
+    VAR
+      GenJnlLine@1004 : Record 81;
+      GenJournalBatch@1003 : Record 232;
+      GenJournalTemplate@1006 : Record 80;
+      Vendor@1001 : Record 23;
+      TempPaymentBuffer@1007 : TEMPORARY Record 372;
+      PaymentAmt@1013 : Decimal;
+      BalAccType@1000 : 'G/L Account,Customer,Vendor,Bank Account';
+      LastLineNo@1011 : Integer;
+      SummarizePerVend@1010 : Boolean;
+    BEGIN
+      TempPaymentBuffer.RESET;
+      TempPaymentBuffer.DELETEALL;
+
+      IF VendorLedgerEntry.FIND('-') THEN
+        REPEAT
+          VendorLedgerEntry.CALCFIELDS("Remaining Amount");
+          IF (VendorLedgerEntry."Applies-to ID" = '') AND (VendorLedgerEntry."Remaining Amount" < 0) THEN BEGIN
+            TempPaymentBuffer."Vendor No." := VendorLedgerEntry."Vendor No.";
+            TempPaymentBuffer."Currency Code" := VendorLedgerEntry."Currency Code";
+
+            IF VendorLedgerEntry."Payment Method Code" = '' THEN BEGIN
+              IF Vendor.GET(VendorLedgerEntry."Vendor No.") THEN
+                TempPaymentBuffer."Payment Method Code" := Vendor."Payment Method Code";
+            END ELSE
+              TempPaymentBuffer."Payment Method Code" := VendorLedgerEntry."Payment Method Code";
+            TempPaymentBuffer."Creditor No." := VendorLedgerEntry."Creditor No.";
+            TempPaymentBuffer."Payment Reference" := VendorLedgerEntry."Payment Reference";
+            TempPaymentBuffer."Exported to Payment File" := VendorLedgerEntry."Exported to Payment File";
+            TempPaymentBuffer."Applies-to Ext. Doc. No." := VendorLedgerEntry."External Document No.";
+            OnUpdateTempBufferFromVendorLedgerEntry(TempPaymentBuffer,VendorLedgerEntry);
+            TempPaymentBuffer."Dimension Entry No." := 0;
+            TempPaymentBuffer."Global Dimension 1 Code" := '';
+            TempPaymentBuffer."Global Dimension 2 Code" := '';
+            TempPaymentBuffer."Dimension Set ID" := 0;
+            TempPaymentBuffer."Vendor Ledg. Entry No." := VendorLedgerEntry."Entry No.";
+            TempPaymentBuffer."Vendor Ledg. Entry Doc. Type" := VendorLedgerEntry."Document Type";
+
+            IF CheckCalcPmtDiscGenJnlVend(VendorLedgerEntry."Remaining Amount",VendorLedgerEntry,0,FALSE) THEN
+              PaymentAmt := -(VendorLedgerEntry."Remaining Amount" - VendorLedgerEntry."Remaining Pmt. Disc. Possible")
+            ELSE
+              PaymentAmt := -VendorLedgerEntry."Remaining Amount";
+
+            TempPaymentBuffer.RESET;
+            TempPaymentBuffer.SETRANGE("Vendor No.",VendorLedgerEntry."Vendor No.");
+            IF TempPaymentBuffer.FIND('-') THEN BEGIN
+              TempPaymentBuffer.Amount := TempPaymentBuffer.Amount + PaymentAmt;
+              SummarizePerVend := TRUE;
+              TempPaymentBuffer.MODIFY;
+            END ELSE BEGIN
+              TempPaymentBuffer."Document No." := NextDocNo;
+              NextDocNo := INCSTR(NextDocNo);
+              TempPaymentBuffer.Amount := PaymentAmt;
+              TempPaymentBuffer.INSERT;
+            END;
+            VendorLedgerEntry."Applies-to ID" := TempPaymentBuffer."Document No.";
+
+            VendorLedgerEntry."Amount to Apply" := VendorLedgerEntry."Remaining Amount";
+            CODEUNIT.RUN(CODEUNIT::"Vend. Entry-Edit",VendorLedgerEntry);
+          END;
+        UNTIL VendorLedgerEntry.NEXT = 0;
+
+      GenJnlLine.LOCKTABLE;
+      GenJournalTemplate.GET(JournalTemplateName);
+      GenJournalBatch.GET(JournalTemplateName,JournalBatchName);
+      GenJnlLine.SETRANGE("Journal Template Name",JournalTemplateName);
+      GenJnlLine.SETRANGE("Journal Batch Name",JournalBatchName);
+      IF GenJnlLine.FINDLAST THEN BEGIN
+        LastLineNo := GenJnlLine."Line No.";
+        GenJnlLine.INIT;
+      END;
+
+      TempPaymentBuffer.RESET;
+      TempPaymentBuffer.SETCURRENTKEY("Document No.");
+      TempPaymentBuffer.SETFILTER(
+        "Vendor Ledg. Entry Doc. Type",'<>%1&<>%2',TempPaymentBuffer."Vendor Ledg. Entry Doc. Type"::Refund,
+        TempPaymentBuffer."Vendor Ledg. Entry Doc. Type"::Payment);
+      IF TempPaymentBuffer.FIND('-') THEN
+        REPEAT
+          WITH GenJnlLine DO BEGIN
+            INIT;
+            VALIDATE("Journal Template Name",JournalTemplateName);
+            VALIDATE("Journal Batch Name",JournalBatchName);
+            LastLineNo := LastLineNo + 10000;
+            "Line No." := LastLineNo;
+            "Document Type" := "Document Type"::Payment;
+            "Posting No. Series" := GenJournalBatch."Posting No. Series";
+            "Document No." := TempPaymentBuffer."Document No.";
+            "Account Type" := "Account Type"::Vendor;
+
+            SetHideValidation(TRUE);
+            VALIDATE("Posting Date",PostingDate);
+            VALIDATE("Account No.",TempPaymentBuffer."Vendor No.");
+
+            Vendor.GET(TempPaymentBuffer."Vendor No.");
+            Description := Vendor.Name;
+
+            "Bal. Account Type" := BalAccType::"Bank Account";
+            VALIDATE("Bal. Account No.",BalAccountNo);
+            VALIDATE("Currency Code",TempPaymentBuffer."Currency Code");
+
+            "Message to Recipient" := GetMessageToRecipient(SummarizePerVend,TempPaymentBuffer);
+            "Bank Payment Type" := BankPaymentType;
+            "Applies-to ID" := "Document No.";
+
+            "Source Line No." := TempPaymentBuffer."Vendor Ledg. Entry No.";
+            "Shortcut Dimension 1 Code" := TempPaymentBuffer."Global Dimension 1 Code";
+            "Shortcut Dimension 2 Code" := TempPaymentBuffer."Global Dimension 2 Code";
+            "Dimension Set ID" := TempPaymentBuffer."Dimension Set ID";
+
+            "Source Code" := GenJournalTemplate."Source Code";
+            "Reason Code" := GenJournalBatch."Reason Code";
+            VALIDATE(Amount,TempPaymentBuffer.Amount);
+            "Applies-to Doc. Type" := TempPaymentBuffer."Vendor Ledg. Entry Doc. Type";
+            "Applies-to Doc. No." := TempPaymentBuffer."Vendor Ledg. Entry Doc. No.";
+            VALIDATE("Payment Method Code",TempPaymentBuffer."Payment Method Code");
+
+            "Creditor No." := TempPaymentBuffer."Creditor No.";
+            "Payment Reference" := TempPaymentBuffer."Payment Reference";
+            "Exported to Payment File" := TempPaymentBuffer."Exported to Payment File";
+            "Applies-to Ext. Doc. No." := TempPaymentBuffer."Applies-to Ext. Doc. No.";
+            OnBeforeUpdateGnlJnlLineDimensionsFromTempBuffer(GenJnlLine,TempPaymentBuffer);
+            UpdateDimensions(GenJnlLine,TempPaymentBuffer);
+            INSERT;
+          END;
+        UNTIL TempPaymentBuffer.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE UpdateDimensions@17(VAR GenJnlLine@1005 : Record 81;TempPaymentBuffer@1008 : TEMPORARY Record 372);
+    VAR
+      DimBuf@1002 : Record 360;
+      TempDimSetEntry@1001 : TEMPORARY Record 480;
+      DimVal@1004 : Record 349;
+      DimBufMgt@1007 : Codeunit 411;
+      DimMgt@1009 : Codeunit 408;
+      NewDimensionID@1003 : Integer;
+      DimSetIDArr@1006 : ARRAY [10] OF Integer;
+    BEGIN
+      WITH GenJnlLine DO BEGIN
+        NewDimensionID := "Dimension Set ID";
+
+        DimBuf.RESET;
+        DimBuf.DELETEALL;
+        DimBufMgt.GetDimensions(TempPaymentBuffer."Dimension Entry No.",DimBuf);
+        IF DimBuf.FINDSET THEN
+          REPEAT
+            DimVal.GET(DimBuf."Dimension Code",DimBuf."Dimension Value Code");
+            TempDimSetEntry."Dimension Code" := DimBuf."Dimension Code";
+            TempDimSetEntry."Dimension Value Code" := DimBuf."Dimension Value Code";
+            TempDimSetEntry."Dimension Value ID" := DimVal."Dimension Value ID";
+            TempDimSetEntry.INSERT;
+          UNTIL DimBuf.NEXT = 0;
+        NewDimensionID := DimMgt.GetDimensionSetID(TempDimSetEntry);
+        "Dimension Set ID" := NewDimensionID;
+
+        CreateDim(
+          DimMgt.TypeToTableID1("Account Type"),"Account No.",
+          DimMgt.TypeToTableID1("Bal. Account Type"),"Bal. Account No.",
+          DATABASE::Job,"Job No.",
+          DATABASE::"Salesperson/Purchaser","Salespers./Purch. Code",
+          DATABASE::Campaign,"Campaign No.");
+        IF NewDimensionID <> "Dimension Set ID" THEN BEGIN
+          DimSetIDArr[1] := "Dimension Set ID";
+          DimSetIDArr[2] := NewDimensionID;
+          "Dimension Set ID" :=
+            DimMgt.GetCombinedDimensionSetID(DimSetIDArr,"Shortcut Dimension 1 Code","Shortcut Dimension 2 Code");
+        END;
+
+        DimMgt.GetDimensionSet(TempDimSetEntry,"Dimension Set ID");
+        DimMgt.UpdateGlobalDimFromDimSetID("Dimension Set ID","Shortcut Dimension 1 Code",
+          "Shortcut Dimension 2 Code");
+      END;
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnUpdateTempBufferFromVendorLedgerEntry@1085(VAR TempPaymentBuffer@1086 : TEMPORARY Record 372;VendorLedgerEntry@1088 : Record 25);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeUpdateGnlJnlLineDimensionsFromTempBuffer@1090(VAR GenJournalLine@1091 : Record 81;TempPaymentBuffer@1092 : TEMPORARY Record 372);
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE SetJournalTemplate@7();
+    VAR
+      GenJournalTemplate@1000 : Record 80;
+    BEGIN
+      GenJournalTemplate.RESET;
+      GenJournalTemplate.SETRANGE(Type,GenJournalTemplate.Type::Payments);
+      GenJournalTemplate.SETRANGE(Recurring,FALSE);
+      IF GenJournalTemplate.FINDFIRST THEN
+        JournalTemplateName := GenJournalTemplate.Name;
+    END;
+
+    LOCAL PROCEDURE SetNextNo@10();
+    VAR
+      GenJournalBatch@1000 : Record 232;
+      NoSeriesMgt@1001 : Codeunit 396;
+    BEGIN
+      IF JournalBatchName <> '' THEN BEGIN
+        GenJournalBatch.GET(JournalTemplateName,JournalBatchName);
+        IF GenJournalBatch."No. Series" = '' THEN
+          NextDocNo := ''
+        ELSE BEGIN
+          NextDocNo := NoSeriesMgt.GetNextNo(GenJournalBatch."No. Series",PostingDate,FALSE);
+          CLEAR(NoSeriesMgt);
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE CheckCalcPmtDiscGenJnlVend@58(RemainingAmt@1007 : Decimal;OldVendLedgEntry2@1002 : Record 25;ApplnRoundingPrecision@1005 : Decimal;CheckAmount@1004 : Boolean) : Boolean;
+    VAR
+      NewCVLedgEntryBuf@1001 : Record 382;
+      OldCVLedgEntryBuf2@1003 : Record 382;
+      PaymentToleranceManagement@1006 : Codeunit 426;
+      DocumentType@1000 : ' ,Payment,Invoice,Credit Memo,Finance Charge Memo,Reminder,Refund';
+    BEGIN
+      NewCVLedgEntryBuf."Document Type" := DocumentType::Payment;
+      NewCVLedgEntryBuf."Posting Date" := PostingDate;
+      NewCVLedgEntryBuf."Remaining Amount" := RemainingAmt;
+      OldCVLedgEntryBuf2.CopyFromVendLedgEntry(OldVendLedgEntry2);
+      EXIT(
+        PaymentToleranceManagement.CheckCalcPmtDisc(
+          NewCVLedgEntryBuf,OldCVLedgEntryBuf2,ApplnRoundingPrecision,FALSE,CheckAmount));
+    END;
+
+    LOCAL PROCEDURE GetMessageToRecipient@18(SummarizePerVend@1000 : Boolean;TempPaymentBuffer@1002 : TEMPORARY Record 372) : Text[140];
+    VAR
+      VendorLedgerEntry@1001 : Record 25;
+      CompanyInformation@1003 : Record 79;
+    BEGIN
+      IF SummarizePerVend THEN BEGIN
+        CompanyInformation.GET;
+        EXIT(CompanyInformation.Name);
+      END;
+
+      VendorLedgerEntry.GET(TempPaymentBuffer."Vendor Ledg. Entry No.");
+      IF VendorLedgerEntry."Message to Recipient" <> '' THEN
+        EXIT(VendorLedgerEntry."Message to Recipient");
+
+      EXIT(
+        STRSUBSTNO(
+          MessageToRecipientMsg,
+          TempPaymentBuffer."Vendor Ledg. Entry Doc. Type",
+          TempPaymentBuffer."Applies-to Ext. Doc. No."));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

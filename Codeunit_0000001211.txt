@@ -1,0 +1,146 @@
+OBJECT Codeunit 1211 Payment Export Gen. Jnl Check
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:03 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    TableNo=81;
+    OnRun=BEGIN
+            CheckPaymentExportGenJnl(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      EmptyPaymentDetailsErr@1002 : TextConst '@@@="%1=Field;%2=Field";ENU=%1 or %2 must be used for payments.';
+      SimultaneousPaymentDetailsErr@1000 : TextConst '@@@="%1=Field;%2=Field";ENU=%1 and %2 cannot be used simultaneously for payments.';
+      WrongBalAccountErr@1001 : TextConst '@@@="%1=Field;%1=Table;%3=Value;%4=Table;%5=Value";ENU=%1 for the %2 is different from %3 on %4: %5.';
+      MustBeVendorEmployeeOrCustomerErr@1005 : TextConst 'ENU=The account must be a vendor, customer or employee account.';
+      MustBeVendEmplPmtOrCustRefundErr@1008 : TextConst 'ENU=Only vendor and employee payments and customer refunds are allowed.';
+      MustBePositiveErr@1011 : TextConst 'ENU=The amount must be positive.';
+      FieldBlankErr@1007 : TextConst '@@@="%1=table name, %2=field name. Example: Customer must have a value in Name.";ENU=%1 must have a value in %2.';
+      FieldKeyBlankErr@1006 : TextConst '@@@="%1=table name, %2=key field value, %3=field name. Example: Customer 10000 must have a value in Name.";ENU=%1 %2 must have a value in %3.';
+      TempGenJournalBatch@1003 : TEMPORARY Record 232;
+      WrongBankPaymentTypeErr@1004 : TextConst '@@@="%1=Bank Payment Type field caption, %2=Electronic Payment bank payment type, %3=Electronic Payment-IAT bank payment type";ENU=%1 must be either %2 or %3.';
+
+    LOCAL PROCEDURE CheckPaymentExportGenJnl@1213(VAR GenJournalLine@1000 : Record 81);
+    VAR
+      GenJnlBatch@1001 : Record 232;
+      Handled@1213 : Boolean;
+    BEGIN
+      WITH GenJournalLine DO BEGIN
+        DeletePaymentFileErrors;
+        GenJnlBatch.GET("Journal Template Name","Journal Batch Name");
+
+        IF NOT TempGenJournalBatch.GET("Journal Template Name","Journal Batch Name") THEN
+          CheckGenJournalBatch(GenJournalLine,GenJnlBatch);
+
+        IF "Payment Method Code" = '' THEN
+          AddFieldEmptyError(GenJournalLine,TABLECAPTION,FIELDCAPTION("Payment Method Code"),'');
+
+        IF ("Recipient Bank Account" <> '') AND ("Creditor No." <> '') THEN
+          InsertPaymentFileError(STRSUBSTNO(SimultaneousPaymentDetailsErr,
+              FIELDCAPTION("Recipient Bank Account"),FIELDCAPTION("Creditor No.")));
+
+        IF "Bal. Account Type" <> "Bal. Account Type"::"Bank Account" THEN
+          InsertPaymentFileError(STRSUBSTNO(WrongBalAccountErr,FIELDCAPTION("Bal. Account Type"),
+              TABLECAPTION,"Bal. Account Type"::"Bank Account",GenJnlBatch.TABLECAPTION,GenJnlBatch.Name));
+
+        IF "Bal. Account No." <> GenJnlBatch."Bal. Account No." THEN
+          InsertPaymentFileError(STRSUBSTNO(WrongBalAccountErr,FIELDCAPTION("Bal. Account No."),
+              TABLECAPTION,GenJnlBatch."Bal. Account No.",GenJnlBatch.TABLECAPTION,GenJnlBatch.Name));
+
+        IF Amount <= 0 THEN
+          InsertPaymentFileError(MustBePositiveErr);
+
+        IF (("Account Type" = "Account Type"::"Bank Account") OR
+            ("Bal. Account Type" = "Bal. Account Type"::"Bank Account")) AND
+           (("Bank Payment Type" <> "Bank Payment Type"::"Electronic Payment") AND
+            ("Bank Payment Type" <> "Bank Payment Type"::"Electronic Payment-IAT"))
+        THEN
+          InsertPaymentFileError(STRSUBSTNO(WrongBankPaymentTypeErr,FIELDCAPTION("Bank Payment Type"),
+              "Bank Payment Type"::"Electronic Payment","Bank Payment Type"::"Electronic Payment-IAT"));
+
+        OnPaymentExportGenJnlCheck(GenJournalLine,Handled);
+        IF NOT Handled THEN BEGIN
+          IF NOT ("Account Type" IN ["Account Type"::Customer,"Account Type"::Vendor,"Account Type"::Employee])
+          THEN
+            InsertPaymentFileError(MustBeVendorEmployeeOrCustomerErr);
+
+          IF (("Account Type" = "Account Type"::Vendor) AND
+              ("Document Type" <> "Document Type"::Payment)) OR
+             (("Account Type" = "Account Type"::Customer) AND
+              ("Document Type" <> "Document Type"::Refund)) OR
+             (("Account Type" = "Account Type"::Employee) AND
+              ("Document Type" <> "Document Type"::Payment))
+          THEN
+            InsertPaymentFileError(MustBeVendEmplPmtOrCustRefundErr);
+
+          IF NOT ("Account Type" = "Account Type"::Employee) AND
+             ("Recipient Bank Account" = '') AND ("Creditor No." = '')
+          THEN
+            InsertPaymentFileError(STRSUBSTNO(EmptyPaymentDetailsErr,
+                FIELDCAPTION("Recipient Bank Account"),FIELDCAPTION("Creditor No.")));
+        END;
+      END;
+    END;
+
+    PROCEDURE AddFieldEmptyError@1(VAR GenJnlLine@1000 : Record 81;TableCaption@1001 : Text;FieldCaption@1002 : Text;KeyValue@1003 : Text);
+    VAR
+      ErrorText@1004 : Text;
+    BEGIN
+      IF KeyValue = '' THEN
+        ErrorText := STRSUBSTNO(FieldBlankErr,TableCaption,FieldCaption)
+      ELSE
+        ErrorText := STRSUBSTNO(FieldKeyBlankErr,TableCaption,KeyValue,FieldCaption);
+      GenJnlLine.InsertPaymentFileError(ErrorText);
+    END;
+
+    [External]
+    PROCEDURE AddBatchEmptyError@19(VAR GenJnlLine@1000 : Record 81;FieldCaption@1003 : Text;KeyValue@1002 : Variant);
+    VAR
+      GenJnlBatch@1001 : Record 232;
+    BEGIN
+      AddFieldEmptyError(GenJnlLine,GenJnlBatch.TABLECAPTION,FieldCaption,FORMAT(KeyValue));
+    END;
+
+    LOCAL PROCEDURE CheckGenJournalBatch@2(GenJournalLine@1001 : Record 81;GenJournalBatch@1000 : Record 232);
+    VAR
+      BankAccount@1002 : Record 270;
+    BEGIN
+      TempGenJournalBatch := GenJournalBatch;
+      TempGenJournalBatch.INSERT;
+
+      GenJournalBatch.OnCheckGenJournalLineExportRestrictions;
+
+      IF NOT GenJournalBatch."Allow Payment Export" THEN
+        AddBatchEmptyError(GenJournalLine,GenJournalBatch.FIELDCAPTION("Allow Payment Export"),'');
+
+      IF GenJournalBatch."Bal. Account Type" <> GenJournalBatch."Bal. Account Type"::"Bank Account" THEN
+        AddBatchEmptyError(GenJournalLine,GenJournalBatch.FIELDCAPTION("Bal. Account Type"),GenJournalBatch."Bal. Account Type");
+
+      IF GenJournalBatch."Bal. Account No." = '' THEN
+        AddBatchEmptyError(GenJournalLine,GenJournalBatch.FIELDCAPTION("Bal. Account No."),GenJournalBatch."Bal. Account No.");
+
+      IF BankAccount.GET(GenJournalBatch."Bal. Account No.") THEN
+        IF (BankAccount."Export Format" = 0) OR (BankAccount."Export Format" = BankAccount."Export Format"::Other) THEN
+          IF BankAccount."Payment Export Format" = '' THEN
+            GenJournalLine.InsertPaymentFileError(
+              STRSUBSTNO(FieldBlankErr,BankAccount.FIELDCAPTION("Payment Export Format"),BankAccount.TABLECAPTION));
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnPaymentExportGenJnlCheck@1215(VAR GenJournalLine@1213 : Record 81;VAR Handled@1217 : Boolean);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

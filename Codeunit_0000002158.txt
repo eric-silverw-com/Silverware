@@ -1,0 +1,290 @@
+OBJECT Codeunit 2158 O365 Document Send Mgt
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:16 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 2158=imd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      RoleCenterEmailErrorIDTxt@1001 : TextConst 'ENU=c3c760b9-6405-aaaa-b2a6-1affb70c38bf';
+      DocumentPageEmailErrorIDTxt@1013 : TextConst 'ENU=9c8d5ebc-8c62-45a7-bc77-e260691e6de0';
+      ShowDocumentsActionLbl@1002 : TextConst 'ENU=Show documents';
+      IgnoreTheseFailuresActionLbl@1016 : TextConst 'ENU=Ignore';
+      EmailSetupActionLbl@1003 : TextConst 'ENU=Set up email';
+      EditCustomerActionLbl@1004 : TextConst 'ENU=Edit customer';
+      ResendForegroundActionLbl@1005 : TextConst 'ENU=Resend now';
+      SomeDocumentsFailedMsg@1006 : TextConst 'ENU=Some documents could not be sent.';
+      EmailFailedCheckSetupMsg@1000 : TextConst 'ENU=The last email about this document could not be sent. Check your email setup.';
+      EmailFailedCheckCustomerMsg@1008 : TextConst 'ENU=The last email about this document could not be sent. Check the customer''s email address.';
+      EmailFailedGenericMsg@1009 : TextConst 'ENU=The last email about this document could not be sent.';
+      EmailFailedWithErrorCodeMsg@1010 : TextConst '@@@="%1=the SMTP error code returned";ENU=The last email about this document could not be sent due to this error: %1.';
+      InvoiceSuccesfullyResentMsg@1011 : TextConst 'ENU=The invoice was succesfully sent.';
+      EstimateSuccesfullyResentMsg@1012 : TextConst 'ENU=The estimate was succesfully sent.';
+      ClientTypeManagement@1014 : Codeunit 4;
+      NotificationLifecycleMgt@1015 : Codeunit 1511;
+      ResendDocumentFromUIMsg@1020 : TextConst 'ENU=To resend this document, use the action in the document page.';
+
+    LOCAL PROCEDURE ShowSendFailedNotificationForDocument@9(DocumentType@1001 : Option;DocumentNo@1000 : Code[20];Posted@1003 : Boolean;DocumentRecordId@1005 : RecordID;ShowActions@1020 : Boolean);
+    VAR
+      O365DocumentSentHistory@1004 : Record 2158;
+      ErrorCode@1002 : Text;
+    BEGIN
+      O365DocumentSentHistory.SETRANGE("Document Type",DocumentType);
+      O365DocumentSentHistory.SETRANGE("Document No.",DocumentNo);
+      O365DocumentSentHistory.SETRANGE(Posted,Posted);
+      IF O365DocumentSentHistory.FINDLAST THEN
+        ErrorCode := GetEmailErrorCode(O365DocumentSentHistory.GetJobQueueErrorMessage)
+      ELSE
+        ErrorCode := '';
+
+      SendNotificationFromErrorCode(O365DocumentSentHistory."Source No.",ErrorCode,DocumentRecordId,ShowActions);
+    END;
+
+    PROCEDURE ShowSalesInvoiceHeaderFailedNotification@12(SalesInvoiceHeader@1001 : Record 112);
+    VAR
+      DummyO365DocumentSentHistory@1004 : Record 2158;
+    BEGIN
+      SalesInvoiceHeader.CALCFIELDS(Cancelled);
+      IF SalesInvoiceHeader.Cancelled THEN
+        EXIT;
+
+      SalesInvoiceHeader.CALCFIELDS("Last Email Sent Time","Last Email Sent Status");
+      IF (SalesInvoiceHeader."Last Email Sent Time" <> 0DT) AND
+         (SalesInvoiceHeader."Last Email Sent Status" = SalesInvoiceHeader."Last Email Sent Status"::Error)
+      THEN
+        ShowSendFailedNotificationForDocument(
+          DummyO365DocumentSentHistory."Document Type"::Invoice,SalesInvoiceHeader."No.",TRUE,SalesInvoiceHeader.RECORDID,TRUE);
+    END;
+
+    PROCEDURE ShowSalesHeaderFailedNotification@2(SalesHeader@1001 : Record 36);
+    BEGIN
+      SalesHeader.CALCFIELDS("Last Email Sent Time","Last Email Sent Status");
+      IF (SalesHeader."Last Email Sent Time" <> 0DT) AND
+         (SalesHeader."Last Email Sent Status" = SalesHeader."Last Email Sent Status"::Error)
+      THEN
+        ShowSendFailedNotificationForDocument(SalesHeader."Document Type",SalesHeader."No.",FALSE,
+          SalesHeader.RECORDID,SalesHeader."Document Type" = SalesHeader."Document Type"::Quote);
+    END;
+
+    LOCAL PROCEDURE GetEmailErrorCode@1(ErrorText@1000 : Text) : Text;
+    VAR
+      TextPosition@1003 : Integer;
+    BEGIN
+      TextPosition := STRPOS(ErrorText,'The server response was:');
+      IF TextPosition = 0 THEN
+        EXIT('');
+      ErrorText := COPYSTR(ErrorText,
+          TextPosition + STRLEN('The server response was:')
+          );
+      ErrorText := DELCHR(ErrorText,'<',' ');
+
+      TextPosition := STRPOS(ErrorText,' ');
+      IF TextPosition <> 0 THEN
+        ErrorText := COPYSTR(ErrorText,1,TextPosition - 1);
+
+      EXIT(ErrorText);
+    END;
+
+    LOCAL PROCEDURE SendNotificationFromErrorCode@13(CustomerNo@1002 : Code[20];ErrorCode@1005 : Text;DocumentRecordId@1006 : RecordID;ShowActions@1020 : Boolean);
+    VAR
+      TargetNotification@1000 : Notification;
+    BEGIN
+      TargetNotification.ID(DocumentPageEmailErrorIDTxt);
+      TargetNotification.SCOPE(NOTIFICATIONSCOPE::LocalScope);
+      TargetNotification.SETDATA('CustNo',FORMAT(CustomerNo));
+      TargetNotification.SETDATA('DocumentRecordId',FORMAT(DocumentRecordId));
+      TargetNotification.SETDATA('ErrCode',ErrorCode);
+
+      CASE ErrorCode OF
+        '5.7.57':
+          BEGIN
+            TargetNotification.MESSAGE(EmailFailedCheckSetupMsg);
+            // Update tests in COD138958 when MethodName changed
+            IF ShowActions THEN
+              TargetNotification.ADDACTION(
+                EmailSetupActionLbl,CODEUNIT::"O365 Document Send Mgt",'OpenSetupEmailFromNotification');
+          END;
+        '5.1.6':
+          BEGIN
+            TargetNotification.MESSAGE(EmailFailedCheckCustomerMsg);
+            // Update tests in COD138958 when MethodName changed
+            IF ShowActions THEN
+              TargetNotification.ADDACTION(
+                EditCustomerActionLbl,CODEUNIT::"O365 Document Send Mgt",'OpenCustomerFromNotification');
+          END;
+        '':
+          TargetNotification.MESSAGE(EmailFailedGenericMsg);
+        ELSE
+          TargetNotification.MESSAGE(STRSUBSTNO(EmailFailedWithErrorCodeMsg,ErrorCode));
+      END;
+
+      // Update tests in COD138958 when MethodName changed
+      IF ShowActions THEN
+        TargetNotification.ADDACTION(
+          ResendForegroundActionLbl,CODEUNIT::"O365 Document Send Mgt",'ResendDocumentFromNotification');
+      NotificationLifecycleMgt.SendNotification(TargetNotification,DocumentRecordId);
+    END;
+
+    PROCEDURE ResendDocumentFromNotification@3(EmailFailedNotification@1000 : Notification);
+    VAR
+      SalesInvoiceHeader@1005 : Record 112;
+      SalesHeader@1003 : Record 36;
+      DocumentMailing@1004 : Codeunit 260;
+      DocumentRecordId@1030 : RecordID;
+    BEGIN
+      IF NOT EmailFailedNotification.HASDATA('DocumentRecordId') THEN
+        EXIT;
+
+      IF NOT EVALUATE(DocumentRecordId,EmailFailedNotification.GETDATA('DocumentRecordId')) THEN
+        EXIT;
+
+      CASE DocumentRecordId.TABLENO OF
+        DATABASE::"Sales Invoice Header":
+          BEGIN
+            SalesInvoiceHeader.GET(DocumentRecordId);
+            IF DocumentMailing.SendPostedInvoiceInForeground(SalesInvoiceHeader) THEN
+              MESSAGE(InvoiceSuccesfullyResentMsg);
+          END;
+        DATABASE::"Sales Header":
+          BEGIN
+            SalesHeader.GET(DocumentRecordId);
+            CASE SalesHeader."Document Type" OF
+              SalesHeader."Document Type"::Quote:
+                IF DocumentMailing.SendQuoteInForeground(SalesHeader) THEN
+                  MESSAGE(EstimateSuccesfullyResentMsg);
+              ELSE
+                MESSAGE(ResendDocumentFromUIMsg);
+            END;
+          END;
+        ELSE
+          MESSAGE(ResendDocumentFromUIMsg);
+      END;
+    END;
+
+    PROCEDURE OpenCustomerFromNotification@4(EmailFailedNotification@1000 : Notification);
+    VAR
+      Customer@1004 : Record 18;
+      CustomerNo@1003 : Code[20];
+    BEGIN
+      IF NOT EmailFailedNotification.HASDATA('CustNo') THEN
+        EXIT;
+
+      CustomerNo := EmailFailedNotification.GETDATA('CustNo');
+
+      IF Customer.GET(CustomerNo) THEN
+        IF ClientTypeManagement.IsPhoneClientType THEN
+          PAGE.RUN(PAGE::"O365 Sales Customer Card",Customer)
+        ELSE
+          PAGE.RUN(PAGE::"BC O365 Sales Customer Card",Customer)
+    END;
+
+    PROCEDURE OpenSetupEmailFromNotification@5(EmailFailedNotification@1000 : Notification);
+    VAR
+      O365SetupEmail@1001 : Codeunit 2135;
+    BEGIN
+      O365SetupEmail.SetupEmail(TRUE);
+    END;
+
+    PROCEDURE ShowRoleCenterEmailNotification@19(CountOnlyNotNotified@1002 : Boolean);
+    VAR
+      DummyO365SalesDocument@1001 : Record 2103;
+      RoleCenterNotification@1000 : Notification;
+      FailedNotNotifiedDocuments@1003 : Integer;
+    BEGIN
+      FailedNotNotifiedDocuments := GetFailedNotNotifiedDocuments(CountOnlyNotNotified);
+
+      IF FailedNotNotifiedDocuments <> 0 THEN BEGIN
+        RoleCenterNotification.ID(RoleCenterEmailErrorIDTxt);
+        RoleCenterNotification.SCOPE(NOTIFICATIONSCOPE::LocalScope);
+        RoleCenterNotification.MESSAGE(SomeDocumentsFailedMsg);
+        // Update tests in COD138958 when MethodName changed
+        RoleCenterNotification.ADDACTION(
+          ShowDocumentsActionLbl,CODEUNIT::"O365 Document Send Mgt",'ShowSendingFailedDocumentList');
+        RoleCenterNotification.ADDACTION(
+          IgnoreTheseFailuresActionLbl,CODEUNIT::"O365 Document Send Mgt",'ClearNotificationsForAllDocumentsAction');
+        NotificationLifecycleMgt.SendNotification(RoleCenterNotification,DummyO365SalesDocument.RECORDID);
+        SetAllToNotified;
+      END;
+    END;
+
+    PROCEDURE ShowSendingFailedDocumentList@20(RoleCenterSendingFailedNotification@1000 : Notification);
+    VAR
+      O365SalesDocument@1002 : Record 2103;
+    BEGIN
+      O365SalesDocument.SETRANGE("Last Email Sent Status",O365SalesDocument."Last Email Sent Status"::Error);
+      O365SalesDocument.SETRANGE("Last Email Notif Cleared",FALSE);
+
+      PAGE.RUN(PAGE::"BC O365 Sent Documents List",O365SalesDocument);
+    END;
+
+    LOCAL PROCEDURE GetFailedNotNotifiedDocuments@1023(CountOnlyNotNotified@1001 : Boolean) DocumentsFailedSending : Integer;
+    VAR
+      O365DocumentSentHistory@1000 : Record 2158;
+    BEGIN
+      O365DocumentSentHistory.SETRANGE(NotificationCleared,FALSE);
+      IF CountOnlyNotNotified THEN
+        O365DocumentSentHistory.SETRANGE(Notified,FALSE);
+
+      O365DocumentSentHistory.SETRANGE("Job Last Status",O365DocumentSentHistory."Job Last Status"::Error);
+      DocumentsFailedSending := O365DocumentSentHistory.COUNT;
+    END;
+
+    LOCAL PROCEDURE SetAllToNotified@6();
+    VAR
+      O365DocumentSentHistory@1000 : Record 2158;
+    BEGIN
+      O365DocumentSentHistory.SETRANGE(Notified,FALSE);
+      O365DocumentSentHistory.MODIFYALL(Notified,TRUE,TRUE);
+    END;
+
+    PROCEDURE ClearNotificationsForDocument@8(DocNo@1001 : Code[20];Posted@1002 : Boolean;DocType@1003 : Option);
+    VAR
+      O365DocumentSentHistory@1000 : Record 2158;
+    BEGIN
+      O365DocumentSentHistory.SETRANGE(Posted,Posted);
+      O365DocumentSentHistory.SETRANGE("Document No.",DocNo);
+      O365DocumentSentHistory.SETRANGE("Document Type",DocType);
+
+      IF O365DocumentSentHistory.FINDLAST THEN BEGIN
+        O365DocumentSentHistory.NotificationCleared := TRUE;
+        O365DocumentSentHistory.Notified := TRUE;
+        O365DocumentSentHistory.MODIFY(TRUE);
+      END;
+    END;
+
+    PROCEDURE ClearNotificationsForAllDocuments@7();
+    VAR
+      O365DocumentSentHistory@1000 : Record 2158;
+    BEGIN
+      O365DocumentSentHistory.SETRANGE(NotificationCleared,FALSE);
+      O365DocumentSentHistory.MODIFYALL(NotificationCleared,TRUE,TRUE);
+    END;
+
+    PROCEDURE ClearNotificationsForAllDocumentsAction@10(TheNotification@1001 : Notification);
+    BEGIN
+      ClearNotificationsForAllDocuments;
+    END;
+
+    PROCEDURE RecallEmailFailedNotification@17();
+    VAR
+      LocalNotification@1005 : Notification;
+    BEGIN
+      LocalNotification.ID(DocumentPageEmailErrorIDTxt);
+      IF LocalNotification.RECALL THEN;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

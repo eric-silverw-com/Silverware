@@ -1,0 +1,709 @@
+OBJECT Codeunit 5461 Graph Int. - Contact
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:23 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      BusinessTypeMissingErr@1000 : TextConst '@@@={Locked};ENU=BusinessType is not present on Graph Contact.';
+      BusinessTypeUnknownValueErr@1001 : TextConst '@@@={Locked};ENU=BusinessType has an invalid value: %1.';
+      BusinessCategoryMissingErr@1002 : TextConst '@@@={Locked};ENU=The Graph Contact must have 1 or more business category fields.';
+      BusinessCategoryWrongValueErr@1003 : TextConst '@@@={Locked};ENU=The business category has an invalid value: %1.\%2.';
+      NoBusinessCategoryErr@1004 : TextConst '@@@={Locked};ENU=At least one business category must be set to True.';
+      CannotGetGraphXrmIdErr@1005 : TextConst '@@@={Locked};ENU=Cannot find the graph XrmId for graph record id %1.';
+
+    [EventSubscriber(Codeunit,5345,OnAfterTransferRecordFields)]
+    LOCAL PROCEDURE OnAfterTransferRecordFields@35(VAR SourceRecordRef@1002 : RecordRef;VAR DestinationRecordRef@1001 : RecordRef;VAR AdditionalFieldsWereModified@1000 : Boolean);
+    VAR
+      Contact@1003 : Record 5050;
+      GraphContact@1004 : Record 5450;
+    BEGIN
+      CASE GetSourceDestCode(SourceRecordRef,DestinationRecordRef) OF
+        'Contact-Graph Contact':
+          BEGIN
+            DestinationRecordRef.SETTABLE(GraphContact);
+            SourceRecordRef.SETTABLE(Contact);
+            SetContactFieldsOnGraph(Contact,GraphContact);
+            SetIntegrationIdFieldOnGraph(Contact,GraphContact);
+            AdditionalFieldsWereModified := TRUE;
+            DestinationRecordRef.GETTABLE(GraphContact);
+          END;
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,5345,OnBeforeInsertRecord)]
+    LOCAL PROCEDURE OnBeforeInsertRecord@1(SourceRecordRef@1001 : RecordRef;VAR DestinationRecordRef@1000 : RecordRef);
+    VAR
+      Contact@1002 : Record 5050;
+      GraphContact@1004 : Record 5450;
+      GraphCollectionMgtContact@1005 : Codeunit 5458;
+      ContactType@1006 : Option;
+    BEGIN
+      CASE GetSourceDestCode(SourceRecordRef,DestinationRecordRef) OF
+        'Graph Contact-Contact':
+          BEGIN
+            DestinationRecordRef.SETTABLE(Contact);
+            SourceRecordRef.SETTABLE(GraphContact);
+            VerifyGraphContactRequiredData(GraphContact);
+            ContactType := Contact.Type;
+            GraphCollectionMgtContact.GetBusinessType(GraphContact.GetBusinessTypeString,ContactType);
+            Contact.Type := ContactType;
+            SetGraphFieldsOnContact(GraphContact,Contact);
+            DestinationRecordRef.GETTABLE(Contact);
+          END;
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,5345,OnAfterInsertRecord)]
+    LOCAL PROCEDURE OnAfterInsertRecord@45(VAR SourceRecordRef@1001 : RecordRef;VAR DestinationRecordRef@1002 : RecordRef);
+    VAR
+      Contact@1003 : Record 5050;
+      GraphContact@1004 : Record 5450;
+      ModifySourceRecord@1005 : Boolean;
+    BEGIN
+      CASE GetSourceDestCode(SourceRecordRef,DestinationRecordRef) OF
+        'Graph Contact-Contact':
+          BEGIN
+            DestinationRecordRef.SETTABLE(Contact);
+            SourceRecordRef.SETTABLE(GraphContact);
+            SetContactBusinessRelations(GraphContact,Contact);
+            CheckAndFixDisplayName(GraphContact,Contact,ModifySourceRecord);
+            ModifySourceGraphContact(GraphContact,ModifySourceRecord);
+            DestinationRecordRef.GETTABLE(Contact);
+            SourceRecordRef.GETTABLE(GraphContact);
+          END;
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,5345,OnBeforeModifyRecord)]
+    LOCAL PROCEDURE OnBeforeModifyRecord@12(IntegrationTableMapping@1000 : Record 5335;SourceRecordRef@1001 : RecordRef;VAR DestinationRecordRef@1002 : RecordRef);
+    VAR
+      GraphContact@1003 : Record 5450;
+      Contact@1004 : Record 5050;
+      ModifySource@1005 : Boolean;
+    BEGIN
+      CASE GetSourceDestCode(SourceRecordRef,DestinationRecordRef) OF
+        'Graph Contact-Contact':
+          BEGIN
+            DestinationRecordRef.SETTABLE(Contact);
+            SourceRecordRef.SETTABLE(GraphContact);
+            VerifyGraphContactRequiredData(GraphContact);
+            SetGraphFieldsOnContact(GraphContact,Contact);
+            SetContactBusinessRelations(GraphContact,Contact);
+            DestinationRecordRef.GETTABLE(Contact);
+          END;
+        'Contact-Graph Contact':
+          BEGIN
+            DestinationRecordRef.SETTABLE(GraphContact);
+            SourceRecordRef.SETTABLE(Contact);
+            CheckAndFixContactBusinessRelations(GraphContact,Contact,ModifySource);
+            IF ModifySource THEN
+              DestinationRecordRef.GETTABLE(GraphContact);
+          END;
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,5345,OnAfterModifyRecord)]
+    LOCAL PROCEDURE OnAfterModifyRecord@51(VAR SourceRecordRef@1001 : RecordRef;VAR DestinationRecordRef@1002 : RecordRef);
+    VAR
+      GraphContact@1000 : Record 5450;
+      Contact@1003 : Record 5050;
+      ModifySourceRecord@1004 : Boolean;
+    BEGIN
+      CASE GetSourceDestCode(SourceRecordRef,DestinationRecordRef) OF
+        'Graph Contact-Contact':
+          BEGIN
+            DestinationRecordRef.SETTABLE(Contact);
+            SourceRecordRef.SETTABLE(GraphContact);
+            SetContactBusinessRelations(GraphContact,Contact);
+            CheckAndFixContactBusinessRelations(GraphContact,Contact,ModifySourceRecord);
+            CheckAndFixDisplayName(GraphContact,Contact,ModifySourceRecord);
+            ModifySourceGraphContact(GraphContact,ModifySourceRecord);
+            SourceRecordRef.GETTABLE(GraphContact);
+          END;
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,5347,OnBeforeDeleteRecord)]
+    LOCAL PROCEDURE OnBeforeDeleteRecord@13(IntegrationTableMapping@1000 : Record 5335;VAR DestinationRecordRef@1001 : RecordRef);
+    VAR
+      Contact@1003 : Record 5050;
+    BEGIN
+      CASE GetDestCode(DestinationRecordRef) OF
+        'Contact':
+          BEGIN
+            DestinationRecordRef.SETTABLE(Contact);
+            BlockCustVendBank(Contact);
+          END;
+      END;
+    END;
+
+    PROCEDURE FindOrCreateCustomerFromGraphContactSafe@16(GraphContactId@1000 : Text[250];VAR Customer@1001 : Record 18;VAR Contact@1006 : Record 5050) : Boolean;
+    VAR
+      MarketingSetup@1008 : Record 5079;
+      GraphSyncRunner@1002 : Codeunit 5452;
+    BEGIN
+      IF NOT FindContactFromGraphId(GraphContactId,Contact) THEN BEGIN
+        GraphSyncRunner.SyncFromGraphSynchronously(
+          CODEUNIT::"Graph Subscription Management",GraphSyncRunner.GetDefaultSyncSynchronouslyTimeoutInSeconds);
+        IF NOT FindContactFromGraphId(GraphContactId,Contact) THEN
+          EXIT(FALSE);
+      END;
+
+      IF FindCustomerFromContact(Customer,Contact) THEN
+        EXIT(TRUE);
+
+      // Promote contact to customer
+      IF NOT MarketingSetup.GET THEN
+        EXIT(FALSE);
+
+      IF MarketingSetup."Bus. Rel. Code for Customers" = '' THEN
+        EXIT(FALSE);
+
+      Contact.SetHideValidationDialog(TRUE);
+      Contact.CreateCustomer(MarketingSetup.GetCustomerTemplate(Contact.Type));
+
+      // This line triggers sync back to graph via Background session
+      // We need to update IsCustomer flag back to Graph
+      // FindCustomerFromGraphContact function is used in the web services
+      // We must be able to revert changes back, thus background session is needed (there are several COMMITs)
+      Contact.MODIFY(TRUE);
+
+      EXIT(FindCustomerFromContact(Customer,Contact));
+    END;
+
+    PROCEDURE FindContactFromGraphId@22(GraphContactId@1000 : Text[250];VAR Contact@1006 : Record 5050) : Boolean;
+    VAR
+      DummyGraphIntegrationRecord@1002 : Record 5451;
+      SearchGraphIntegrationRecord@1007 : Record 5451;
+      ContactRecordID@1005 : RecordID;
+      ContactXrmId@1004 : GUID;
+    BEGIN
+      IF GraphContactId = '' THEN
+        EXIT(FALSE);
+
+      IF EVALUATE(ContactXrmId,GraphContactId) THEN BEGIN
+        SearchGraphIntegrationRecord.SETRANGE(XRMId,ContactXrmId);
+        IF NOT SearchGraphIntegrationRecord.FINDFIRST THEN
+          EXIT(FALSE);
+
+        GraphContactId := SearchGraphIntegrationRecord."Graph ID";
+      END;
+
+      IF NOT DummyGraphIntegrationRecord.FindRecordIDFromID(GraphContactId,DATABASE::Contact,ContactRecordID) THEN
+        EXIT(FALSE);
+
+      EXIT(Contact.GET(ContactRecordID));
+    END;
+
+    PROCEDURE FindCustomerFromContact@26(VAR Customer@1001 : Record 18;VAR Contact@1006 : Record 5050) : Boolean;
+    VAR
+      ContactBusinessRelation@1003 : Record 5054;
+    BEGIN
+      // Check primary contact first
+      Customer.SETRANGE("Primary Contact No.",Contact."No.");
+      IF Customer.FINDFIRST THEN
+        EXIT(TRUE);
+
+      Customer.SETRANGE("Primary Contact No.");
+      ContactBusinessRelation.SETCURRENTKEY("Link to Table","No.");
+      ContactBusinessRelation.SETRANGE("Link to Table",ContactBusinessRelation."Link to Table"::Customer);
+      ContactBusinessRelation.SETRANGE("Contact No.",Contact."No.");
+
+      IF NOT ContactBusinessRelation.FINDFIRST THEN
+        EXIT(FALSE);
+
+      EXIT(Customer.GET(ContactBusinessRelation."No."));
+    END;
+
+    PROCEDURE FindGraphContactIdFromCustomer@18(VAR GraphContactId@1000 : Text[250];VAR Customer@1001 : Record 18;VAR Contact@1006 : Record 5050) : Boolean;
+    VAR
+      GraphIntegrationRecord@1002 : Record 5451;
+      ContactBusinessRelation@1003 : Record 5054;
+      MarketingSetup@1007 : Record 5079;
+      ContactNo@1004 : Code[20];
+    BEGIN
+      // Use primary contact if specified
+      IF Customer."Primary Contact No." <> '' THEN
+        ContactNo := Customer."Primary Contact No."
+      ELSE BEGIN
+        ContactBusinessRelation.SETCURRENTKEY("Link to Table","No.");
+        ContactBusinessRelation.SETRANGE("Link to Table",ContactBusinessRelation."Link to Table"::Customer);
+        ContactBusinessRelation.SETRANGE("No.",Customer."No.");
+        IF MarketingSetup.GET THEN
+          ContactBusinessRelation.SETRANGE("Business Relation Code",MarketingSetup."Bus. Rel. Code for Customers");
+
+        IF NOT ContactBusinessRelation.FINDFIRST THEN
+          EXIT(FALSE);
+
+        ContactNo := ContactBusinessRelation."Contact No.";
+      END;
+
+      IF NOT Contact.GET(ContactNo) THEN
+        EXIT(FALSE);
+
+      EXIT(GraphIntegrationRecord.FindIDFromRecordID(Contact.RECORDID,GraphContactId));
+    END;
+
+    PROCEDURE FindGraphContactIdFromCustomerNo@19(VAR GraphContactID@1002 : Text[250];CustomerNo@1001 : Code[20]) : Boolean;
+    VAR
+      Customer@1000 : Record 18;
+      DummyContact@1003 : Record 5050;
+    BEGIN
+      IF NOT Customer.GET(CustomerNo) THEN
+        EXIT;
+
+      EXIT(FindGraphContactIdFromCustomer(GraphContactID,Customer,DummyContact));
+    END;
+
+    PROCEDURE FindGraphContactIdFromVendor@27(VAR GraphContactId@1000 : Text[250];VAR Vendor@1001 : Record 23;VAR Contact@1006 : Record 5050) : Boolean;
+    VAR
+      GraphIntegrationRecord@1002 : Record 5451;
+      ContactBusinessRelation@1003 : Record 5054;
+      MarketingSetup@1007 : Record 5079;
+      ContactNo@1004 : Code[20];
+    BEGIN
+      // Use primary contact if specified
+      IF Vendor."Primary Contact No." <> '' THEN
+        ContactNo := Vendor."Primary Contact No."
+      ELSE BEGIN
+        ContactBusinessRelation.SETCURRENTKEY("Link to Table","No.");
+        ContactBusinessRelation.SETRANGE("Link to Table",ContactBusinessRelation."Link to Table"::Vendor);
+        ContactBusinessRelation.SETRANGE("No.",Vendor."No.");
+        IF MarketingSetup.GET THEN
+          ContactBusinessRelation.SETRANGE("Business Relation Code",MarketingSetup."Bus. Rel. Code for Vendors");
+
+        IF NOT ContactBusinessRelation.FINDFIRST THEN
+          EXIT(FALSE);
+
+        ContactNo := ContactBusinessRelation."Contact No.";
+      END;
+
+      IF NOT Contact.GET(ContactNo) THEN
+        EXIT(FALSE);
+
+      EXIT(GraphIntegrationRecord.FindIDFromRecordID(Contact.RECORDID,GraphContactId));
+    END;
+
+    LOCAL PROCEDURE GetSourceDestCode@38(SourceRecordRef@1001 : RecordRef;DestinationRecordRef@1000 : RecordRef) : Text;
+    BEGIN
+      IF (SourceRecordRef.NUMBER <> 0) AND (DestinationRecordRef.NUMBER <> 0) THEN
+        EXIT(STRSUBSTNO('%1-%2',SourceRecordRef.NAME,DestinationRecordRef.NAME));
+      EXIT('');
+    END;
+
+    LOCAL PROCEDURE GetDestCode@14(DestinationRecordRef@1000 : RecordRef) : Text;
+    BEGIN
+      IF DestinationRecordRef.NUMBER <> 0 THEN
+        EXIT(STRSUBSTNO('%1',DestinationRecordRef.NAME));
+      EXIT('');
+    END;
+
+    LOCAL PROCEDURE SetContactFieldsOnGraph@2(Contact@1001 : Record 5050;VAR GraphContact@1000 : Record 5450);
+    VAR
+      GraphCollectionMgtContact@1002 : Codeunit 5458;
+      EmailAddressesString@1005 : Text;
+      BusinessTypeString@1006 : Text;
+      IsNavCreatedString@1013 : Text;
+      IsLead@1010 : Boolean;
+      IsPartner@1011 : Boolean;
+      IsContact@1012 : Boolean;
+    BEGIN
+      // Avoid syncing contacts without a name to Graph, which may be created because of creating a Customer without a name.
+      Contact.TESTFIELD(Name);
+
+      IF Contact.Type = Contact.Type::Company THEN
+        GraphContact.DisplayName := Contact."Company Name"
+      ELSE
+        IF (Contact."First Name" IN ['',' ']) AND (Contact."Middle Name" = '') AND (Contact.Surname = '') THEN
+          GraphContact.DisplayName := Contact.Name;
+
+      // E-MailAddresses:
+      EmailAddressesString := GraphContact.GetEmailAddressesString;
+      EmailAddressesString := GraphCollectionMgtContact.UpdateEmailAddress(EmailAddressesString,0,Contact."E-Mail");
+      EmailAddressesString := GraphCollectionMgtContact.UpdateEmailAddress(EmailAddressesString,1,Contact."E-Mail 2");
+      GraphContact.SetEmailAddressesString(EmailAddressesString);
+
+      // Extensions
+      BusinessTypeString := GraphCollectionMgtContact.AddBusinessType(Contact.Type);
+      GraphContact.SetBusinessTypeString(BusinessTypeString);
+
+      // If the property exists OR IsCustomer = TRUE then set the property, else leave empty.
+      UpdateBusinessCategoriesFromNAV(Contact,GraphContact);
+
+      IF GraphContact.Id = '' THEN BEGIN // new graph contact
+        IsNavCreatedString := GraphCollectionMgtContact.AddIsNavCreated(TRUE);
+        GraphContact.SetIsNavCreatedString(IsNavCreatedString);
+      END;
+
+      IsLead := GraphCollectionMgtContact.GetIsLead(GraphContact.GetIsLeadString);
+      IsPartner := GraphCollectionMgtContact.GetIsPartner(GraphContact.GetIsPartnerString);
+      IsContact := GraphCollectionMgtContact.GetIsContact(GraphContact.GetIsContactString);
+
+      // at least 1 must be true. If none are true, set IsContact = TRUE
+      IF NOT (CheckIsBank(Contact) OR CheckIsCustomer(Contact) OR CheckIsVendor(Contact) OR IsLead OR IsPartner OR IsContact) THEN
+        GraphContact.SetIsContactString(GraphCollectionMgtContact.AddIsContact(TRUE));
+
+      // Comments
+      GraphContact.SetPersonalNotesString(GraphCollectionMgtContact.GetContactComments(Contact));
+    END;
+
+    LOCAL PROCEDURE SetGraphFieldsOnContact@8(GraphContact@1003 : Record 5450;VAR Contact@1002 : Record 5050);
+    VAR
+      GraphCollectionMgtContact@1004 : Codeunit 5458;
+      DummyName@1005 : Text;
+    BEGIN
+      IF Contact.Type = Contact.Type::Company THEN BEGIN
+        IF (GraphContact.DisplayName = '') AND (GraphContact.CompanyName <> '') THEN
+          Contact.VALIDATE(Name,COPYSTR(GraphContact.CompanyName,1,MAXSTRLEN(Contact.Name)))
+        ELSE
+          Contact.VALIDATE(Name,COPYSTR(GraphContact.DisplayName,1,MAXSTRLEN(Contact.Name)));
+      END ELSE
+        Contact.VALIDATE("First Name");
+
+      // E-MailAddresses:
+      GraphCollectionMgtContact.InitializeCollection(GraphContact.GetEmailAddressesString);
+      GraphCollectionMgtContact.GetEmailAddress(0,DummyName,Contact."E-Mail");
+      GraphCollectionMgtContact.GetEmailAddress(1,DummyName,Contact."E-Mail 2");
+
+      // Comments
+      GraphCollectionMgtContact.SetContactComments(Contact,GraphContact.GetPersonalNotesString);
+    END;
+
+    LOCAL PROCEDURE SetContactBusinessRelations@9(GraphContact@1001 : Record 5450;VAR Contact@1000 : Record 5050);
+    VAR
+      MarketingSetup@1005 : Record 5079;
+      GraphCollectionMgtContact@1002 : Codeunit 5458;
+    BEGIN
+      IF MarketingSetup.GET THEN BEGIN
+        // IsCustomer
+        Contact.SetHideValidationDialog(TRUE);
+        IF MarketingSetup."Bus. Rel. Code for Customers" <> '' THEN
+          IF GraphCollectionMgtContact.GetIsCustomer(GraphContact.GetIsCustomerString) AND
+             NOT CheckIsCustomer(Contact)
+          THEN
+            Contact.CreateCustomer(MarketingSetup.GetCustomerTemplate(Contact.Type));
+
+        IF Contact.Type = Contact.Type::Company THEN BEGIN
+          // IsVendor
+          IF MarketingSetup."Bus. Rel. Code for Vendors" <> '' THEN
+            IF GraphCollectionMgtContact.GetIsVendor(GraphContact.GetIsVendorString) AND
+               NOT CheckIsVendor(Contact)
+            THEN
+              Contact.CreateVendor;
+
+          // IsBank
+          IF MarketingSetup."Bus. Rel. Code for Bank Accs." <> '' THEN
+            IF GraphCollectionMgtContact.GetIsBank(GraphContact.GetIsBankString) AND
+               NOT CheckIsBank(Contact)
+            THEN
+              Contact.CreateBankAccount;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateBusinessCategoriesFromNAV@25(VAR Contact@1000 : Record 5050;VAR GraphContact@1001 : Record 5450) Modified : Boolean;
+    VAR
+      GraphCollectionMgtContact@1005 : Codeunit 5458;
+      IsBankString@1010 : Text;
+      IsCustomerString@1011 : Text;
+      IsVendorString@1012 : Text;
+      GraphIsBank@1008 : Boolean;
+      GraphIsCustomer@1004 : Boolean;
+      GraphIsVendor@1003 : Boolean;
+      NavIsBank@1006 : Boolean;
+      NavIsCustomer@1007 : Boolean;
+      NavIsVendor@1009 : Boolean;
+    BEGIN
+      // Checks for inconsistencies in the business category fields and updates the graph contact accordingly
+
+      GraphIsBank := GraphCollectionMgtContact.GetIsBank(GraphContact.GetIsBankString);
+      GraphIsCustomer := GraphCollectionMgtContact.GetIsCustomer(GraphContact.GetIsCustomerString);
+      GraphIsVendor := GraphCollectionMgtContact.GetIsVendor(GraphContact.GetIsVendorString);
+
+      NavIsBank := CheckIsBank(Contact);
+      NavIsCustomer := CheckIsCustomer(Contact);
+      NavIsVendor := CheckIsVendor(Contact);
+
+      IF GraphIsBank <> NavIsBank THEN BEGIN
+        IsBankString := GraphCollectionMgtContact.AddIsBank(NavIsBank);
+        GraphContact.SetIsBankString(IsBankString);
+        Modified := TRUE;
+      END;
+
+      IF GraphIsCustomer <> NavIsCustomer THEN BEGIN
+        IsCustomerString := GraphCollectionMgtContact.AddIsCustomer(NavIsCustomer);
+        GraphContact.SetIsCustomerString(IsCustomerString);
+        Modified := TRUE;
+      END;
+
+      IF GraphIsVendor <> NavIsVendor THEN BEGIN
+        IsVendorString := GraphCollectionMgtContact.AddIsVendor(NavIsVendor);
+        GraphContact.SetIsVendorString(IsVendorString);
+        Modified := TRUE;
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckIsCustomer@5(Contact@1001 : Record 5050) : Boolean;
+    VAR
+      ContactBusinessRelation@1000 : Record 5054;
+    BEGIN
+      ContactBusinessRelation.SETRANGE("Contact No.",Contact."No.");
+      ContactBusinessRelation.SETRANGE("Link to Table",ContactBusinessRelation."Link to Table"::Customer);
+      EXIT(NOT ContactBusinessRelation.ISEMPTY);
+    END;
+
+    LOCAL PROCEDURE CheckIsVendor@6(Contact@1000 : Record 5050) : Boolean;
+    VAR
+      ContactBusinessRelation@1001 : Record 5054;
+    BEGIN
+      ContactBusinessRelation.SETRANGE("Contact No.",Contact."No.");
+      ContactBusinessRelation.SETRANGE("Link to Table",ContactBusinessRelation."Link to Table"::Vendor);
+      EXIT(NOT ContactBusinessRelation.ISEMPTY);
+    END;
+
+    LOCAL PROCEDURE CheckIsBank@7(Contact@1001 : Record 5050) : Boolean;
+    VAR
+      ContactBusinessRelation@1000 : Record 5054;
+    BEGIN
+      ContactBusinessRelation.SETRANGE("Contact No.",Contact."No.");
+      ContactBusinessRelation.SETRANGE("Link to Table",ContactBusinessRelation."Link to Table"::"Bank Account");
+      EXIT(NOT ContactBusinessRelation.ISEMPTY);
+    END;
+
+    LOCAL PROCEDURE CheckAndFixContactBusinessRelations@3(VAR GraphContact@1001 : Record 5450;Contact@1000 : Record 5050;VAR ModifySourceRecord@1002 : Boolean);
+    BEGIN
+      ModifySourceRecord := UpdateBusinessCategoriesFromNAV(Contact,GraphContact) OR ModifySourceRecord;
+    END;
+
+    LOCAL PROCEDURE CheckAndFixDisplayName@4(VAR GraphContact@1000 : Record 5450;VAR Contact@1001 : Record 5050;VAR ModifySourceRecord@1002 : Boolean);
+    BEGIN
+      IF (GraphContact.DisplayName = '') AND (Contact.Name <> '') THEN BEGIN
+        GraphContact.DisplayName := Contact.Name;
+        ModifySourceRecord := TRUE;
+      END;
+    END;
+
+    LOCAL PROCEDURE ModifySourceGraphContact@11(VAR GraphContact@1000 : Record 5450;ModifySourceRecord@1001 : Boolean);
+    BEGIN
+      IF ModifySourceRecord THEN
+        GraphContact.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE VerifyGraphContactRequiredData@10(GraphContact@1000 : Record 5450);
+    VAR
+      GraphCollectionMgtContact@1001 : Codeunit 5458;
+      Value@1002 : Text;
+      BusinessTypeString@1009 : Text;
+      IsCustomerString@1003 : Text;
+      IsVendorString@1004 : Text;
+      IsBankString@1005 : Text;
+      IsContactString@1006 : Text;
+      IsLeadString@1007 : Text;
+      IsPartnerString@1008 : Text;
+      HasBusinessCategory@1010 : Boolean;
+    BEGIN
+      BusinessTypeString := GraphContact.GetBusinessTypeString;
+
+      // GraphContact MUST contain BusinessType
+      IF NOT GraphCollectionMgtContact.HasBusinessType(BusinessTypeString) THEN
+        ERROR(BusinessTypeMissingErr);
+
+      // BusinessType MUST contain a valid value
+      IF NOT GraphCollectionMgtContact.TryGetBusinessTypeValue(BusinessTypeString,Value) THEN
+        ERROR(BusinessTypeUnknownValueErr,Value);
+
+      IsCustomerString := GraphContact.GetIsCustomerString;
+      IsVendorString := GraphContact.GetIsVendorString;
+      IsBankString := GraphContact.GetIsBankString;
+      IsContactString := GraphContact.GetIsContactString;
+      IsLeadString := GraphContact.GetIsLeadString;
+      IsPartnerString := GraphContact.GetIsPartnerString;
+
+      // At least one of the Business Category fields must be present
+      IF NOT (GraphCollectionMgtContact.HasIsCustomer(IsCustomerString) OR
+              GraphCollectionMgtContact.HasIsVendor(IsVendorString) OR
+              GraphCollectionMgtContact.HasIsBank(IsBankString) OR
+              GraphCollectionMgtContact.HasIsContact(IsContactString) OR
+              GraphCollectionMgtContact.HasIsLead(IsLeadString) OR
+              GraphCollectionMgtContact.HasIsPartner(IsPartnerString))
+      THEN
+        ERROR(BusinessCategoryMissingErr);
+
+      // Business Category fields MUST contain a valid value
+      // At least 1 Business Category must be set to TRUE
+      IF GraphCollectionMgtContact.HasIsCustomer(IsCustomerString) THEN BEGIN
+        IF NOT GraphCollectionMgtContact.TryGetIsCustomerValue(IsCustomerString,Value) THEN
+          ERROR(BusinessCategoryWrongValueErr,GETLASTERRORTEXT,IsCustomerString);
+        IF GraphCollectionMgtContact.GetIsCustomer(IsCustomerString) THEN
+          HasBusinessCategory := TRUE;
+      END;
+
+      IF GraphCollectionMgtContact.HasIsVendor(IsVendorString) THEN BEGIN
+        IF NOT GraphCollectionMgtContact.TryGetIsVendorValue(IsVendorString,Value) THEN
+          ERROR(BusinessCategoryWrongValueErr,GETLASTERRORTEXT,IsVendorString);
+        IF GraphCollectionMgtContact.GetIsVendor(IsVendorString) THEN
+          HasBusinessCategory := TRUE;
+      END;
+
+      IF GraphCollectionMgtContact.HasIsBank(IsBankString) THEN BEGIN
+        IF NOT GraphCollectionMgtContact.TryGetIsBankValue(IsBankString,Value) THEN
+          ERROR(BusinessCategoryWrongValueErr,GETLASTERRORTEXT,IsBankString);
+        IF GraphCollectionMgtContact.GetIsBank(IsBankString) THEN
+          HasBusinessCategory := TRUE;
+      END;
+
+      IF GraphCollectionMgtContact.HasIsContact(IsContactString) THEN BEGIN
+        IF NOT GraphCollectionMgtContact.TryGetIsContactValue(IsContactString,Value) THEN
+          ERROR(BusinessCategoryWrongValueErr,GETLASTERRORTEXT,IsContactString);
+        IF GraphCollectionMgtContact.GetIsContact(IsContactString) THEN
+          HasBusinessCategory := TRUE;
+      END;
+
+      IF GraphCollectionMgtContact.HasIsLead(IsLeadString) THEN BEGIN
+        IF NOT GraphCollectionMgtContact.TryGetIsLeadValue(IsLeadString,Value) THEN
+          ERROR(BusinessCategoryWrongValueErr,GETLASTERRORTEXT,IsLeadString);
+        IF GraphCollectionMgtContact.GetIsLead(IsLeadString) THEN
+          HasBusinessCategory := TRUE;
+      END;
+
+      IF GraphCollectionMgtContact.HasIsPartner(IsPartnerString) THEN BEGIN
+        IF NOT GraphCollectionMgtContact.TryGetIsPartnerValue(IsPartnerString,Value) THEN
+          ERROR(BusinessCategoryWrongValueErr,GETLASTERRORTEXT,IsPartnerString);
+        IF GraphCollectionMgtContact.GetIsPartner(IsPartnerString) THEN
+          HasBusinessCategory := TRUE;
+      END;
+
+      IF NOT HasBusinessCategory THEN
+        ERROR(NoBusinessCategoryErr);
+    END;
+
+    LOCAL PROCEDURE BlockCustVendBank@15(DeletedContact@1000 : Record 5050);
+    VAR
+      ContactBusinessRelation@1001 : Record 5054;
+      Customer@1002 : Record 18;
+      Vendor@1003 : Record 23;
+      BankAccount@1004 : Record 270;
+    BEGIN
+      ContactBusinessRelation.SETRANGE("Contact No.",DeletedContact."No.");
+      ContactBusinessRelation.SETRANGE("Link to Table",ContactBusinessRelation."Link to Table"::Customer);
+      IF ContactBusinessRelation.FINDFIRST THEN
+        IF Customer.GET(ContactBusinessRelation."No.") THEN
+          DeleteOrBlockCustomer(Customer);
+
+      ContactBusinessRelation.SETRANGE("Link to Table",ContactBusinessRelation."Link to Table"::Vendor);
+      IF ContactBusinessRelation.FINDFIRST THEN
+        IF Vendor.GET(ContactBusinessRelation."No.") THEN BEGIN
+          Vendor.Blocked := Vendor.Blocked::All;
+          Vendor.MODIFY;
+        END;
+
+      ContactBusinessRelation.SETRANGE("Link to Table",ContactBusinessRelation."Link to Table"::"Bank Account");
+      IF ContactBusinessRelation.FINDFIRST THEN
+        IF BankAccount.GET(ContactBusinessRelation."No.") THEN BEGIN
+          BankAccount.Blocked := TRUE;
+          BankAccount.MODIFY;
+        END;
+
+      ContactBusinessRelation.RESET;
+      ContactBusinessRelation.SETRANGE("Contact No.",DeletedContact."No.");
+      ContactBusinessRelation.DELETEALL;
+    END;
+
+    LOCAL PROCEDURE SetIntegrationIdFieldOnGraph@17(VAR Contact@1000 : Record 5050;VAR GraphContact@1001 : Record 5450);
+    VAR
+      IntegrationRecord@1002 : Record 5151;
+      GraphCollectionMgtContact@1003 : Codeunit 5458;
+      IntegrationIdString@1004 : Text;
+    BEGIN
+      IF NOT IntegrationRecord.FindByRecordId(Contact.RECORDID) THEN
+        EXIT;
+
+      IntegrationIdString := GraphCollectionMgtContact.AddNavIntegrationId(IntegrationRecord."Integration ID");
+      GraphContact.SetNavIntegrationIdString(IntegrationIdString);
+    END;
+
+    PROCEDURE SetXRMId@21(VAR GraphIntegrationRecord@1002 : Record 5451);
+    VAR
+      GraphContact@1004 : Record 5450;
+      XrmID@1000 : GUID;
+    BEGIN
+      IF NOT (GraphIntegrationRecord."Table ID" = DATABASE::Contact) THEN
+        EXIT;
+
+      IF NOT GraphContact.GET(GraphIntegrationRecord."Graph ID") THEN
+        EXIT;
+
+      IF GraphContact.GetXrmId(XrmID) THEN
+        GraphIntegrationRecord.XRMId := XrmID;
+    END;
+
+    PROCEDURE UpdateBlankXrmIds@20();
+    VAR
+      GraphIntegrationRecord@1007 : Record 5451;
+      GraphContact@1006 : Record 5450;
+      GraphConnectionSetup@1005 : Codeunit 5456;
+      GraphSyncRunner@1004 : Codeunit 5452;
+      BlankGuid@1003 : GUID;
+      XrmId@1002 : GUID;
+      InboundConnectionName@1001 : Text;
+    BEGIN
+      IF NOT GraphSyncRunner.IsGraphSyncEnabled THEN
+        EXIT;
+
+      GraphIntegrationRecord.SETRANGE(XRMId,BlankGuid);
+      GraphIntegrationRecord.SETRANGE("Table ID",DATABASE::Contact);
+      IF NOT GraphIntegrationRecord.FINDSET(TRUE,FALSE) THEN
+        EXIT;
+
+      InboundConnectionName := GraphConnectionSetup.GetInboundConnectionName(DATABASE::Contact);
+
+      IF NOT HASTABLECONNECTION(TABLECONNECTIONTYPE::MicrosoftGraph,InboundConnectionName) THEN
+        REGISTERTABLECONNECTION(
+          TABLECONNECTIONTYPE::MicrosoftGraph,InboundConnectionName,
+          GraphConnectionSetup.GetInboundConnectionString(DATABASE::Contact));
+
+      SETDEFAULTTABLECONNECTION(TABLECONNECTIONTYPE::MicrosoftGraph,InboundConnectionName,TRUE);
+
+      REPEAT
+        IF GetGraphContact(GraphContact,GraphIntegrationRecord) THEN BEGIN
+          IF NOT GraphContact.GetXrmId(XrmId) THEN
+            ERROR(CannotGetGraphXrmIdErr,GraphIntegrationRecord."Graph ID");
+          GraphIntegrationRecord.XRMId := XrmId;
+          GraphIntegrationRecord.MODIFY;
+        END;
+      UNTIL GraphIntegrationRecord.NEXT = 0;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE GetGraphContact@24(VAR GraphContact@1000 : Record 5450;GraphIntegrationRecord@1001 : Record 5451);
+    BEGIN
+      GraphContact.GET(GraphIntegrationRecord."Graph ID");
+    END;
+
+    LOCAL PROCEDURE DeleteOrBlockCustomer@23(VAR Customer@1000 : Record 18);
+    BEGIN
+      // If there are any open or posted documents for the customer, then the customer is marked as blocked
+      IF Customer.HasAnyOpenOrPostedDocuments THEN BEGIN
+        Customer.VALIDATE(Blocked,Customer.Blocked::All);
+        Customer.MODIFY(TRUE);
+        // If there are no documents, then the customer is deleted
+      END ELSE
+        Customer.DELETE(TRUE);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,332 @@
+OBJECT Codeunit 1034 Job Planning Line - Calendar
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:02 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    TableNo=1003;
+    OnRun=VAR
+            LocalJobPlanningLine@1000 : Record 1003;
+          BEGIN
+            LocalJobPlanningLine.SETRANGE("Job No.","Job No.");
+            LocalJobPlanningLine.SETRANGE("Job Task No.","Job Task No.");
+            LocalJobPlanningLine.SETFILTER("Line Type",'%1|%2',"Line Type"::Budget,"Line Type"::"Both Budget and Billable");
+            LocalJobPlanningLine.SETRANGE(Type,Type::Resource);
+            LocalJobPlanningLine.SETFILTER("No.",'<>''''');
+            IF LocalJobPlanningLine.FINDSET THEN BEGIN
+              REPEAT
+                SetPlanningLine(LocalJobPlanningLine);
+                CreateAndSend;
+              UNTIL LocalJobPlanningLine.NEXT = 0;
+            END ELSE
+              MESSAGE(NoPlanningLinesMsg);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      JobPlanningLineCalendar@1012 : Record 1034;
+      JobPlanningLine@1000 : Record 1003;
+      Job@1001 : Record 167;
+      JobTask@1002 : Record 1001;
+      Contact@1004 : Record 5050;
+      Customer@1003 : Record 18;
+      ProjectManagerResource@1005 : Record 156;
+      AdditionalResourcesTxt@1009 : TextConst 'ENU=Additional Resources';
+      SetPlanningLineErr@1008 : TextConst 'ENU=You must specify a job planning line before you can send the appointment.';
+      DateTimeFormatTxt@1010 : TextConst '@@@={Locked};ENU=<Year4><Month,2><Day,2>T<Hours24,2><Minutes,2><Seconds,2>';
+      ProdIDTxt@1011 : TextConst '@@@={Locked};ENU=//Microsoft Corporation//Dynamics 365//EN';
+      Resource@1006 : Record 156;
+      NoPlanningLinesMsg@1007 : TextConst 'ENU=There are no applicable planning lines for this action.';
+
+    [External]
+    PROCEDURE SetPlanningLine@4(NewJobPlanningLine@1000 : Record 1003);
+    BEGIN
+      JobPlanningLine := NewJobPlanningLine;
+      UpdateJob;
+      UpdateJobTask;
+      UpdateResource;
+    END;
+
+    PROCEDURE CreateAndSend@13();
+    VAR
+      TempEmailItem@1000 : TEMPORARY Record 9500;
+    BEGIN
+      IF JobPlanningLine."No." = '' THEN
+        ERROR(SetPlanningLineErr);
+
+      IF JobPlanningLineCalendar.ShouldSendCancellation(JobPlanningLine) THEN
+        IF CreateCancellation(TempEmailItem) THEN
+          TempEmailItem.Send(TRUE);
+
+      IF JobPlanningLineCalendar.ShouldSendRequest(JobPlanningLine) THEN
+        IF CreateRequest(TempEmailItem) THEN
+          TempEmailItem.Send(TRUE);
+    END;
+
+    PROCEDURE CreateRequest@14(VAR TempEmailItem@1002 : TEMPORARY Record 9500) : Boolean;
+    VAR
+      Email@1000 : Text[80];
+    BEGIN
+      IF JobPlanningLine."No." = '' THEN
+        ERROR(SetPlanningLineErr);
+
+      Email := GetResourceEmail(JobPlanningLine."No.");
+
+      IF Email <> '' THEN BEGIN
+        JobPlanningLineCalendar.InsertOrUpdate(JobPlanningLine);
+        GenerateEmail(TempEmailItem,Email,FALSE);
+        EXIT(TRUE);
+      END;
+    END;
+
+    PROCEDURE CreateCancellation@7(VAR TempEmailItem@1002 : TEMPORARY Record 9500) : Boolean;
+    VAR
+      Email@1001 : Text[80];
+    BEGIN
+      IF JobPlanningLine."No." = '' THEN
+        ERROR(SetPlanningLineErr);
+
+      IF NOT JobPlanningLineCalendar.HasBeenSent(JobPlanningLine) THEN
+        EXIT(FALSE);
+
+      Email := GetResourceEmail(JobPlanningLineCalendar."Resource No.");
+      IF Email <> '' THEN BEGIN
+        GenerateEmail(TempEmailItem,Email,TRUE);
+        JobPlanningLineCalendar.DELETE;
+        EXIT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE GenerateEmail@15(VAR TempEmailItem@1000 : TEMPORARY Record 9500;RecipientEmail@1007 : Text[80];Cancel@1001 : Boolean);
+    VAR
+      TempBlob@1006 : Record 99008535;
+      FileMgt@1005 : Codeunit 419;
+      Stream@1004 : OutStream;
+      ICS@1003 : Text;
+      FilePath@1002 : Text;
+    BEGIN
+      ICS := GenerateICS(Cancel);
+      TempBlob.Blob.CREATEOUTSTREAM(Stream,TEXTENCODING::UTF8);
+      Stream.WRITE(ICS);
+
+      FilePath := FileMgt.ServerTempFileName('.ics');
+      FileMgt.BLOBExportToServerFile(TempBlob,FilePath);
+
+      TempEmailItem.Init;
+      TempEmailItem.Subject := JobTask.Description;
+      TempEmailItem."Attachment File Path" := COPYSTR(FilePath,1,250);
+      TempEmailItem."Attachment Name" := STRSUBSTNO('%1.ics',JobTask.TABLECAPTION);
+      TempEmailItem."Send to" := RecipientEmail;
+    END;
+
+    LOCAL PROCEDURE GenerateICS@33(Cancel@1007 : Boolean) ICS : Text;
+    VAR
+      StringBuilder@1000 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      Location@1003 : Text;
+      Summary@1002 : Text;
+      Status@1008 : Text;
+      Method@1009 : Text;
+      Description@1001 : Text;
+    BEGIN
+      Location := STRSUBSTNO('%1, %2, %3',Customer.Address,Customer.City,Customer."Country/Region Code");
+      Summary := STRSUBSTNO('%1:%2:%3',JobPlanningLine."Job No.",JobPlanningLine."Job Task No.",JobPlanningLine."Line No.");
+
+      IF Cancel THEN BEGIN
+        Method := 'CANCEL';
+        Status := 'CANCELLED';
+      END ELSE BEGIN
+        Method := 'REQUEST';
+        Status := 'CONFIRMED';
+      END;
+      Description := GetDescription;
+
+      StringBuilder := StringBuilder.StringBuilder;
+      WITH StringBuilder DO BEGIN
+        AppendLine('BEGIN:VCALENDAR');
+        AppendLine('VERSION:2.0');
+        AppendLine('PRODID:-' + ProdIDTxt);
+        AppendLine('METHOD:' + Method);
+        AppendLine('BEGIN:VEVENT');
+        AppendLine('UID:' + DELCHR(JobPlanningLineCalendar.UID,'<>','{}'));
+        AppendLine('ORGANIZER:' + GetOrganizer);
+        AppendLine('LOCATION:' + Location);
+        AppendLine('DTSTART:' + GetStartDate);
+        AppendLine('DTEND:' + GetEndDate);
+        AppendLine('SUMMARY:' + Summary);
+        AppendLine('DESCRIPTION:' + Description);
+        AppendLine('X-ALT-DESC;FMTTYPE=' + GetHtmlDescription(Description));
+        AppendLine('SEQUENCE:' + FORMAT(JobPlanningLineCalendar.Sequence));
+        AppendLine('STATUS:' + Status);
+        AppendLine('END:VEVENT');
+        AppendLine('END:VCALENDAR');
+      END;
+
+      ICS := StringBuilder.ToString;
+    END;
+
+    LOCAL PROCEDURE GetAdditionalResources@11() AdditionalResources : Text;
+    VAR
+      LocalJobPlanningLine@1000 : Record 1003;
+      LocalResource@1001 : Record 156;
+    BEGIN
+      // Get all resources for the same job task.
+      WITH LocalJobPlanningLine DO BEGIN
+        SETRANGE("Job No.",JobPlanningLine."Job No.");
+        SETRANGE("Job Task No.",JobPlanningLine."Job Task No.");
+        SETRANGE(Type,Type::Resource);
+        SETFILTER("Line Type",'%1|%2',"Line Type"::Budget,"Line Type"::"Both Budget and Billable");
+        SETFILTER("No.",'<>%1&<>''''',Resource."No.");
+        IF FINDSET THEN BEGIN
+          AdditionalResources += '\n\n' + AdditionalResourcesTxt + ':';
+          REPEAT
+            LocalResource.GET("No.");
+            AdditionalResources += STRSUBSTNO('\n    (%1) %2 - %3',
+                "Line Type",LocalResource.Name,Description);
+          UNTIL NEXT = 0;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetContactPhone@16() : Text[30];
+    BEGIN
+      IF Contact."No." <> '' THEN
+        EXIT(Contact."Phone No.");
+
+      EXIT(Customer."Phone No.");
+    END;
+
+    LOCAL PROCEDURE GetDescription@28() AppointmentDescription : Text;
+    VAR
+      AppointmentFormat@1002 : Text;
+    BEGIN
+      AppointmentFormat := Job.TABLECAPTION + ': %1 - %2\r\n';
+      AppointmentFormat += JobTask.TABLECAPTION + ': %3 - %4\n\n';
+      IF Customer.Name <> '' THEN
+        AppointmentFormat += STRSUBSTNO('%1: %2\n',Customer.TABLECAPTION,Customer.Name);
+      AppointmentFormat += Contact.TABLECAPTION + ': %5\n';
+      AppointmentFormat += Contact.FIELDCAPTION("Phone No.") + ': %6\n\n';
+      AppointmentFormat += Resource.TABLECAPTION + ': (%7) %8 - %9';
+      AppointmentDescription := STRSUBSTNO(AppointmentFormat,
+          Job."No.",Job.Description,
+          JobTask."Job Task No.",JobTask.Description,
+          Customer.Contact,GetContactPhone,
+          JobPlanningLine."Line Type",Resource.Name,JobPlanningLine.Description);
+
+      AppointmentDescription += GetAdditionalResources;
+      IF ProjectManagerResource.Name <> '' THEN
+        AppointmentDescription += STRSUBSTNO('\n\n%1: %2',
+            Job.FIELDCAPTION("Project Manager"),ProjectManagerResource.Name);
+    END;
+
+    LOCAL PROCEDURE GetHtmlDescription@6(Description@1000 : Text) HtmlAppointDescription : Text;
+    VAR
+      TypeHelper@1001 : Codeunit 10;
+    BEGIN
+      HtmlAppointDescription := TypeHelper.RegexReplace(Description,'\\r','');
+      HtmlAppointDescription := TypeHelper.RegexReplace(HtmlAppointDescription,'\\n','<br>');
+      HtmlAppointDescription := 'text/html:<html><body>' + HtmlAppointDescription + '</html></body>';
+    END;
+
+    LOCAL PROCEDURE GetOrganizer@17() : Text;
+    VAR
+      SMTPMailSetup@1000 : Record 409;
+      ProjectManagerUser@1001 : Record 2000000120;
+    BEGIN
+      ProjectManagerUser.SETRANGE("User Name",ProjectManagerResource."Time Sheet Owner User ID");
+      IF ProjectManagerUser.FINDFIRST THEN
+        IF ProjectManagerUser."Authentication Email" <> '' THEN
+          EXIT(ProjectManagerUser."Authentication Email");
+
+      SMTPMailSetup.GetSetup;
+      EXIT(SMTPMailSetup."User ID");
+    END;
+
+    LOCAL PROCEDURE GetStartDate@8() StartDateTime : Text;
+    VAR
+      StartDate@1000 : Date;
+      StartTime@1002 : Time;
+    BEGIN
+      StartDate := JobPlanningLine."Planning Date";
+      IF JobPlanningLine.Quantity < 12 THEN
+        EVALUATE(StartTime,FORMAT(8));
+
+      StartDateTime := FORMAT(CREATEDATETIME(StartDate,StartTime),0,DateTimeFormatTxt);
+    END;
+
+    LOCAL PROCEDURE GetEndDate@9() EndDateTime : Text;
+    VAR
+      StartDate@1001 : Date;
+      EndTime@1004 : Time;
+      Duration@1000 : Decimal;
+      Days@1002 : Integer;
+    BEGIN
+      Duration := JobPlanningLine.Quantity;
+      StartDate := JobPlanningLine."Planning Date";
+      IF Duration < 12 THEN
+        EVALUATE(EndTime,FORMAT(8 + Duration))
+      ELSE
+        Days := ROUND(Duration / 24,1,'>');
+
+      EndDateTime := FORMAT(CREATEDATETIME(StartDate + Days,EndTime),0,DateTimeFormatTxt);
+    END;
+
+    LOCAL PROCEDURE GetResourceEmail@12(ResourceNo@1000 : Code[20]) : Text[80];
+    VAR
+      LocalResource@1001 : Record 156;
+      LocalUser@1002 : Record 2000000120;
+    BEGIN
+      LocalResource.GET(ResourceNo);
+      LocalUser.SETRANGE("User Name",LocalResource."Time Sheet Owner User ID");
+      IF LocalUser.FINDFIRST THEN
+        EXIT(LocalUser."Authentication Email");
+    END;
+
+    LOCAL PROCEDURE UpdateJob@1();
+    BEGIN
+      IF Job."No." <> JobPlanningLine."Job No." THEN BEGIN
+        Job.GET(JobPlanningLine."Job No.");
+        Customer.GET(Job."Bill-to Customer No.");
+        IF Customer."Primary Contact No." <> '' THEN
+          Contact.GET(Customer."Primary Contact No.");
+        IF Job."Project Manager" <> '' THEN
+          ProjectManagerResource.GET(Job."Project Manager");
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateJobTask@2();
+    BEGIN
+      IF (JobTask."Job Task No." <> JobPlanningLine."Job Task No.") OR (JobTask."Job No." <> JobPlanningLine."Job No.") THEN
+        JobTask.GET(JobPlanningLine."Job No.",JobPlanningLine."Job Task No.");
+    END;
+
+    LOCAL PROCEDURE UpdateResource@3();
+    BEGIN
+      IF JobPlanningLine."No." <> Resource."No." THEN
+        IF JobPlanningLine."No." <> '' THEN
+          Resource.GET(JobPlanningLine."No.");
+    END;
+
+    [EventSubscriber(Table,1003,OnAfterDeleteEvent)]
+    LOCAL PROCEDURE OnDeletePlanningLine@5(VAR Rec@1000 : Record 1003;RunTrigger@1001 : Boolean);
+    VAR
+      LocalJobPlanningLineCalendar@1003 : Record 1034;
+    BEGIN
+      IF NOT RunTrigger OR Rec.ISTEMPORARY THEN
+        EXIT;
+      IF LocalJobPlanningLineCalendar.HasBeenSent(Rec) THEN BEGIN
+        SetPlanningLine(Rec);
+        CreateAndSend;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

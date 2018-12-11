@@ -1,0 +1,199 @@
+OBJECT Codeunit 1312 Vendor Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=;
+    Time=;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    [External]
+    PROCEDURE CalcAmountsOnPostedInvoices@1(VendNo@1000 : Code[20];VAR RecCount@1001 : Integer) : Decimal;
+    VAR
+      VendorLedgerEntry@1002 : Record 25;
+    BEGIN
+      EXIT(CalcAmountsOnPostedDocs(VendNo,RecCount,VendorLedgerEntry."Document Type"::Invoice));
+    END;
+
+    [External]
+    PROCEDURE CalcAmountsOnPostedCrMemos@2(VendNo@1001 : Code[20];VAR RecCount@1000 : Integer) : Decimal;
+    VAR
+      VendorLedgerEntry@1002 : Record 25;
+    BEGIN
+      EXIT(CalcAmountsOnPostedDocs(VendNo,RecCount,VendorLedgerEntry."Document Type"::"Credit Memo"));
+    END;
+
+    [External]
+    PROCEDURE CalcAmountsOnPostedOrders@3(VendNo@1001 : Code[20];VAR RecCount@1000 : Integer) : Decimal;
+    VAR
+      VendorLedgerEntry@1002 : Record 25;
+    BEGIN
+      EXIT(CalcAmountsOnPostedDocs(VendNo,RecCount,VendorLedgerEntry."Document Type"::" "));
+    END;
+
+    [External]
+    PROCEDURE CalcAmountsOnUnpostedInvoices@4(VendNo@1001 : Code[20];VAR RecCount@1000 : Integer) : Decimal;
+    VAR
+      VendorLedgerEntry@1002 : Record 25;
+    BEGIN
+      EXIT(CalcAmountsOnUnpostedDocs(VendNo,RecCount,VendorLedgerEntry."Document Type"::Invoice));
+    END;
+
+    [External]
+    PROCEDURE CalcAmountsOnUnpostedCrMemos@5(VendNo@1001 : Code[20];VAR RecCount@1000 : Integer) : Decimal;
+    VAR
+      VendorLedgerEntry@1002 : Record 25;
+    BEGIN
+      EXIT(CalcAmountsOnUnpostedDocs(VendNo,RecCount,VendorLedgerEntry."Document Type"::"Credit Memo"));
+    END;
+
+    [External]
+    PROCEDURE DrillDownOnPostedInvoices@20(VendNo@1001 : Code[20]);
+    VAR
+      PurchInvHeader@1000 : Record 122;
+    BEGIN
+      WITH PurchInvHeader DO BEGIN
+        SETRANGE("Buy-from Vendor No.",VendNo);
+        SETFILTER("Posting Date",GetCurrentYearFilter);
+
+        PAGE.RUN(PAGE::"Posted Purchase Invoices",PurchInvHeader);
+      END;
+    END;
+
+    [External]
+    PROCEDURE DrillDownOnPostedCrMemo@8(VendNo@1001 : Code[20]);
+    VAR
+      PurchCrMemoHdr@1000 : Record 124;
+    BEGIN
+      WITH PurchCrMemoHdr DO BEGIN
+        SETRANGE("Buy-from Vendor No.",VendNo);
+        SETFILTER("Posting Date",GetCurrentYearFilter);
+
+        PAGE.RUN(PAGE::"Posted Purchase Credit Memos",PurchCrMemoHdr);
+      END;
+    END;
+
+    [External]
+    PROCEDURE DrillDownOnPostedOrders@19(VendNo@1001 : Code[20]);
+    VAR
+      PurchaseLine@1000 : Record 39;
+    BEGIN
+      WITH PurchaseLine DO BEGIN
+        SETRANGE("Buy-from Vendor No.",VendNo);
+        SETRANGE("Document Type","Document Type"::Order);
+        SETFILTER("Order Date",GetCurrentYearFilter);
+
+        PAGE.RUN(PAGE::"Purchase Orders",PurchaseLine);
+      END;
+    END;
+
+    [External]
+    PROCEDURE DrillDownOnOutstandingInvoices@15(VendNo@1001 : Code[20]);
+    VAR
+      PurchaseHeader@1000 : Record 38;
+      PurchaseLine@1002 : Record 39;
+    BEGIN
+      SetFilterForUnpostedLines(PurchaseLine,VendNo,PurchaseHeader."Document Type"::Invoice);
+      PAGE.RUN(PAGE::"Purchase Invoices",PurchaseHeader);
+    END;
+
+    [External]
+    PROCEDURE DrillDownOnOutstandingCrMemos@14(VendNo@1001 : Code[20]);
+    VAR
+      PurchaseHeader@1000 : Record 38;
+      PurchaseLine@1002 : Record 39;
+    BEGIN
+      SetFilterForUnpostedLines(PurchaseLine,VendNo,PurchaseHeader."Document Type"::"Credit Memo");
+      PAGE.RUN(PAGE::"Purchase Credit Memos",PurchaseHeader);
+    END;
+
+    LOCAL PROCEDURE CalcAmountsOnPostedDocs@6(VendNo@1001 : Code[20];VAR RecCount@1000 : Integer;DocType@1002 : Integer) : Decimal;
+    VAR
+      VendLedgEntry@1003 : Record 25;
+    BEGIN
+      WITH VendLedgEntry DO BEGIN
+        SetFilterForPostedDocs(VendLedgEntry,VendNo,DocType);
+        RecCount := COUNT;
+        CALCSUMS("Purchase (LCY)");
+        EXIT("Purchase (LCY)");
+      END;
+    END;
+
+    LOCAL PROCEDURE CalcAmountsOnUnpostedDocs@7(VendNo@1001 : Code[20];VAR RecCount@1000 : Integer;DocType@1002 : Integer) : Decimal;
+    VAR
+      PurchaseLine@1007 : Record 39;
+      Result@1006 : Decimal;
+      VAT@1005 : Decimal;
+      OutstandingAmount@1004 : Decimal;
+      OldDocumentNo@1003 : Code[20];
+    BEGIN
+      RecCount := 0;
+      Result := 0;
+
+      SetFilterForUnpostedLines(PurchaseLine,VendNo,DocType);
+      WITH PurchaseLine DO BEGIN
+        IF FINDSET THEN
+          REPEAT
+            CASE "Document Type" OF
+              "Document Type"::Invoice:
+                OutstandingAmount := "Outstanding Amount (LCY)";
+              "Document Type"::"Credit Memo":
+                OutstandingAmount := -"Outstanding Amount (LCY)";
+            END;
+            VAT := 100 + "VAT %";
+            Result += OutstandingAmount * 100 / VAT;
+
+            IF OldDocumentNo <> "Document No." THEN BEGIN
+              OldDocumentNo := "Document No.";
+              RecCount += 1;
+            END;
+          UNTIL NEXT = 0;
+      END;
+      EXIT(ROUND(Result));
+    END;
+
+    LOCAL PROCEDURE SetFilterForUnpostedLines@9(VAR PurchaseLine@1003 : Record 39;VendNo@1002 : Code[20];DocumentType@1000 : Integer);
+    BEGIN
+      WITH PurchaseLine DO BEGIN
+        SETRANGE("Buy-from Vendor No.",VendNo);
+
+        IF DocumentType = -1 THEN
+          SETFILTER("Document Type",'%1|%2',"Document Type"::Invoice,"Document Type"::"Credit Memo")
+        ELSE
+          SETRANGE("Document Type",DocumentType);
+      END;
+    END;
+
+    LOCAL PROCEDURE SetFilterForPostedDocs@27(VAR VendLedgEntry@1002 : Record 25;VendNo@1001 : Code[20];DocumentType@1000 : Integer);
+    BEGIN
+      WITH VendLedgEntry DO BEGIN
+        SETRANGE("Buy-from Vendor No.",VendNo);
+        SETFILTER("Posting Date",GetCurrentYearFilter);
+        SETRANGE("Document Type",DocumentType);
+      END;
+    END;
+
+    [External]
+    PROCEDURE GetCurrentYearFilter@10() : Text[30];
+    VAR
+      DateFilterCalc@1002 : Codeunit 358;
+      CustDateFilter@1001 : Text[30];
+      CustDateName@1000 : Text[30];
+    BEGIN
+      DateFilterCalc.CreateFiscalYearFilter(CustDateFilter,CustDateName,WORKDATE,0);
+      EXIT(CustDateFilter);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

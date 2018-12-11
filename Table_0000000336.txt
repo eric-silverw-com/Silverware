@@ -1,0 +1,1071 @@
+OBJECT Table 336 Tracking Specification
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:14:14 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnDelete=BEGIN
+               TESTFIELD("Quantity Handled (Base)",0);
+               TESTFIELD("Quantity Invoiced (Base)",0);
+             END;
+
+    CaptionML=ENU=Tracking Specification;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Entry No.           ;Integer       ;CaptionML=ENU=Entry No. }
+    { 2   ;   ;Item No.            ;Code20        ;TableRelation=Item;
+                                                   CaptionML=ENU=Item No. }
+    { 3   ;   ;Location Code       ;Code10        ;TableRelation=Location;
+                                                   CaptionML=ENU=Location Code }
+    { 4   ;   ;Quantity (Base)     ;Decimal       ;OnValidate=BEGIN
+                                                                IF ("Quantity (Base)" * "Quantity Handled (Base)" < 0) OR
+                                                                   (ABS("Quantity (Base)") < ABS("Quantity Handled (Base)"))
+                                                                THEN
+                                                                  FIELDERROR("Quantity (Base)",STRSUBSTNO(Text002,FIELDCAPTION("Quantity Handled (Base)")));
+
+                                                                WMSManagement.CheckItemTrackingChange(Rec,xRec);
+                                                                InitQtyToShip;
+                                                                CheckSerialNoQty;
+
+                                                                IF NOT QuantityToInvoiceIsSufficient THEN
+                                                                  VALIDATE("Appl.-to Item Entry",0);
+                                                              END;
+
+                                                   CaptionML=ENU=Quantity (Base);
+                                                   DecimalPlaces=0:5 }
+    { 7   ;   ;Description         ;Text50        ;CaptionML=ENU=Description }
+    { 8   ;   ;Creation Date       ;Date          ;CaptionML=ENU=Creation Date }
+    { 10  ;   ;Source Type         ;Integer       ;CaptionML=ENU=Source Type }
+    { 11  ;   ;Source Subtype      ;Option        ;CaptionML=ENU=Source Subtype;
+                                                   OptionCaptionML=ENU=0,1,2,3,4,5,6,7,8,9,10;
+                                                   OptionString=0,1,2,3,4,5,6,7,8,9,10 }
+    { 12  ;   ;Source ID           ;Code20        ;CaptionML=ENU=Source ID }
+    { 13  ;   ;Source Batch Name   ;Code10        ;CaptionML=ENU=Source Batch Name }
+    { 14  ;   ;Source Prod. Order Line;Integer    ;CaptionML=ENU=Source Prod. Order Line }
+    { 15  ;   ;Source Ref. No.     ;Integer       ;CaptionML=ENU=Source Ref. No. }
+    { 16  ;   ;Item Ledger Entry No.;Integer      ;TableRelation="Item Ledger Entry";
+                                                   CaptionML=ENU=Item Ledger Entry No. }
+    { 17  ;   ;Transfer Item Entry No.;Integer    ;TableRelation="Item Ledger Entry";
+                                                   CaptionML=ENU=Transfer Item Entry No. }
+    { 24  ;   ;Serial No.          ;Code50        ;OnValidate=BEGIN
+                                                                IF "Serial No." <> xRec."Serial No." THEN BEGIN
+                                                                  TESTFIELD("Quantity Handled (Base)",0);
+                                                                  TESTFIELD("Appl.-from Item Entry",0);
+                                                                  IF IsReclass THEN
+                                                                    "New Serial No." := "Serial No.";
+                                                                  WMSManagement.CheckItemTrackingChange(Rec,xRec);
+                                                                  IF NOT SkipSerialNoQtyValidation THEN
+                                                                    CheckSerialNoQty;
+                                                                  InitExpirationDate;
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ENU=Serial No. }
+    { 28  ;   ;Positive            ;Boolean       ;CaptionML=ENU=Positive }
+    { 29  ;   ;Qty. per Unit of Measure;Decimal   ;InitValue=1;
+                                                   CaptionML=ENU=Qty. per Unit of Measure;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 38  ;   ;Appl.-to Item Entry ;Integer       ;OnValidate=VAR
+                                                                ItemLedgEntry@1000 : Record 32;
+                                                                ItemJnlLine@1001 : Record 83;
+                                                              BEGIN
+                                                                IF "Appl.-to Item Entry" = 0 THEN
+                                                                  EXIT;
+
+                                                                IF NOT TrackingExists THEN BEGIN
+                                                                  TESTFIELD("Serial No.");
+                                                                  TESTFIELD("Lot No.");
+                                                                END;
+
+                                                                ItemLedgEntry.GET("Appl.-to Item Entry");
+                                                                ItemLedgEntry.TESTFIELD("Item No.","Item No.");
+                                                                ItemLedgEntry.TESTFIELD(Positive,TRUE);
+                                                                ItemLedgEntry.TESTFIELD("Variant Code","Variant Code");
+                                                                ItemLedgEntry.TESTFIELD("Serial No.","Serial No.");
+                                                                ItemLedgEntry.TESTFIELD("Lot No.","Lot No.");
+                                                                IF "Source Type" = DATABASE::"Item Journal Line" THEN BEGIN
+                                                                  ItemJnlLine.SETRANGE("Journal Template Name","Source ID");
+                                                                  ItemJnlLine.SETRANGE("Journal Batch Name","Source Batch Name");
+                                                                  ItemJnlLine.SETRANGE("Line No.","Source Ref. No.");
+                                                                  ItemJnlLine.SETRANGE("Entry Type","Source Subtype");
+
+                                                                  IF ItemJnlLine.FINDFIRST THEN
+                                                                    IF ItemJnlLine."Entry Type" = ItemJnlLine."Entry Type"::Output THEN BEGIN
+                                                                      ItemLedgEntry.TESTFIELD("Order Type",ItemJnlLine."Order Type"::Production);
+                                                                      ItemLedgEntry.TESTFIELD("Order No.",ItemJnlLine."Order No.");
+                                                                      ItemLedgEntry.TESTFIELD("Order Line No.",ItemJnlLine."Order Line No.");
+                                                                      ItemLedgEntry.TESTFIELD("Entry Type",ItemJnlLine."Entry Type");
+                                                                    END;
+                                                                END;
+                                                                IF ABS("Quantity (Base)") > ABS(ItemLedgEntry."Remaining Quantity") THEN
+                                                                  ERROR(RemainingQtyErr,ItemLedgEntry.FIELDCAPTION("Remaining Quantity"),ItemLedgEntry."Entry No.",FIELDCAPTION("Quantity (Base)"));
+                                                              END;
+
+                                                   OnLookup=VAR
+                                                              ItemLedgEntry@1000 : Record 32;
+                                                            BEGIN
+                                                              ItemLedgEntry.SETCURRENTKEY("Item No.",Open,"Variant Code",Positive,"Location Code");
+                                                              ItemLedgEntry.SETRANGE("Item No.","Item No.");
+                                                              ItemLedgEntry.SETRANGE(Positive,TRUE);
+                                                              ItemLedgEntry.SETRANGE("Location Code","Location Code");
+                                                              ItemLedgEntry.SETRANGE("Variant Code","Variant Code");
+                                                              ItemLedgEntry.SETRANGE("Serial No.","Serial No.");
+                                                              ItemLedgEntry.SETRANGE("Lot No.","Lot No.");
+                                                              ItemLedgEntry.SETRANGE(Open,TRUE);
+                                                              IF PAGE.RUNMODAL(PAGE::"Item Ledger Entries",ItemLedgEntry) = ACTION::LookupOK THEN
+                                                                VALIDATE("Appl.-to Item Entry",ItemLedgEntry."Entry No.");
+                                                            END;
+
+                                                   CaptionML=ENU=Appl.-to Item Entry }
+    { 40  ;   ;Warranty Date       ;Date          ;CaptionML=ENU=Warranty Date }
+    { 41  ;   ;Expiration Date     ;Date          ;OnValidate=BEGIN
+                                                                WMSManagement.CheckItemTrackingChange(Rec,xRec);
+                                                                IF "Buffer Status2" = "Buffer Status2"::"ExpDate blocked" THEN BEGIN
+                                                                  "Expiration Date" := xRec."Expiration Date";
+                                                                  MESSAGE(Text004);
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ENU=Expiration Date }
+    { 50  ;   ;Qty. to Handle (Base);Decimal      ;OnValidate=BEGIN
+                                                                IF ("Qty. to Handle (Base)" * "Quantity (Base)" < 0) OR
+                                                                   (ABS("Qty. to Handle (Base)") > ABS("Quantity (Base)")
+                                                                    - "Quantity Handled (Base)")
+                                                                THEN
+                                                                  ERROR(
+                                                                    Text001,
+                                                                    "Quantity (Base)" - "Quantity Handled (Base)");
+
+                                                                InitQtyToInvoice;
+                                                                "Qty. to Handle" := CalcQty("Qty. to Handle (Base)");
+                                                                CheckSerialNoQty;
+                                                              END;
+
+                                                   CaptionML=ENU=Qty. to Handle (Base);
+                                                   DecimalPlaces=0:5 }
+    { 51  ;   ;Qty. to Invoice (Base);Decimal     ;OnValidate=BEGIN
+                                                                IF ("Qty. to Invoice (Base)" * "Quantity (Base)" < 0) OR
+                                                                   (ABS("Qty. to Invoice (Base)") > ABS("Qty. to Handle (Base)"
+                                                                      + "Quantity Handled (Base)" - "Quantity Invoiced (Base)"))
+                                                                THEN
+                                                                  ERROR(
+                                                                    Text000,
+                                                                    "Qty. to Handle (Base)" + "Quantity Handled (Base)" - "Quantity Invoiced (Base)");
+
+                                                                "Qty. to Invoice" := CalcQty("Qty. to Invoice (Base)");
+                                                                CheckSerialNoQty;
+                                                              END;
+
+                                                   CaptionML=ENU=Qty. to Invoice (Base);
+                                                   DecimalPlaces=0:5 }
+    { 52  ;   ;Quantity Handled (Base);Decimal    ;CaptionML=ENU=Quantity Handled (Base);
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 53  ;   ;Quantity Invoiced (Base);Decimal   ;CaptionML=ENU=Quantity Invoiced (Base);
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 60  ;   ;Qty. to Handle      ;Decimal       ;CaptionML=ENU=Qty. to Handle;
+                                                   DecimalPlaces=0:5 }
+    { 61  ;   ;Qty. to Invoice     ;Decimal       ;CaptionML=ENU=Qty. to Invoice;
+                                                   DecimalPlaces=0:5 }
+    { 70  ;   ;Buffer Status       ;Option        ;CaptionML=ENU=Buffer Status;
+                                                   OptionCaptionML=ENU=" ,MODIFY,INSERT";
+                                                   OptionString=[ ,MODIFY,INSERT];
+                                                   Editable=No }
+    { 71  ;   ;Buffer Status2      ;Option        ;CaptionML=ENU=Buffer Status2;
+                                                   OptionCaptionML=ENU=,ExpDate blocked;
+                                                   OptionString=,ExpDate blocked;
+                                                   Editable=No }
+    { 72  ;   ;Buffer Value1       ;Decimal       ;CaptionML=ENU=Buffer Value1;
+                                                   Editable=No }
+    { 73  ;   ;Buffer Value2       ;Decimal       ;CaptionML=ENU=Buffer Value2;
+                                                   Editable=No }
+    { 74  ;   ;Buffer Value3       ;Decimal       ;CaptionML=ENU=Buffer Value3;
+                                                   Editable=No }
+    { 75  ;   ;Buffer Value4       ;Decimal       ;CaptionML=ENU=Buffer Value4;
+                                                   Editable=No }
+    { 76  ;   ;Buffer Value5       ;Decimal       ;CaptionML=ENU=Buffer Value5;
+                                                   Editable=No }
+    { 80  ;   ;New Serial No.      ;Code50        ;OnValidate=BEGIN
+                                                                WMSManagement.CheckItemTrackingChange(Rec,xRec);
+                                                              END;
+
+                                                   CaptionML=ENU=New Serial No. }
+    { 81  ;   ;New Lot No.         ;Code50        ;OnValidate=BEGIN
+                                                                WMSManagement.CheckItemTrackingChange(Rec,xRec);
+                                                              END;
+
+                                                   CaptionML=ENU=New Lot No. }
+    { 900 ;   ;Prohibit Cancellation;Boolean      ;CaptionML=ENU=Prohibit Cancelation }
+    { 5400;   ;Lot No.             ;Code50        ;OnValidate=BEGIN
+                                                                IF "Lot No." <> xRec."Lot No." THEN BEGIN
+                                                                  TESTFIELD("Quantity Handled (Base)",0);
+                                                                  TESTFIELD("Appl.-from Item Entry",0);
+                                                                  IF IsReclass THEN
+                                                                    "New Lot No." := "Lot No.";
+                                                                  WMSManagement.CheckItemTrackingChange(Rec,xRec);
+                                                                  InitExpirationDate;
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ENU=Lot No. }
+    { 5401;   ;Variant Code        ;Code10        ;TableRelation="Item Variant".Code WHERE (Item No.=FIELD(Item No.));
+                                                   CaptionML=ENU=Variant Code }
+    { 5402;   ;Bin Code            ;Code20        ;TableRelation=Bin.Code WHERE (Location Code=FIELD(Location Code));
+                                                   CaptionML=ENU=Bin Code }
+    { 5811;   ;Appl.-from Item Entry;Integer      ;OnValidate=VAR
+                                                                ItemLedgEntry@1000 : Record 32;
+                                                              BEGIN
+                                                                IF "Appl.-from Item Entry" = 0 THEN
+                                                                  EXIT;
+
+                                                                CASE "Source Type" OF
+                                                                  DATABASE::"Sales Line":
+                                                                    IF (("Source Subtype" IN [3,5]) AND ("Quantity (Base)" < 0)) OR
+                                                                       (("Source Subtype" IN [1,2]) AND ("Quantity (Base)" > 0)) // sale
+                                                                    THEN
+                                                                      FIELDERROR("Quantity (Base)");
+                                                                  DATABASE::"Item Journal Line":
+                                                                    IF (("Source Subtype" IN [0,2,6]) AND ("Quantity (Base)" < 0)) OR
+                                                                       (("Source Subtype" IN [1,3,4,5]) AND ("Quantity (Base)" > 0))
+                                                                    THEN
+                                                                      FIELDERROR("Quantity (Base)");
+                                                                  DATABASE::"Service Line":
+                                                                    IF (("Source Subtype" IN [3]) AND ("Quantity (Base)" < 0)) OR
+                                                                       (("Source Subtype" IN [1,2]) AND ("Quantity (Base)" > 0))
+                                                                    THEN
+                                                                      FIELDERROR("Quantity (Base)");
+                                                                  ELSE
+                                                                    FIELDERROR("Source Subtype");
+                                                                END;
+
+                                                                IF NOT TrackingExists THEN BEGIN
+                                                                  TESTFIELD("Serial No.");
+                                                                  TESTFIELD("Lot No.");
+                                                                END;
+                                                                ItemLedgEntry.GET("Appl.-from Item Entry");
+                                                                ItemLedgEntry.TESTFIELD("Item No.","Item No.");
+                                                                ItemLedgEntry.TESTFIELD(Positive,FALSE);
+                                                                IF ItemLedgEntry."Shipped Qty. Not Returned" + ABS("Qty. to Handle (Base)") > 0 THEN
+                                                                  ItemLedgEntry.FIELDERROR("Shipped Qty. Not Returned");
+                                                                ItemLedgEntry.TESTFIELD("Variant Code","Variant Code");
+                                                                ItemLedgEntry.TESTFIELD("Serial No.","Serial No.");
+                                                                ItemLedgEntry.TESTFIELD("Lot No.","Lot No.");
+                                                              END;
+
+                                                   OnLookup=VAR
+                                                              ItemLedgEntry@1000 : Record 32;
+                                                            BEGIN
+                                                              ItemLedgEntry.SETCURRENTKEY("Item No.",Positive,"Location Code","Variant Code");
+                                                              ItemLedgEntry.SETRANGE("Item No.","Item No.");
+                                                              ItemLedgEntry.SETRANGE(Positive,FALSE);
+                                                              IF "Location Code" <> '' THEN
+                                                                ItemLedgEntry.SETRANGE("Location Code","Location Code");
+                                                              ItemLedgEntry.SETRANGE("Variant Code","Variant Code");
+                                                              ItemLedgEntry.SETRANGE("Serial No.","Serial No.");
+                                                              ItemLedgEntry.SETRANGE("Lot No.","Lot No.");
+                                                              ItemLedgEntry.SETFILTER("Shipped Qty. Not Returned",'<0');
+                                                              IF PAGE.RUNMODAL(PAGE::"Item Ledger Entries",ItemLedgEntry) = ACTION::LookupOK THEN
+                                                                VALIDATE("Appl.-from Item Entry",ItemLedgEntry."Entry No.");
+                                                            END;
+
+                                                   CaptionML=ENU=Appl.-from Item Entry;
+                                                   MinValue=0 }
+    { 5817;   ;Correction          ;Boolean       ;CaptionML=ENU=Correction }
+    { 6505;   ;New Expiration Date ;Date          ;OnValidate=BEGIN
+                                                                WMSManagement.CheckItemTrackingChange(Rec,xRec);
+                                                              END;
+
+                                                   CaptionML=ENU=New Expiration Date }
+    { 7300;   ;Quantity actual Handled (Base);Decimal;
+                                                   CaptionML=ENU=Quantity actual Handled (Base);
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+  }
+  KEYS
+  {
+    {    ;Entry No.                               ;Clustered=Yes }
+    {    ;Source ID,Source Type,Source Subtype,Source Batch Name,Source Prod. Order Line,Source Ref. No.;
+                                                   SumIndexFields=Qty. to Handle (Base),Qty. to Invoice (Base),Quantity Handled (Base),Quantity Invoiced (Base);
+                                                   MaintainSQLIndex=No;
+                                                   MaintainSIFTIndex=No }
+    {    ;Lot No.,Serial No.                       }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      Text000@1003 : TextConst 'ENU=You cannot invoice more than %1 units.';
+      Text001@1001 : TextConst 'ENU=You cannot handle more than %1 units.';
+      Text002@1000 : TextConst 'ENU=must not be less than %1';
+      Text003@1002 : TextConst 'ENU=%1 must be -1, 0 or 1 when %2 is stated.';
+      Text004@1004 : TextConst 'ENU=Expiration date has been established by existing entries and cannot be changed.';
+      WMSManagement@1005 : Codeunit 7302;
+      Text005@1006 : TextConst 'ENU=%1 in %2 for %3 %4, %5: %6, %7: %8 is currently %9. It must be %10.';
+      SkipSerialNoQtyValidation@1202 : Boolean;
+      RemainingQtyErr@1007 : TextConst 'ENU=The %1 in item ledger entry %2 is too low to cover %3.';
+
+    [External]
+    PROCEDURE InitQtyToShip@15();
+    BEGIN
+      "Qty. to Handle (Base)" := "Quantity (Base)" - "Quantity Handled (Base)";
+      "Qty. to Handle" := CalcQty("Qty. to Handle (Base)");
+
+      InitQtyToInvoice;
+    END;
+
+    [External]
+    PROCEDURE InitQtyToInvoice@13();
+    BEGIN
+      "Qty. to Invoice (Base)" := "Quantity Handled (Base)" + "Qty. to Handle (Base)" - "Quantity Invoiced (Base)";
+      "Qty. to Invoice" := CalcQty("Qty. to Invoice (Base)");
+    END;
+
+    [External]
+    PROCEDURE InitFromAsmHeader@28(VAR AsmHeader@1000 : Record 900);
+    BEGIN
+      INIT;
+      SetItemData(
+        AsmHeader."Item No.",AsmHeader.Description,AsmHeader."Location Code",AsmHeader."Variant Code",AsmHeader."Bin Code",
+        AsmHeader."Qty. per Unit of Measure");
+      SetSource(DATABASE::"Assembly Header",AsmHeader."Document Type",AsmHeader."No.",0,'',0);
+      SetQuantities(
+        AsmHeader."Quantity (Base)",AsmHeader."Quantity to Assemble",AsmHeader."Quantity to Assemble (Base)",
+        AsmHeader."Quantity to Assemble",AsmHeader."Quantity to Assemble (Base)",
+        AsmHeader."Assembled Quantity (Base)",AsmHeader."Assembled Quantity (Base)");
+
+      OnAfterInitFromAsmHeader(Rec,AsmHeader);
+    END;
+
+    [External]
+    PROCEDURE InitFromAsmLine@30(VAR AsmLine@1000 : Record 901);
+    BEGIN
+      INIT;
+      SetItemData(
+        AsmLine."No.",AsmLine.Description,AsmLine."Location Code",AsmLine."Variant Code",AsmLine."Bin Code",
+        AsmLine."Qty. per Unit of Measure");
+      SetSource(
+        DATABASE::"Assembly Line",AsmLine."Document Type",AsmLine."Document No.",AsmLine."Line No.",'',0);
+      SetQuantities(
+        AsmLine."Quantity (Base)",AsmLine."Quantity to Consume",AsmLine."Quantity to Consume (Base)",
+        AsmLine."Quantity to Consume",AsmLine."Quantity to Consume (Base)",
+        AsmLine."Consumed Quantity (Base)",AsmLine."Consumed Quantity (Base)");
+
+      OnAfterInitFromAsmLine(Rec,AsmLine);
+    END;
+
+    [External]
+    PROCEDURE InitFromItemJnlLine@3(ItemJnlLine@1000 : Record 83);
+    BEGIN
+      INIT;
+      SetItemData(
+        ItemJnlLine."Item No.",ItemJnlLine.Description,ItemJnlLine."Location Code",ItemJnlLine."Variant Code",
+        ItemJnlLine."Bin Code",ItemJnlLine."Qty. per Unit of Measure");
+      SetSource(
+        DATABASE::"Item Journal Line",ItemJnlLine."Entry Type",ItemJnlLine."Journal Template Name",ItemJnlLine."Line No.",
+        ItemJnlLine."Journal Batch Name",0);
+      SetQuantities(
+        ItemJnlLine."Quantity (Base)",ItemJnlLine.Quantity,ItemJnlLine."Quantity (Base)",ItemJnlLine.Quantity,
+        ItemJnlLine."Quantity (Base)",0,0);
+
+      OnAfterInitFromItemJnlLine(Rec,ItemJnlLine);
+    END;
+
+    [External]
+    PROCEDURE InitFromJobJnlLine@27(VAR JobJnlLine@1000 : Record 210);
+    BEGIN
+      INIT;
+      SetItemData(
+        JobJnlLine."No.",JobJnlLine.Description,JobJnlLine."Location Code",JobJnlLine."Variant Code",JobJnlLine."Bin Code",
+        JobJnlLine."Qty. per Unit of Measure");
+      SetSource(
+        DATABASE::"Job Journal Line",JobJnlLine."Entry Type",JobJnlLine."Journal Template Name",JobJnlLine."Line No.",
+        JobJnlLine."Journal Batch Name",0);
+      SetQuantities(
+        JobJnlLine."Quantity (Base)",JobJnlLine.Quantity,JobJnlLine."Quantity (Base)",JobJnlLine.Quantity,
+        JobJnlLine."Quantity (Base)",0,0);
+
+      OnAfterInitFromJobJnlLine(Rec,JobJnlLine);
+    END;
+
+    [External]
+    PROCEDURE InitFromPurchLine@19(PurchLine@1001 : Record 39);
+    BEGIN
+      INIT;
+      SetItemData(
+        PurchLine."No.",PurchLine.Description,PurchLine."Location Code",PurchLine."Variant Code",PurchLine."Bin Code",
+        PurchLine."Qty. per Unit of Measure");
+      SetSource(
+        DATABASE::"Purchase Line",PurchLine."Document Type",PurchLine."Document No.",PurchLine."Line No.",'',0);
+      IF PurchLine.IsCreditDocType THEN
+        SetQuantities(
+          PurchLine."Quantity (Base)",PurchLine."Return Qty. to Ship",PurchLine."Return Qty. to Ship (Base)",
+          PurchLine."Qty. to Invoice",PurchLine."Qty. to Invoice (Base)",PurchLine."Return Qty. Shipped (Base)",
+          PurchLine."Qty. Invoiced (Base)")
+      ELSE
+        SetQuantities(
+          PurchLine."Quantity (Base)",PurchLine."Qty. to Receive",PurchLine."Qty. to Receive (Base)",
+          PurchLine."Qty. to Invoice",PurchLine."Qty. to Invoice (Base)",PurchLine."Qty. Received (Base)",
+          PurchLine."Qty. Invoiced (Base)");
+
+      OnAfterInitFromPurchLine(Rec,PurchLine);
+    END;
+
+    [External]
+    PROCEDURE InitFromProdOrderLine@23(VAR ProdOrderLine@1001 : Record 5406);
+    BEGIN
+      INIT;
+      SetItemData(
+        ProdOrderLine."Item No.",ProdOrderLine.Description,ProdOrderLine."Location Code",ProdOrderLine."Variant Code",'',
+        ProdOrderLine."Qty. per Unit of Measure");
+      SetSource(
+        DATABASE::"Prod. Order Line",ProdOrderLine.Status,ProdOrderLine."Prod. Order No.",0,'',ProdOrderLine."Line No.");
+      SetQuantities(
+        ProdOrderLine."Quantity (Base)",ProdOrderLine."Remaining Quantity",ProdOrderLine."Remaining Qty. (Base)",
+        ProdOrderLine."Remaining Quantity",ProdOrderLine."Remaining Qty. (Base)",ProdOrderLine."Finished Qty. (Base)",
+        ProdOrderLine."Finished Qty. (Base)");
+
+      OnAfterInitFromProdOrderLine(Rec,ProdOrderLine);
+    END;
+
+    [External]
+    PROCEDURE InitFromProdOrderComp@24(VAR ProdOrderComp@1000 : Record 5407);
+    BEGIN
+      INIT;
+      SetItemData(
+        ProdOrderComp."Item No.",ProdOrderComp.Description,ProdOrderComp."Location Code",ProdOrderComp."Variant Code",
+        ProdOrderComp."Bin Code",ProdOrderComp."Qty. per Unit of Measure");
+      SetSource(
+        DATABASE::"Prod. Order Component",ProdOrderComp.Status,ProdOrderComp."Prod. Order No.",ProdOrderComp."Line No.",'',
+        ProdOrderComp."Prod. Order Line No.");
+      SetQuantities(
+        ProdOrderComp."Remaining Qty. (Base)",ProdOrderComp."Remaining Quantity",ProdOrderComp."Remaining Qty. (Base)",
+        ProdOrderComp."Remaining Quantity",ProdOrderComp."Remaining Qty. (Base)",
+        ProdOrderComp."Expected Qty. (Base)" - ProdOrderComp."Remaining Qty. (Base)",
+        ProdOrderComp."Expected Qty. (Base)" - ProdOrderComp."Remaining Qty. (Base)");
+
+      OnAfterInitFromProdOrderComp(Rec,ProdOrderComp);
+    END;
+
+    [External]
+    PROCEDURE InitFromProdPlanningComp@25(VAR PlanningComponent@1001 : Record 99000829);
+    VAR
+      NetQuantity@1000 : Decimal;
+    BEGIN
+      INIT;
+      SetItemData(
+        PlanningComponent."Item No.",PlanningComponent.Description,PlanningComponent."Location Code",
+        PlanningComponent."Variant Code",'',PlanningComponent."Qty. per Unit of Measure");
+      SetSource(DATABASE::"Planning Component",0,PlanningComponent."Worksheet Template Name",PlanningComponent."Line No.",
+        PlanningComponent."Worksheet Batch Name",PlanningComponent."Worksheet Line No.");
+      NetQuantity := ROUND(PlanningComponent."Net Quantity (Base)" / PlanningComponent."Qty. per Unit of Measure",0.00001);
+      SetQuantities(
+        PlanningComponent."Net Quantity (Base)",NetQuantity,PlanningComponent."Net Quantity (Base)",NetQuantity,
+        PlanningComponent."Net Quantity (Base)",0,0);
+
+      OnAfterInitFromProdPlanningComp(Rec,PlanningComponent);
+    END;
+
+    [External]
+    PROCEDURE InitFromReqLine@20(ReqLine@1001 : Record 246);
+    BEGIN
+      INIT;
+      SetItemData(
+        ReqLine."No.",ReqLine.Description,ReqLine."Location Code",ReqLine."Variant Code",'',ReqLine."Qty. per Unit of Measure");
+      SetSource(
+        DATABASE::"Requisition Line",0,ReqLine."Worksheet Template Name",ReqLine."Line No.",ReqLine."Journal Batch Name",0);
+      SetQuantities(
+        ReqLine."Quantity (Base)",ReqLine.Quantity,ReqLine."Quantity (Base)",ReqLine.Quantity,ReqLine."Quantity (Base)",0,0);
+
+      OnAfterInitFromReqLine(Rec,ReqLine);
+    END;
+
+    [External]
+    PROCEDURE InitFromSalesLine@17(SalesLine@1000 : Record 37);
+    BEGIN
+      INIT;
+      SetItemData(
+        SalesLine."No.",SalesLine.Description,SalesLine."Location Code",SalesLine."Variant Code",SalesLine."Bin Code",
+        SalesLine."Qty. per Unit of Measure");
+      SetSource(
+        DATABASE::"Sales Line",SalesLine."Document Type",SalesLine."Document No.",SalesLine."Line No.",'',0);
+      IF SalesLine.IsCreditDocType THEN
+        SetQuantities(
+          SalesLine."Quantity (Base)",SalesLine."Return Qty. to Receive",SalesLine."Return Qty. to Receive (Base)",
+          SalesLine."Qty. to Invoice",SalesLine."Qty. to Invoice (Base)",SalesLine."Return Qty. Received (Base)",
+          SalesLine."Qty. Invoiced (Base)")
+      ELSE
+        SetQuantities(
+          SalesLine."Quantity (Base)",SalesLine."Qty. to Ship",SalesLine."Qty. to Ship (Base)",SalesLine."Qty. to Invoice",
+          SalesLine."Qty. to Invoice (Base)",SalesLine."Qty. Shipped (Base)",SalesLine."Qty. Invoiced (Base)");
+
+      OnAfterInitFromSalesLine(Rec,SalesLine);
+    END;
+
+    [External]
+    PROCEDURE InitFromServLine@26(VAR ServiceLine@1001 : Record 5902;Consume@1000 : Boolean);
+    BEGIN
+      INIT;
+      SetItemData(
+        ServiceLine."No.",ServiceLine.Description,ServiceLine."Location Code",ServiceLine."Variant Code",ServiceLine."Bin Code",
+        ServiceLine."Qty. per Unit of Measure");
+      SetSource(
+        DATABASE::"Service Line",ServiceLine."Document Type",ServiceLine."Document No.",ServiceLine."Line No.",'',0);
+
+      "Quantity (Base)" := ServiceLine."Quantity (Base)";
+      IF Consume THEN BEGIN
+        "Qty. to Invoice (Base)" := ServiceLine."Qty. to Consume (Base)";
+        "Qty. to Invoice" := ServiceLine."Qty. to Consume";
+        "Quantity Invoiced (Base)" := ServiceLine."Qty. Consumed (Base)";
+      END ELSE BEGIN
+        "Qty. to Invoice (Base)" := ServiceLine."Qty. to Invoice (Base)";
+        "Qty. to Invoice" := ServiceLine."Qty. to Invoice";
+        "Quantity Invoiced (Base)" := ServiceLine."Qty. Invoiced (Base)";
+      END;
+
+      IF ServiceLine."Document Type" = ServiceLine."Document Type"::"Credit Memo" THEN BEGIN
+        "Qty. to Handle" := ServiceLine."Qty. to Invoice";
+        "Qty. to Handle (Base)" := ServiceLine."Qty. to Invoice (Base)";
+        "Quantity Handled (Base)" := ServiceLine."Qty. Invoiced (Base)";
+      END ELSE BEGIN
+        "Qty. to Handle" := ServiceLine."Qty. to Ship";
+        "Qty. to Handle (Base)" := ServiceLine."Qty. to Ship (Base)";
+        "Quantity Handled (Base)" := ServiceLine."Qty. Shipped (Base)";
+      END;
+
+      OnAfterInitFromServLine(Rec,ServiceLine);
+    END;
+
+    [External]
+    PROCEDURE InitFromTransLine@22(VAR TransLine@1000 : Record 5741;VAR AvalabilityDate@1002 : Date;Direction@1003 : 'Outbound,Inbound');
+    BEGIN
+      CASE Direction OF
+        Direction::Outbound:
+          BEGIN
+            INIT;
+            SetItemData(
+              TransLine."Item No.",TransLine.Description,TransLine."Transfer-from Code",TransLine."Variant Code",
+              TransLine."Transfer-from Bin Code",TransLine."Qty. per Unit of Measure");
+            SetSource(
+              DATABASE::"Transfer Line",Direction,TransLine."Document No.",TransLine."Line No.",'',
+              TransLine."Derived From Line No.");
+            SetQuantities(
+              TransLine."Quantity (Base)",TransLine."Qty. to Ship",TransLine."Qty. to Ship (Base)",TransLine.Quantity,
+              TransLine."Quantity (Base)",TransLine."Qty. Shipped (Base)",0);
+            AvalabilityDate := TransLine."Shipment Date";
+          END;
+        Direction::Inbound:
+          BEGIN
+            INIT;
+            SetItemData(
+              TransLine."Item No.",TransLine.Description,TransLine."Transfer-to Code",TransLine."Variant Code",
+              TransLine."Transfer-To Bin Code",TransLine."Qty. per Unit of Measure");
+            SetSource(
+              DATABASE::"Transfer Line",Direction,TransLine."Document No.",TransLine."Line No.",'',
+              TransLine."Derived From Line No.");
+            SetQuantities(
+              TransLine."Quantity (Base)",TransLine."Qty. to Receive",TransLine."Qty. to Receive (Base)",TransLine.Quantity,
+              TransLine."Quantity (Base)",TransLine."Qty. Received (Base)",0);
+            AvalabilityDate := TransLine."Receipt Date";
+          END;
+      END;
+
+      OnAfterInitFromTransLine(Rec,TransLine);
+    END;
+
+    LOCAL PROCEDURE CheckSerialNoQty@1();
+    BEGIN
+      IF "Serial No." = '' THEN
+        EXIT;
+      IF NOT ("Quantity (Base)" IN [-1,0,1]) THEN
+        ERROR(Text003,FIELDCAPTION("Quantity (Base)"),FIELDCAPTION("Serial No."));
+      IF NOT ("Qty. to Handle (Base)" IN [-1,0,1]) THEN
+        ERROR(Text003,FIELDCAPTION("Qty. to Handle (Base)"),FIELDCAPTION("Serial No."));
+      IF NOT ("Qty. to Invoice (Base)" IN [-1,0,1]) THEN
+        ERROR(Text003,FIELDCAPTION("Qty. to Invoice (Base)"),FIELDCAPTION("Serial No."));
+    END;
+
+    [External]
+    PROCEDURE CalcQty@14(BaseQty@1000 : Decimal) : Decimal;
+    BEGIN
+      IF "Qty. per Unit of Measure" = 0 THEN
+        "Qty. per Unit of Measure" := 1;
+      EXIT(ROUND(BaseQty / "Qty. per Unit of Measure",0.00001));
+    END;
+
+    [External]
+    PROCEDURE CopySpecification@131(VAR TempTrackingSpecification@1000 : TEMPORARY Record 336);
+    BEGIN
+      RESET;
+      IF TempTrackingSpecification.FINDSET THEN BEGIN
+        REPEAT
+          Rec := TempTrackingSpecification;
+          IF INSERT THEN;
+        UNTIL TempTrackingSpecification.NEXT = 0;
+        TempTrackingSpecification.DELETEALL;
+      END;
+    END;
+
+    [External]
+    PROCEDURE InsertSpecification@135();
+    VAR
+      TrackingSpecification@1000 : Record 336;
+    BEGIN
+      RESET;
+      IF FINDSET THEN BEGIN
+        REPEAT
+          TrackingSpecification := Rec;
+          TrackingSpecification."Buffer Status" := 0;
+          TrackingSpecification.InitQtyToShip;
+          TrackingSpecification.Correction := FALSE;
+          TrackingSpecification."Quantity actual Handled (Base)" := 0;
+          IF "Buffer Status" = "Buffer Status"::MODIFY THEN
+            TrackingSpecification.MODIFY
+          ELSE
+            TrackingSpecification.INSERT;
+        UNTIL NEXT = 0;
+        DELETEALL;
+      END;
+    END;
+
+    [External]
+    PROCEDURE InitTrackingSpecification@117(FromType@1010 : Integer;FromSubtype@1009 : Integer;FromID@1008 : Code[20];FromBatchName@1007 : Code[10];FromProdOrderLine@1006 : Integer;FromRefNo@1005 : Integer;FromVariantCode@1004 : Code[10];FromLocationCode@1003 : Code[10];FromSerialNo@1002 : Code[50];FromLotNo@1001 : Code[50];FromQtyPerUOM@1000 : Decimal);
+    BEGIN
+      SetSource(FromType,FromSubtype,FromID,FromRefNo,FromBatchName,FromProdOrderLine);
+      "Variant Code" := FromVariantCode;
+      "Location Code" := FromLocationCode;
+      "Serial No." := FromSerialNo;
+      "Lot No." := FromLotNo;
+      "Qty. per Unit of Measure" := FromQtyPerUOM;
+    END;
+
+    [External]
+    PROCEDURE InitTrackingSpecification2@43(FromType@1010 : Integer;FromSubtype@1009 : Integer;FromID@1008 : Code[20];FromBatchName@1007 : Code[10];FromProdOrderLine@1006 : Integer;FromRefNo@1005 : Integer;FromVariantCode@1004 : Code[10];FromLocationCode@1003 : Code[10];FromQtyPerUOM@1000 : Decimal);
+    BEGIN
+      InitTrackingSpecification(
+        FromType,FromSubtype,FromID,FromBatchName,FromProdOrderLine,FromRefNo,
+        FromVariantCode,FromLocationCode,'','',FromQtyPerUOM);
+    END;
+
+    [External]
+    PROCEDURE InitExpirationDate@2();
+    VAR
+      ItemTrackingMgt@1001 : Codeunit 6500;
+      ExpDate@1000 : Date;
+      EntriesExist@1002 : Boolean;
+    BEGIN
+      IF ("Serial No." = xRec."Serial No.") AND ("Lot No." = xRec."Lot No.") THEN
+        EXIT;
+
+      "Expiration Date" := 0D;
+
+      ExpDate := ItemTrackingMgt.ExistingExpirationDate("Item No.","Variant Code","Lot No.","Serial No.",FALSE,EntriesExist);
+      IF EntriesExist THEN BEGIN
+        "Expiration Date" := ExpDate;
+        "Buffer Status2" := "Buffer Status2"::"ExpDate blocked";
+      END ELSE
+        "Buffer Status2" := 0;
+
+      IF IsReclass THEN BEGIN
+        "New Expiration Date" := "Expiration Date";
+        "Warranty Date" := ItemTrackingMgt.ExistingWarrantyDate("Item No.","Variant Code","Lot No.","Serial No.",EntriesExist);
+      END;
+    END;
+
+    [External]
+    PROCEDURE IsReclass@4() : Boolean;
+    BEGIN
+      EXIT(("Source Type" = DATABASE::"Item Journal Line") AND ("Source Subtype" = 4));
+    END;
+
+    [External]
+    PROCEDURE TestFieldError@5(FieldCaptionText@1000 : Text[80];CurrFieldValue@1001 : Decimal;CompareValue@1002 : Decimal);
+    BEGIN
+      IF CurrFieldValue = CompareValue THEN
+        EXIT;
+
+      ERROR(Text005,
+        FieldCaptionText,TABLECAPTION,FIELDCAPTION("Item No."),"Item No.",
+        FIELDCAPTION("Serial No."),"Serial No.",FIELDCAPTION("Lot No."),"Lot No.",
+        ABS(CurrFieldValue),ABS(CompareValue));
+    END;
+
+    [External]
+    PROCEDURE SetItemData@29(ItemNo@1000 : Code[20];ItemDescription@1001 : Text[50];LocationCode@1002 : Code[10];VariantCode@1003 : Code[10];BinCode@1005 : Code[20];QtyPerUoM@1004 : Decimal);
+    BEGIN
+      "Item No." := ItemNo;
+      Description := ItemDescription;
+      "Location Code" := LocationCode;
+      "Variant Code" := VariantCode;
+      "Bin Code" := BinCode;
+      "Qty. per Unit of Measure" := QtyPerUoM;
+    END;
+
+    [External]
+    PROCEDURE SetQuantities@32(QtyBase@1000 : Decimal;QtyToHandle@1001 : Decimal;QtyToHandleBase@1002 : Decimal;QtyToInvoice@1003 : Decimal;QtyToInvoiceBase@1004 : Decimal;QtyHandledBase@1005 : Decimal;QtyInvoicedBase@1006 : Decimal);
+    BEGIN
+      "Quantity (Base)" := QtyBase;
+      "Qty. to Handle" := QtyToHandle;
+      "Qty. to Handle (Base)" := QtyToHandleBase;
+      "Qty. to Invoice" := QtyToInvoice;
+      "Qty. to Invoice (Base)" := QtyToInvoiceBase;
+      "Quantity Handled (Base)" := QtyHandledBase;
+      "Quantity Invoiced (Base)" := QtyInvoicedBase;
+    END;
+
+    [External]
+    PROCEDURE ClearSourceFilter@36();
+    BEGIN
+      SETRANGE("Source Type");
+      SETRANGE("Source Subtype");
+      SETRANGE("Source ID");
+      SETRANGE("Source Ref. No.");
+      SETRANGE("Source Batch Name");
+      SETRANGE("Source Prod. Order Line");
+    END;
+
+    [External]
+    PROCEDURE SetSource@21(SourceType@1000 : Integer;SourceSubtype@1001 : Integer;SourceID@1002 : Code[20];SourceRefNo@1003 : Integer;SourceBatchName@1004 : Code[10];SourceProdOrderLine@1005 : Integer);
+    BEGIN
+      "Source Type" := SourceType;
+      "Source Subtype" := SourceSubtype;
+      "Source ID" := SourceID;
+      "Source Ref. No." := SourceRefNo;
+      "Source Batch Name" := SourceBatchName;
+      "Source Prod. Order Line" := SourceProdOrderLine;
+    END;
+
+    [External]
+    PROCEDURE SetSourceFromPurchLine@8(PurchLine@1000 : Record 39);
+    BEGIN
+      "Source Type" := DATABASE::"Purchase Line";
+      "Source Subtype" := PurchLine."Document Type";
+      "Source ID" := PurchLine."Document No.";
+      "Source Batch Name" := '';
+      "Source Prod. Order Line" := 0;
+      "Source Ref. No." := PurchLine."Line No.";
+    END;
+
+    [External]
+    PROCEDURE SetSourceFromSalesLine@18(SalesLine@1000 : Record 37);
+    BEGIN
+      "Source Type" := DATABASE::"Sales Line";
+      "Source Subtype" := SalesLine."Document Type";
+      "Source ID" := SalesLine."Document No.";
+      "Source Batch Name" := '';
+      "Source Prod. Order Line" := 0;
+      "Source Ref. No." := SalesLine."Line No.";
+    END;
+
+    [External]
+    PROCEDURE SetSourceFilter@31(SourceType@1011 : Integer;SourceSubtype@1010 : Integer;SourceID@1009 : Code[20];SourceRefNo@1008 : Integer;SourceKey@1000 : Boolean);
+    BEGIN
+      IF SourceKey THEN
+        SETCURRENTKEY(
+          "Source ID","Source Type","Source Subtype","Source Batch Name",
+          "Source Prod. Order Line","Source Ref. No.");
+      SETRANGE("Source Type",SourceType);
+      IF SourceSubtype >= 0 THEN
+        SETRANGE("Source Subtype",SourceSubtype);
+      SETRANGE("Source ID",SourceID);
+      IF SourceRefNo >= 0 THEN
+        SETRANGE("Source Ref. No.",SourceRefNo);
+    END;
+
+    [External]
+    PROCEDURE SetSourceFilter2@33(SourceBatchName@1007 : Code[10];SourceProdOrderLine@1006 : Integer);
+    BEGIN
+      SETRANGE("Source Batch Name",SourceBatchName);
+      SETRANGE("Source Prod. Order Line",SourceProdOrderLine);
+    END;
+
+    [External]
+    PROCEDURE ClearTracking@40();
+    BEGIN
+      "Serial No." := '';
+      "Lot No." := '';
+      "Warranty Date" := 0D;
+      "Expiration Date" := 0D;
+
+      OnAfterClearTracking(Rec);
+    END;
+
+    [External]
+    PROCEDURE ClearTrackingFilter@35();
+    BEGIN
+      SETRANGE("Serial No.");
+      SETRANGE("Lot No.");
+    END;
+
+    [External]
+    PROCEDURE SetTracking@37(SerialNo@1001 : Code[50];LotNo@1000 : Code[50];WarrantyDate@1002 : Date;ExpirationDate@1003 : Date);
+    BEGIN
+      "Serial No." := SerialNo;
+      "Lot No." := LotNo;
+      "Warranty Date" := WarrantyDate;
+      "Expiration Date" := ExpirationDate;
+    END;
+
+    [External]
+    PROCEDURE CopyTrackingFromItemLedgEntry@41(ItemLedgerEntry@1000 : Record 32);
+    BEGIN
+      "Serial No." := ItemLedgerEntry."Serial No.";
+      "Lot No." := ItemLedgerEntry."Lot No.";
+
+      OnAfterCopyTrackingFromItemLedgEntry(Rec,ItemLedgerEntry);
+    END;
+
+    [External]
+    PROCEDURE SetTrackingFilter@34(SerialNo@1000 : Code[50];LotNo@1001 : Code[50]);
+    BEGIN
+      SETRANGE("Serial No.",SerialNo);
+      SETRANGE("Lot No.",LotNo);
+    END;
+
+    [External]
+    PROCEDURE SetTrackingFilterBlank@42();
+    BEGIN
+      SETRANGE("Serial No.",'');
+      SETRANGE("Lot No.",'');
+    END;
+
+    [External]
+    PROCEDURE SetTrackingFilterFromEntrySummary@44(EntrySummary@1000 : Record 338);
+    BEGIN
+      SETRANGE("Serial No.",EntrySummary."Serial No.");
+      SETRANGE("Lot No.",EntrySummary."Lot No.");
+
+      OnAfterSetTrackingFilterFromEntrySummary(Rec,EntrySummary);
+    END;
+
+    [External]
+    PROCEDURE SetTrackingFilterFromReservEntry@38(ReservEntry@1000 : Record 337);
+    BEGIN
+      SETRANGE("Serial No.",ReservEntry."Serial No.");
+      SETRANGE("Lot No.",ReservEntry."Lot No.");
+
+      OnAfterSetTrackingFilterFromReservEntry(Rec,ReservEntry);
+    END;
+
+    [External]
+    PROCEDURE SetTrackingFilterFromSpec@39(TrackingSpecification@1000 : Record 336);
+    BEGIN
+      SETRANGE("Serial No.",TrackingSpecification."Serial No.");
+      SETRANGE("Lot No.",TrackingSpecification."Lot No.");
+
+      OnAfterSetTrackingFilterFromTrackingSpec(Rec,TrackingSpecification);
+    END;
+
+    [External]
+    PROCEDURE SetSkipSerialNoQtyValidation@7(NewVal@1000 : Boolean);
+    BEGIN
+      SkipSerialNoQtyValidation := NewVal;
+    END;
+
+    [External]
+    PROCEDURE CheckItemTrackingQuantity@6(TableNo@1000 : Integer;DocumentType@1001 : Option;DocumentNo@1002 : Code[20];LineNo@1003 : Integer;QtyToHandleBase@1009 : Decimal;QtyToInvoiceBase@1010 : Decimal;Handle@1004 : Boolean;Invoice@1006 : Boolean);
+    VAR
+      ReservationEntry@1005 : Record 337;
+    BEGIN
+      IF QtyToHandleBase = 0 THEN
+        Handle := FALSE;
+      IF QtyToInvoiceBase = 0 THEN
+        Invoice := FALSE;
+      IF NOT (Handle OR Invoice) THEN
+        EXIT;
+      ReservationEntry.SetSourceFilter(TableNo,DocumentType,DocumentNo,LineNo,TRUE);
+      ReservationEntry.SETFILTER("Item Tracking",'%1|%2',
+        ReservationEntry."Item Tracking"::"Lot and Serial No.",
+        ReservationEntry."Item Tracking"::"Serial No.");
+      CheckItemTrackingByType(ReservationEntry,QtyToHandleBase,QtyToInvoiceBase,FALSE,Handle,Invoice);
+      ReservationEntry.SETRANGE("Item Tracking",ReservationEntry."Item Tracking"::"Lot No.");
+      CheckItemTrackingByType(ReservationEntry,QtyToHandleBase,QtyToInvoiceBase,TRUE,Handle,Invoice);
+    END;
+
+    LOCAL PROCEDURE CheckItemTrackingByType@12(VAR ReservationEntry@1000 : Record 337;QtyToHandleBase@1004 : Decimal;QtyToInvoiceBase@1006 : Decimal;OnlyLot@1005 : Boolean;Handle@1001 : Boolean;Invoice@1002 : Boolean);
+    VAR
+      TrackingSpecification@1009 : Record 336;
+      HandleQtyBase@1007 : Decimal;
+      InvoiceQtyBase@1008 : Decimal;
+      LotsToHandleUndefined@1003 : Boolean;
+      LotsToInvoiceUndefined@1010 : Boolean;
+    BEGIN
+      IF OnlyLot THEN BEGIN
+        GetUndefinedLots(ReservationEntry,Handle,Invoice,LotsToHandleUndefined,LotsToInvoiceUndefined);
+        IF NOT (LotsToHandleUndefined OR LotsToInvoiceUndefined) THEN
+          EXIT;
+      END;
+      IF NOT ReservationEntry.FINDLAST THEN
+        EXIT;
+      IF Handle THEN BEGIN
+        ReservationEntry.CALCSUMS("Qty. to Handle (Base)");
+        HandleQtyBase += ReservationEntry."Qty. to Handle (Base)";
+      END;
+      IF Invoice THEN BEGIN
+        ReservationEntry.CALCSUMS("Qty. to Invoice (Base)");
+        InvoiceQtyBase += ReservationEntry."Qty. to Invoice (Base)";
+      END;
+      TrackingSpecification.TRANSFERFIELDS(ReservationEntry);
+      IF Handle THEN
+        IF ABS(HandleQtyBase) > ABS(QtyToHandleBase) THEN
+          TrackingSpecification.TestFieldError(FIELDCAPTION("Qty. to Handle (Base)"),HandleQtyBase,QtyToHandleBase);
+      IF Invoice THEN
+        IF ABS(InvoiceQtyBase) > ABS(QtyToInvoiceBase) THEN
+          TrackingSpecification.TestFieldError(FIELDCAPTION("Qty. to Invoice (Base)"),InvoiceQtyBase,QtyToInvoiceBase);
+    END;
+
+    LOCAL PROCEDURE GetUndefinedLots@10(VAR ReservationEntry@1000 : Record 337;Handle@1004 : Boolean;Invoice@1005 : Boolean;VAR LotsToHandleUndefined@1006 : Boolean;VAR LotsToInvoiceUndefined@1007 : Boolean);
+    VAR
+      HandleLot@1003 : Code[20];
+      InvoiceLot@1002 : Code[20];
+      StopLoop@1008 : Boolean;
+    BEGIN
+      LotsToHandleUndefined := FALSE;
+      LotsToInvoiceUndefined := FALSE;
+      IF NOT ReservationEntry.FINDSET THEN
+        EXIT;
+      REPEAT
+        IF Handle THEN BEGIN
+          CheckLot(ReservationEntry."Qty. to Handle (Base)",ReservationEntry."Lot No.",HandleLot,LotsToHandleUndefined);
+          IF LotsToHandleUndefined AND NOT Invoice THEN
+            StopLoop := TRUE;
+        END;
+        IF Invoice THEN BEGIN
+          CheckLot(ReservationEntry."Qty. to Invoice (Base)",ReservationEntry."Lot No.",InvoiceLot,LotsToInvoiceUndefined);
+          IF LotsToInvoiceUndefined AND NOT Handle THEN
+            StopLoop := TRUE;
+        END;
+        IF LotsToHandleUndefined AND LotsToInvoiceUndefined THEN
+          StopLoop := TRUE;
+      UNTIL StopLoop OR (ReservationEntry.NEXT = 0);
+    END;
+
+    LOCAL PROCEDURE CheckLot@16(ReservQty@1000 : Decimal;ReservLot@1003 : Code[50];VAR Lot@1001 : Code[50];VAR Undefined@1002 : Boolean);
+    BEGIN
+      Undefined := FALSE;
+      IF ReservQty = 0 THEN
+        EXIT;
+      IF Lot = '' THEN
+        Lot := ReservLot
+      ELSE
+        IF ReservLot <> Lot THEN
+          Undefined := TRUE;
+    END;
+
+    LOCAL PROCEDURE QuantityToInvoiceIsSufficient@9() : Boolean;
+    VAR
+      SalesLine@1000 : Record 37;
+    BEGIN
+      IF "Source Type" = DATABASE::"Sales Line" THEN BEGIN
+        SalesLine.SETRANGE("Document Type","Source Subtype");
+        SalesLine.SETRANGE("Document No.","Source ID");
+        SalesLine.SETRANGE("Line No.","Source Ref. No.");
+        IF SalesLine.FINDFIRST THEN
+          EXIT("Quantity (Base)" < SalesLine."Qty. to Invoice (Base)");
+      END;
+    END;
+
+    [External]
+    PROCEDURE TrackingExists@11() : Boolean;
+    BEGIN
+      EXIT(("Serial No." <> '') OR ("Lot No." <> ''));
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterClearTracking@60(VAR TrackingSpecification@1000 : Record 336);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterInitFromAsmHeader@46(VAR TrackingSpecification@1000 : Record 336;AssemblyHeader@1001 : Record 900);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterInitFromAsmLine@47(VAR TrackingSpecification@1000 : Record 336;AssemblyLine@1001 : Record 901);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterInitFromItemJnlLine@48(VAR TrackingSpecification@1000 : Record 336;ItemJournalLine@1001 : Record 83);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterInitFromJobJnlLine@50(VAR TrackingSpecification@1000 : Record 336;JobJournalLine@1001 : Record 210);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterInitFromPurchLine@51(VAR TrackingSpecification@1000 : Record 336;PurchaseLine@1001 : Record 39);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterInitFromProdOrderLine@53(VAR TrackingSpecification@1000 : Record 336;ProdOrderLine@1001 : Record 5406);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterInitFromProdOrderComp@54(VAR TrackingSpecification@1000 : Record 336;ProdOrderComponent@1001 : Record 5407);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterInitFromProdPlanningComp@55(VAR TrackingSpecification@1000 : Record 336;PlanningComponent@1001 : Record 99000829);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterInitFromReqLine@56(VAR TrackingSpecification@1000 : Record 336;RequisitionLine@1001 : Record 246);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterInitFromSalesLine@45(VAR TrackingSpecification@1000 : Record 336;SalesLine@1001 : Record 37);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterInitFromServLine@52(VAR TrackingSpecification@1000 : Record 336;ServiceLine@1001 : Record 5902);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterInitFromTransLine@57(VAR TrackingSpecification@1000 : Record 336;TransferLine@1001 : Record 5741);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterCopyTrackingFromItemLedgEntry@61(VAR TrackingSpecification@1000 : Record 336;ItemLedgerEntry@1001 : Record 32);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterSetTrackingFilterFromEntrySummary@49(VAR TrackingSpecification@1000 : Record 336;EntrySummary@1001 : Record 338);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterSetTrackingFilterFromReservEntry@58(VAR TrackingSpecification@1000 : Record 336;ReservationEntry@1001 : Record 337);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterSetTrackingFilterFromTrackingSpec@59(VAR TrackingSpecification@1000 : Record 336;FromTrackingSpecification@1001 : Record 336);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

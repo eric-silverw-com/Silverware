@@ -1,0 +1,173 @@
+OBJECT Codeunit 5333 CRM Integration Telemetry
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:20 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            SendIntegrationStatsTelemetry;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      CRMConnectionCategoryTxt@1002 : TextConst '@@@={Locked};ENU=AL CRM Connection';
+      CRMIntegrationCategoryTxt@1004 : TextConst '@@@={Locked};ENU=AL CRM Integration';
+      EnabledConnectionTelemetryTxt@1001 : TextConst '@@@={Locked};ENU={"Enabled": "Yes", "AuthenticationType": "%1", "CRMVersion": "%2", "ProxyVersion": "%3", "CRMSolutionInstalled": "%4", "SOIntegration": "%5", "AutoCreateSO": "%6", "UsersMapRequired": "%7", "ItemAvailablityEnabled": "%8"}';
+      DisabledConnectionTelemetryTxt@1000 : TextConst '@@@={Locked};ENU={"Enabled": "No", "DisableReason": "%1","AuthenticationType": "%2", "ProxyVersion": "%3", "AutoCreateSO": "%4", "UsersMapRequired": "%5"}';
+      CRMIntegrationManagement@1003 : Codeunit 5330;
+      IntegrationTableStatsTxt@1005 : TextConst '@@@={Locked};ENU={"TableID": "%1", "IntTableID": "%2", "Direction": "%3", "SyncCoupledOnly": "%4", "SyncJobsTotal": "%5", "TotalRecords": "%6", "IntegrationRecords": "%7", "CoupledRecords": "%8", "CoupledErrors": "%9"}';
+      NoPermissionTxt@1006 : TextConst '@@@={Locked};ENU={"READPERMISSION": "No"}';
+
+    LOCAL PROCEDURE GetEnabledConnectionTelemetryData@64(CRMConnectionSetup@1000 : Record 5330) : Text;
+    BEGIN
+      WITH CRMConnectionSetup DO
+        EXIT(
+          STRSUBSTNO(
+            EnabledConnectionTelemetryTxt,
+            FORMAT("Authentication Type"),"CRM Version","Proxy Version","Is CRM Solution Installed",
+            "Is S.Order Integration Enabled","Auto Create Sales Orders","Is User Mapping Required",
+            CRMIntegrationManagement.IsItemAvailabilityWebServiceEnabled));
+    END;
+
+    LOCAL PROCEDURE GetDisabledConnectionTelemetryData@59(CRMConnectionSetup@1000 : Record 5330) : Text;
+    BEGIN
+      WITH CRMConnectionSetup DO
+        EXIT(
+          STRSUBSTNO(
+            DisabledConnectionTelemetryTxt,
+            "Disable Reason",FORMAT("Authentication Type"),"Proxy Version","Auto Create Sales Orders","Is User Mapping Required"));
+    END;
+
+    LOCAL PROCEDURE GetIntegrationStatsTelemetryData@2() Data : Text;
+    VAR
+      IntegrationTableMapping@1000 : Record 5335;
+      TableData@1002 : Text;
+      Comma@1003 : Text;
+    BEGIN
+      IF NOT IntegrationTableMapping.READPERMISSION THEN
+        EXIT(NoPermissionTxt);
+
+      Data := '[';
+      WITH IntegrationTableMapping DO
+        IF FINDSET THEN
+          REPEAT
+            TableData :=
+              STRSUBSTNO(
+                IntegrationTableStatsTxt,
+                "Table ID","Integration Table ID",FORMAT(Direction),"Synch. Only Coupled Records",
+                GetSyncJobsTotal(Name),GetTotalRecords("Table ID"),GetIntegrationRecords("Table ID"),
+                GetCoupledRecords("Table ID"),GetCoupledErrors("Table ID"));
+            Data += Comma + TableData;
+            Comma := ','
+          UNTIL NEXT = 0;
+      Data += ']';
+    END;
+
+    LOCAL PROCEDURE GetSyncJobsTotal@6(Name@1000 : Code[20]) : Integer;
+    VAR
+      IntegrationSynchJob@1001 : Record 5338;
+    BEGIN
+      IF NOT IntegrationSynchJob.READPERMISSION THEN
+        EXIT(-1);
+      IntegrationSynchJob.SETRANGE("Integration Table Mapping Name",Name);
+      EXIT(IntegrationSynchJob.COUNT);
+    END;
+
+    LOCAL PROCEDURE GetTotalRecords@7(TableID@1000 : Integer) Result : Integer;
+    VAR
+      RecRef@1001 : RecordRef;
+    BEGIN
+      RecRef.OPEN(TableID);
+      IF RecRef.READPERMISSION THEN
+        Result := RecRef.COUNT
+      ELSE
+        Result := -1;
+      RecRef.CLOSE;
+    END;
+
+    LOCAL PROCEDURE GetIntegrationRecords@8(TableID@1000 : Integer) : Integer;
+    VAR
+      IntegrationRecord@1001 : Record 5151;
+    BEGIN
+      IF NOT IntegrationRecord.READPERMISSION THEN
+        EXIT(-1);
+      IntegrationRecord.SETRANGE("Table ID",TableID);
+      EXIT(IntegrationRecord.COUNT);
+    END;
+
+    LOCAL PROCEDURE GetCoupledRecords@9(TableID@1000 : Integer) : Integer;
+    VAR
+      CRMIntegrationRecord@1002 : Record 5331;
+    BEGIN
+      IF NOT CRMIntegrationRecord.READPERMISSION THEN
+        EXIT(-1);
+      CRMIntegrationRecord.SETRANGE("Table ID",TableID);
+      EXIT(CRMIntegrationRecord.COUNT);
+    END;
+
+    LOCAL PROCEDURE GetCoupledErrors@10(TableID@1001 : Integer) : Integer;
+    VAR
+      CRMIntegrationRecord@1000 : Record 5331;
+    BEGIN
+      IF NOT CRMIntegrationRecord.READPERMISSION THEN
+        EXIT(-1);
+      CRMIntegrationRecord.SETRANGE("Table ID",TableID);
+      CRMIntegrationRecord.SETRANGE(Skipped,TRUE);
+      EXIT(CRMIntegrationRecord.COUNT);
+    END;
+
+    LOCAL PROCEDURE SendConnectionTelemetry@58(CRMConnectionSetup@1000 : Record 5330);
+    BEGIN
+      WITH CRMConnectionSetup DO
+        IF "Is Enabled" THEN
+          SENDTRACETAG(
+            '000024X',CRMConnectionCategoryTxt,VERBOSITY::Normal,
+            GetEnabledConnectionTelemetryData(CRMConnectionSetup),DATACLASSIFICATION::SystemMetadata)
+        ELSE
+          SENDTRACETAG(
+            '000024Y',CRMConnectionCategoryTxt,VERBOSITY::Normal,
+            GetDisabledConnectionTelemetryData(CRMConnectionSetup),DATACLASSIFICATION::SystemMetadata);
+    END;
+
+    LOCAL PROCEDURE SendIntegrationStatsTelemetry@1();
+    BEGIN
+      SENDTRACETAG(
+        '000024Z',CRMIntegrationCategoryTxt,VERBOSITY::Normal,
+        GetIntegrationStatsTelemetryData,DATACLASSIFICATION::SystemMetadata);
+    END;
+
+    [EventSubscriber(Table,5330,OnAfterInsertEvent)]
+    LOCAL PROCEDURE OnAfterInsertConnectionSetup@72(VAR Rec@1000 : Record 5330;RunTrigger@1001 : Boolean);
+    BEGIN
+      IF NOT Rec.ISTEMPORARY THEN
+        SendConnectionTelemetry(Rec);
+    END;
+
+    [EventSubscriber(Table,5330,OnAfterModifyEvent)]
+    LOCAL PROCEDURE OnAfterModifyConnectionSetup@66(VAR Rec@1000 : Record 5330;VAR xRec@1001 : Record 5330;RunTrigger@1002 : Boolean);
+    BEGIN
+      IF NOT Rec.ISTEMPORARY THEN
+        SendConnectionTelemetry(Rec);
+    END;
+
+    [EventSubscriber(Codeunit,5330,OnAfterCRMIntegrationEnabled,"",Skip,Skip)]
+    LOCAL PROCEDURE ScheduleCRMIntTelemetryAfterIntegrationEnabled@4();
+    VAR
+      CodeUnitMetadata@1001 : Record 2000000137;
+      TelemetryManagement@1000 : Codeunit 1350;
+    BEGIN
+      IF CodeUnitMetadata.GET(CODEUNIT::"CRM Integration Telemetry") THEN
+        TelemetryManagement.ScheduleCalEventsForTelemetryAsync(CodeUnitMetadata.RECORDID,CODEUNIT::"Create Telemetry Cal. Events",10);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

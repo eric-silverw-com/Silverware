@@ -1,0 +1,189 @@
+OBJECT Codeunit 2112 O365 Sales Attachment Mgt
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:15 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      EmailSizeAboveMaxTxt@1003 : TextConst '@@@="%1=the total size allowed for all the attachments, e.g. ""25 MB""";ENU=The total size of the attachments exceeds the maximum limit (%1). Remove some to be able to send your document.';
+      NotSupportedMsg@1002 : TextConst 'ENU=Cannot view this file type.';
+      PhotoLbl@1001 : TextConst '@@@="%1 = a number, e.g. 1, 2, 3,...";ENU=Photo %1';
+      MovieLbl@1000 : TextConst '@@@="%1 = a number, e.g. 1, 2, 3,...";ENU=Movie %1';
+      MegaBytesLbl@1004 : TextConst '@@@="%1=the number of megabytes";ENU=%1 MB';
+
+    [External]
+    PROCEDURE GetNoOfAttachments@124(RecordVariant@1002 : Variant) : Integer;
+    VAR
+      IncomingDocumentAttachment@1000 : Record 133;
+    BEGIN
+      IF NOT GetAttachments(RecordVariant,IncomingDocumentAttachment) THEN
+        EXIT(0);
+
+      EXIT(IncomingDocumentAttachment.COUNT);
+    END;
+
+    PROCEDURE GetSizeOfAttachments@2(VAR IncomingDocumentAttachment@1000 : Record 133) TotalSize : Integer;
+    BEGIN
+      TotalSize := 0;
+
+      IncomingDocumentAttachment.SETAUTOCALCFIELDS(Content);
+      IF IncomingDocumentAttachment.FINDSET THEN
+        REPEAT
+          IF IncomingDocumentAttachment.Content.HASVALUE THEN
+            TotalSize += IncomingDocumentAttachment.Content.LENGTH;
+        UNTIL IncomingDocumentAttachment.NEXT = 0;
+    END;
+
+    [External]
+    PROCEDURE GetAttachments@3(RecordVariant@1002 : Variant;VAR IncomingDocumentAttachment@1005 : Record 133) : Boolean;
+    VAR
+      SalesHeader@1001 : Record 36;
+      SalesInvoiceHeader@1003 : Record 112;
+      RecordRef@1004 : RecordRef;
+    BEGIN
+      RecordRef.GETTABLE(RecordVariant);
+      IF RecordRef.NUMBER = DATABASE::"Sales Header" THEN BEGIN
+        SalesHeader := RecordVariant;
+        IF SalesHeader."Incoming Document Entry No." = 0 THEN
+          EXIT(FALSE);
+
+        IncomingDocumentAttachment.SETRANGE("Incoming Document Entry No.",SalesHeader."Incoming Document Entry No.");
+        EXIT(NOT IncomingDocumentAttachment.ISEMPTY);
+      END;
+
+      IF RecordRef.NUMBER = DATABASE::"Sales Invoice Header" THEN BEGIN
+        SalesInvoiceHeader := RecordVariant;
+        IncomingDocumentAttachment.SETRANGE("Document No.",SalesInvoiceHeader."No.");
+        IncomingDocumentAttachment.SETRANGE("Posting Date",SalesInvoiceHeader."Posting Date");
+        EXIT(NOT IncomingDocumentAttachment.ISEMPTY);
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    [External]
+    PROCEDURE EditAttachments@123(RecordVariant@1000 : Variant) NoOfAttachments : Integer;
+    VAR
+      IncomingDocument@1001 : Record 130;
+      SalesHeader@1003 : Record 36;
+      SalesInvoiceHeader@1002 : Record 112;
+      RecordRef@1004 : RecordRef;
+    BEGIN
+      RecordRef.GETTABLE(RecordVariant);
+      IF NOT RecordRef.FIND THEN
+        EXIT;
+      RecordVariant := RecordRef;
+      IF RecordRef.NUMBER = DATABASE::"Sales Header" THEN BEGIN
+        SalesHeader := RecordVariant;
+        IF SalesHeader."Incoming Document Entry No." = 0 THEN BEGIN
+          SalesHeader."Incoming Document Entry No." := IncomingDocument.CreateIncomingDocument(SalesHeader."Sell-to Customer Name",'');
+          SalesHeader.MODIFY;
+          COMMIT;
+          RecordVariant := SalesHeader;
+        END;
+        SalesHeader.SETRECFILTER;
+        PAGE.RUN(PAGE::"O365 Sales Doc. Attachments",SalesHeader);
+      END;
+      IF RecordRef.NUMBER = DATABASE::"Sales Invoice Header" THEN BEGIN
+        SalesInvoiceHeader := RecordVariant;
+        SalesInvoiceHeader.SETRECFILTER;
+        PAGE.RUN(PAGE::"O365 Posted Sales Inv. Att.",SalesInvoiceHeader);
+      END;
+      NoOfAttachments := GetNoOfAttachments(RecordVariant);
+    END;
+
+    PROCEDURE ImportAttachmentFromFileSystem@5(VAR IncomingDocumentAttachmentOrig@1001 : Record 133);
+    VAR
+      IncomingDocumentAttachment@1000 : Record 133;
+    BEGIN
+      IncomingDocumentAttachment.INIT;
+      IncomingDocumentAttachment.COPYFILTERS(IncomingDocumentAttachmentOrig);
+      IncomingDocumentAttachment.NewAttachment;
+      CASE IncomingDocumentAttachment.Type OF
+        IncomingDocumentAttachment.Type::Image:
+          IncomingDocumentAttachment.Name :=
+            COPYSTR(
+              STRSUBSTNO(PhotoLbl,IncomingDocumentAttachment."Line No." DIV 10000),1,MAXSTRLEN(IncomingDocumentAttachment.Name));
+        IncomingDocumentAttachment.Type::Other:
+          IF UPPERCASE(IncomingDocumentAttachment."File Extension") = 'MOV' THEN
+            IncomingDocumentAttachment.Name :=
+              COPYSTR(
+                STRSUBSTNO(MovieLbl,IncomingDocumentAttachment."Line No." DIV 10000),1,MAXSTRLEN(IncomingDocumentAttachment.Name));
+      END;
+      IncomingDocumentAttachment.MODIFY;
+    END;
+
+    PROCEDURE OpenAttachmentPreviewIfSupported@1(IncomingDocumentAttachment@1000 : Record 133);
+    BEGIN
+      WITH IncomingDocumentAttachment DO BEGIN
+        CALCFIELDS(Content);
+        IF NOT Content.HASVALUE THEN
+          EXIT;
+
+        CASE Type OF
+          Type::Image:
+            PAGE.RUNMODAL(PAGE::"O365 Incoming Doc. Att. Pict.",IncomingDocumentAttachment);
+          Type::PDF:
+            Export(Name + '.' + "File Extension",TRUE)
+          ELSE
+            MESSAGE(NotSupportedMsg);
+        END;
+      END
+    END;
+
+    PROCEDURE WarnIfIncomingDocumentSizeAboveMax@40(VAR IncomingDocumentAttachment@1000 : Record 133);
+    BEGIN
+      IF GetSizeOfAttachments(IncomingDocumentAttachment) > GetMaxEmailAttachmentsSize THEN
+        MESSAGE(STRSUBSTNO(EmailSizeAboveMaxTxt,GetMaxEmailAttachmentsSizeAsText));
+    END;
+
+    PROCEDURE AssertIncomingDocumentSizeBelowMax@6(VAR IncomingDocumentAttachment@1000 : Record 133);
+    BEGIN
+      IF GetSizeOfAttachments(IncomingDocumentAttachment) > GetMaxEmailAttachmentsSize THEN
+        ERROR(EmailSizeAboveMaxTxt,GetMaxEmailAttachmentsSizeAsText);
+    END;
+
+    LOCAL PROCEDURE GetMaxEmailAttachmentsSize@8() MaxEmailAttachmentSize : Integer;
+    VAR
+      CompanyInformation@1014 : Record 79;
+      GraphMail@1000 : Codeunit 405;
+      MaxEmailSize@1010 : Integer;
+    BEGIN
+      IF GraphMail.IsEnabled THEN
+        MaxEmailSize := 4 * 1024 * 1024 // REST request size limit is 4MB, including body and emailed documents
+      ELSE
+        MaxEmailSize := 25 * 1024 * 1024; // 25MB limit for SMTP emails, including body and emailed documents
+
+      CompanyInformation.CALCFIELDS(Picture);
+
+      MaxEmailAttachmentSize := MaxEmailSize - CompanyInformation.Picture.LENGTH - 512 * 1024;// Subtract company logo and 500 KB for rest
+
+      IF MaxEmailAttachmentSize < 0 THEN
+        EXIT(0);
+    END;
+
+    LOCAL PROCEDURE GetMaxEmailAttachmentsSizeAsText@4() : Text[10];
+    VAR
+      Bytes@1001 : Integer;
+      MegaBytes@1000 : Integer;
+    BEGIN
+      Bytes := GetMaxEmailAttachmentsSize;
+      MegaBytes := Bytes DIV (1024 * 1024);
+      EXIT(STRSUBSTNO(MegaBytesLbl,MegaBytes));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

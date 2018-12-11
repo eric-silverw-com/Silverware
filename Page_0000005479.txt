@@ -1,0 +1,416 @@
+OBJECT Page 5479 Customer Payments Entity
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:11:02 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=[@@@={Locked};
+               ENU=customerPayments];
+    SourceTable=Table81;
+    DelayedInsert=Yes;
+    PageType=ListPart;
+    OnOpenPage=BEGIN
+                 GraphMgtCustomerPayments.SetCustomerPaymentsFilters(Rec);
+               END;
+
+    OnAfterGetRecord=BEGIN
+                       SetCalculatedFields;
+                     END;
+
+    OnNewRecord=BEGIN
+                  CheckFilters;
+
+                  ClearCalculatedFields;
+
+                  "Document Type" := "Document Type"::Payment;
+                  "Account Type" := "Account Type"::Customer;
+                  "Applies-to Doc. Type" := "Applies-to Doc. Type"::Invoice;
+                END;
+
+    OnInsertRecord=VAR
+                     TempGenJournalLine@1002 : TEMPORARY Record 81;
+                   BEGIN
+                     ProcessAppliesToInvoiceNumberAndId;
+
+                     TempGenJournalLine.RESET;
+                     TempGenJournalLine.COPY(Rec);
+
+                     CLEAR(Rec);
+                     GraphMgtCustomerPayments.SetCustomerPaymentsTemplateAndBatch(
+                       Rec,LibraryAPIGeneralJournal.GetBatchNameFromId(TempGenJournalLine.GETFILTER("Journal Batch Id")));
+                     LibraryAPIGeneralJournal.InitializeLine(
+                       Rec,TempGenJournalLine."Line No.",TempGenJournalLine."Document No.",TempGenJournalLine."External Document No.");
+                     TransferGeneratedFieldsFromInitializeLine(TempGenJournalLine);
+
+                     GraphMgtCustomerPayments.SetCustomerPaymentsValues(Rec,TempGenJournalLine);
+
+                     UpdateDimensions(TRUE);
+
+                     SetCalculatedFields;
+                   END;
+
+    OnModifyRecord=VAR
+                     GenJournalLine@1000 : Record 81;
+                   BEGIN
+                     ProcessAppliesToInvoiceNumberAndId;
+
+                     GenJournalLine.SETRANGE(Id,Id);
+                     GenJournalLine.FINDFIRST;
+
+                     IF "Line No." = GenJournalLine."Line No." THEN
+                       MODIFY(TRUE)
+                     ELSE BEGIN
+                       GenJournalLine.TRANSFERFIELDS(Rec,FALSE);
+                       GenJournalLine.RENAME("Journal Template Name","Journal Batch Name","Line No.");
+                       TRANSFERFIELDS(GenJournalLine,TRUE);
+                     END;
+
+                     UpdateDimensions(FALSE);
+
+                     SetCalculatedFields;
+
+                     EXIT(FALSE);
+                   END;
+
+    OnAfterGetCurrRecord=BEGIN
+                           IF NOT FiltersChecked THEN BEGIN
+                             CheckFilters;
+                             FiltersChecked := TRUE;
+                           END;
+                         END;
+
+    ODataKeyFields=Id;
+  }
+  CONTROLS
+  {
+    { 1   ;    ;Container ;
+                Name=<Control1>;
+                CaptionML=ENU=<Control1>;
+                ContainerType=ContentArea }
+
+    { 2   ;1   ;Group     ;
+                Name=<Control2>;
+                CaptionML=ENU=<Control2>;
+                GroupType=Repeater }
+
+    { 8   ;2   ;Field     ;
+                Name=id;
+                CaptionML=[@@@={Locked};
+                           ENU=Id];
+                ApplicationArea=#All;
+                SourceExpr=Id;
+                Editable=FALSE }
+
+    { 6   ;2   ;Field     ;
+                Name=journalDisplayName;
+                CaptionML=[@@@={Locked};
+                           ENU=JournalDisplayName];
+                ToolTipML=ENU=Specifies the Journal Batch Name of the Customer Payment;
+                ApplicationArea=#All;
+                SourceExpr=GlobalJournalDisplayNameTxt;
+                OnValidate=BEGIN
+                             ERROR(CannotEditBatchNameErr);
+                           END;
+                            }
+
+    { 4   ;2   ;Field     ;
+                Name=lineNumber;
+                CaptionML=[@@@={Locked};
+                           ENU=LineNumber];
+                ApplicationArea=#All;
+                SourceExpr="Line No." }
+
+    { 16  ;2   ;Field     ;
+                Name=customerId;
+                CaptionML=[@@@={Locked};
+                           ENU=CustomerId];
+                ApplicationArea=#All;
+                SourceExpr="Customer Id";
+                OnValidate=BEGIN
+                             IF "Customer Id" = BlankGUID THEN BEGIN
+                               "Account No." := '';
+                               EXIT;
+                             END;
+
+                             Customer.SETRANGE(Id,"Customer Id");
+                             IF NOT Customer.FINDFIRST THEN
+                               ERROR(CustomerIdDoesNotMatchACustomerErr);
+
+                             "Account No." := Customer."No.";
+                           END;
+                            }
+
+    { 19  ;2   ;Field     ;
+                Name=customerNumber;
+                CaptionML=[@@@={Locked};
+                           ENU=CustomerNumber];
+                ApplicationArea=#All;
+                SourceExpr="Account No.";
+                TableRelation=Customer;
+                OnValidate=BEGIN
+                             IF Customer."No." <> '' THEN BEGIN
+                               IF Customer."No." <> "Account No." THEN
+                                 ERROR(CustomerValuesDontMatchErr);
+                               EXIT;
+                             END;
+
+                             IF "Account No." = '' THEN BEGIN
+                               "Customer Id" := BlankGUID;
+                               EXIT;
+                             END;
+
+                             IF NOT Customer.GET("Account No.") THEN
+                               ERROR(CustomerNumberDoesNotMatchACustomerErr);
+
+                             "Customer Id" := Customer.Id;
+                           END;
+                            }
+
+    { 10  ;2   ;Field     ;
+                Name=contactId;
+                CaptionML=[@@@={Locked};
+                           ENU=ContactId];
+                ApplicationArea=#All;
+                SourceExpr="Contact Graph Id";
+                OnValidate=VAR
+                             CustomerOfContact@1001 : Record 18;
+                             ContactRecord@1002 : Record 5050;
+                             GraphIntContact@1000 : Codeunit 5461;
+                           BEGIN
+                             IF "Contact Graph Id" = '' THEN BEGIN
+                               IF Customer."No." = '' THEN
+                                 VALIDATE("Account No.",'');
+                               EXIT;
+                             END;
+
+                             IF NOT GraphIntContact.FindOrCreateCustomerFromGraphContactSafe("Contact Graph Id",CustomerOfContact,ContactRecord) THEN
+                               EXIT;
+
+                             IF Customer."No." <> '' THEN BEGIN
+                               IF CustomerOfContact."No." <> Customer."No." THEN
+                                 ERROR(CustomerValuesDontMatchErr);
+                               EXIT;
+                             END;
+
+                             VALIDATE("Customer Id",CustomerOfContact.Id);
+                             VALIDATE("Account No.",CustomerOfContact."No.");
+                           END;
+                            }
+
+    { 18  ;2   ;Field     ;
+                Name=postingDate;
+                CaptionML=[@@@={Locked};
+                           ENU=PostingDate];
+                ApplicationArea=#All;
+                SourceExpr="Posting Date" }
+
+    { 12  ;2   ;Field     ;
+                Name=documentNumber;
+                CaptionML=[@@@={Locked};
+                           ENU=DocumentNumber];
+                ApplicationArea=#All;
+                SourceExpr="Document No." }
+
+    { 3   ;2   ;Field     ;
+                Name=externalDocumentNumber;
+                CaptionML=[@@@={Locked};
+                           ENU=ExternalDocumentNumber];
+                ApplicationArea=#All;
+                SourceExpr="External Document No." }
+
+    { 5   ;2   ;Field     ;
+                Name=amount;
+                CaptionML=[@@@={Locked};
+                           ENU=Amount];
+                ApplicationArea=#All;
+                SourceExpr=Amount }
+
+    { 11  ;2   ;Field     ;
+                Name=appliesToInvoiceId;
+                CaptionML=[@@@={Locked};
+                           ENU=AppliesToInvoiceId];
+                ToolTipML=ENU=Specifies the Applies-To Invoice Id field of the customer payment.;
+                ApplicationArea=#All;
+                SourceExpr=AppliesToInvoiceIdText;
+                OnValidate=BEGIN
+                             "Applies-to Invoice Id" := AppliesToInvoiceIdText;
+                             IF "Applies-to Invoice Id" = BlankGUID THEN BEGIN
+                               AppliesToInvoiceNumberText := '';
+                               EXIT;
+                             END;
+
+                             SalesInvoiceHeader.RESET;
+                             SalesInvoiceHeader.SETRANGE(Id,AppliesToInvoiceIdText);
+                             IF NOT SalesInvoiceHeader.FINDFIRST THEN
+                               ERROR(AppliesToInvoiceIdDoesNotMatchAnInvoiceErr);
+
+                             AppliesToInvoiceNumberText := SalesInvoiceHeader."No.";
+
+                             IF "Account No." = '' THEN BEGIN
+                               IF SalesInvoiceHeader."Bill-to Customer No." <> '' THEN
+                                 "Account No." := SalesInvoiceHeader."Bill-to Customer No."
+                               ELSE
+                                 "Account No." := SalesInvoiceHeader."Sell-to Customer No.";
+                             END;
+                           END;
+                            }
+
+    { 17  ;2   ;Field     ;
+                Name=appliesToInvoiceNumber;
+                CaptionML=[@@@={Locked};
+                           ENU=AppliesToInvoiceNumber];
+                ToolTipML=ENU=Specifies the Applies-To Invoice Id field of the customer payment.;
+                ApplicationArea=#All;
+                SourceExpr=AppliesToInvoiceNumberText;
+                OnValidate=VAR
+                             BlankGUID@1000 : GUID;
+                           BEGIN
+                             "Applies-to Doc. No." := AppliesToInvoiceNumberText;
+
+                             IF SalesInvoiceHeader."No." <> '' THEN BEGIN
+                               IF SalesInvoiceHeader."No." <> AppliesToInvoiceNumberText THEN
+                                 ERROR(AppliesToDocValuesDontMatchErr);
+                               EXIT;
+                             END;
+
+                             IF SalesInvoiceHeader.GET(AppliesToInvoiceNumberText) THEN BEGIN
+                               AppliesToInvoiceIdText := SalesInvoiceHeader.Id;
+                               IF "Account No." = '' THEN BEGIN
+                                 IF SalesInvoiceHeader."Bill-to Customer No." <> '' THEN
+                                   "Account No." := SalesInvoiceHeader."Bill-to Customer No."
+                                 ELSE
+                                   "Account No." := SalesInvoiceHeader."Sell-to Customer No.";
+                               END;
+                             END ELSE
+                               AppliesToInvoiceIdText := BlankGUID;
+                           END;
+                            }
+
+    { 7   ;2   ;Field     ;
+                Name=description;
+                CaptionML=[@@@={Locked};
+                           ENU=Description];
+                ApplicationArea=#All;
+                SourceExpr=Description }
+
+    { 13  ;2   ;Field     ;
+                Name=comment;
+                CaptionML=[@@@={Locked};
+                           ENU=Comment];
+                ApplicationArea=#All;
+                SourceExpr=Comment }
+
+    { 14  ;2   ;Field     ;
+                Name=dimensions;
+                CaptionML=[@@@={Locked};
+                           ENU=Dimensions];
+                ToolTipML=ENU=Specifies Journal Line Dimensions.;
+                ApplicationArea=#All;
+                SourceExpr=DimensionsJSON;
+                OnValidate=BEGIN
+                             DimensionsSet := PreviousDimensionsJSON <> DimensionsJSON;
+                           END;
+
+                ODataEDMType=Collection(DIMENSION) }
+
+    { 9   ;2   ;Field     ;
+                Name=lastModifiedDateTime;
+                CaptionML=[@@@={Locked};
+                           ENU=LastModifiedDateTime];
+                ApplicationArea=#All;
+                SourceExpr="Last Modified DateTime";
+                Editable=FALSE }
+
+  }
+  CODE
+  {
+    VAR
+      Customer@1007 : Record 18;
+      SalesInvoiceHeader@1008 : Record 112;
+      GraphMgtCustomerPayments@1000 : Codeunit 5479;
+      LibraryAPIGeneralJournal@1001 : Codeunit 5469;
+      GlobalJournalDisplayNameTxt@1014 : Text;
+      DimensionsJSON@1017 : Text;
+      PreviousDimensionsJSON@1016 : Text;
+      AppliesToInvoiceNumberText@1002 : Code[20];
+      AppliesToInvoiceIdText@1003 : GUID;
+      FiltersNotSpecifiedErr@1012 : TextConst '@@@={Locked};ENU=You must specify a journal batch ID or a journal ID to get a journal line.';
+      CannotEditBatchNameErr@1015 : TextConst '@@@={Locked};ENU=The Journal Batch Display Name isn''t editable.';
+      CustomerValuesDontMatchErr@1005 : TextConst '@@@={Locked};ENU=The customer values do not match to a specific Customer.';
+      CustomerIdDoesNotMatchACustomerErr@1004 : TextConst '@@@={Locked};ENU=The "customerId" does not match to a Customer.';
+      CustomerNumberDoesNotMatchACustomerErr@1006 : TextConst '@@@={Locked};ENU=The "customerNumber" does not match to a Customer.';
+      AppliesToDocValuesDontMatchErr@1010 : TextConst '@@@={Locked};ENU=The AppliesToInvoice values do not match to the same Invoice.';
+      AppliesToInvoiceIdDoesNotMatchAnInvoiceErr@1009 : TextConst '@@@={Locked};ENU=The "appliesToInvoiceId" should be the ID of an Open, Paid, Corrective, or Canceled Invoice.';
+      FiltersChecked@1013 : Boolean;
+      DimensionsSet@1018 : Boolean;
+      BlankGUID@1011 : GUID;
+
+    LOCAL PROCEDURE TransferGeneratedFieldsFromInitializeLine@2(VAR GenJournalLine@1000 : Record 81);
+    BEGIN
+      IF GenJournalLine."Document No." = '' THEN
+        GenJournalLine."Document No." := "Document No.";
+    END;
+
+    LOCAL PROCEDURE SetCalculatedFields@6();
+    VAR
+      GraphMgtComplexTypes@1000 : Codeunit 5468;
+    BEGIN
+      GlobalJournalDisplayNameTxt := "Journal Batch Name";
+      AppliesToInvoiceNumberText := "Applies-to Doc. No.";
+      AppliesToInvoiceIdText := "Applies-to Invoice Id";
+      DimensionsJSON := GraphMgtComplexTypes.GetDimensionsJSON("Dimension Set ID");
+      PreviousDimensionsJSON := DimensionsJSON;
+    END;
+
+    LOCAL PROCEDURE ClearCalculatedFields@10();
+    BEGIN
+      CLEAR(GlobalJournalDisplayNameTxt);
+      CLEAR(AppliesToInvoiceIdText);
+      CLEAR(AppliesToInvoiceNumberText);
+      CLEAR(DimensionsJSON);
+      CLEAR(PreviousDimensionsJSON);
+      CLEAR(DimensionsSet);
+    END;
+
+    LOCAL PROCEDURE ProcessAppliesToInvoiceNumberAndId@5();
+    BEGIN
+      IF AppliesToInvoiceNumberText <> '' THEN
+        "Applies-to Doc. No." := AppliesToInvoiceNumberText;
+      "Applies-to Invoice Id" := AppliesToInvoiceIdText;
+    END;
+
+    LOCAL PROCEDURE CheckFilters@3();
+    BEGIN
+      IF (GETFILTER("Journal Batch Id") = '') AND
+         (GETFILTER(Id) = '')
+      THEN
+        ERROR(FiltersNotSpecifiedErr);
+    END;
+
+    LOCAL PROCEDURE UpdateDimensions@14(LineExists@1001 : Boolean);
+    VAR
+      GraphMgtComplexTypes@1000 : Codeunit 5468;
+      DimensionManagement@1003 : Codeunit 408;
+      NewDimensionSetId@1002 : Integer;
+    BEGIN
+      IF NOT DimensionsSet THEN
+        EXIT;
+
+      GraphMgtComplexTypes.GetDimensionSetFromJSON(DimensionsJSON,"Dimension Set ID",NewDimensionSetId);
+      IF "Dimension Set ID" <> NewDimensionSetId THEN BEGIN
+        "Dimension Set ID" := NewDimensionSetId;
+        DimensionManagement.UpdateGlobalDimFromDimSetID(NewDimensionSetId,"Shortcut Dimension 1 Code","Shortcut Dimension 2 Code");
+        IF LineExists THEN
+          MODIFY;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

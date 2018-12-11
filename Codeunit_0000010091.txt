@@ -1,0 +1,592 @@
+OBJECT Codeunit 10091 Export Payments (RB)
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:54 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ExportInProcessErr@1020012 : TextConst '@@@="%1 = the filename that is already being processed.";ENU=Cannot start new Export File while %1 is in process.';
+      ExportFilePathErr@1020010 : TextConst '@@@="%1 = the export file path, %2 the field in the table, ie, bank, customer etc, %3 = the identifier for the record, ie, bankaccount number etc. ";ENU=%1 in %2 %3 is invalid.';
+      FileAlreadyExistsErr@1020009 : TextConst '@@@="%1 = file name, %2 file patch, the bank account table, the identifier in the bank account table, ie the .No";ENU=File %1 already exists. Check the %2 in %3 %4.';
+      ExportDetailsFileNotStartedErr@1020008 : TextConst 'ENU=Cannot export details until an export file is started.';
+      InvalidPaymentSpecErr@1020007 : TextConst '@@@="%1 = Account Type, %2 = the account,%3 = Vendor table, %4 = Customer table";ENU=Either %1 or %2 must refer to either a %3 or a %4 for an electronic payment.';
+      VendorBankAccErr@1020006 : TextConst '@@@=The Vendor No;ENU=Vendor No. %1 has no bank account setup for electronic payments.';
+      VendorMoreThanOneBankAccErr@1020005 : TextConst '@@@="%1 = The Vendor No.";ENU=Vendor No. %1 has more than one bank account setup for electronic payments.';
+      CustBankAccErr@1020004 : TextConst '@@@=%1 the Customer No.;ENU=Customer No. %1 has no bank account setup for electronic payments.';
+      CustMoreThanOneBankAccErr@1020003 : TextConst '@@@=%1 the customer No.;ENU=Customer No. %1 has more than one bank account setup for electronic payments.';
+      ExportFileNotEndedFileNotStartedErr@1020002 : TextConst 'ENU=Cannot end export file until an export file is started.';
+      FileDoesNoteExistErr@1020001 : TextConst '@@@="%1 = the file name.";ENU=File %1 does not exist.';
+      DidTransmissionWorkQst@1020000 : TextConst 'ENU=Did the transmission work properly?';
+      CustomerBlockedErr@1020100 : TextConst '@@@="%1 = account type, %2 = customer.blocked";ENU=%1 is blocked for %2 processing.';
+      PrivacyBlockedErr@1234567 : TextConst '@@@="%1 = accountant type";ENU=%1 is blocked for privacy.';
+      Vendor@1020037 : Record 23;
+      Customer@1020036 : Record 18;
+      BankAccount@1020035 : Record 270;
+      CompanyInformation@1020034 : Record 79;
+      RBMgt@1480001 : Codeunit 419;
+      ExportFile@1020011 : File;
+      TotalFileDebit@1020030 : Decimal;
+      TotalFileCredit@1020029 : Decimal;
+      RecordLength@1020028 : Integer;
+      NoOfRec@1020027 : Integer;
+      Justification@1020024 : 'Left,Right';
+      FileName@1020023 : Text;
+      FileIsInProcess@1020021 : Boolean;
+      FileDate@1020019 : Date;
+      ModifierValues@1020017 : ARRAY [26] OF Code[1];
+      TraceNo@1020015 : Integer;
+      PaymentsThisAcct@1020013 : Integer;
+      DemandDebitErr@1020038 : TextConst '@@@="%1= Journal Template Name Caption, %2 = Journal Template Name,%3=Journal Batch Name Caption,%4=Journal Batch Name,%5=Line No. Caption,%6=Line No.";ENU=Demand Debits are not supported. Check sign on %1 %2, %3 %4, %5 %6.';
+      ConfirmTransmissioinQst@1480000 : TextConst '@@@="%1 = full  filename, %2 = file path, %3 = file name, %4 = bank account table, %5 = bank account no.caption, %6 = bank account no. ";ENU=You must now run the program that transmits the payments file to the bank. Transmit the file named %1 located at %2 to %3 (%4 %5 %6).  After the transmission is completed, you will be asked if it worked correctly.  Are you ready to transmit (answer No to cancel the transmission process)?';
+      Transactions@1030000 : Integer;
+      CurrencyType@1030001 : Code[3];
+      NoOfCustInfoRec@1030002 : Integer;
+      AcctNo@1030003 : Code[20];
+      AcctName@1030004 : Text[30];
+      AcctLanguage@1030005 : 'E  English,F  French';
+      RecipientAddress@1030006 : Text[80];
+      RecipientCity@1030010 : Text[30];
+      RecipientCountryCode@1030009 : Text[30];
+      RecipientCounty@1030008 : Text[30];
+      RecipientPostCode@1030007 : Code[20];
+      RecipientBankAcctNo@1030015 : Text[30];
+      RecipientTransitNo@1030014 : Text[20];
+      RecipientBankNo@1030013 : Text[20];
+      RecipientBankAcctCurrencyCode@1030012 : Code[10];
+      RecipientBankAcctCountryCode@1030011 : Code[10];
+
+    [External]
+    PROCEDURE StartExportFile@6(BankAccountNo@1020001 : Code[20];GenJnlLine@1030010 : Record 81);
+    VAR
+      GLSetup@1030002 : Record 98;
+      FileHeaderRec@1020003 : Text[250];
+      i@1020002 : Integer;
+    BEGIN
+      BuildIDModifier;
+      IF FileIsInProcess THEN
+        ERROR(ExportInProcessErr,FileName);
+
+      CompanyInformation.GET;
+      CompanyInformation.TESTFIELD("Federal ID No.");
+
+      WITH BankAccount DO BEGIN
+        LOCKTABLE;
+        GET(BankAccountNo);
+        TESTFIELD("Export Format","Export Format"::CA);
+        TESTFIELD("Transit No.");
+        TESTFIELD("E-Pay Export File Path");
+        IF "E-Pay Export File Path"[STRLEN("E-Pay Export File Path")] <> '\' THEN
+          ERROR(ExportFilePathErr,
+            FIELDCAPTION("E-Pay Export File Path"),
+            TABLECAPTION,
+            "No.");
+        TESTFIELD("Last E-Pay Export File Name");
+        TESTFIELD("Bank Acc. Posting Group");
+        TESTFIELD(Blocked,FALSE);
+        TESTFIELD("Client No.");
+        TESTFIELD("Client Name");
+
+        IF GenJnlLine."Bank Payment Type" =
+           GenJnlLine."Bank Payment Type"::"Electronic Payment-IAT"
+        THEN BEGIN
+          GenJnlLine.TESTFIELD("Transaction Code");
+          GenJnlLine.TESTFIELD("Company Entry Description");
+        END;
+
+        "Last E-Pay Export File Name" := INCSTR("Last E-Pay Export File Name");
+        FileName := RBMgt.ServerTempFileName('');
+        IF "Last ACH File ID Modifier" = '' THEN
+          "Last ACH File ID Modifier" := '1'
+        ELSE BEGIN
+          i := 1;
+          WHILE (i < ARRAYLEN(ModifierValues)) AND
+                ("Last ACH File ID Modifier" <> ModifierValues[i])
+          DO
+            i := i + 1;
+          IF i = ARRAYLEN(ModifierValues) THEN
+            i := 1
+          ELSE
+            i := i + 1;
+          "Last ACH File ID Modifier" := ModifierValues[i];
+        END;
+        "Last E-Pay File Creation No." := "Last E-Pay File Creation No." + 1;
+        MODIFY;
+
+        IF EXISTS(FileName) THEN
+          ERROR(FileAlreadyExistsErr,
+            FileName,
+            FIELDCAPTION("Last E-Pay Export File Name"),
+            TABLECAPTION,
+            "No.");
+        ExportFile.TEXTMODE(TRUE);
+        ExportFile.WRITEMODE(TRUE);
+        ExportFile.CREATE(FileName);
+
+        FileIsInProcess := TRUE;
+        FileDate := TODAY;
+        NoOfRec := 0;
+        NoOfCustInfoRec := 0;
+        TotalFileDebit := 0;
+        TotalFileCredit := 0;
+        RecordLength := 152;
+        Transactions := 0;
+        FileHeaderRec := '';
+        ExportPrnString(FileHeaderRec);
+
+        FileHeaderRec := '';
+        AddNumToPrnString(FileHeaderRec,NoOfRec,1,6);                              // Record Count
+        AddToPrnString(FileHeaderRec,'A',7,1,Justification::Left,' ');             // Record Type
+        AddToPrnString(FileHeaderRec,'HDR',8,3,Justification::Left,' ');           // Transaction Code
+        AddToPrnString(FileHeaderRec,"Client No.",11,10,Justification::Left,'0');  // Client Number
+        AddToPrnString(FileHeaderRec,"Client Name",21,30,Justification::Left,' '); // Client Name
+        AddNumToPrnString(FileHeaderRec,"Last E-Pay File Creation No.",51,4);      // File Creation Number
+        AddNumToPrnString(FileHeaderRec,JulianDate(FileDate),55,7);                // File Creation Date
+        IF GenJnlLine."Currency Code" = '' THEN BEGIN
+          GLSetup.GET;
+          CurrencyType := GLSetup."LCY Code";
+        END ELSE
+          CurrencyType := GenJnlLine."Currency Code";
+        AddToPrnString(FileHeaderRec,CurrencyType,62,3,Justification::Left,' ');
+        AddToPrnString(FileHeaderRec,'1',65,1,Justification::Left,' ');            // Input Type
+        AddToPrnString(FileHeaderRec,' ',66,15,Justification::Left,' ');
+        AddToPrnString(FileHeaderRec,' ',81,6,Justification::Left,' ');
+        AddToPrnString(FileHeaderRec,' ',87,8,Justification::Left,' ');
+        AddToPrnString(FileHeaderRec,' ',95,9,Justification::Left,' ');
+        AddToPrnString(FileHeaderRec,' ',104,46,Justification::Left,' ');
+        AddToPrnString(FileHeaderRec,' ',150,2,Justification::Left,' ');
+        AddToPrnString(FileHeaderRec,' ',152,1,Justification::Left,' ');
+        ExportPrnString(FileHeaderRec);
+      END;
+    END;
+
+    [External]
+    PROCEDURE ExportElectronicPayment@17(GenJnlLine@1020002 : Record 81;PaymentAmount@1020001 : Decimal;SettleDate@1020000 : Date) : Code[30];
+    VAR
+      DemandCredit@1020004 : Boolean;
+    BEGIN
+      IF NOT FileIsInProcess THEN
+        ERROR(ExportDetailsFileNotStartedErr);
+      // NOTE:  If PaymentAmount is Positive, then we are Receiving money.
+      // If PaymentAmount is Negative, then we are Sending money.
+      IF PaymentAmount = 0 THEN
+        EXIT('');
+      DemandCredit := (PaymentAmount < 0);
+      PaymentAmount := ABS(PaymentAmount);
+      IF DemandCredit THEN
+        TotalFileCredit := TotalFileCredit + PaymentAmount
+      ELSE
+        TotalFileDebit := TotalFileDebit + PaymentAmount;
+      WITH GenJnlLine DO BEGIN
+        IF NOT DemandCredit THEN // for now, this is not supported for Canada
+          ERROR(DemandDebitErr,
+            FIELDCAPTION("Journal Template Name"),"Journal Template Name",
+            FIELDCAPTION("Journal Batch Name"),"Journal Batch Name",
+            FIELDCAPTION("Line No."),"Line No.");
+
+        GetRecipientData(GenJnlLine);
+        WriteRecord(GenJnlLine,PaymentAmount,SettleDate);
+      END;
+
+      EXIT(GenerateFullTraceNoCode(TraceNo));
+    END;
+
+    [External]
+    PROCEDURE EndExportFile@10() : Boolean;
+    VAR
+      FileControlRec@1020000 : Text[250];
+      ClientFile@1020001 : Text;
+    BEGIN
+      IF NOT FileIsInProcess THEN
+        ERROR(ExportFileNotEndedFileNotStartedErr);
+
+      FileIsInProcess := FALSE;
+
+      FileControlRec := '';
+      AddNumToPrnString(FileControlRec,NoOfRec,1,6);                                         // Record Count
+      AddToPrnString(FileControlRec,'Z',7,1,Justification::Left,' ');                        // Record Type
+      AddToPrnString(FileControlRec,'TRL',8,3,Justification::Left,' ');                      // Transaction Code
+      AddToPrnString(FileControlRec,BankAccount."Client No.",11,10,Justification::Left,'0'); // Client Number
+      AddNumToPrnString(FileControlRec,Transactions,21,6);                                   // Number of Credit Payment Transactions
+      AddAmtToPrnString(FileControlRec,TotalFileCredit,27,14);                               // Total Value of Credit Payment Transactions
+      AddToPrnString(FileControlRec,' ',41,6,Justification::Left,'0');
+      AddToPrnString(FileControlRec,' ',47,14,Justification::Left,'0');
+      AddNumToPrnString(FileControlRec,0,61,2);                                              // Zero Fill
+      AddNumToPrnString(FileControlRec,NoOfCustInfoRec,63,6);                                // Number of Cust. Info Records
+      AddToPrnString(FileControlRec,' ',69,12,Justification::Left,' ');
+      AddToPrnString(FileControlRec,' ',81,6,Justification::Left,' ');
+      AddToPrnString(FileControlRec,' ',87,63,Justification::Left,' ');
+      AddToPrnString(FileControlRec,' ',150,2,Justification::Left,' ');
+      AddToPrnString(FileControlRec,' ',152,1,Justification::Left,' ');
+      ExportPrnString(FileControlRec);
+      ExportFile.CLOSE;
+
+      ClientFile := BankAccount."E-Pay Export File Path" + BankAccount."Last E-Pay Export File Name";
+      RBMgt.DownloadToFile(FileName,ClientFile);
+      ERASE(FileName);
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE GenerateFullTraceNoCode@14(TraceNo@1020000 : Integer) : Code[30];
+    VAR
+      TraceCode@1020001 : Text[250];
+    BEGIN
+      TraceCode := '';
+      AddNumToPrnString(TraceCode,BankAccount."Last E-Pay File Creation No.",1,6);
+      AddNumToPrnString(TraceCode,TraceNo,7,6);
+      EXIT(TraceCode);
+    END;
+
+    LOCAL PROCEDURE AddNumToPrnString@12(VAR PrnString@1020003 : Text[250];Number@1020002 : Integer;StartPos@1020001 : Integer;Length@1020000 : Integer);
+    VAR
+      TmpString@1020005 : Text[250];
+    BEGIN
+      TmpString := DELCHR(FORMAT(Number),'=','.,-');
+      AddToPrnString(PrnString,TmpString,StartPos,Length,Justification::Right,'0');
+    END;
+
+    LOCAL PROCEDURE AddAmtToPrnString@3(VAR PrnString@1020003 : Text[250];Amount@1020002 : Decimal;StartPos@1020001 : Integer;Length@1020000 : Integer);
+    VAR
+      TmpString@1020005 : Text[250];
+      I@1020004 : Integer;
+    BEGIN
+      TmpString := FORMAT(Amount);
+      I := STRPOS(TmpString,'.');
+      CASE TRUE OF
+        I = 0:
+          TmpString := TmpString + '.00';
+        I = STRLEN(TmpString) - 1:
+          TmpString := TmpString + '0';
+      END;
+      TmpString := DELCHR(TmpString,'=','.,-');
+      AddToPrnString(PrnString,TmpString,StartPos,Length,Justification::Right,'0');
+    END;
+
+    [External]
+    PROCEDURE AddFedIDToPrnString@18(VAR PrnString@1020003 : Text[250];FedID@1020002 : Text[30];StartPos@1020001 : Integer;Length@1020000 : Integer);
+    BEGIN
+      AddToPrnString(PrnString,'1' + DELCHR(FedID,'=',' .,-'),StartPos,Length,Justification::Left,' ');
+    END;
+
+    LOCAL PROCEDURE AddToPrnString@4(VAR PrnString@1020005 : Text[251];SubString@1020004 : Text[250];StartPos@1020003 : Integer;Length@1020002 : Integer;Justification@1020001 : 'Left,Right';Filler@1020000 : Text[1]);
+    VAR
+      I@1020007 : Integer;
+      SubStrLen@1020006 : Integer;
+    BEGIN
+      SubString := UPPERCASE(DELCHR(SubString,'<>',' '));
+      SubStrLen := STRLEN(SubString);
+
+      IF SubStrLen > Length THEN BEGIN
+        SubString := COPYSTR(SubString,1,Length);
+        SubStrLen := Length;
+      END;
+
+      IF Justification = Justification::Right THEN
+        FOR I := 1 TO (Length - SubStrLen) DO
+          SubString := Filler + SubString
+      ELSE
+        FOR I := SubStrLen + 1 TO Length DO
+          SubString := SubString + Filler;
+
+      IF STRLEN(PrnString) >= StartPos THEN
+        IF StartPos > 1 THEN
+          PrnString := COPYSTR(PrnString,1,StartPos - 1) + SubString + COPYSTR(PrnString,StartPos)
+        ELSE
+          PrnString := SubString + PrnString
+      ELSE BEGIN
+        FOR I := STRLEN(PrnString) + 1 TO StartPos - 1 DO
+          PrnString := PrnString + ' ';
+        PrnString := PrnString + SubString;
+      END;
+    END;
+
+    LOCAL PROCEDURE ExportPrnString@11(VAR PrnString@1020000 : Text[250]);
+    BEGIN
+      PrnString := PADSTR(PrnString,RecordLength,' ');
+      ExportFile.WRITE(PrnString);
+      NoOfRec := NoOfRec + 1;
+      PrnString := '';
+    END;
+
+    LOCAL PROCEDURE GetRecipientData@20(GenJournalLine@1030000 : Record 81);
+    VAR
+      AcctType@1030001 : Text[1];
+    BEGIN
+      WITH GenJournalLine DO BEGIN
+        IF "Account Type" = "Account Type"::Vendor THEN BEGIN
+          AcctType := 'V';
+          AcctNo := "Account No.";
+        END ELSE
+          IF "Account Type" = "Account Type"::Customer THEN BEGIN
+            AcctType := 'C';
+            AcctNo := "Account No.";
+          END ELSE
+            IF "Bal. Account Type" = "Bal. Account Type"::Vendor THEN BEGIN
+              AcctType := 'V';
+              AcctNo := "Bal. Account No.";
+            END ELSE
+              IF "Bal. Account Type" = "Bal. Account Type"::Customer THEN BEGIN
+                AcctType := 'C';
+                AcctNo := "Bal. Account No.";
+              END ELSE
+                ERROR(InvalidPaymentSpecErr,
+                  FIELDCAPTION("Account Type"),FIELDCAPTION("Bal. Account Type"),Vendor.TABLECAPTION,Customer.TABLECAPTION);
+        IF AcctType = 'V' THEN
+          GetRecipientDataFromVendor
+        ELSE
+          IF AcctType = 'C' THEN
+            GetRecipientDataFromCustomer(GenJournalLine);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetRecipientDataFromVendor@21();
+    VAR
+      VendorBankAccount@1030002 : Record 288;
+    BEGIN
+      IF AcctNo <> Vendor."No." THEN BEGIN
+        Vendor.GET(AcctNo);
+        Vendor.TESTFIELD(Blocked,Vendor.Blocked::" ");
+        Vendor.TESTFIELD("Privacy Blocked",FALSE);
+        PaymentsThisAcct := 0;
+      END ELSE
+        PaymentsThisAcct := PaymentsThisAcct + 1;
+      AcctName := COPYSTR(Vendor.Name,1,30);
+      AcctLanguage := Vendor."Bank Communication";
+      RecipientAddress := COPYSTR(Vendor.Address,1,35) + ' ' + COPYSTR(Vendor."Address 2",1,35);
+      RecipientCity := Vendor.City;
+      RecipientCountryCode := Vendor."Country/Region Code";
+      RecipientCounty := Vendor.County;
+      RecipientPostCode := Vendor."Post Code";
+      VendorBankAccount.SETRANGE("Vendor No.",AcctNo);
+      VendorBankAccount.SETRANGE("Use for Electronic Payments",TRUE);
+      IF VendorBankAccount.COUNT < 1 THEN
+        ERROR(VendorBankAccErr,AcctNo);
+      IF VendorBankAccount.COUNT > 1 THEN
+        ERROR(VendorMoreThanOneBankAccErr,AcctNo);
+      VendorBankAccount.FINDFIRST;
+      VendorBankAccount.TESTFIELD("Bank Account No.");
+      RecipientBankNo := VendorBankAccount."Bank Branch No.";
+      RecipientTransitNo := VendorBankAccount."Transit No.";
+      RecipientBankAcctNo := VendorBankAccount."Bank Account No.";
+      RecipientBankAcctCurrencyCode := VendorBankAccount."Currency Code";
+      RecipientBankAcctCountryCode := VendorBankAccount."Country/Region Code";
+    END;
+
+    LOCAL PROCEDURE GetRecipientDataFromCustomer@22(GenJournalLine@1030000 : Record 81);
+    VAR
+      CustomerBankAccount@1030001 : Record 287;
+    BEGIN
+      IF AcctNo <> Customer."No." THEN BEGIN
+        Customer.GET(AcctNo);
+        IF Customer."Privacy Blocked" THEN
+          ERROR(PrivacyBlockedErr,GenJournalLine."Account Type");
+
+        IF Customer.Blocked = Customer.Blocked::All THEN
+          ERROR(CustomerBlockedErr,GenJournalLine."Account Type",Customer.Blocked);
+        PaymentsThisAcct := 0;
+      END ELSE
+        PaymentsThisAcct := PaymentsThisAcct + 1;
+      AcctName := COPYSTR(Customer.Name,1,30);
+      AcctLanguage := Customer."Bank Communication";
+      RecipientAddress := COPYSTR(Customer.Address,1,35) + ' ' + COPYSTR(Customer."Address 2",1,35);
+      RecipientCity := Customer.City;
+      RecipientCountryCode := Customer."Country/Region Code";
+      RecipientCounty := Customer.County;
+      RecipientPostCode := Customer."Post Code";
+      CustomerBankAccount.SETRANGE("Customer No.",AcctNo);
+      CustomerBankAccount.SETRANGE("Use for Electronic Payments",TRUE);
+      IF CustomerBankAccount.COUNT < 1 THEN
+        ERROR(CustBankAccErr,AcctNo);
+      IF CustomerBankAccount.COUNT > 1 THEN
+        ERROR(CustMoreThanOneBankAccErr,AcctNo);
+      CustomerBankAccount.FINDFIRST;
+      CustomerBankAccount.TESTFIELD("Bank Account No.");
+      RecipientBankNo := CustomerBankAccount."Bank Branch No.";
+      RecipientTransitNo := CustomerBankAccount."Transit No.";
+      RecipientBankAcctNo := CustomerBankAccount."Bank Account No.";
+      RecipientBankAcctCurrencyCode := CustomerBankAccount."Currency Code";
+      RecipientBankAcctCountryCode := CustomerBankAccount."Country/Region Code"
+    END;
+
+    LOCAL PROCEDURE JulianDate@23(NormalDate@1020000 : Date) : Integer;
+    VAR
+      Year@1020002 : Integer;
+      Days@1020001 : Integer;
+    BEGIN
+      Year := DATE2DMY(NormalDate,3);
+      Days := (NormalDate - DMY2DATE(1,1,Year)) + 1;
+      EXIT(Year * 1000 + Days);
+    END;
+
+    LOCAL PROCEDURE BuildIDModifier@5();
+    BEGIN
+      ModifierValues[1] := 'A';
+      ModifierValues[2] := 'B';
+      ModifierValues[3] := 'C';
+      ModifierValues[4] := 'D';
+      ModifierValues[5] := 'E';
+      ModifierValues[6] := 'F';
+      ModifierValues[7] := 'G';
+      ModifierValues[8] := 'H';
+      ModifierValues[9] := 'I';
+      ModifierValues[10] := 'J';
+      ModifierValues[11] := 'K';
+      ModifierValues[12] := 'L';
+      ModifierValues[13] := 'M';
+      ModifierValues[14] := 'N';
+      ModifierValues[15] := 'O';
+      ModifierValues[16] := 'P';
+      ModifierValues[17] := 'Q';
+      ModifierValues[18] := 'R';
+      ModifierValues[19] := 'S';
+      ModifierValues[20] := 'T';
+      ModifierValues[21] := 'U';
+      ModifierValues[22] := 'V';
+      ModifierValues[23] := 'W';
+      ModifierValues[24] := 'X';
+      ModifierValues[25] := 'Y';
+      ModifierValues[26] := 'Z';
+    END;
+
+    [External]
+    PROCEDURE TransmitExportedFile@16(BankAccountNo@1020001 : Code[20];FName@1020000 : Text);
+    VAR
+      ExportFullPathName@1020007 : Text;
+      TransmitFullPathName@1020006 : Text;
+    BEGIN
+      WITH BankAccount DO BEGIN
+        GET(BankAccountNo);
+        TESTFIELD("E-Pay Export File Path");
+        IF "E-Pay Export File Path"[STRLEN("E-Pay Export File Path")] <> '\' THEN
+          ERROR(ExportFilePathErr,
+            FIELDCAPTION("E-Pay Export File Path"),
+            TABLECAPTION,
+            "No.");
+        TESTFIELD("E-Pay Trans. Program Path");
+        IF "E-Pay Trans. Program Path"[STRLEN("E-Pay Trans. Program Path")] <> '\' THEN
+          ERROR(ExportFilePathErr,
+            FIELDCAPTION("E-Pay Trans. Program Path"),
+            TABLECAPTION,
+            "No.");
+        ExportFullPathName := "E-Pay Export File Path" + FName;
+        TransmitFullPathName := "E-Pay Trans. Program Path" + FName;
+
+        IF NOT RBMgt.ClientFileExists(ExportFullPathName) THEN
+          ERROR(FileDoesNoteExistErr,FName);
+        RBMgt.CopyClientFile(ExportFullPathName,TransmitFullPathName,TRUE);
+
+        IF CONFIRM(ConfirmTransmissioinQst,TRUE,FName,"E-Pay Trans. Program Path",Name,TABLECAPTION,FIELDCAPTION("No."),"No.") THEN
+          IF CONFIRM(DidTransmissionWorkQst) THEN
+            RBMgt.DeleteClientFile(ExportFullPathName);
+      END;
+    END;
+
+    LOCAL PROCEDURE WriteRecord@30(GenJournalLine@1030004 : Record 81;PaymentAmount@1030005 : Decimal;SettleDate@1030006 : Date);
+    VAR
+      DetailRec@1030003 : Text[250];
+      IATAddressInfo1Rec@1030002 : Text[250];
+      IATAddressInfo2Rec@1030001 : Text[250];
+      IATRemittanceRec@1030000 : Text[250];
+    BEGIN
+      WITH GenJournalLine DO BEGIN
+        Transactions := Transactions + 1;
+        DetailRec := '';
+        TraceNo := NoOfRec;
+        AddNumToPrnString(DetailRec,NoOfRec,1,6);                                          // Record Count
+        AddToPrnString(DetailRec,'C',7,1,Justification::Left,' ');
+        AddToPrnString(DetailRec,"Transaction Code",8,3,Justification::Left,' ');          // Transaction Code
+        AddToPrnString(DetailRec,BankAccount."Client No.",11,10,Justification::Left,'0');  // Client Number
+        AddToPrnString(DetailRec,' ',21,1,Justification::Left,' ');
+        AddToPrnString(DetailRec,AcctNo,22,19,Justification::Left,' ');                    // Customer Number
+        AddNumToPrnString(DetailRec,PaymentsThisAcct,41,2);                                // Payment Number
+        IF RecipientBankAcctCountryCode = 'CA' THEN BEGIN
+          AddToPrnString(DetailRec,RecipientBankNo,43,4,Justification::Right,'0');        // Bank No.
+          AddToPrnString(DetailRec,RecipientTransitNo,47,5,Justification::Right,'0');     // Transit No.
+        END ELSE
+          IF RecipientBankAcctCountryCode = 'US' THEN
+            AddToPrnString(DetailRec,RecipientTransitNo,43,9,Justification::Right,'0');
+
+        AddToPrnString(DetailRec,RecipientBankAcctNo,52,18,Justification::Left,' ');
+        AddToPrnString(DetailRec,' ',70,1,Justification::Left,' ');
+        AddAmtToPrnString(DetailRec,PaymentAmount,71,10);                                  // Payment Amount
+        AddToPrnString(DetailRec,' ',81,6,Justification::Left,' ');
+        AddNumToPrnString(DetailRec,JulianDate(SettleDate),87,7);                          // Payment Date
+        AddToPrnString(DetailRec,AcctName,94,30,Justification::Left,' ');                  // Customer Name
+        AddToPrnString(DetailRec,FORMAT(AcctLanguage),124,1,Justification::Left,' ');      // Language Code
+        AddToPrnString(DetailRec,' ',125,1,Justification::Left,' ');
+        AddToPrnString(DetailRec,BankAccount."Client Name",126,15,Justification::Left,' ');// Client Name
+        IF RecipientBankAcctCurrencyCode = '' THEN
+          AddToPrnString(DetailRec,CurrencyType,141,3,Justification::Left,' ')
+        ELSE
+          AddToPrnString(DetailRec,RecipientBankAcctCurrencyCode,141,3,Justification::Left,' ');
+        AddToPrnString(DetailRec,' ',144,1,Justification::Left,' ');
+        IF RecipientCountryCode = 'CA' THEN
+          AddToPrnString(DetailRec,'CAN',145,3,Justification::Left,' ')
+        ELSE
+          IF RecipientCountryCode = 'US' THEN
+            AddToPrnString(DetailRec,'USA',145,3,Justification::Left,' ');
+        AddToPrnString(DetailRec,' ',148,2,Justification::Left,' ');
+        AddToPrnString(DetailRec,' ',150,2,Justification::Left,' ');
+        AddToPrnString(DetailRec,'N',152,1,Justification::Left,' ');                       // No Optional Records Follow
+
+        ExportPrnString(DetailRec);
+        IATAddressInfo1Rec := '';
+        AddNumToPrnString(IATAddressInfo1Rec,NoOfRec,1,6);
+        AddToPrnString(IATAddressInfo1Rec,'C',7,1,Justification::Left,' ');
+        AddToPrnString(IATAddressInfo1Rec,'AD1',8,3,Justification::Left,' ');
+        AddToPrnString(IATAddressInfo1Rec,BankAccount."Client No.",11,10,Justification::Left,'0');
+        AddToPrnString(IATAddressInfo1Rec,CompanyInformation.Name,21,30,Justification::Left,' ');
+        AddToPrnString(IATAddressInfo1Rec,COPYSTR(CompanyInformation.Address,1,35) + ' ' +
+          COPYSTR(CompanyInformation."Address 2",1,35),51,35,Justification::Left,' ');
+        AddToPrnString(IATAddressInfo1Rec,CompanyInformation.City + '*' + CompanyInformation.County +
+          '\',86,35,Justification::Left,' ');
+        AddToPrnString(IATAddressInfo1Rec,CompanyInformation."Country/Region Code" + '*' + CompanyInformation."Post Code" +
+          '\',121,32,Justification::Left,' ');
+
+        ExportPrnString(IATAddressInfo1Rec);
+        NoOfCustInfoRec += 1;
+
+        IATAddressInfo2Rec := '';
+        AddNumToPrnString(IATAddressInfo2Rec,NoOfRec,1,6);
+        AddToPrnString(IATAddressInfo2Rec,'C',7,1,Justification::Left,' ');
+        AddToPrnString(IATAddressInfo2Rec,'AD2',8,3,Justification::Left,' ');
+        AddToPrnString(IATAddressInfo2Rec,BankAccount."Client No.",11,10,Justification::Left,'0');
+        AddToPrnString(IATAddressInfo2Rec,RecipientAddress,21,35,Justification::Left,' ');
+        AddToPrnString(IATAddressInfo2Rec,RecipientCity + '*' + RecipientCounty + '\',56,35,Justification::Left,' ');
+        AddToPrnString(IATAddressInfo2Rec,RecipientCountryCode + '*' + RecipientPostCode + '\',91,35,Justification::Left,' ');
+        AddToPrnString(IATAddressInfo2Rec,FORMAT("Transaction Type Code"),126,3,Justification::Left,' ');
+        AddToPrnString(IATAddressInfo2Rec,"Company Entry Description",129,10,Justification::Left,' ');
+        AddToPrnString(IATAddressInfo2Rec,' ',139,14,Justification::Left,' ');
+
+        ExportPrnString(IATAddressInfo2Rec);
+        NoOfCustInfoRec += +1;
+
+        IF ("Payment Related Information 1" <> '') OR ("Payment Related Information 2" <> '') THEN BEGIN
+          IATRemittanceRec := '';
+          AddNumToPrnString(IATRemittanceRec,NoOfRec,1,6);
+          AddToPrnString(IATRemittanceRec,'C',7,1,Justification::Left,' ');
+          AddToPrnString(IATRemittanceRec,'REM',8,3,Justification::Left,' ');
+          AddToPrnString(IATRemittanceRec,BankAccount."Client No.",11,10,Justification::Left,'0');
+          AddToPrnString(IATRemittanceRec,"Payment Related Information 1",21,80,Justification::Left,' ');
+          AddToPrnString(IATRemittanceRec,"Payment Related Information 2",101,52,Justification::Left,' ');
+
+          ExportPrnString(IATRemittanceRec);
+          NoOfCustInfoRec += +1;
+        END;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

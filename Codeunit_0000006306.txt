@@ -1,0 +1,117 @@
+OBJECT Codeunit 6306 PBI Aged Acc. Calc
+{
+  OBJECT-PROPERTIES
+  {
+    Date=;
+    Time=;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      BusinessChartBuffer@1005 : Record 485;
+      TempEntryNoAmountBuffer@1004 : TEMPORARY Record 386;
+      AgedAccReceivable@1003 : Codeunit 763;
+      AgedAccPayable@1001 : Codeunit 764;
+      NoOfPeriods@1000 : Integer;
+      FormatedPeriod@1002 : Text[30];
+
+    PROCEDURE GetValues@1(VAR TempPowerBIChartBuffer@1002 : TEMPORARY Record 6305;ChartCodeunitID@1001 : Integer;ChartName@1000 : Text);
+    BEGIN
+      SetPeriodAndUpdateChart(TempPowerBIChartBuffer,ChartCodeunitID,ChartName);
+    END;
+
+    LOCAL PROCEDURE SetPeriodAndUpdateChart@70(VAR TempPowerBIChartBuffer@1003 : TEMPORARY Record 6305;ChartCodeunitID@1005 : Integer;ChartName@1004 : Text);
+    VAR
+      SelectedChartDefinition@1006 : Record 1310;
+      LogInManagement@1001 : Codeunit 40;
+      ChartManagement@1000 : Codeunit 1315;
+      i@1002 : Integer;
+    BEGIN
+      IF SelectedChartDefinition.GET(ChartCodeunitID,ChartName) THEN
+        FOR i := 0 TO 4 DO BEGIN
+          BusinessChartBuffer.RESET;
+          BusinessChartBuffer.DELETEALL;
+          TempEntryNoAmountBuffer.RESET;
+          TempEntryNoAmountBuffer.DELETEALL;
+
+          BusinessChartBuffer."Period Length" := i;
+          ChartManagement.SetPeriodLength(SelectedChartDefinition,BusinessChartBuffer,BusinessChartBuffer."Period Length",FALSE);
+          BusinessChartBuffer."Period Filter Start Date" := LogInManagement.GetDefaultWorkDate;
+
+          CASE SelectedChartDefinition."Code Unit ID" OF
+            CODEUNIT::"Aged Acc. Payable":
+              AgedAccPayable.UpdateData(BusinessChartBuffer,TempEntryNoAmountBuffer);
+            CODEUNIT::"Aged Acc. Receivable":
+              AgedAccReceivable.UpdateDataPerGroup(BusinessChartBuffer,TempEntryNoAmountBuffer);
+          END;
+
+          TempEntryNoAmountBuffer.RESET;
+          IF TempEntryNoAmountBuffer.FINDSET THEN
+            REPEAT
+              FormatPeriod;
+              InsertToBuffer(TempPowerBIChartBuffer);
+            UNTIL TempEntryNoAmountBuffer.NEXT = 0;
+        END
+    END;
+
+    LOCAL PROCEDURE FormatPeriod@83();
+    VAR
+      TempEntryNoAmountBuffer2@1000 : TEMPORARY Record 386;
+      PeriodLength@1003 : Text[1];
+      PeriodOption@1001 : ' ,Next,Previous';
+      PeriodIndex@1004 : Integer;
+    BEGIN
+      AgedAccReceivable.InitParameters(BusinessChartBuffer,PeriodLength,NoOfPeriods,TempEntryNoAmountBuffer2);
+
+      WITH BusinessChartBuffer DO BEGIN
+        PeriodIndex := TempEntryNoAmountBuffer."Entry No.";
+        FormatedPeriod := COPYSTR(AgedAccReceivable.FormatColumnName(PeriodIndex,PeriodLength,NoOfPeriods,PeriodOption),1,30);
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertToBuffer@78(VAR TempPowerBIChartBuffer@1000 : TEMPORARY Record 6305);
+    BEGIN
+      WITH TempPowerBIChartBuffer DO BEGIN
+        IF FINDLAST THEN
+          ID += 1
+        ELSE
+          ID := 1;
+        Value := TempEntryNoAmountBuffer.Amount;
+        "Measure Name" := TempEntryNoAmountBuffer."Business Unit Code";
+        Date := FormatedPeriod;
+        "Period Type" := BusinessChartBuffer."Period Length";
+        "Period Type Sorting" := BusinessChartBuffer."Period Length";
+        CASE "Period Type" OF
+          BusinessChartBuffer."Period Length"::Day:
+            "Date Sorting" := TempEntryNoAmountBuffer."Entry No.";
+          BusinessChartBuffer."Period Length"::Week:
+            "Date Sorting" := TempEntryNoAmountBuffer."Entry No." * 10;
+          BusinessChartBuffer."Period Length"::Month:
+            "Date Sorting" := TempEntryNoAmountBuffer."Entry No." * 100;
+          BusinessChartBuffer."Period Length"::Quarter:
+            "Date Sorting" := TempEntryNoAmountBuffer."Entry No." * 1000;
+          BusinessChartBuffer."Period Length"::Year:
+            "Date Sorting" := TempEntryNoAmountBuffer."Entry No." * 10000;
+          BusinessChartBuffer."Period Length"::"Accounting Period":
+            "Date Sorting" := TempEntryNoAmountBuffer."Entry No." * 100000;
+        END;
+        IF TempEntryNoAmountBuffer."Entry No." = 0 THEN
+          "Date Sorting" := 0;
+        IF TempEntryNoAmountBuffer."Entry No." = (NoOfPeriods - 1) THEN
+          "Date Sorting" := 1000000;
+        INSERT;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

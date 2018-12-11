@@ -1,0 +1,109 @@
+OBJECT Codeunit 1248 Process Bank Acc. Rec Lines
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:04 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    TableNo=274;
+    Permissions=TableData 1220=rimd;
+    OnRun=VAR
+            DataExch@1001 : Record 1220;
+            ProcessDataExch@1002 : Codeunit 1201;
+            RecRef@1000 : RecordRef;
+          BEGIN
+            DataExch.GET("Data Exch. Entry No.");
+            RecRef.GETTABLE(Rec);
+            ProcessDataExch.ProcessAllLinesColumnMapping(DataExch,RecRef);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ProgressWindowMsg@1000 : TextConst 'ENU=Please wait while the operation is being completed.';
+
+    PROCEDURE ImportBankStatement@6(BankAccRecon@1004 : Record 273;DataExch@1003 : Record 1220) : Boolean;
+    VAR
+      BankAcc@1000 : Record 270;
+      DataExchDef@1001 : Record 1222;
+      DataExchMapping@1002 : Record 1224;
+      DataExchLineDef@1005 : Record 1227;
+      TempBankAccReconLine@1006 : TEMPORARY Record 274;
+      ProgressWindow@1008 : Dialog;
+    BEGIN
+      BankAcc.GET(BankAccRecon."Bank Account No.");
+      BankAcc.GetDataExchDef(DataExchDef);
+
+      DataExch."Related Record" := BankAcc.RECORDID;
+      DataExch."Data Exch. Def Code" := DataExchDef.Code;
+
+      IF NOT DataExch.ImportToDataExch(DataExchDef)THEN
+        EXIT(FALSE);
+
+      ProgressWindow.OPEN(ProgressWindowMsg);
+
+      CreateBankAccRecLineTemplate(TempBankAccReconLine,BankAccRecon,DataExch);
+      DataExchLineDef.SETRANGE("Data Exch. Def Code",DataExchDef.Code);
+      DataExchLineDef.FINDFIRST;
+
+      DataExchMapping.GET(DataExchDef.Code,DataExchLineDef.Code,DATABASE::"Bank Acc. Reconciliation Line");
+
+      IF DataExchMapping."Pre-Mapping Codeunit" <> 0 THEN
+        CODEUNIT.RUN(DataExchMapping."Pre-Mapping Codeunit",TempBankAccReconLine);
+
+      DataExchMapping.TESTFIELD("Mapping Codeunit");
+      CODEUNIT.RUN(DataExchMapping."Mapping Codeunit",TempBankAccReconLine);
+
+      IF DataExchMapping."Post-Mapping Codeunit" <> 0 THEN
+        CODEUNIT.RUN(DataExchMapping."Post-Mapping Codeunit",TempBankAccReconLine);
+
+      InsertNonReconciledNonImportedLines(TempBankAccReconLine,GetStatementLineNoOffset(BankAccRecon));
+
+      ProgressWindow.CLOSE;
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE CreateBankAccRecLineTemplate@9(VAR BankAccReconLine@1000 : Record 274;BankAccRecon@1002 : Record 273;DataExch@1001 : Record 1220);
+    BEGIN
+      BankAccReconLine.INIT;
+      BankAccReconLine."Statement Type" := BankAccRecon."Statement Type";
+      BankAccReconLine."Statement No." := BankAccRecon."Statement No.";
+      BankAccReconLine."Bank Account No." := BankAccRecon."Bank Account No.";
+      BankAccReconLine."Data Exch. Entry No." := DataExch."Entry No.";
+    END;
+
+    LOCAL PROCEDURE InsertNonReconciledNonImportedLines@1(VAR TempBankAccReconLine@1000 : TEMPORARY Record 274;StatementLineNoOffset@1002 : Integer);
+    VAR
+      BankAccReconciliationLine@1001 : Record 274;
+    BEGIN
+      IF TempBankAccReconLine.FINDSET THEN
+        REPEAT
+          IF TempBankAccReconLine.CanImport THEN BEGIN
+            BankAccReconciliationLine := TempBankAccReconLine;
+            BankAccReconciliationLine."Statement Line No." += StatementLineNoOffset;
+            BankAccReconciliationLine.INSERT;
+          END;
+        UNTIL TempBankAccReconLine.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE GetStatementLineNoOffset@3(BankAccRecon@1000 : Record 273) : Integer;
+    VAR
+      BankAccReconLine@1001 : Record 274;
+    BEGIN
+      BankAccReconLine.SETRANGE("Statement Type",BankAccRecon."Statement Type");
+      BankAccReconLine.SETRANGE("Statement No.",BankAccRecon."Statement No.");
+      BankAccReconLine.SETRANGE("Bank Account No.",BankAccRecon."Bank Account No.");
+      IF BankAccReconLine.FINDLAST THEN
+        EXIT(BankAccReconLine."Statement Line No.");
+      EXIT(0)
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

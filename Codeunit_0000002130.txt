@@ -1,0 +1,256 @@
+OBJECT Codeunit 2130 O365 Excel Import Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:16 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ValueIsNotValidDecimalErr@1000 : TextConst '@@@=%1 - some value which should be converted to decimal.;ENU=%1 is not a valid decimal.';
+
+    PROCEDURE ImportData@1(VAR ExcelBuffer@1002 : Record 370;VAR O365FieldExcelMapping@1001 : Record 2112;StartRowNo@1000 : Integer;ObjectType@1003 : 'Customer,Item') : Integer;
+    BEGIN
+      ExcelBuffer.RESET;
+      CASE ObjectType OF
+        ObjectType::Customer:
+          EXIT(ImportCustomers(ExcelBuffer,O365FieldExcelMapping,StartRowNo));
+        ObjectType::Item:
+          EXIT(ImportItems(ExcelBuffer,O365FieldExcelMapping,StartRowNo));
+      END;
+    END;
+
+    LOCAL PROCEDURE ImportCustomers@2(VAR ExcelBuffer@1000 : Record 370;VAR O365FieldExcelMapping@1001 : Record 2112;StartRowNo@1003 : Integer) : Integer;
+    VAR
+      TempCustomer@1006 : TEMPORARY Record 18;
+      RecRef@1005 : RecordRef;
+      i@1004 : Integer;
+    BEGIN
+      RecRef.GETTABLE(TempCustomer);
+
+      FOR i := StartRowNo TO GetLastRowNo(ExcelBuffer) DO BEGIN
+        ExcelBuffer.SETRANGE("Row No.",i);
+        InitNewCustomerRecordRef(RecRef,i);
+        FillRecordRefFromExcelBuffer(ExcelBuffer,O365FieldExcelMapping,RecRef);
+        RecRef.INSERT;
+      END;
+
+      CreateCustomersFromBuffer(TempCustomer);
+      EXIT(TempCustomer.COUNT);
+    END;
+
+    LOCAL PROCEDURE ImportItems@3(VAR ExcelBuffer@1000 : Record 370;VAR O365FieldExcelMapping@1001 : Record 2112;StartRowNo@1003 : Integer) : Integer;
+    VAR
+      TempItem@1006 : TEMPORARY Record 27;
+      RecRef@1005 : RecordRef;
+      i@1002 : Integer;
+    BEGIN
+      RecRef.GETTABLE(TempItem);
+
+      FOR i := StartRowNo TO GetLastRowNo(ExcelBuffer) DO BEGIN
+        ExcelBuffer.SETRANGE("Row No.",i);
+        InitNewItemRecordRef(RecRef,i);
+        FillRecordRefFromExcelBuffer(ExcelBuffer,O365FieldExcelMapping,RecRef);
+        RecRef.INSERT;
+      END;
+
+      CreateItemsFromBuffer(TempItem);
+      EXIT(TempItem.COUNT);
+    END;
+
+    LOCAL PROCEDURE GetLastRowNo@4(VAR ExcelBuffer@1000 : Record 370) : Integer;
+    BEGIN
+      ExcelBuffer.RESET;
+      ExcelBuffer.FINDLAST;
+      EXIT(ExcelBuffer."Row No.");
+    END;
+
+    LOCAL PROCEDURE AddFieldValueToRecordRef@9(ExcelBuffer@1000 : Record 370;VAR O365FieldExcelMapping@1001 : Record 2112;VAR RecRef@1002 : RecordRef);
+    VAR
+      FieldRef@1003 : FieldRef;
+    BEGIN
+      O365FieldExcelMapping.SETRANGE("Excel Column No.",ExcelBuffer."Column No.");
+      IF O365FieldExcelMapping.FINDFIRST THEN BEGIN
+        FieldRef := RecRef.FIELD(O365FieldExcelMapping."Field ID");
+        IF FORMAT(FieldRef.TYPE) = 'Decimal' THEN
+          TryEvaluateTextToDecimal(ExcelBuffer."Cell Value as Text");
+        FieldRef.VALUE := COPYSTR(ExcelBuffer."Cell Value as Text",1,FieldRef.LENGTH);
+      END;
+    END;
+
+    LOCAL PROCEDURE TryEvaluateTextToDecimal@10(ValueAsText@1000 : Text);
+    VAR
+      DecimalValue@1001 : Decimal;
+    BEGIN
+      IF NOT EVALUATE(DecimalValue,ValueAsText) THEN
+        ERROR(ValueIsNotValidDecimalErr,ValueAsText);
+    END;
+
+    LOCAL PROCEDURE InitNewCustomerRecordRef@20(VAR RecRef@1000 : RecordRef;RowNo@1001 : Integer);
+    VAR
+      DummyCustomer@1003 : Record 18;
+      FieldRef@1002 : FieldRef;
+    BEGIN
+      RecRef.INIT;
+      FieldRef := RecRef.FIELD(DummyCustomer.FIELDNO("No."));
+      FieldRef.VALUE := FORMAT(RowNo);
+    END;
+
+    LOCAL PROCEDURE InitNewItemRecordRef@5(VAR RecRef@1000 : RecordRef;RowNo@1001 : Integer);
+    VAR
+      DummyItem@1003 : Record 27;
+      FieldRef@1002 : FieldRef;
+    BEGIN
+      RecRef.INIT;
+      FieldRef := RecRef.FIELD(DummyItem.FIELDNO("No."));
+      FieldRef.VALUE := FORMAT(RowNo);
+    END;
+
+    LOCAL PROCEDURE CreateCustomersFromBuffer@29(VAR TempCustomer@1000 : TEMPORARY Record 18);
+    VAR
+      Customer@1001 : Record 18;
+      ConfigTemplateHeader@1002 : Record 8618;
+    BEGIN
+      GetCustomerConfigTemplate(ConfigTemplateHeader);
+
+      IF TempCustomer.FINDSET THEN
+        REPEAT
+          CreateCustomerFromBuffer(TempCustomer,Customer);
+          UpdateRecordFromTemplate(ConfigTemplateHeader,Customer);
+        UNTIL TempCustomer.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE CreateItemsFromBuffer@6(VAR TempItem@1000 : TEMPORARY Record 27);
+    VAR
+      ConfigTemplateHeader@1002 : Record 8618;
+      Item@1001 : Record 27;
+    BEGIN
+      GetItemConfigTemplate(ConfigTemplateHeader);
+
+      IF TempItem.FINDSET THEN
+        REPEAT
+          CreateItemFromBuffer(TempItem,Item);
+          UpdateRecordFromTemplate(ConfigTemplateHeader,Item);
+        UNTIL TempItem.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE CreateCustomerFromBuffer@28(VAR TempCustomer@1000 : TEMPORARY Record 18;VAR Customer@1001 : Record 18);
+    BEGIN
+      Customer.TRANSFERFIELDS(TempCustomer);
+      Customer."No." := '';
+      Customer.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CreateItemFromBuffer@32(VAR TempItem@1000 : TEMPORARY Record 27;VAR Item@1001 : Record 27);
+    BEGIN
+      Item.TRANSFERFIELDS(TempItem);
+      Item."No." := '';
+      Item.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE FillRecordRefFromExcelBuffer@11(VAR ExcelBuffer@1001 : Record 370;VAR O365FieldExcelMapping@1000 : Record 2112;VAR RecRef@1002 : RecordRef);
+    BEGIN
+      IF ExcelBuffer.FINDSET THEN
+        REPEAT
+          AddFieldValueToRecordRef(ExcelBuffer,O365FieldExcelMapping,RecRef);
+        UNTIL ExcelBuffer.NEXT = 0;
+    END;
+
+    PROCEDURE FillCustomerFieldsMappingBuffer@8(VAR O365FieldExcelMapping@1001 : Record 2112);
+    VAR
+      DummyCustomer@1000 : Record 18;
+    BEGIN
+      AddFieldToMapping(O365FieldExcelMapping,DATABASE::Customer,DummyCustomer.FIELDNO(Name));
+      AddFieldToMapping(O365FieldExcelMapping,DATABASE::Customer,DummyCustomer.FIELDNO("Phone No."));
+      AddFieldToMapping(O365FieldExcelMapping,DATABASE::Customer,DummyCustomer.FIELDNO("E-Mail"));
+      AddFieldToMapping(O365FieldExcelMapping,DATABASE::Customer,DummyCustomer.FIELDNO(Address));
+      AddFieldToMapping(O365FieldExcelMapping,DATABASE::Customer,DummyCustomer.FIELDNO("Post Code"));
+      AddFieldToMapping(O365FieldExcelMapping,DATABASE::Customer,DummyCustomer.FIELDNO(City));
+      AddFieldToMapping(O365FieldExcelMapping,DATABASE::Customer,DummyCustomer.FIELDNO(County));
+      AddFieldToMapping(O365FieldExcelMapping,DATABASE::Customer,DummyCustomer.FIELDNO("Country/Region Code"));
+    END;
+
+    PROCEDURE FillItemFieldsMappingBuffer@15(VAR O365FieldExcelMapping@1001 : Record 2112);
+    VAR
+      DummyItem@1000 : Record 27;
+    BEGIN
+      AddFieldToMapping(O365FieldExcelMapping,DATABASE::Item,DummyItem.FIELDNO(Description));
+      AddFieldToMapping(O365FieldExcelMapping,DATABASE::Item,DummyItem.FIELDNO("Unit Price"));
+      AddFieldToMapping(O365FieldExcelMapping,DATABASE::Item,DummyItem.FIELDNO("Base Unit of Measure"));
+      AddFieldToMapping(O365FieldExcelMapping,DATABASE::Item,DummyItem.FIELDNO("Tax Group Code"));
+    END;
+
+    LOCAL PROCEDURE AddFieldToMapping@25(VAR O365FieldExcelMapping@1002 : Record 2112;TableID@1000 : Integer;FieldID@1001 : Integer);
+    BEGIN
+      WITH O365FieldExcelMapping DO BEGIN
+        INIT;
+        "Table ID" := TableID;
+        "Field ID" := FieldID;
+        INSERT;
+      END;
+    END;
+
+    PROCEDURE AutomapColumns@7(VAR O365FieldExcelMapping@1000 : Record 2112;VAR ExcelBuffer@1001 : Record 370) MappingFound : Boolean;
+    BEGIN
+      ExcelBuffer.SETRANGE("Row No.",1);
+      IF ExcelBuffer.FINDSET THEN
+        REPEAT
+          MappingFound := MappingFound OR AdjustColumnMapping(O365FieldExcelMapping,ExcelBuffer);
+        UNTIL ExcelBuffer.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE AdjustColumnMapping@26(VAR O365FieldExcelMapping@1002 : Record 2112;ExcelBuffer@1000 : Record 370) : Boolean;
+    BEGIN
+      IF O365FieldExcelMapping.FINDSET THEN
+        REPEAT
+          O365FieldExcelMapping.CALCFIELDS("Field Name");
+          IF LOWERCASE(O365FieldExcelMapping."Field Name") = LOWERCASE(ExcelBuffer."Cell Value as Text") THEN BEGIN
+            O365FieldExcelMapping."Excel Column No." := ExcelBuffer."Column No.";
+            O365FieldExcelMapping.MODIFY;
+            EXIT(TRUE);
+          END;
+        UNTIL O365FieldExcelMapping.NEXT = 0;
+
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE GetCustomerConfigTemplate@23(VAR ConfigTemplateHeader@1000 : Record 8618);
+    VAR
+      O365SalesInitialSetup@1002 : Record 2110;
+    BEGIN
+      O365SalesInitialSetup.GET;
+      O365SalesInitialSetup.TESTFIELD("Default Customer Template");
+      ConfigTemplateHeader.GET(O365SalesInitialSetup."Default Customer Template");
+    END;
+
+    LOCAL PROCEDURE GetItemConfigTemplate@33(VAR ConfigTemplateHeader@1000 : Record 8618);
+    VAR
+      O365SalesInitialSetup@1002 : Record 2110;
+    BEGIN
+      O365SalesInitialSetup.GET;
+      O365SalesInitialSetup.TESTFIELD("Default Item Template");
+      ConfigTemplateHeader.GET(O365SalesInitialSetup."Default Item Template");
+    END;
+
+    LOCAL PROCEDURE UpdateRecordFromTemplate@12(VAR ConfigTemplateHeader@1003 : Record 8618;RecVar@1000 : Variant);
+    VAR
+      ConfigTemplateMgt@1001 : Codeunit 8612;
+      RecRef@1002 : RecordRef;
+    BEGIN
+      RecRef.GETTABLE(RecVar);
+      ConfigTemplateMgt.UpdateRecord(ConfigTemplateHeader,RecRef);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

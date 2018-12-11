@@ -1,0 +1,317 @@
+OBJECT Codeunit 2501 ExtensionMarketplaceMgmt
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:17 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      GlobalPropertyValue@1003 : Text;
+      ParseFailureErr@1000 : TextConst '@@@="JSON parsing error. %1=target property name";ENU=Failed to extract ''%1'' property from JSON object.';
+      TelemetryBodyTxt@1001 : TextConst '@@@="%1=SPZA operation result option, %2=details describing the context or reason for the result";ENU={"acquisitionResult":"%1", "detail":"%2"}';
+      GlobalId@1008 : Text;
+      ParseApplicationIdErr@1002 : TextConst '@@@="%1=Name of token that we expected   ";ENU=Failed to extract ''%1'' token from Application Id.';
+      Token@1004 : 'PUBID,AID,PACKID,PAPPID';
+      NullGuidTok@1005 : TextConst '@@@={Locked};ENU=00000000-0000-0000-0000-000000000000';
+      AppsourceTxt@1006 : TextConst '@@@={Locked};ENU=https://appsource.microsoft.com';
+      AppsourcePPETxt@1007 : TextConst '@@@={Locked};ENU=https://appsource.microsoft.com';
+      EmbedRelativeTxt@1009 : TextConst '@@@={Locked};ENU="/embed/en-us/marketplace?product=project-madeira"';
+      MarketplaceDisabledSecretTxt@1010 : TextConst '@@@={Locked};ENU=extmgmt-marketplace-disable';
+
+    [External]
+    PROCEDURE GetMarketplaceEmbeddedUrl@1() : Text;
+    BEGIN
+      // Returns the url to the Madeira SPZA Embedded Gallery.
+      IF IsPPE THEN
+        EXIT(AppsourcePPETxt + EmbedRelativeTxt);
+
+      EXIT(AppsourceTxt + EmbedRelativeTxt);
+    END;
+
+    [External]
+    PROCEDURE GetMessageType@3(JObject@1000 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject") : Text;
+    BEGIN
+      // Extracts the 'msgType' property from the
+      EXIT(GetValue(JObject,'msgType',TRUE));
+    END;
+
+    LOCAL PROCEDURE GetValue@4(JObject@1000 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";Property@1001 : Text;ThrowError@1002 : Boolean) : Text;
+    BEGIN
+      // Helper for extracting a property value out of a JObject
+      IF TryGetValue(JObject,Property) THEN
+        EXIT(GlobalPropertyValue);
+
+      IF ThrowError THEN
+        ERROR(ParseFailureErr,Property);
+
+      EXIT('');
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryGetValue@5(JObject@1001 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";Property@1002 : Text);
+    VAR
+      StringComparison@1000 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.StringComparison";
+      JToken@1003 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JToken";
+    BEGIN
+      // Helper to 'safely' extract the value of a JProperty. Ignores case and 'catches' exceptions
+      JToken := JObject.GetValue(Property,StringComparison.OrdinalIgnoreCase);
+      GlobalPropertyValue := JToken.ToString;
+    END;
+
+    [External]
+    PROCEDURE GetApplicationIdFromData@10(JObject@1000 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject") : Text;
+    VAR
+      TempObject@1001 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";
+    BEGIN
+      // Extracts the applicationId property out of the data object return by the SPZA site
+      TempObject := TempObject.Parse(GetValue(JObject,'data',TRUE));
+      EXIT(GetValue(TempObject,'applicationId',TRUE));
+    END;
+
+    [External]
+    PROCEDURE MapMarketplaceIdToPackageId@2(ApplicationId@1000 : Text) : GUID;
+    BEGIN
+      // When an ISV submits an Extension to SPZA for publication to
+      // the marketplace, their artifact (.NAVX) is associated with an
+      // id created internally by the SPZA team.
+      // The .NAVX and other associated data are then submitted to our
+      // Certification/Validation service. The id that SPZA created for
+      // this item is is included as part of this payload. Unfortunately,
+      // the id isn't provided to our service using the same name: 'applicationId'.
+      // It is currently not known what name is used during this initial
+      // submission, but once known it will be our responsibility to create
+      // a mapping path between that service, the extension, and this codeunit.
+      // Format:
+      // PUBID.<value>|AID.<value>|PACKID.<package id>{|-preview}
+
+      IF TryParseApplicationId(ApplicationId,Token::PACKID) THEN
+        EXIT(GlobalId);
+
+      EXIT(NullGuidTok);
+    END;
+
+    [External]
+    PROCEDURE GetTelementryUrlFromData@9(JObject@1000 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject") : Text;
+    VAR
+      TempObject@1001 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";
+    BEGIN
+      // Extracts the telemetryUrl property out of the data object return by the SPZA site
+      // NOTE: the temp object is needed here. While JObject.Parse looks like a static call
+      // to the JObject type, it will in fact reload and modify the underlying referenced object
+      // as well as return the result of a 'parse'
+      TempObject := TempObject.Parse(GetValue(JObject,'data',FALSE));
+      EXIT(GetValue(TempObject,'responseUrl',FALSE));
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryMakeMarketplaceTelemetryCallback@6(TelemetryUrl@1000 : Text;OperationResult@1001 : 'UserNotAuthorized,DeploymentFailedDueToPackage,DeploymentFailed,Successful,UserCancel,UserTimeOut');
+    VAR
+      HttpWebRequestMgt@1002 : Codeunit 1297;
+      ResponseStr@1003 : InStream;
+      HttpStatusCode@1005 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpStatusCode";
+      ResponseHeaders@1004 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Specialized.NameValueCollection";
+    BEGIN
+      // Extracted from CODE1294::UploadFile
+      HttpWebRequestMgt.Initialize(TelemetryUrl);
+      HttpWebRequestMgt.DisableUI;
+      HttpWebRequestMgt.SetReturnType('*/*');
+      HttpWebRequestMgt.SetContentType('application/json');
+      HttpWebRequestMgt.SetMethod('POST');
+      HttpWebRequestMgt.AddBodyAsText(CreateTelemetryBody(OperationResult));
+      HttpWebRequestMgt.CreateInstream(ResponseStr);
+
+      HttpWebRequestMgt.GetResponse(ResponseStr,HttpStatusCode,ResponseHeaders)
+    END;
+
+    LOCAL PROCEDURE CreateTelemetryBody@7(OperationResult@1000 : 'UserNotAuthorized,DeploymentFailedDueToPackage,DeploymentFailed,Successful,UserCancel,UserTimeOut') : Text;
+    BEGIN
+      // The telmetry callback expects an object of the form:
+      // {
+      // ..."Result":"<result value>",
+      // ..."ResultDetail":"<result detail>",
+      // }
+      // Result is an enum string that SPZA recognizes, as defined by
+      // the OperationResult variable in this function.
+      // ResultDetail is an internal value that we can specify to identify the
+      // task that the telmetry entry relates to.
+      EXIT(STRSUBSTNO(TelemetryBodyTxt,FORMAT(OperationResult),'ExtensionInstallation'));
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryParseApplicationId@18(ApplicationId@1000 : Text;ExpectedToken@1002 : 'PUBID,AID,PACKID,PAPPID');
+    VAR
+      actualToken@1003 : Text;
+      TokenFound@1001 : Boolean;
+      CurrentToken@1004 : Text;
+    BEGIN
+      // Extract token value from Formats:
+      // PUBID.<value>|AID.<value>|PACKID.<package id>{|-preview}
+      // PUBID.<value>|AID.<value>|PAPPID.<app id>{|-preview}
+
+      // Since 'split' in C\AL depends on comma delimiters, make sure we remove existing commas
+      GlobalId := CONVERTSTR(ApplicationId,',',';');
+
+      // Create 'split' points at pipes
+      GlobalId := CONVERTSTR(GlobalId,'|',',');
+
+      // Flag to indicate if expected token found or not
+      TokenFound := FALSE;
+
+      // Iterate over tokens
+      WHILE GlobalId <> '' DO BEGIN
+        CurrentToken := SELECTSTR(1,GlobalId);
+
+        // Remove the scanned token from GlobalID
+        GlobalId := DELSTR(GlobalId,1,STRLEN(CurrentToken) + 1);
+
+        // Create 'split' point at token\value separator
+        CurrentToken := CONVERTSTR(CurrentToken,'.',',');
+
+        // Get token
+        actualToken := SELECTSTR(1,CurrentToken);
+        IF actualToken = FORMAT(ExpectedToken) THEN BEGIN
+          TokenFound := TRUE;
+          BREAK;
+        END;
+      END;
+
+      IF NOT TokenFound THEN
+        ERROR(ParseApplicationIdErr,ExpectedToken);
+
+      // Select the value of the token
+      GlobalId := SELECTSTR(2,CurrentToken);
+    END;
+
+    [External]
+    PROCEDURE MapMarketplaceIdToAppId@8(ApplicationId@1000 : Text) : GUID;
+    BEGIN
+      // When an ISV submits an Extension to SPZA for publication to
+      // the marketplace, their artifact (.NAVX) is associated with an
+      // id created internally by the SPZA team.
+      // The .NAVX and other associated data are then submitted to our
+      // Certification/Validation service. The id that SPZA created for
+      // this item is is included as part of this payload. Unfortunately,
+      // the id isn't provided to our service using the same name: 'applicationId'.
+      // It is currently not known what name is used during this initial
+      // submission, but once known it will be our responsibility to create
+      // a mapping path between that service, the extension, and this codeunit.
+      // Format:
+      // PUBID.<value>|AID.<value>|PACKID.<package id>{|-preview}
+
+      IF TryParseApplicationId(ApplicationId,Token::PAPPID) THEN
+        EXIT(GlobalId);
+
+      EXIT(NullGuidTok);
+    END;
+
+    PROCEDURE MakeMarketplaceTelemetryCallback@13(TelemetryUrl@1000 : Text;OperationResult@1001 : 'UserNotAuthorized,DeploymentFailedDueToPackage,DeploymentFailed,Successful,UserCancel,UserTimeOut';PackageId@1007 : Text);
+    VAR
+      ActivityLog@1006 : Record 710;
+      Related@1002 : Record 2000000160;
+    BEGIN
+      IF NOT TryMakeMarketplaceTelemetryCallback(TelemetryUrl,OperationResult) THEN BEGIN
+        Related."Package ID" := PackageId;
+        ActivityLog.LogActivity(Related,ActivityLog.Status::Failed,
+          'ExtensionInstallation',STRSUBSTNO('Make SPZA Telemetry call with result: %1',OperationResult),GETLASTERRORTEXT);
+      END;
+    END;
+
+    PROCEDURE GetLoadMarketplaceMessage@20() Message : Text;
+    VAR
+      User@1002 : Record 2000000120;
+      AzureADMgt@1001 : Codeunit 6300;
+      PowerBiServiceMgt@1004 : Codeunit 6301;
+      HttpUtility@1003 : DotNet "'System.Web, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Web.HttpUtility";
+      TempString@1005 : Text;
+      FisrtName@1006 : Text;
+      LastName@1007 : Text;
+      AccessToken@1008 : Text;
+    BEGIN
+      User.SETRANGE("User Security ID",USERSECURITYID);
+      User.FINDFIRST;
+      TempString := User."Full Name";
+      TempString := DELCHR(TempString,'<>',' ');
+      TempString := CONVERTSTR(TempString,' ',',');
+      FisrtName := SELECTSTR(1,TempString);
+      IF STRPOS(TempString,',') = 0 THEN
+        LastName := ''
+      ELSE
+        LastName := SELECTSTR(2,TempString);
+
+      AccessToken := AzureADMgt.GetAccessToken(PowerBiServiceMgt.GetPowerBiResourceUrl,PowerBiServiceMgt.GetPowerBiResourceName,FALSE);
+      AccessToken := HttpUtility.JavaScriptStringEncode(AccessToken);
+
+      // What is azure resource uri for Madeira? As of now getting access token for power bi.
+      Message := '{"msgType":"loadMarketplace","hostData":{"firstName" :"' + FisrtName + '","lastName":"' + LastName + '","workEmail":"';
+      Message := Message + User."Authentication Email" + '","accessToken":"' + AccessToken + '"}}';
+    END;
+
+    LOCAL PROCEDURE IsPPE@21() : Boolean;
+    VAR
+      EnvironmentMgt@1000 : Codeunit 9005;
+    BEGIN
+      EXIT(EnvironmentMgt.IsPPE);
+    END;
+
+    [TryFunction]
+    PROCEDURE InstallExtension@14(ApplicationID@1000 : Text;TelemetryUrl@1001 : Text);
+    VAR
+      MarketplaceExtnDeployment@1008 : Page 2510;
+      ID@1003 : GUID;
+    BEGIN
+      ID := MapMarketplaceIdToAppId(ApplicationID);
+
+      MarketplaceExtnDeployment.SetAppIDAndTelemetryUrl(ID,TelemetryUrl);
+      MarketplaceExtnDeployment.RUNMODAL;
+    END;
+
+    PROCEDURE IsMarketplaceEnabled@11() : Boolean;
+    VAR
+      AzureKeyVaultManagement@1000 : Codeunit 2200;
+      DisabledSecret@1001 : Text[250];
+      DisabledValue@1002 : Boolean;
+    BEGIN
+      // Try to retrieve config value from keyvault, but if we fail (not there, or not boolean) then assume true
+      IF AzureKeyVaultManagement.GetAzureKeyVaultSecret(DisabledSecret,MarketplaceDisabledSecretTxt) THEN
+        IF EVALUATE(DisabledValue,DisabledSecret) THEN
+          EXIT(NOT DisabledValue);
+
+      EXIT(TRUE);
+    END;
+
+    [EventSubscriber(Codeunit,2000000006,InvokeExtensionInstallation)]
+    LOCAL PROCEDURE InvokeExtensionInstallation@12(AppId@1000 : Text;ResponseUrl@1001 : Text);
+    BEGIN
+      IF NOT InstallExtension(AppId,ResponseUrl) THEN
+        MESSAGE(GETLASTERRORTEXT);
+    END;
+
+    BEGIN
+    {
+      // This codeunit is used as a helper for managing interations between
+      // Madeira and the SPZA marketplace. The marketplace provides a gallery
+      // that users can use to select and install Extensions published (an thus
+      // available) on Madeira.
+      // When and item is selected from the gallery, a JSON object is returned
+      // and needs to be parsed for the key information we need to perform an
+      // install.
+      // At current the key pieces of that object look like this:
+      //
+      // "msgType":"<type name string>",
+      // "data":
+      //    "applicationId":"<string identifier for selected extension>",
+      //    "telemetryUrl":"<url>",
+    }
+    END.
+  }
+}
+

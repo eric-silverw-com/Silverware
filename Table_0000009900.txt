@@ -1,0 +1,450 @@
+OBJECT Table 9900 Web Service Aggregate
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:15:50 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    DataPerCompany=No;
+    OnInsert=VAR
+               WebService@1000 : Record 2000000076;
+               TenantWebService@1003 : Record 2000000168;
+             BEGIN
+               AssertValidRec;
+
+               // Adding a new web service with the same Object Type and Service Name as an existing record
+               // (system or tenant record) will result in a duplicate service error the same as today
+               // =>  This scenario is covered by the PK on all tables involved.
+
+               // We also want all of published services to have unique names whatever their Object Type is.
+               // Otherwise, there is no difference in requesting, for example, page and query with the same Service Names
+               // via OData, and metadata can not be generated.
+               AssertUniquePublishedServiceName;
+
+               // Adding a new record for an Object (Type and ID) that has an unpublished system record
+               // will give the following record/row error (Message:  The web service can't be added
+               // because it conflicts with an unpublished system web service for the object.)
+               CLEAR(WebService);
+               WebService.SETRANGE("Object Type","Object Type");
+               WebService.SETRANGE("Object ID","Object ID");
+               WebService.SETRANGE(Published,FALSE);
+
+               IF NOT WebService.ISEMPTY THEN
+                 ERROR(WebServiceNotAllowedErr);
+
+               WebService.RESET;
+
+               // If the all tenants checkbox is selected, then create the web service record as a system
+               // record, otherwise create as a tenant record
+               IF "All Tenants" THEN BEGIN
+                 CLEAR(WebService);
+                 WebService.TRANSFERFIELDS(Rec);
+                 WebService.INSERT;
+               END ELSE BEGIN
+                 CLEAR(TenantWebService);
+                 TenantWebService.TRANSFERFIELDS(Rec);
+                 TenantWebService.INSERT;
+               END
+             END;
+
+    OnModify=VAR
+               WebService@1000 : Record 2000000076;
+               TenantWebService@1001 : Record 2000000168;
+             BEGIN
+               AssertValidRec;
+               AssertUniquePublishedServiceName;
+
+               IF "All Tenants" <> xRec."All Tenants" THEN
+                 IF NOT "All Tenants" AND xRec."All Tenants" THEN BEGIN
+                   // Unselecting the all tenants checkbox will remove the system record and add a tenant record if one
+                   // doesn't already exist.
+                   IF WebService.GET(xRec."Object Type",xRec."Service Name") THEN
+                     WebService.DELETE;
+
+                   IF NOT TenantWebService.GET("Object Type","Service Name") THEN BEGIN
+                     CLEAR(TenantWebService);
+                     TenantWebService.TRANSFERFIELDS(Rec);
+                     TenantWebService.INSERT;
+                   END
+                 END ELSE BEGIN
+                   // Selecting the all tenants checkbox will add a system record.
+                   CLEAR(WebService);
+                   WebService.TRANSFERFIELDS(Rec);
+                   WebService.INSERT;
+                 END
+               ELSE
+                 // Changing the Object Type, Object ID, Service Name, and Publish fields of a system record will
+                 // change the value in the system record.
+                 IF "All Tenants" THEN
+                   IF WebService.GET("Object Type","Service Name") THEN BEGIN
+                     // There is an existing record, so modify it.
+                     WebService."Object ID" := "Object ID";
+                     WebService.Published := Published;
+                     WebService.MODIFY;
+                   END ELSE BEGIN
+                     // There is no existing record, so insert one.
+                     CLEAR(WebService);
+                     WebService.TRANSFERFIELDS(Rec);
+                     WebService.INSERT;
+                   END
+                 ELSE BEGIN
+                   // Changing the Object Type, Object ID, Service Name, and Publish fields of a tenant record will
+                   // change the value in the tenant record.
+                   // i.  Changing the web service to have the same Object Type and Service Name as an existing
+                   // record (system or tenant record) will result in a duplicate error the same as today.
+                   // =>  This scenario is covered by keys on the Web Service Aggregate table.
+                   // ii. Changing the web service to have the same Object (Type and ID) as an Unpublished system
+                   // record will give the following record/row error. (Message:  The web service can't be modified
+                   // because it conflicts with an unpublished system web service for the object.
+
+                   AssertModAllowed;
+
+                   IF TenantWebService.GET("Object Type","Service Name") THEN BEGIN
+                     TenantWebService."Object ID" := "Object ID";
+                     TenantWebService.Published := Published;
+                     TenantWebService.MODIFY
+                   END ELSE BEGIN
+                     TenantWebService.TRANSFERFIELDS(Rec);
+                     TenantWebService.INSERT;
+                   END
+                 END
+             END;
+
+    OnDelete=VAR
+               WebService@1000 : Record 2000000076;
+               TenantWebService@1001 : Record 2000000168;
+             BEGIN
+               // When deleting an existing web service record...
+               // Deleting a tenant record will delete the tenant record.
+               // Deleting a system record will delete the system record.
+               IF xRec."All Tenants" THEN BEGIN
+                 IF WebService.GET(xRec."Object Type",xRec."Service Name") THEN
+                   WebService.DELETE;
+               END ELSE
+                 IF TenantWebService.GET(xRec."Object Type",xRec."Service Name") THEN
+                   TenantWebService.DELETE;
+             END;
+
+    OnRename=VAR
+               WebService@1000 : Record 2000000076;
+               TenantWebService@1001 : Record 2000000168;
+             BEGIN
+               AssertUniquePublishedServiceName;
+
+               IF "All Tenants" = xRec."All Tenants" THEN
+                 IF "All Tenants" THEN BEGIN
+                   // Changing the Object Type, Object ID, Service Name, and Publish fields of a system record will
+                   // change the value in the system record.
+                   IF WebService.GET(xRec."Object Type",xRec."Service Name") THEN
+                     WebService.RENAME("Object Type","Service Name");
+
+                   IF WebService.GET("Object Type","Service Name") THEN BEGIN
+                     WebService."Object ID" := "Object ID";
+                     WebService.Published := Published;
+                     WebService.MODIFY
+                   END ELSE BEGIN
+                     WebService.TRANSFERFIELDS(Rec);
+                     WebService.INSERT;
+                   END
+                 END ELSE BEGIN
+                   // Changing the Object Type, Object ID, Service Name, and Publish fields of a tenant record will
+                   // change the value in the tenant record.
+                   // i.  Changing the web service to have the same Object Type and Service Name as an existing
+                   // record (system or tenant record) will result in a duplicate error the same as today.
+                   // =>  This scenario is covered by keys on the Web Service Aggregate table.
+                   // ii. Changing the web service to have the same Object (Type and ID) as an Unpublished system
+                   // record will give the following record/row error. (Message:  The web service can't be modified
+                   // because it conflicts with an unpublished system web service for the object.
+
+                   AssertModAllowed;
+
+                   IF TenantWebService.GET(xRec."Object Type",xRec."Service Name") THEN
+                     TenantWebService.RENAME("Object Type","Service Name");
+
+                   IF TenantWebService.GET("Object Type","Service Name") THEN BEGIN
+                     TenantWebService."Object ID" := "Object ID";
+                     TenantWebService.Published := Published;
+                     TenantWebService.MODIFY
+                   END ELSE BEGIN
+                     TenantWebService.TRANSFERFIELDS(Rec);
+                     TenantWebService.INSERT;
+                   END
+                 END
+               ELSE
+                 IF NOT "All Tenants" AND xRec."All Tenants" THEN BEGIN
+                   // Unselecting the all tenants checkbox will remove the system record and add a tenant record if one
+                   // doesn't already exist.
+                   IF WebService.GET(xRec."Object Type",xRec."Service Name") THEN
+                     WebService.DELETE;
+
+                   IF NOT TenantWebService.GET("Object Type","Service Name") THEN BEGIN
+                     CLEAR(TenantWebService);
+                     TenantWebService.TRANSFERFIELDS(Rec);
+                     TenantWebService.INSERT;
+                   END
+                 END ELSE BEGIN
+                   // Selecting the all tenants checkbox will add a system record.
+                   CLEAR(WebService);
+                   WebService.TRANSFERFIELDS(Rec);
+                   WebService.INSERT;
+                 END
+             END;
+
+    CaptionML=ENU=Web Service Aggregate;
+  }
+  FIELDS
+  {
+    { 3   ;   ;Object Type         ;Option        ;CaptionML=ENU=Object Type;
+                                                   OptionCaptionML=ENU=,,,,,Codeunit,,,Page,Query;
+                                                   OptionString=,,,,,Codeunit,,,Page,Query }
+    { 6   ;   ;Object ID           ;Integer       ;TableRelation=AllObjWithCaption."Object ID" WHERE (Object Type=FIELD(Object Type));
+                                                   CaptionML=ENU=Object ID }
+    { 9   ;   ;Service Name        ;Text240       ;CaptionML=ENU=Service Name }
+    { 12  ;   ;Published           ;Boolean       ;CaptionML=ENU=Published }
+    { 15  ;   ;All Tenants         ;Boolean       ;CaptionML=ENU=All Tenants }
+  }
+  KEYS
+  {
+    {    ;Object Type,Service Name                ;Clustered=Yes }
+    {    ;Object Type,Object ID                    }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      NotApplicableTxt@1002 : TextConst 'ENU=Not applicable';
+      WebServiceNotAllowedErr@1001 : TextConst 'ENU=The web service cannot be added because it conflicts with an unpublished system web service for the object.';
+      WebServiceModNotAllowedErr@1000 : TextConst 'ENU=The web service cannot be modified because it conflicts with an unpublished system web service for the object.';
+      WebServiceAlreadyPublishedErr@1003 : TextConst '@@@="%1 = Web Service name";ENU=The web service name %1 already exists.  Enter a different service name.';
+
+    LOCAL PROCEDURE AssertModAllowed@5();
+    VAR
+      WebService@1000 : Record 2000000076;
+    BEGIN
+      WebService.SETRANGE("Object Type","Object Type");
+      WebService.SETRANGE("Object ID","Object ID");
+      WebService.SETRANGE(Published,FALSE);
+
+      IF NOT WebService.ISEMPTY THEN
+        ERROR(WebServiceModNotAllowedErr);
+    END;
+
+    LOCAL PROCEDURE AssertValidRec@4();
+    VAR
+      AllObj@1001 : Record 2000000038;
+    BEGIN
+      TESTFIELD("Object ID");
+      TESTFIELD("Service Name");
+      IF NOT ("Object Type" IN ["Object Type"::Codeunit,"Object Type"::Page,"Object Type"::Query]) THEN
+        FIELDERROR("Object Type");
+      IF ("Object Type" = "Object Type"::Page) AND
+         ("Object ID" = PAGE::"Web Services")
+      THEN
+        FIELDERROR("Object ID");
+      AllObj.GET("Object Type","Object ID");
+    END;
+
+    LOCAL PROCEDURE AssertUniquePublishedServiceName@7();
+    VAR
+      WebService@1000 : Record 2000000076;
+      TenantWebService@1001 : Record 2000000168;
+    BEGIN
+      IF ((("Service Name" <> xRec."Service Name") OR (Published <> xRec.Published)) AND
+          (Published = TRUE) AND ("Object Type" <> "Object Type"::Codeunit))
+      THEN BEGIN
+        // check that this service name does not exist in the list of all-tenant services
+        // or in per tenant web services table
+        WebService.SETRANGE(Published,TRUE);
+        WebService.SETRANGE("Service Name","Service Name");
+        TenantWebService.SETRANGE(Published,TRUE);
+        TenantWebService.SETRANGE("Service Name","Service Name");
+        // Codeunits use SOAP protocol and do not cause any troubles if they have the same name
+        WebService.SETRANGE("Object Type","Object Type"::Page,"Object Type"::Query);
+        TenantWebService.SETRANGE("Object Type","Object Type"::Page,"Object Type"::Query);
+        IF (NOT WebService.ISEMPTY) OR (NOT TenantWebService.ISEMPTY) THEN
+          ERROR(WebServiceAlreadyPublishedErr,"Service Name");
+      END;
+    END;
+
+    PROCEDURE GetODataUrl@2() : Text;
+    VAR
+      WebService@1000 : Record 2000000076;
+      TenantWebService@1001 : Record 2000000168;
+      ODataUtility@1003 : Codeunit 6710;
+      ODataServiceRootUrl@1002 : Text;
+      ODataUrl@1005 : Text;
+      ObjectTypeParam@1007 : ',,,,,,,,Page,Query';
+    BEGIN
+      IF "All Tenants" THEN BEGIN
+        CLEAR(WebService);
+        WebService.INIT;
+        WebService.TRANSFERFIELDS(Rec);
+
+        CASE "Object Type" OF
+          "Object Type"::Page:
+            EXIT(GETURL(CLIENTTYPE::OData,COMPANYNAME,OBJECTTYPE::Page,"Object ID",WebService));
+          "Object Type"::Query:
+            EXIT(GETURL(CLIENTTYPE::OData,COMPANYNAME,OBJECTTYPE::Query,"Object ID",WebService));
+          ELSE
+            EXIT(NotApplicableTxt);
+        END
+      END ELSE BEGIN
+        CLEAR(TenantWebService);
+        TenantWebService.INIT;
+        TenantWebService.TRANSFERFIELDS(Rec);
+
+        CASE "Object Type" OF
+          "Object Type"::Page:
+            BEGIN
+              ODataServiceRootUrl := GETURL(CLIENTTYPE::OData,COMPANYNAME,OBJECTTYPE::Page,"Object ID",TenantWebService);
+              ODataUrl := ODataUtility.GenerateODataV3Url(ODataServiceRootUrl,TenantWebService."Service Name",ObjectTypeParam::Page);
+              EXIT(ODataUrl);
+            END;
+          "Object Type"::Query:
+            BEGIN
+              ODataServiceRootUrl := GETURL(CLIENTTYPE::OData,COMPANYNAME,OBJECTTYPE::Query,"Object ID",TenantWebService);
+              ODataUrl := ODataUtility.GenerateODataV3Url(ODataServiceRootUrl,TenantWebService."Service Name",ObjectTypeParam::Query);
+              EXIT(ODataUrl);
+            END;
+          ELSE
+            EXIT(NotApplicableTxt);
+        END
+      END
+    END;
+
+    [External]
+    PROCEDURE GetSOAPUrl@3() : Text;
+    VAR
+      WebService@1000 : Record 2000000076;
+      TenantWebService@1001 : Record 2000000168;
+    BEGIN
+      IF "All Tenants" THEN BEGIN
+        CLEAR(WebService);
+        WebService.INIT;
+        WebService.TRANSFERFIELDS(Rec);
+
+        CASE "Object Type" OF
+          "Object Type"::Page:
+            EXIT(GETURL(CLIENTTYPE::SOAP,COMPANYNAME,OBJECTTYPE::Page,"Object ID",WebService));
+          "Object Type"::Codeunit:
+            EXIT(GETURL(CLIENTTYPE::SOAP,COMPANYNAME,OBJECTTYPE::Codeunit,"Object ID",WebService));
+          ELSE
+            EXIT(NotApplicableTxt);
+        END
+      END ELSE BEGIN
+        CLEAR(TenantWebService);
+        TenantWebService.INIT;
+        TenantWebService.TRANSFERFIELDS(Rec);
+
+        CASE "Object Type" OF
+          "Object Type"::Page:
+            EXIT(GETURL(CLIENTTYPE::SOAP,COMPANYNAME,OBJECTTYPE::Page,"Object ID",TenantWebService));
+          "Object Type"::Codeunit:
+            EXIT(GETURL(CLIENTTYPE::SOAP,COMPANYNAME,OBJECTTYPE::Codeunit,"Object ID",TenantWebService));
+          ELSE
+            EXIT(NotApplicableTxt);
+        END
+      END
+    END;
+
+    [External]
+    PROCEDURE PopulateTable@1();
+    VAR
+      WebService@1000 : Record 2000000076;
+      TenantWebService@1001 : Record 2000000168;
+    BEGIN
+      RESET;
+      DELETEALL;
+
+      // The system records will always be displayed...
+      IF WebService.FINDSET THEN
+        REPEAT
+          INIT;
+          TRANSFERFIELDS(WebService);
+          "All Tenants" := TRUE;
+          INSERT;
+        UNTIL WebService.NEXT = 0;
+
+      // The tenant records that don't have the same (Object Type and Service Name)
+      // or (Object Type and Object ID) as a system record will be displayed.
+      // i.e. any tenant records that have the same values for these will not be
+      // displayed
+      "All Tenants" := FALSE;
+
+      CLEAR(TenantWebService);
+      IF TenantWebService.FINDSET THEN
+        REPEAT
+          CLEAR(WebService);
+          IF NOT WebService.GET(TenantWebService."Object Type",TenantWebService."Service Name") THEN BEGIN
+            WebService.SETRANGE("Object Type",TenantWebService."Object Type");
+            WebService.SETRANGE("Object ID",TenantWebService."Object ID");
+
+            // DCR: Include the tenant record if it has the same Object Type and Object ID
+            // of a system record AND the system record is published...
+            WebService.SETRANGE(Published,FALSE);
+
+            IF NOT WebService.FINDSET THEN BEGIN
+              INIT;
+              TRANSFERFIELDS(TenantWebService);
+              INSERT;
+            END
+          END
+        UNTIL TenantWebService.NEXT = 0;
+    END;
+
+    PROCEDURE GetODataV4Url@6() : Text;
+    VAR
+      WebService@1005 : Record 2000000076;
+      TenantWebService@1004 : Record 2000000168;
+      ODataUtility@1003 : Codeunit 6710;
+      ODataServiceRootUrl@1002 : Text;
+      ODataUrl@1001 : Text;
+      ObjectTypeParam@1000 : ',,,,,,,,Page,Query';
+    BEGIN
+      IF "All Tenants" THEN BEGIN
+        CLEAR(WebService);
+        WebService.INIT;
+        WebService.TRANSFERFIELDS(Rec);
+
+        CASE "Object Type" OF
+          "Object Type"::Page:
+            EXIT(GETURL(CLIENTTYPE::ODataV4,COMPANYNAME,OBJECTTYPE::Page,"Object ID",WebService));
+          "Object Type"::Query:
+            EXIT(GETURL(CLIENTTYPE::ODataV4,COMPANYNAME,OBJECTTYPE::Query,"Object ID",WebService));
+          ELSE
+            EXIT(NotApplicableTxt);
+        END
+      END ELSE BEGIN
+        CLEAR(TenantWebService);
+        TenantWebService.INIT;
+        TenantWebService.TRANSFERFIELDS(Rec);
+
+        CASE "Object Type" OF
+          "Object Type"::Page:
+            BEGIN
+              ODataServiceRootUrl := GETURL(CLIENTTYPE::ODataV4,COMPANYNAME,OBJECTTYPE::Page,"Object ID",TenantWebService);
+              ODataUrl := ODataUtility.GenerateODataV4Url(ODataServiceRootUrl,TenantWebService."Service Name",ObjectTypeParam::Page);
+              EXIT(ODataUrl);
+            END;
+          "Object Type"::Query:
+            BEGIN
+              ODataServiceRootUrl := GETURL(CLIENTTYPE::ODataV4,COMPANYNAME,OBJECTTYPE::Query,"Object ID",TenantWebService);
+              ODataUrl := ODataUtility.GenerateODataV4Url(ODataServiceRootUrl,TenantWebService."Service Name",ObjectTypeParam::Query);
+              EXIT(ODataUrl);
+            END;
+          ELSE
+            EXIT(NotApplicableTxt);
+        END
+      END
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

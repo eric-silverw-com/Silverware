@@ -1,0 +1,243 @@
+OBJECT Codeunit 2160 Calendar Event Mangement
+{
+  OBJECT-PROPERTIES
+  {
+    Date=;
+    Time=;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 2160=rimd,
+                TableData 2161=rimd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    PROCEDURE CreateCalendarEvent@6(ScheduledDate@1003 : Date;Description@1000 : Text[50];CodeunitNo@1001 : Integer;RecId@1002 : RecordID;QueueEvent@1005 : Boolean) : Integer;
+    VAR
+      CalendarEvent@1004 : Record 2160;
+    BEGIN
+      CalendarEvent.INIT;
+      CalendarEvent.VALIDATE(Description,Description);
+      CalendarEvent.VALIDATE("Scheduled Date",ScheduledDate);
+      CalendarEvent.VALIDATE("Object ID to Run",CodeunitNo);
+      CalendarEvent.VALIDATE("Record ID to Process",RecId);
+      IF NOT QueueEvent THEN
+        CalendarEvent.VALIDATE(State,CalendarEvent.State::"On Hold");
+      CalendarEvent.INSERT(TRUE);
+
+      EXIT(CalendarEvent."No.")
+    END;
+
+    PROCEDURE CreateCalendarEventForCodeunit@18(ScheduledDate@1003 : Date;Description@1000 : Text[50];CodeunitNo@1001 : Integer) : Integer;
+    VAR
+      CalendarEvent@1004 : Record 2160;
+    BEGIN
+      CalendarEvent.INIT;
+      CalendarEvent.VALIDATE(Description,Description);
+      CalendarEvent.VALIDATE("Scheduled Date",ScheduledDate);
+      CalendarEvent.VALIDATE("Object ID to Run",CodeunitNo);
+      CalendarEvent.VALIDATE(Type,CalendarEvent.Type::System);
+      CalendarEvent.INSERT(TRUE);
+
+      EXIT(CalendarEvent."No.")
+    END;
+
+    PROCEDURE QueueBackgroundSystemEvent@8(Description@1000 : Text[50];CodeunitNo@1001 : Integer;RecId@1002 : RecordID) : Integer;
+    VAR
+      CalendarEvent@1004 : Record 2160;
+    BEGIN
+      CalendarEvent.INIT;
+      CalendarEvent.VALIDATE(Description,Description);
+      CalendarEvent.VALIDATE("Scheduled Date",TODAY);
+      CalendarEvent.VALIDATE(Type,CalendarEvent.Type::System);
+      CalendarEvent.VALIDATE("Object ID to Run",CodeunitNo);
+      CalendarEvent.VALIDATE("Record ID to Process",RecId);
+      CalendarEvent.INSERT(TRUE);
+
+      EXIT(CalendarEvent."No.")
+    END;
+
+    PROCEDURE CreateOrUpdateJobQueueEntry@1(CalendarEvent@1000 : Record 2160);
+    VAR
+      JobQueueEntry@1001 : Record 472;
+    BEGIN
+      FindOrCreateJobQueue(JobQueueEntry);
+      UpdateJobQueueWithSuggestedDate(JobQueueEntry,CalendarEvent);
+    END;
+
+    PROCEDURE DescheduleCalendarEvent@9(VAR CalendarEvent@1001 : Record 2160);
+    VAR
+      JobQueueEntry@1000 : Record 472;
+    BEGIN
+      IF NOT FindJobQueue(JobQueueEntry) THEN
+        EXIT;
+
+      // If the next scheduled run date matches this record
+      // We may be able to move it further back if there were no more events on this date.
+      IF GetNextJobQueueRunDate(JobQueueEntry) = CalendarEvent."Scheduled Date" THEN
+        UpdateJobQueue(JobQueueEntry);
+    END;
+
+    PROCEDURE DescheduleCalendarEventForCodeunit@16(CodeunitID@1001 : Integer);
+    VAR
+      CalendarEvent@1000 : Record 2160;
+    BEGIN
+      CalendarEvent.SETRANGE("Object ID to Run",CodeunitID);
+      CalendarEvent.SETRANGE(Archived,FALSE);
+      CalendarEvent.DELETEALL(TRUE);
+    END;
+
+    PROCEDURE FindJobQueue@3(VAR JobQueueEntry@1000 : Record 472) : Boolean;
+    VAR
+      CalendarEventUserConfig@1001 : Record 2161;
+    BEGIN
+      GetCalendarEventUserConfiguration(CalendarEventUserConfig);
+
+      IF ISNULLGUID(CalendarEventUserConfig."Current Job Queue Entry") THEN
+        EXIT(FALSE);
+
+      EXIT(JobQueueEntry.GET(CalendarEventUserConfig."Current Job Queue Entry"));
+    END;
+
+    PROCEDURE SetJobQueueOnHold@2(VAR JobQueueEntry@1000 : Record 472);
+    BEGIN
+      JobQueueEntry.LOCKTABLE(TRUE);
+      JobQueueEntry.FIND;
+
+      IF JobQueueEntry.Status <> JobQueueEntry.Status::"On Hold" THEN BEGIN
+        CLEAR(JobQueueEntry."User ID");
+        JobQueueEntry.Status := JobQueueEntry.Status::"On Hold";
+      END;
+
+      JobQueueEntry.MODIFY(TRUE);
+    END;
+
+    PROCEDURE UpdateJobQueue@7(VAR JobQueueEntry@1000 : Record 472);
+    VAR
+      CalendarEvent@1001 : Record 2160;
+    BEGIN
+      UpdateJobQueueWithFilter(JobQueueEntry,CalendarEvent);
+    END;
+
+    LOCAL PROCEDURE UpdateJobQueueWithSuggestedDate@4(VAR JobQueueEntry@1000 : Record 472;CalendarEvent@1001 : Record 2160);
+    VAR
+      OtherCalendarEvent@1002 : Record 2160;
+    BEGIN
+      JobQueueEntry.LOCKTABLE;
+      JobQueueEntry.FIND;
+
+      IF CalendarEvent."Scheduled Date" > GetNextJobQueueRunDate(JobQueueEntry) THEN BEGIN
+        IF NOT OtherCalendarEvent.GET(CalendarEvent."No.") THEN // Check if this is an existing event
+          EXIT; // It's new, so no need to check if we need to update the date
+
+        // It's an existing event - check that we weren't waiting for this one originally
+        IF OtherCalendarEvent."Scheduled Date" > GetNextJobQueueRunDate(JobQueueEntry) THEN
+          EXIT;
+
+        // Find the next date (ignoring this event)
+        OtherCalendarEvent.SETFILTER("No.",'<>%1',CalendarEvent."No.");
+        UpdateJobQueueWithFilter(JobQueueEntry,OtherCalendarEvent);
+
+        // Then check if the updated date is after the new date we found
+        IF CalendarEvent."Scheduled Date" > GetNextJobQueueRunDate(JobQueueEntry) THEN
+          EXIT; // It is, so no need to update with the proposed date
+      END;
+
+      SetNextJobQueueRunDate(JobQueueEntry,CalendarEvent."Scheduled Date");
+    END;
+
+    LOCAL PROCEDURE UpdateJobQueueWithFilter@13(VAR JobQueueEntry@1000 : Record 472;VAR CalendarEvent@1001 : Record 2160);
+    BEGIN
+      CalendarEvent.SETCURRENTKEY("Scheduled Date");
+      CalendarEvent.SETASCENDING("Scheduled Date",TRUE);
+      CalendarEvent.SETRANGE(Archived,FALSE);
+      CalendarEvent.SETRANGE(User,USERID);
+      CalendarEvent.SETRANGE(State,CalendarEvent.State::Queued);
+
+      IF NOT CalendarEvent.FINDFIRST THEN BEGIN
+        SetJobQueueOnHold(JobQueueEntry);
+        EXIT;
+      END;
+
+      SetNextJobQueueRunDate(JobQueueEntry,CalendarEvent."Scheduled Date");
+    END;
+
+    LOCAL PROCEDURE FindOrCreateJobQueue@5(VAR JobQueueEntry@1000 : Record 472);
+    VAR
+      CalendarEventUserConfig@1001 : Record 2161;
+    BEGIN
+      IF FindJobQueue(JobQueueEntry) THEN
+        EXIT;
+
+      JobQueueEntry.INIT;
+      JobQueueEntry."Object Type to Run" := JobQueueEntry."Object Type to Run"::Codeunit;
+      JobQueueEntry."Object ID to Run" := CODEUNIT::"Calendar Event Execution";
+      JobQueueEntry."Maximum No. of Attempts to Run" := 3;
+      JobQueueEntry."Recurring Job" := TRUE;
+      JobQueueEntry.Status := JobQueueEntry.Status::"On Hold";
+      JobQueueEntry."Manual Recurrence" := TRUE;
+      JobQueueEntry.INSERT(TRUE);
+
+      GetCalendarEventUserConfiguration(CalendarEventUserConfig);
+      CalendarEventUserConfig."Current Job Queue Entry" := JobQueueEntry.ID;
+      CalendarEventUserConfig.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE GetJobQueueRunTime@15() Result : Time;
+    VAR
+      CalendarEventUserConfig@1001 : Record 2161;
+    BEGIN
+      Result := 0T;
+
+      GetCalendarEventUserConfiguration(CalendarEventUserConfig);
+
+      EXIT(CalendarEventUserConfig."Default Execute Time");
+    END;
+
+    LOCAL PROCEDURE GetNextJobQueueRunDate@14(VAR JobQueueEntry@1000 : Record 472) : Date;
+    BEGIN
+      IF JobQueueEntry.Status <> JobQueueEntry.Status::Ready THEN
+        EXIT(DMY2DATE(31,12,9999));
+
+      EXIT(DT2DATE(JobQueueEntry."Earliest Start Date/Time"));
+    END;
+
+    LOCAL PROCEDURE SetNextJobQueueRunDate@17(VAR JobQueueEntry@1000 : Record 472;NewDate@1001 : Date);
+    BEGIN
+      JobQueueEntry.LOCKTABLE(TRUE);
+      JobQueueEntry.FIND;
+
+      IF NewDate <= TODAY THEN
+        JobQueueEntry."Earliest Start Date/Time" := CREATEDATETIME(TODAY,TIME + (5 * 1000))
+      ELSE
+        JobQueueEntry."Earliest Start Date/Time" := CREATEDATETIME(NewDate,GetJobQueueRunTime);
+
+      CLEAR(JobQueueEntry."User ID");
+
+      IF JobQueueEntry.Status <> JobQueueEntry.Status::Ready THEN
+        JobQueueEntry.Status := JobQueueEntry.Status::Ready;
+
+      JobQueueEntry.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE GetCalendarEventUserConfiguration@10(VAR CalendarEventUserConfig@1000 : Record 2161);
+    BEGIN
+      CalendarEventUserConfig.LOCKTABLE;
+      IF NOT CalendarEventUserConfig.GET(USERID) THEN BEGIN
+        CalendarEventUserConfig.INIT;
+        CalendarEventUserConfig.VALIDATE(User,USERID);
+        IF NOT CalendarEventUserConfig.INSERT(TRUE) THEN // Insert failed, possibly because it was just inserted in another session
+          CalendarEventUserConfig.GET(USERID); // Try to get the record one more time before failing
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

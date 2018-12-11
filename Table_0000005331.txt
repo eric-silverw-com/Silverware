@@ -1,0 +1,513 @@
+OBJECT Table 5331 CRM Integration Record
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:14:50 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=CRM Integration Record;
+  }
+  FIELDS
+  {
+    { 2   ;   ;CRM ID              ;GUID          ;OnValidate=BEGIN
+                                                                CLEAR("Last Synch. CRM Job ID");
+                                                                "Last Synch. CRM Modified On" := 0DT;
+                                                                "Last Synch. CRM Result" := 0;
+                                                                Skipped := FALSE;
+                                                              END;
+
+                                                   CaptionML=ENU=CRM ID;
+                                                   Description=An ID of a record in Microsoft Dynamics CRM }
+    { 3   ;   ;Integration ID      ;GUID          ;TableRelation="Integration Record"."Integration ID";
+                                                   OnValidate=BEGIN
+                                                                CLEAR("Last Synch. Job ID");
+                                                                "Last Synch. Modified On" := 0DT;
+                                                                "Last Synch. Result" := 0;
+                                                                Skipped := FALSE;
+                                                              END;
+
+                                                   CaptionML=ENU=Integration ID }
+    { 4   ;   ;Last Synch. Modified On;DateTime   ;CaptionML=ENU=Last Synch. Modified On }
+    { 5   ;   ;Last Synch. CRM Modified On;DateTime;
+                                                   CaptionML=ENU=Last Synch. CRM Modified On }
+    { 6   ;   ;Table ID            ;Integer       ;FieldClass=Normal;
+                                                   CaptionML=ENU=Table ID;
+                                                   Editable=No }
+    { 7   ;   ;Last Synch. Result  ;Option        ;CaptionML=ENU=Last Synch. Result;
+                                                   OptionCaptionML=ENU=,Success,Failure;
+                                                   OptionString=,Success,Failure }
+    { 8   ;   ;Last Synch. CRM Result;Option      ;CaptionML=ENU=Last Synch. CRM Result;
+                                                   OptionCaptionML=ENU=,Success,Failure;
+                                                   OptionString=,Success,Failure }
+    { 9   ;   ;Last Synch. Job ID  ;GUID          ;CaptionML=ENU=Last Synch. Job ID }
+    { 10  ;   ;Last Synch. CRM Job ID;GUID        ;CaptionML=ENU=Last Synch. CRM Job ID }
+    { 11  ;   ;Skipped             ;Boolean       ;CaptionML=ENU=Skipped;
+                                                   Editable=No }
+  }
+  KEYS
+  {
+    {    ;CRM ID,Integration ID                   ;Clustered=Yes }
+    {    ;Integration ID                           }
+    {    ;Last Synch. Modified On,Integration ID   }
+    {    ;Last Synch. CRM Modified On,CRM ID       }
+    {    ;Skipped,Table ID                         }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      IntegrationRecordNotFoundErr@1000 : TextConst 'ENU=The integration record for entity %1 was not found.';
+      CRMIdAlreadyMappedErr@1003 : TextConst '@@@="%1 ID of the record, %2 ID of the already mapped record, %3 = CRM product name";ENU=Cannot couple %1 to this %3 record, because the %3 record is already coupled to %2.';
+      RecordIdAlreadyMappedErr@1004 : TextConst '@@@=%1 ID from the record, %2 ID of the already mapped record;ENU=Cannot couple the %2 record to %1, because %1 is already coupled to another %2 record.';
+      CRMProductName@1001 : Codeunit 5344;
+
+    LOCAL PROCEDURE GetCRMIdFromRecRef@24(CRMRecordRef@1000 : RecordRef) : GUID;
+    VAR
+      CRMIdFieldRef@1003 : FieldRef;
+      PrimaryKeyRef@1002 : KeyRef;
+    BEGIN
+      PrimaryKeyRef := CRMRecordRef.KEYINDEX(1);
+      CRMIdFieldRef := PrimaryKeyRef.FIELDINDEX(1);
+      EXIT(CRMIdFieldRef.VALUE);
+    END;
+
+    [External]
+    PROCEDURE GetCRMRecordID@31(IntegrationTableID@1004 : Integer;VAR CRMRecID@1000 : RecordID) Found : Boolean;
+    VAR
+      RecRef@1003 : RecordRef;
+    BEGIN
+      Found := GetCRMRecordRef(IntegrationTableID,RecRef);
+      CRMRecID := RecRef.RECORDID;
+      RecRef.CLOSE;
+    END;
+
+    [External]
+    PROCEDURE GetCRMRecordRef@33(IntegrationTableID@1004 : Integer;VAR RecRef@1000 : RecordRef) : Boolean;
+    VAR
+      FieldRef@1002 : FieldRef;
+      KeyRef@1001 : KeyRef;
+    BEGIN
+      RecRef.OPEN(IntegrationTableID);
+      KeyRef := RecRef.KEYINDEX(1);
+      FieldRef := KeyRef.FIELDINDEX(1);
+      FieldRef.SETRANGE("CRM ID");
+      EXIT(RecRef.FINDFIRST);
+    END;
+
+    PROCEDURE GetLatestJobIDFilter@23() : Text;
+    VAR
+      IntegrationSynchJob@1000 : Record 5338;
+    BEGIN
+      IF ISNULLGUID("Last Synch. Job ID") AND ISNULLGUID("Last Synch. CRM Job ID") THEN
+        EXIT('');
+      IntegrationSynchJob.SETFILTER(ID,'%1|%2',"Last Synch. Job ID","Last Synch. CRM Job ID");
+      EXIT(IntegrationSynchJob.GETFILTER(ID));
+    END;
+
+    PROCEDURE GetLatestError@28(VAR IntegrationSynchJobErrors@1000 : Record 5339) : Boolean;
+    BEGIN
+      IF NOT ISNULLGUID("Last Synch. CRM Job ID") THEN
+        EXIT(GetErrorForJobID("Last Synch. CRM Job ID",IntegrationSynchJobErrors));
+      IF NOT ISNULLGUID("Last Synch. Job ID") THEN
+        EXIT(GetErrorForJobID("Last Synch. Job ID",IntegrationSynchJobErrors))
+    END;
+
+    LOCAL PROCEDURE GetErrorForJobID@29(JobID@1000 : GUID;VAR IntegrationSynchJobErrors@1005 : Record 5339) : Boolean;
+    VAR
+      IntegrationRecord@1002 : Record 5151;
+      IntegrationSynchJob@1001 : Record 5338;
+      IntegrationTableMapping@1003 : Record 5335;
+      CRMRecId@1004 : RecordID;
+    BEGIN
+      IF IntegrationSynchJob.GET(JobID) THEN
+        CASE IntegrationSynchJob."Synch. Direction" OF
+          IntegrationSynchJob."Synch. Direction"::ToIntegrationTable:
+            IF IntegrationRecord.FindByIntegrationId("Integration ID") THEN
+              EXIT(IntegrationSynchJob.GetErrorForRecordID(IntegrationRecord."Record ID",IntegrationSynchJobErrors));
+          IntegrationSynchJob."Synch. Direction"::FromIntegrationTable:
+            IF IntegrationTableMapping.GET(IntegrationSynchJob."Integration Table Mapping Name") THEN
+              IF GetCRMRecordID(IntegrationTableMapping."Integration Table ID",CRMRecId) THEN
+                EXIT(IntegrationSynchJob.GetErrorForRecordID(CRMRecId,IntegrationSynchJobErrors));
+        END;
+    END;
+
+    PROCEDURE InsertRecord@25(CRMID@1000 : GUID;IntegrationRecord@1001 : Record 5151);
+    BEGIN
+      RESET;
+      INIT;
+      "CRM ID" := CRMID;
+      "Integration ID" := IntegrationRecord."Integration ID";
+      "Table ID" := IntegrationRecord."Table ID";
+      INSERT(TRUE);
+    END;
+
+    [External]
+    PROCEDURE IsCRMRecordRefCoupled@16(CRMRecordRef@1000 : RecordRef) : Boolean;
+    BEGIN
+      EXIT(FindByCRMID(GetCRMIdFromRecRef(CRMRecordRef)));
+    END;
+
+    [External]
+    PROCEDURE IsIntegrationIdCoupled@18(IntegrationID@1000 : GUID) : Boolean;
+    VAR
+      CRMIntegrationRecord@1001 : Record 5331;
+    BEGIN
+      EXIT(FindRowFromIntegrationID(IntegrationID,CRMIntegrationRecord));
+    END;
+
+    [External]
+    PROCEDURE IsRecordCoupled@5(DestinationRecordID@1001 : RecordID) : Boolean;
+    VAR
+      CRMId@1002 : GUID;
+    BEGIN
+      EXIT(FindIDFromRecordID(DestinationRecordID,CRMId));
+    END;
+
+    [External]
+    PROCEDURE FindByCRMID@14(CRMID@1000 : GUID) : Boolean;
+    BEGIN
+      RESET;
+      SETRANGE("CRM ID",CRMID);
+      EXIT(FINDFIRST);
+    END;
+
+    [External]
+    PROCEDURE FindValidByCRMID@30(CRMID@1000 : GUID) Found : Boolean;
+    VAR
+      IntegrationRecord@1002 : Record 5151;
+      RecRef@1001 : RecordRef;
+    BEGIN
+      CLEAR("CRM ID");
+      RESET;
+      SETRANGE("CRM ID",CRMID);
+      IF FINDFIRST THEN
+        IF IntegrationRecord.FindByIntegrationId("Integration ID") THEN
+          Found := RecRef.GET(IntegrationRecord."Record ID");
+    END;
+
+    [External]
+    PROCEDURE FindByRecordID@21(RecID@1000 : RecordID) : Boolean;
+    VAR
+      CRMIntegrationRecord@1001 : Record 5331;
+    BEGIN
+      IF FindRowFromRecordID(RecID,CRMIntegrationRecord) THEN BEGIN
+        COPY(CRMIntegrationRecord);
+        EXIT(TRUE);
+      END;
+    END;
+
+    [External]
+    PROCEDURE FindValidByRecordID@32(RecID@1000 : RecordID;IntegrationTableID@1004 : Integer) Found : Boolean;
+    VAR
+      CRMIntegrationRecord@1001 : Record 5331;
+      CRMRecId@1002 : RecordID;
+    BEGIN
+      CLEAR("CRM ID");
+      IF FindRowFromRecordID(RecID,CRMIntegrationRecord) THEN BEGIN
+        COPY(CRMIntegrationRecord);
+        Found := GetCRMRecordID(IntegrationTableID,CRMRecId);
+      END;
+    END;
+
+    [External]
+    PROCEDURE FindRecordIDFromID@3(SourceCRMID@1001 : GUID;DestinationTableID@1004 : Integer;VAR DestinationRecordId@1002 : RecordID) : Boolean;
+    VAR
+      CRMIntegrationRecord@1003 : Record 5331;
+      IntegrationRecord@1005 : Record 5151;
+    BEGIN
+      IF FindRowFromCRMID(SourceCRMID,DestinationTableID,CRMIntegrationRecord) THEN
+        IF IntegrationRecord.FindByIntegrationId(CRMIntegrationRecord."Integration ID") THEN BEGIN
+          DestinationRecordId := IntegrationRecord."Record ID";
+          EXIT(TRUE);
+        END;
+    END;
+
+    [External]
+    PROCEDURE FindIDFromRecordID@2(SourceRecordID@1001 : RecordID;VAR DestinationCRMID@1002 : GUID) : Boolean;
+    VAR
+      CRMIntegrationRecord@1004 : Record 5331;
+    BEGIN
+      IF FindRowFromRecordID(SourceRecordID,CRMIntegrationRecord) THEN BEGIN
+        DestinationCRMID := CRMIntegrationRecord."CRM ID";
+        EXIT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE FindIntegrationIDFromCRMID@20(SourceCRMID@1002 : GUID;DestinationTableID@1004 : Integer;VAR DestinationIntegrationID@1001 : GUID) : Boolean;
+    VAR
+      CRMIntegrationRecord@1000 : Record 5331;
+    BEGIN
+      IF FindRowFromCRMID(SourceCRMID,DestinationTableID,CRMIntegrationRecord) THEN BEGIN
+        DestinationIntegrationID := CRMIntegrationRecord."Integration ID";
+        EXIT(TRUE);
+      END;
+    END;
+
+    [External]
+    PROCEDURE CoupleCRMIDToRecordID@1(CRMID@1000 : GUID;RecordID@1001 : RecordID);
+    VAR
+      CRMIntegrationRecord@1003 : Record 5331;
+      IntegrationRecord@1004 : Record 5151;
+      CRMIntegrationRecord2@1006 : Record 5331;
+      ErrCRMID@1005 : GUID;
+    BEGIN
+      IF NOT IntegrationRecord.FindByRecordId(RecordID) THEN
+        ERROR(IntegrationRecordNotFoundErr,FORMAT(RecordID,0,1));
+
+      // Find coupling between CRMID and TableNo
+      IF NOT FindRowFromCRMID(CRMID,RecordID.TABLENO,CRMIntegrationRecord) THEN
+        // Find rogue coupling beteen CRMID and table 0
+        IF NOT FindRowFromCRMID(CRMID,0,CRMIntegrationRecord) THEN BEGIN
+          // Find other coupling to the record
+          IF CRMIntegrationRecord2.FindIDFromRecordID(RecordID,ErrCRMID) THEN
+            ERROR(RecordIdAlreadyMappedErr,FORMAT(RecordID,0,1));
+
+          CRMIntegrationRecord.InsertRecord(CRMID,IntegrationRecord);
+          EXIT;
+        END;
+
+      // Update Integration ID
+      IF CRMIntegrationRecord."Integration ID" <> IntegrationRecord."Integration ID" THEN BEGIN
+        IF CRMIntegrationRecord2.FindIDFromRecordID(RecordID,ErrCRMID) THEN
+          ERROR(RecordIdAlreadyMappedErr,FORMAT(RecordID,0,1));
+        CRMIntegrationRecord.SetNewIntegrationId(IntegrationRecord."Integration ID");
+      END;
+    END;
+
+    [External]
+    PROCEDURE CoupleRecordIdToCRMID@99(RecordID@1001 : RecordID;CRMID@1000 : GUID);
+    VAR
+      CRMIntegrationRecord@1003 : Record 5331;
+      IntegrationRecord@1004 : Record 5151;
+      IntegrationManagement@1002 : Codeunit 5150;
+      RecRef@1005 : RecordRef;
+      IntegrationID@1006 : GUID;
+    BEGIN
+      IF NOT IntegrationRecord.FindByRecordId(RecordID) THEN BEGIN
+        RecRef.GET(RecordID);
+        IntegrationID := IntegrationManagement.InsertUpdateIntegrationRecord(RecRef,CURRENTDATETIME);
+        IF ISNULLGUID(IntegrationID) THEN
+          EXIT;
+        IntegrationRecord.GET(IntegrationID);
+      END;
+      IF NOT FindRowFromIntegrationID(IntegrationRecord."Integration ID",CRMIntegrationRecord) THEN BEGIN
+        AssertRecordIDCanBeCoupled(RecordID,CRMID);
+        CRMIntegrationRecord.InsertRecord(CRMID,IntegrationRecord);
+      END ELSE
+        IF CRMIntegrationRecord."CRM ID" <> CRMID THEN BEGIN
+          AssertRecordIDCanBeCoupled(RecordID,CRMID);
+          CRMIntegrationRecord.SetNewCRMId(CRMID);
+        END;
+    END;
+
+    [External]
+    PROCEDURE RemoveCouplingToRecord@15(RecordID@1000 : RecordID) : Boolean;
+    VAR
+      CRMIntegrationRecord@1002 : Record 5331;
+      IntegrationRecord@1001 : Record 5151;
+    BEGIN
+      IF NOT IntegrationRecord.FindByRecordId(RecordID) THEN
+        ERROR(IntegrationRecordNotFoundErr,FORMAT(RecordID,0,1));
+
+      IF FindRowFromIntegrationID(IntegrationRecord."Integration ID",CRMIntegrationRecord) THEN BEGIN
+        COPY(CRMIntegrationRecord);
+        CRMIntegrationRecord.DELETE(TRUE);
+        EXIT(TRUE);
+      END;
+    END;
+
+    [External]
+    PROCEDURE RemoveCouplingToCRMID@13(CRMID@1000 : GUID;DestinationTableID@1003 : Integer) : Boolean;
+    VAR
+      CRMIntegrationRecord@1002 : Record 5331;
+    BEGIN
+      IF FindRowFromCRMID(CRMID,DestinationTableID,CRMIntegrationRecord) THEN BEGIN
+        COPY(CRMIntegrationRecord);
+        CRMIntegrationRecord.DELETE(TRUE);
+        EXIT(TRUE);
+      END;
+    END;
+
+    [External]
+    PROCEDURE SetNewCRMId@27(CRMId@1000 : GUID);
+    BEGIN
+      DELETE;
+      VALIDATE("CRM ID",CRMId);
+      INSERT;
+    END;
+
+    [External]
+    PROCEDURE SetNewIntegrationId@34(IntegrationId@1000 : GUID);
+    BEGIN
+      DELETE;
+      VALIDATE("Integration ID",IntegrationId);
+      INSERT;
+    END;
+
+    [External]
+    PROCEDURE AssertRecordIDCanBeCoupled@4(RecordID@1001 : RecordID;CRMID@1000 : GUID);
+    VAR
+      CRMIntegrationRecord@1003 : Record 5331;
+      ErrRecordID@1004 : RecordID;
+      ErrIntegrationID@1005 : GUID;
+    BEGIN
+      IF FindIntegrationIDFromCRMID(CRMID,RecordID.TABLENO,ErrIntegrationID) THEN
+        IF NOT UncoupleCRMIDIfRecordDeleted(ErrIntegrationID) THEN BEGIN
+          CRMIntegrationRecord.FindRecordIDFromID(CRMID,RecordID.TABLENO,ErrRecordID);
+          ERROR(CRMIdAlreadyMappedErr,FORMAT(RecordID,0,1),ErrRecordID,CRMProductName.SHORT);
+        END;
+    END;
+
+    PROCEDURE SetLastSynchResultFailed@19(SourceRecRef@1004 : RecordRef;DirectionToIntTable@1002 : Boolean;JobId@1000 : GUID);
+    VAR
+      Found@1006 : Boolean;
+    BEGIN
+      IF DirectionToIntTable THEN
+        Found := FindByRecordID(SourceRecRef.RECORDID)
+      ELSE
+        Found := FindByCRMID(GetCRMIdFromRecRef(SourceRecRef));
+      IF Found THEN BEGIN
+        IF DirectionToIntTable THEN BEGIN
+          IF (NOT Skipped) AND ("Last Synch. CRM Result" = "Last Synch. CRM Result"::Failure) THEN
+            Skipped := IsSameFailureRepeatedTwice(SourceRecRef,"Last Synch. CRM Job ID",JobId);
+          "Last Synch. CRM Job ID" := JobId;
+          "Last Synch. CRM Result" := "Last Synch. CRM Result"::Failure
+        END ELSE BEGIN
+          IF (NOT Skipped) AND ("Last Synch. Result" = "Last Synch. Result"::Failure) THEN
+            Skipped := IsSameFailureRepeatedTwice(SourceRecRef,"Last Synch. Job ID",JobId);
+          "Last Synch. Job ID" := JobId;
+          "Last Synch. Result" := "Last Synch. Result"::Failure;
+        END;
+        MODIFY(TRUE);
+      END;
+    END;
+
+    [External]
+    PROCEDURE SetLastSynchModifiedOns@8(SourceCRMID@1001 : GUID;DestinationTableID@1005 : Integer;CRMLastModifiedOn@1000 : DateTime;LastModifiedOn@1003 : DateTime;JobId@1002 : GUID;Direction@1006 : Option);
+    VAR
+      CRMIntegrationRecord@1004 : Record 5331;
+      IntegrationTableMapping@1007 : Record 5335;
+    BEGIN
+      IF FindRowFromCRMID(SourceCRMID,DestinationTableID,CRMIntegrationRecord) THEN
+        WITH CRMIntegrationRecord DO BEGIN
+          CASE Direction OF
+            IntegrationTableMapping.Direction::FromIntegrationTable:
+              BEGIN
+                "Last Synch. Job ID" := JobId;
+                "Last Synch. Result" := "Last Synch. Result"::Success;
+              END;
+            IntegrationTableMapping.Direction::ToIntegrationTable:
+              BEGIN
+                "Last Synch. CRM Job ID" := JobId;
+                "Last Synch. CRM Result" := "Last Synch. CRM Result"::Success;
+              END;
+          END;
+          "Last Synch. Modified On" := LastModifiedOn;
+          "Last Synch. CRM Modified On" := CRMLastModifiedOn;
+          MODIFY(TRUE);
+        END;
+    END;
+
+    [External]
+    PROCEDURE SetLastSynchCRMModifiedOn@12(CRMID@1001 : GUID;DestinationTableID@1003 : Integer;CRMLastModifiedOn@1000 : DateTime);
+    VAR
+      CRMIntegrationRecord@1004 : Record 5331;
+    BEGIN
+      IF FindRowFromCRMID(CRMID,DestinationTableID,CRMIntegrationRecord) THEN BEGIN
+        CRMIntegrationRecord."Last Synch. CRM Modified On" := CRMLastModifiedOn;
+        CRMIntegrationRecord.MODIFY(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE IsSameFailureRepeatedTwice@26(RecRef@1003 : RecordRef;LastJobID@1002 : GUID;NewJobID@1001 : GUID) : Boolean;
+    VAR
+      IntegrationSynchJob@1000 : Record 5338;
+      IntegrationSynchJobErrors@1006 : Record 5339;
+      LastError@1004 : Text;
+      NewError@1005 : Text;
+    BEGIN
+      IF ISNULLGUID(LastJobID) OR ISNULLGUID(NewJobID) THEN
+        EXIT(FALSE);
+      IF IntegrationSynchJob.GET(LastJobID) THEN
+        IF IntegrationSynchJob.GetErrorForRecordID(RecRef.RECORDID,IntegrationSynchJobErrors) THEN
+          LastError := IntegrationSynchJobErrors.Message;
+      IF IntegrationSynchJob.GET(NewJobID) THEN
+        IF IntegrationSynchJob.GetErrorForRecordID(RecRef.RECORDID,IntegrationSynchJobErrors) THEN
+          NewError := IntegrationSynchJobErrors.Message;
+      EXIT((LastError = NewError) AND (NewError <> ''));
+    END;
+
+    [External]
+    PROCEDURE IsModifiedAfterLastSynchonizedCRMRecord@6(CRMID@1000 : GUID;DestinationTableID@1004 : Integer;CurrentModifiedOn@1002 : DateTime) : Boolean;
+    VAR
+      CRMIntegrationRecord@1003 : Record 5331;
+      TypeHelper@1001 : Codeunit 10;
+    BEGIN
+      IF FindRowFromCRMID(CRMID,DestinationTableID,CRMIntegrationRecord) THEN
+        EXIT(TypeHelper.CompareDateTime(CurrentModifiedOn,CRMIntegrationRecord."Last Synch. CRM Modified On") > 0);
+    END;
+
+    [External]
+    PROCEDURE IsModifiedAfterLastSynchronizedRecord@7(RecordID@1001 : RecordID;CurrentModifiedOn@1000 : DateTime) : Boolean;
+    VAR
+      CRMIntegrationRecord@1003 : Record 5331;
+      TypeHelper@1002 : Codeunit 10;
+    BEGIN
+      IF FindRowFromRecordID(RecordID,CRMIntegrationRecord) THEN
+        EXIT(TypeHelper.CompareDateTime(CurrentModifiedOn,CRMIntegrationRecord."Last Synch. Modified On") > 0);
+    END;
+
+    LOCAL PROCEDURE UncoupleCRMIDIfRecordDeleted@9(IntegrationID@1001 : GUID) : Boolean;
+    VAR
+      IntegrationRecord@1000 : Record 5151;
+      CRMIntegrationRecord@1003 : Record 5331;
+    BEGIN
+      IntegrationRecord.FindByIntegrationId(IntegrationID);
+      IF IntegrationRecord."Deleted On" <> 0DT THEN BEGIN
+        IF FindRowFromIntegrationID(IntegrationID,CRMIntegrationRecord) THEN
+          CRMIntegrationRecord.DELETE;
+        EXIT(TRUE);
+      END;
+    END;
+
+    [External]
+    PROCEDURE DeleteIfRecordDeleted@17(CRMID@1001 : GUID;DestinationTableID@1002 : Integer) : Boolean;
+    VAR
+      IntegrationID@1004 : GUID;
+    BEGIN
+      IF FindIntegrationIDFromCRMID(CRMID,DestinationTableID,IntegrationID) THEN
+        EXIT(UncoupleCRMIDIfRecordDeleted(IntegrationID));
+    END;
+
+    LOCAL PROCEDURE FindRowFromRecordID@10(SourceRecordID@1000 : RecordID;VAR CRMIntegrationRecord@1001 : Record 5331) : Boolean;
+    VAR
+      IntegrationRecord@1002 : Record 5151;
+    BEGIN
+      IF IntegrationRecord.FindByRecordId(SourceRecordID) THEN
+        EXIT(FindRowFromIntegrationID(IntegrationRecord."Integration ID",CRMIntegrationRecord));
+    END;
+
+    LOCAL PROCEDURE FindRowFromCRMID@11(CRMID@1001 : GUID;DestinationTableID@1003 : Integer;VAR CRMIntegrationRecord@1000 : Record 5331) : Boolean;
+    BEGIN
+      CRMIntegrationRecord.SETRANGE("CRM ID",CRMID);
+      CRMIntegrationRecord.SETFILTER("Table ID",FORMAT(DestinationTableID));
+      EXIT(CRMIntegrationRecord.FINDFIRST);
+    END;
+
+    LOCAL PROCEDURE FindRowFromIntegrationID@22(IntegrationID@1001 : GUID;VAR CRMIntegrationRecord@1000 : Record 5331) : Boolean;
+    BEGIN
+      CRMIntegrationRecord.SETCURRENTKEY("Integration ID");
+      CRMIntegrationRecord.SETFILTER("Integration ID",IntegrationID);
+      EXIT(CRMIntegrationRecord.FINDFIRST);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

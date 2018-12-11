@@ -1,0 +1,150 @@
+OBJECT Codeunit 1660 Payroll Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:14 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 2000000120=rimd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      PayrollServiceNotFoundErr@1006 : TextConst 'ENU=A payroll service could not be found.';
+      PayrollServiceDisabledErr@1004 : TextConst '@@@=%1 Payroll Service Name;ENU=Payroll service %1 is disabled.';
+      SelectPayrollServiceToUseTxt@1003 : TextConst 'ENU=Several payroll services are installed and enabled. Select a service you want to use.';
+      SelectPayrollServiceToEnableTxt@1002 : TextConst 'ENU=Select a payroll service you want to enable and use.';
+      EnablePayrollServicesQst@1005 : TextConst 'ENU=All payroll services are disabled. Do you want to enable a payroll service?';
+
+    [External]
+    PROCEDURE ShowPayrollForTestInNonSaas@1() : Boolean;
+    VAR
+      PermissionManager@1000 : Codeunit 9002;
+    BEGIN
+      IF PermissionManager.SoftwareAsAService THEN
+        EXIT(TRUE);
+      EXIT(FALSE);
+    END;
+
+    [External]
+    PROCEDURE ImportPayroll@2(VAR GenJournalLine@1000 : Record 81);
+    VAR
+      TempServiceConnection@1002 : TEMPORARY Record 1400;
+    BEGIN
+      TempServiceConnection.DELETEALL;
+      OnRegisterPayrollService(TempServiceConnection);
+
+      IF TempServiceConnection.ISEMPTY THEN
+        ERROR(PayrollServiceNotFoundErr);
+
+      IF NOT EnabledPayrollServiceExists(TempServiceConnection) THEN BEGIN
+        IF CONFIRM(EnablePayrollServicesQst) THEN
+          EnablePayrollService(TempServiceConnection)
+        ELSE
+          EXIT;
+      END;
+
+      IF EnabledPayrollServiceExists(TempServiceConnection) THEN
+        IF SelectPayrollService(TempServiceConnection,SelectPayrollServiceToUseTxt) THEN
+          OnImportPayroll(TempServiceConnection,GenJournalLine);
+    END;
+
+    LOCAL PROCEDURE EnabledPayrollServiceExists@9(VAR TempServiceConnection@1000 : TEMPORARY Record 1400) : Boolean;
+    BEGIN
+      TempServiceConnection.SETFILTER(
+        Status,STRSUBSTNO('%1|%2',TempServiceConnection.Status::Enabled,TempServiceConnection.Status::Connected));
+      EXIT(TempServiceConnection.FINDSET);
+    END;
+
+    LOCAL PROCEDURE EnablePayrollService@8(VAR TempServiceConnection@1000 : TEMPORARY Record 1400);
+    VAR
+      SelectedServiceRecordId@1004 : RecordID;
+      SelectedServiceName@1005 : Text;
+    BEGIN
+      TempServiceConnection.RESET;
+      IF SelectPayrollService(TempServiceConnection,SelectPayrollServiceToEnableTxt) THEN BEGIN
+        SelectedServiceRecordId := TempServiceConnection."Record ID";
+        SelectedServiceName := TempServiceConnection.Name;
+        SetupPayrollService(TempServiceConnection);
+        TempServiceConnection.DELETEALL;
+        OnRegisterPayrollService(TempServiceConnection);
+        IF NOT TempServiceConnection.ISEMPTY THEN BEGIN
+          TempServiceConnection.SETRANGE("Record ID",SelectedServiceRecordId);
+          IF NOT EnabledPayrollServiceExists(TempServiceConnection) THEN
+            ERROR(PayrollServiceDisabledErr,SelectedServiceName);
+        END ELSE
+          ERROR(PayrollServiceNotFoundErr);
+      END;
+    END;
+
+    LOCAL PROCEDURE SelectPayrollService@31(VAR TempServiceConnection@1000 : TEMPORARY Record 1400;Instruction@1001 : Text) : Boolean;
+    VAR
+      ServiceList@1004 : Text;
+      SelectedServiceIndex@1003 : Integer;
+    BEGIN
+      IF TempServiceConnection.COUNT < 2 THEN
+        EXIT(TempServiceConnection.FINDFIRST);
+
+      TempServiceConnection.SETCURRENTKEY(Name);
+      TempServiceConnection.SETASCENDING(Name,TRUE);
+      TempServiceConnection.FINDFIRST;
+      REPEAT
+        IF ServiceList = '' THEN
+          ServiceList := CONVERTSTR(TempServiceConnection.Name,',',' ')
+        ELSE
+          ServiceList := ServiceList + ',' + CONVERTSTR(TempServiceConnection.Name,',',' ');
+      UNTIL TempServiceConnection.NEXT = 0;
+      SelectedServiceIndex := STRMENU(ServiceList,1,Instruction);
+
+      IF SelectedServiceIndex > 0 THEN BEGIN
+        TempServiceConnection.FINDFIRST;
+        IF SelectedServiceIndex > 1 THEN
+          TempServiceConnection.NEXT(SelectedServiceIndex - 1);
+      END;
+      EXIT(SelectedServiceIndex > 0);
+    END;
+
+    LOCAL PROCEDURE SetupPayrollService@10(VAR TempServiceConnection@1000 : TEMPORARY Record 1400);
+    VAR
+      AssistedSetup@1002 : Record 1803;
+      RecordRef@1001 : RecordRef;
+      RecordRefVariant@1003 : Variant;
+    BEGIN
+      RecordRef.GET(TempServiceConnection."Record ID");
+      IF (TempServiceConnection.Status <> TempServiceConnection.Status::Enabled) AND
+         (TempServiceConnection.Status <> TempServiceConnection.Status::Connected) AND
+         (TempServiceConnection."Assisted Setup Page ID" <> 0) AND
+         AssistedSetup.GET(TempServiceConnection."Assisted Setup Page ID") AND
+         (AssistedSetup.Status = AssistedSetup.Status::"Not Completed") AND
+         AssistedSetup.Visible
+      THEN
+        AssistedSetup.Run
+      ELSE BEGIN
+        RecordRefVariant := RecordRef;
+        PAGE.RUNMODAL(TempServiceConnection."Page ID",RecordRefVariant);
+      END;
+    END;
+
+    [Integration]
+    [External]
+    PROCEDURE OnRegisterPayrollService@5(VAR TempServiceConnection@1000 : TEMPORARY Record 1400);
+    BEGIN
+    END;
+
+    [Integration]
+    [External]
+    PROCEDURE OnImportPayroll@4(VAR TempServiceConnection@1000 : TEMPORARY Record 1400;GenJournalLine@1001 : Record 81);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

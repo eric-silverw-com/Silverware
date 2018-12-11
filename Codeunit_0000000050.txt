@@ -1,0 +1,128 @@
+OBJECT Codeunit 50 SaaS Log In Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:07:48 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            ShowTermsAndConditionsOnOpenCompany;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      NoPermissionToEnterTrialErr@1003 : TextConst '@@@="%1 = Company Name";ENU=In order to open %1, your company must start a trial. You must be an administrator to enter the trial period.';
+      RequireUserApprovalForTrialErr@1000 : TextConst '@@@="%1 = Company Name";ENU=Preview versions are no longer available. To continue using %1, use a web client to open the company and accept the terms and conditions.';
+      MissingEvaluationCompanyErr@1013 : TextConst 'ENU=You do not have an evaluation company. To continue with the trial version, you must accept the terms and conditions.';
+      AbortTrialQst@1001 : TextConst '@@@=Use same string as in page 9193 textconst AbortTrialQst;ENU=Are you sure that you want to cancel?';
+      CanNotOpenCompanyFromDevicelMsg@1002 : TextConst '@@@="%1 = Company Name";ENU=Sorry, you can''t create a %1 from this device.';
+
+    LOCAL PROCEDURE ChangeToEvaluationCompany@17();
+    VAR
+      SelectedCompany@1001 : Record 2000000006;
+      SessionSetting@1002 : SessionSettings;
+    BEGIN
+      SessionSetting.INIT;
+
+      SelectedCompany.SETRANGE("Evaluation Company",TRUE);
+      IF SelectedCompany.FINDFIRST THEN
+        SessionSetting.COMPANY(SelectedCompany.Name)
+      ELSE
+        ERROR(MissingEvaluationCompanyErr);
+
+      SessionSetting.REQUESTSESSIONUPDATE(TRUE);
+
+      // Commit needed as SessionSetting is saving to the Personalization
+      COMMIT;
+
+      // Confirm needed to force the session update
+      IF CONFIRM(AbortTrialQst) THEN;
+    END;
+
+    LOCAL PROCEDURE ShowTermsAndConditionsOnOpenCompany@10();
+    VAR
+      TenantLicenseState@1004 : Record 2000000189;
+      Company@1010 : Record 2000000006;
+      PermissionManager@1002 : Codeunit 9002;
+      RoleCenterNotificationMgt@1005 : Codeunit 1430;
+      ClientTypeManagement@1003 : Codeunit 4;
+      IdentityManagement@1011 : Codeunit 9801;
+      ThirtyDayTrialDialog@1001 : Page 9193;
+      SuppressApprovalForTrial@1006 : Boolean;
+    BEGIN
+      IF IdentityManagement.IsInvAppId THEN
+        EXIT;
+
+      IF NOT Company.GET(COMPANYNAME) THEN
+        EXIT;
+
+      IF PermissionManager.IsPreview THEN
+        EXIT;
+
+      IF NOT PermissionManager.SoftwareAsAService THEN
+        EXIT;
+
+      IF PermissionManager.IsSandboxConfiguration THEN
+        EXIT;
+
+      IF Company."Evaluation Company" THEN
+        EXIT;
+
+      IF TenantLicenseState.FINDLAST THEN
+        IF TenantLicenseState.State <> TenantLicenseState.State::Evaluation THEN
+          EXIT;
+
+      IF NOT GUIALLOWED THEN BEGIN
+        IF CURRENTCLIENTTYPE IN [CLIENTTYPE::OData,CLIENTTYPE::ODataV4] THEN BEGIN
+          SuppressApprovalForTrial := FALSE;
+          OnSuppressApprovalForTrial(SuppressApprovalForTrial);
+          IF NOT SuppressApprovalForTrial THEN
+            ERROR(RequireUserApprovalForTrialErr,Company.Name);
+        END;
+        EXIT;
+      END;
+
+      IF ClientTypeManagement.IsDeviceClientType THEN BEGIN
+        MESSAGE(CanNotOpenCompanyFromDevicelMsg,Company.Name);
+        ChangeToEvaluationCompany;
+        // Just to be sure that we do not save the Trial License State on the server side
+        ERROR('');
+      END;
+
+      IF NOT Company.WRITEPERMISSION THEN
+        ERROR(NoPermissionToEnterTrialErr,Company.Name);
+
+      COMMIT;
+
+      ThirtyDayTrialDialog.RUNMODAL;
+
+      IF NOT ThirtyDayTrialDialog.Confirmed THEN BEGIN
+        IF RoleCenterNotificationMgt.IsEvaluationNotificationClicked THEN
+          RoleCenterNotificationMgt.ShowEvaluationNotification;
+        ChangeToEvaluationCompany;
+        // Just to be sure that we do not save the Trial License State on the server side
+        ERROR('');
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,2000000006,OpenContactMSSales)]
+    LOCAL PROCEDURE OpenContactMSSales@3();
+    BEGIN
+      PAGE.RUN(PAGE::"Contact MS Sales")
+    END;
+
+    [Integration]
+    PROCEDURE OnSuppressApprovalForTrial@1(VAR GetSuppressApprovalForTrial@1000 : Boolean);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

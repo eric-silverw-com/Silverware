@@ -1,0 +1,893 @@
+OBJECT Codeunit 23 Item Jnl.-Post Batch
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:07:47 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    TableNo=83;
+    Permissions=TableData 233=imd,
+                TableData 7313=r;
+    OnRun=BEGIN
+            ItemJnlLine.COPY(Rec);
+            Code;
+            Rec := ItemJnlLine;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=cannot exceed %1 characters';
+      Text001@1001 : TextConst 'ENU=Journal Batch Name    #1##########\\';
+      Text002@1002 : TextConst 'ENU=Checking lines        #2######\';
+      Text003@1003 : TextConst 'ENU=Posting lines         #3###### @4@@@@@@@@@@@@@\';
+      Text004@1004 : TextConst 'ENU=Updating lines        #5###### @6@@@@@@@@@@@@@';
+      Text005@1005 : TextConst 'ENU=Posting lines         #3###### @4@@@@@@@@@@@@@';
+      Text006@1006 : TextConst 'ENU=A maximum of %1 posting number series can be used in each journal.';
+      Text007@1007 : TextConst 'ENU=<Month Text>';
+      Text008@1008 : TextConst 'ENU=There are new postings made in the period you want to revalue item no. %1.\';
+      Text009@1009 : TextConst 'ENU=You must calculate the inventory value again.';
+      Text010@1061 : TextConst '@@@="One or more reservation entries exist for the item with Item No. = 1000, Location Code = BLUE, Variant Code = NEW which may be disrupted if you post this negative adjustment. Do you want to continue?";ENU="One or more reservation entries exist for the item with %1 = %2, %3 = %4, %5 = %6 which may be disrupted if you post this negative adjustment. Do you want to continue?"';
+      ItemJnlTemplate@1010 : Record 82;
+      ItemJnlBatch@1011 : Record 233;
+      ItemJnlLine@1012 : Record 83;
+      ItemLedgEntry@1015 : Record 32;
+      WhseEntry@1049 : Record 7312;
+      ItemReg@1016 : Record 46;
+      WhseReg@1025 : Record 7313;
+      GLSetup@1017 : Record 98;
+      InvtSetup@1050 : Record 313;
+      AccountingPeriod@1018 : Record 50;
+      NoSeries@1019 : TEMPORARY Record 308;
+      Location@1043 : Record 14;
+      ItemJnlCheckLine@1021 : Codeunit 21;
+      ItemJnlPostLine@1022 : Codeunit 22;
+      NoSeriesMgt@1023 : Codeunit 396;
+      NoSeriesMgt2@1024 : ARRAY [10] OF Codeunit 396;
+      WMSMgmt@1046 : Codeunit 7302;
+      WhseJnlPostLine@1048 : Codeunit 7301;
+      InvtAdjmt@1045 : Codeunit 5895;
+      Window@1027 : Dialog;
+      ItemRegNo@1028 : Integer;
+      WhseRegNo@1044 : Integer;
+      StartLineNo@1029 : Integer;
+      Day@1030 : Integer;
+      Week@1031 : Integer;
+      Month@1032 : Integer;
+      MonthText@1033 : Text[30];
+      NoOfRecords@1034 : Integer;
+      LineCount@1035 : Integer;
+      LastDocNo@1036 : Code[20];
+      LastDocNo2@1037 : Code[20];
+      LastPostedDocNo@1038 : Code[20];
+      NoOfPostingNoSeries@1039 : Integer;
+      PostingNoSeriesNo@1040 : Integer;
+      WhseTransaction@1047 : Boolean;
+      PhysInvtCount@1052 : Boolean;
+      SuppressCommit@1013 : Boolean;
+
+    LOCAL PROCEDURE Code@3();
+    VAR
+      UpdateAnalysisView@1002 : Codeunit 410;
+      UpdateItemAnalysisView@1006 : Codeunit 7150;
+      PhysInvtCountMgt@1007 : Codeunit 7380;
+      OldEntryType@1008 : 'Purchase,Sale,Positive Adjmt.,Negative Adjmt.,Transfer,Consumption,Output, ,Assembly Consumption,Assembly Output';
+      RaiseError@1000 : Boolean;
+    BEGIN
+      WITH ItemJnlLine DO BEGIN
+        LOCKTABLE;
+        SETRANGE("Journal Template Name","Journal Template Name");
+        SETRANGE("Journal Batch Name","Journal Batch Name");
+
+        ItemJnlTemplate.GET("Journal Template Name");
+        ItemJnlBatch.GET("Journal Template Name","Journal Batch Name");
+        RaiseError := STRLEN(INCSTR(ItemJnlBatch.Name)) > MAXSTRLEN(ItemJnlBatch.Name);
+        OnBeforeRaiseExceedLengthError(ItemJnlBatch,RaiseError);
+        IF RaiseError THEN
+          ItemJnlBatch.FIELDERROR(Name,STRSUBSTNO(Text000,MAXSTRLEN(ItemJnlBatch.Name)));
+
+        IF ItemJnlTemplate.Recurring THEN BEGIN
+          SETRANGE("Posting Date",0D,WORKDATE);
+          SETFILTER("Expiration Date",'%1 | %2..',0D,WORKDATE);
+        END;
+
+        IF NOT FIND('=><') THEN BEGIN
+          "Line No." := 0;
+          IF NOT SuppressCommit THEN
+            COMMIT;
+          EXIT;
+        END;
+
+        CheckItemAvailability(ItemJnlLine);
+
+        IF ItemJnlTemplate.Recurring THEN
+          Window.OPEN(
+            Text001 +
+            Text002 +
+            Text003 +
+            Text004)
+        ELSE
+          Window.OPEN(
+            Text001 +
+            Text002 +
+            Text005);
+
+        Window.UPDATE(1,"Journal Batch Name");
+
+        CheckLines(ItemJnlLine);
+
+        // Find next register no.
+        ItemLedgEntry.LOCKTABLE;
+        IF ItemLedgEntry.FINDLAST THEN;
+        IF WhseTransaction THEN BEGIN
+          WhseEntry.LOCKTABLE;
+          IF WhseEntry.FINDLAST THEN;
+        END;
+
+        ItemReg.LOCKTABLE;
+        IF ItemReg.FINDLAST THEN
+          ItemRegNo := ItemReg."No." + 1
+        ELSE
+          ItemRegNo := 1;
+
+        WhseReg.LOCKTABLE;
+        IF WhseReg.FINDLAST THEN
+          WhseRegNo := WhseReg."No." + 1
+        ELSE
+          WhseRegNo := 1;
+
+        GLSetup.GET;
+        PhysInvtCount := FALSE;
+
+        // Post lines
+        LineCount := 0;
+        OldEntryType := "Entry Type";
+        PostLines(ItemJnlLine,PhysInvtCountMgt);
+
+        // Copy register no. and current journal batch name to item journal
+        IF NOT ItemReg.FINDLAST OR (ItemReg."No." <> ItemRegNo) THEN
+          ItemRegNo := 0;
+        IF NOT WhseReg.FINDLAST OR (WhseReg."No." <> WhseRegNo) THEN
+          WhseRegNo := 0;
+
+        INIT;
+
+        "Line No." := ItemRegNo;
+        IF "Line No." = 0 THEN
+          "Line No." := WhseRegNo;
+
+        InvtSetup.GET;
+        IF InvtSetup."Automatic Cost Adjustment" <>
+           InvtSetup."Automatic Cost Adjustment"::Never
+        THEN BEGIN
+          InvtAdjmt.SetProperties(TRUE,InvtSetup."Automatic Cost Posting");
+          InvtAdjmt.MakeMultiLevelAdjmt;
+        END;
+
+        // Update/delete lines
+        OnBeforeUpdateDeleteLines(ItemJnlLine,ItemRegNo);
+        IF "Line No." <> 0 THEN BEGIN
+          IF ItemJnlTemplate.Recurring THEN BEGIN
+            HandleRecurringLine(ItemJnlLine);
+          END ELSE
+            HandleNonRecurringLine(ItemJnlLine,OldEntryType);
+          IF ItemJnlBatch."No. Series" <> '' THEN
+            NoSeriesMgt.SaveNoSeries;
+          IF NoSeries.FINDSET THEN
+            REPEAT
+              EVALUATE(PostingNoSeriesNo,NoSeries.Description);
+              NoSeriesMgt2[PostingNoSeriesNo].SaveNoSeries;
+            UNTIL NoSeries.NEXT = 0;
+        END;
+
+        IF PhysInvtCount THEN
+          PhysInvtCountMgt.UpdateItemSKUListPhysInvtCount;
+
+        OnAfterPostJnlLines(ItemJnlBatch,ItemJnlLine,ItemRegNo,WhseRegNo);
+
+        Window.CLOSE;
+        IF NOT SuppressCommit THEN
+          COMMIT;
+        CLEAR(ItemJnlCheckLine);
+        CLEAR(ItemJnlPostLine);
+        CLEAR(WhseJnlPostLine);
+        CLEAR(InvtAdjmt)
+      END;
+      UpdateAnalysisView.UpdateAll(0,TRUE);
+      UpdateItemAnalysisView.UpdateAll(0,TRUE);
+      IF NOT SuppressCommit THEN
+        COMMIT;
+    END;
+
+    LOCAL PROCEDURE CheckLines@11(VAR ItemJnlLine@1000 : Record 83);
+    BEGIN
+      OnBeforeCheckLines(ItemJnlLine);
+
+      WITH ItemJnlLine DO BEGIN
+        LineCount := 0;
+        StartLineNo := "Line No.";
+        REPEAT
+          LineCount := LineCount + 1;
+          Window.UPDATE(2,LineCount);
+          CheckRecurringLine(ItemJnlLine);
+
+          IF (("Value Entry Type" = "Value Entry Type"::"Direct Cost") AND ("Item Charge No." = '')) OR
+             (("Invoiced Quantity" <> 0) AND (Amount <> 0))
+          THEN BEGIN
+            ItemJnlCheckLine.RunCheck(ItemJnlLine);
+
+            IF (Quantity <> 0) AND
+               ("Value Entry Type" = "Value Entry Type"::"Direct Cost") AND
+               ("Item Charge No." = '')
+            THEN
+              CheckWMSBin(ItemJnlLine);
+
+            IF ("Value Entry Type" = "Value Entry Type"::Revaluation) AND
+               ("Inventory Value Per" = "Inventory Value Per"::" ") AND
+               "Partial Revaluation"
+            THEN
+              CheckRemainingQty;
+
+            OnAfterCheckJnlLine(ItemJnlLine,SuppressCommit);
+          END;
+
+          IF NEXT = 0 THEN
+            FINDFIRST;
+        UNTIL "Line No." = StartLineNo;
+        NoOfRecords := LineCount;
+      END;
+
+      OnAfterCheckLines(ItemJnlLine);
+    END;
+
+    LOCAL PROCEDURE PostLines@12(VAR ItemJnlLine@1000 : Record 83;VAR PhysInvtCountMgt@1004 : Codeunit 7380);
+    VAR
+      TempTrackingSpecification@1003 : TEMPORARY Record 336;
+      OriginalQuantity@1002 : Decimal;
+      OriginalQuantityBase@1001 : Decimal;
+    BEGIN
+      LastDocNo := '';
+      LastDocNo2 := '';
+      LastPostedDocNo := '';
+      WITH ItemJnlLine DO BEGIN
+        SETCURRENTKEY("Journal Template Name","Journal Batch Name","Line No.");
+        FINDSET;
+        REPEAT
+          IF NOT EmptyLine AND
+             (ItemJnlBatch."No. Series" <> '') AND
+             ("Document No." <> LastDocNo2)
+          THEN
+            TESTFIELD("Document No.",NoSeriesMgt.GetNextNo(ItemJnlBatch."No. Series","Posting Date",FALSE));
+          IF NOT EmptyLine THEN
+            LastDocNo2 := "Document No.";
+          MakeRecurringTexts(ItemJnlLine);
+          ConstructPostingNumber(ItemJnlLine);
+
+          IF "Inventory Value Per" <> "Inventory Value Per"::" " THEN
+            ItemJnlPostSumLine(ItemJnlLine)
+          ELSE
+            IF (("Value Entry Type" = "Value Entry Type"::"Direct Cost") AND ("Item Charge No." = '')) OR
+               (("Invoiced Quantity" <> 0) AND (Amount <> 0))
+            THEN BEGIN
+              LineCount := LineCount + 1;
+              Window.UPDATE(3,LineCount);
+              Window.UPDATE(4,ROUND(LineCount / NoOfRecords * 10000,1));
+              OriginalQuantity := Quantity;
+              OriginalQuantityBase := "Quantity (Base)";
+              IF NOT ItemJnlPostLine.RunWithCheck(ItemJnlLine) THEN
+                ItemJnlPostLine.CheckItemTracking;
+              IF "Value Entry Type" <> "Value Entry Type"::Revaluation THEN BEGIN
+                ItemJnlPostLine.CollectTrackingSpecification(TempTrackingSpecification);
+                OnPostLinesBeforePostWhseJnlLine(ItemJnlLine,SuppressCommit);
+                PostWhseJnlLine(ItemJnlLine,OriginalQuantity,OriginalQuantityBase,TempTrackingSpecification);
+              END;
+            END;
+
+          IF IsPhysInvtCount(ItemJnlTemplate,"Phys Invt Counting Period Code","Phys Invt Counting Period Type") THEN BEGIN
+            IF NOT PhysInvtCount THEN BEGIN
+              PhysInvtCountMgt.InitTempItemSKUList;
+              PhysInvtCount := TRUE;
+            END;
+            PhysInvtCountMgt.AddToTempItemSKUList("Item No.","Location Code","Variant Code","Phys Invt Counting Period Type");
+          END;
+        UNTIL NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE HandleRecurringLine@15(VAR ItemJnlLine@1000 : Record 83);
+    VAR
+      ItemJnlLine2@1002 : Record 83;
+    BEGIN
+      LineCount := 0;
+      ItemJnlLine2.COPYFILTERS(ItemJnlLine);
+      ItemJnlLine2.FINDSET;
+      REPEAT
+        LineCount := LineCount + 1;
+        Window.UPDATE(5,LineCount);
+        Window.UPDATE(6,ROUND(LineCount / NoOfRecords * 10000,1));
+        IF ItemJnlLine2."Posting Date" <> 0D THEN
+          ItemJnlLine2.VALIDATE("Posting Date",CALCDATE(ItemJnlLine2."Recurring Frequency",ItemJnlLine2."Posting Date"));
+        IF (ItemJnlLine2."Recurring Method" = ItemJnlLine2."Recurring Method"::Variable) AND
+           (ItemJnlLine2."Item No." <> '')
+        THEN BEGIN
+          ItemJnlLine2.Quantity := 0;
+          ItemJnlLine2."Invoiced Quantity" := 0;
+          ItemJnlLine2.Amount := 0;
+        END;
+        ItemJnlLine2.MODIFY;
+      UNTIL ItemJnlLine2.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE HandleNonRecurringLine@17(VAR ItemJnlLine@1000 : Record 83;OldEntryType@1001 : 'Purchase,Sale,Positive Adjmt.,Negative Adjmt.,Transfer,Consumption,Output, ,Assembly Consumption,Assembly Output');
+    VAR
+      ItemJnlLine2@1003 : Record 83;
+      ItemJnlLine3@1002 : Record 83;
+      IncrBatchName@1004 : Boolean;
+    BEGIN
+      WITH ItemJnlLine DO BEGIN
+        ItemJnlLine2.COPYFILTERS(ItemJnlLine);
+        ItemJnlLine2.SETFILTER("Item No.",'<>%1','');
+        IF ItemJnlLine2.FINDLAST THEN; // Remember the last line
+        ItemJnlLine2."Entry Type" := OldEntryType;
+
+        ItemJnlLine3.COPY(ItemJnlLine);
+        ItemJnlLine3.DELETEALL;
+        ItemJnlLine3.RESET;
+        ItemJnlLine3.SETRANGE("Journal Template Name","Journal Template Name");
+        ItemJnlLine3.SETRANGE("Journal Batch Name","Journal Batch Name");
+        IF NOT ItemJnlLine3.FINDLAST THEN BEGIN
+          IncrBatchName := INCSTR("Journal Batch Name") <> '';
+          OnBeforeIncrBatchName(ItemJnlLine,IncrBatchName);
+          IF IncrBatchName THEN BEGIN
+            ItemJnlBatch.DELETE;
+            ItemJnlBatch.Name := INCSTR("Journal Batch Name");
+            IF ItemJnlBatch.INSERT THEN;
+            "Journal Batch Name" := ItemJnlBatch.Name;
+          END;
+        END;
+
+        ItemJnlLine3.SETRANGE("Journal Batch Name","Journal Batch Name");
+        IF (ItemJnlBatch."No. Series" = '') AND NOT ItemJnlLine3.FINDLAST AND
+           NOT (ItemJnlLine2."Entry Type" IN [ItemJnlLine2."Entry Type"::Consumption,ItemJnlLine2."Entry Type"::Output])
+        THEN BEGIN
+          ItemJnlLine3.INIT;
+          ItemJnlLine3."Journal Template Name" := "Journal Template Name";
+          ItemJnlLine3."Journal Batch Name" := "Journal Batch Name";
+          ItemJnlLine3."Line No." := 10000;
+          ItemJnlLine3.INSERT;
+          ItemJnlLine3.SetUpNewLine(ItemJnlLine2);
+          ItemJnlLine3.MODIFY;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE ConstructPostingNumber@13(VAR ItemJnlLine@1000 : Record 83);
+    BEGIN
+      WITH ItemJnlLine DO BEGIN
+        IF "Posting No. Series" = '' THEN
+          "Posting No. Series" := ItemJnlBatch."No. Series"
+        ELSE
+          IF NOT EmptyLine THEN
+            IF "Document No." = LastDocNo THEN
+              "Document No." := LastPostedDocNo
+            ELSE BEGIN
+              IF NOT NoSeries.GET("Posting No. Series") THEN BEGIN
+                NoOfPostingNoSeries := NoOfPostingNoSeries + 1;
+                IF NoOfPostingNoSeries > ARRAYLEN(NoSeriesMgt2) THEN
+                  ERROR(
+                    Text006,
+                    ARRAYLEN(NoSeriesMgt2));
+                NoSeries.Code := "Posting No. Series";
+                NoSeries.Description := FORMAT(NoOfPostingNoSeries);
+                NoSeries.INSERT;
+              END;
+              LastDocNo := "Document No.";
+              EVALUATE(PostingNoSeriesNo,NoSeries.Description);
+              "Document No." := NoSeriesMgt2[PostingNoSeriesNo].GetNextNo("Posting No. Series","Posting Date",FALSE);
+              LastPostedDocNo := "Document No.";
+            END;
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckRecurringLine@1(VAR ItemJnlLine2@1000 : Record 83);
+    VAR
+      NULDF@1001 : DateFormula;
+    BEGIN
+      WITH ItemJnlLine2 DO BEGIN
+        IF "Item No." <> '' THEN
+          IF ItemJnlTemplate.Recurring THEN BEGIN
+            TESTFIELD("Recurring Method");
+            TESTFIELD("Recurring Frequency");
+            IF "Recurring Method" = "Recurring Method"::Variable THEN
+              TESTFIELD(Quantity);
+          END ELSE BEGIN
+            CLEAR(NULDF);
+            TESTFIELD("Recurring Method",0);
+            TESTFIELD("Recurring Frequency",NULDF);
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE MakeRecurringTexts@2(VAR ItemJnlLine2@1000 : Record 83);
+    BEGIN
+      WITH ItemJnlLine2 DO BEGIN
+        IF ("Item No." <> '') AND ("Recurring Method" <> 0) THEN BEGIN // Not recurring
+          Day := DATE2DMY("Posting Date",1);
+          Week := DATE2DWY("Posting Date",2);
+          Month := DATE2DMY("Posting Date",2);
+          MonthText := FORMAT("Posting Date",0,Text007);
+          AccountingPeriod.SETRANGE("Starting Date",0D,"Posting Date");
+          IF NOT AccountingPeriod.FINDLAST THEN
+            AccountingPeriod.Name := '';
+          "Document No." :=
+            DELCHR(
+              PADSTR(
+                STRSUBSTNO("Document No.",Day,Week,Month,MonthText,AccountingPeriod.Name),
+                MAXSTRLEN("Document No.")),
+              '>');
+          Description :=
+            DELCHR(
+              PADSTR(
+                STRSUBSTNO(Description,Day,Week,Month,MonthText,AccountingPeriod.Name),
+                MAXSTRLEN(Description)),
+              '>');
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE ItemJnlPostSumLine@5800(ItemJnlLine4@1000 : Record 83);
+    VAR
+      Item@1002 : Record 27;
+      ItemLedgEntry4@1003 : Record 32;
+      ItemLedgEntry5@1005 : Record 32;
+      Remainder@1006 : Decimal;
+      RemAmountToDistribute@1007 : Decimal;
+      RemQuantity@1008 : Decimal;
+      DistributeCosts@1009 : Boolean;
+      IncludeExpectedCost@1010 : Boolean;
+      PostingDate@1012 : Date;
+      IsLastEntry@1011 : Boolean;
+    BEGIN
+      DistributeCosts := TRUE;
+      RemAmountToDistribute := ItemJnlLine.Amount;
+      RemQuantity := ItemJnlLine.Quantity;
+      IF ItemJnlLine.Amount <> 0 THEN BEGIN
+        LineCount := LineCount + 1;
+        Window.UPDATE(3,LineCount);
+        Window.UPDATE(4,ROUND(LineCount / NoOfRecords * 10000,1));
+        WITH ItemLedgEntry4 DO BEGIN
+          Item.GET(ItemJnlLine4."Item No.");
+          IncludeExpectedCost := (Item."Costing Method" = Item."Costing Method"::Standard) AND
+            (ItemJnlLine4."Inventory Value Per" <> ItemJnlLine4."Inventory Value Per"::" ");
+          RESET;
+          SETCURRENTKEY("Item No.",Positive,"Location Code","Variant Code");
+          SETRANGE("Item No.",ItemJnlLine."Item No.");
+          SETRANGE(Positive,TRUE);
+          PostingDate := ItemJnlLine."Posting Date";
+
+          IF (ItemJnlLine4."Location Code" <> '') OR
+             (ItemJnlLine4."Inventory Value Per" IN
+              [ItemJnlLine."Inventory Value Per"::Location,
+               ItemJnlLine4."Inventory Value Per"::"Location and Variant"])
+          THEN
+            SETRANGE("Location Code",ItemJnlLine."Location Code");
+          IF (ItemJnlLine."Variant Code" <> '') OR
+             (ItemJnlLine4."Inventory Value Per" IN
+              [ItemJnlLine."Inventory Value Per"::Variant,
+               ItemJnlLine4."Inventory Value Per"::"Location and Variant"])
+          THEN
+            SETRANGE("Variant Code",ItemJnlLine."Variant Code");
+          IF FINDSET THEN
+            REPEAT
+              IF IncludeEntryInCalc(ItemLedgEntry4,PostingDate,IncludeExpectedCost) THEN BEGIN
+                ItemLedgEntry5 := ItemLedgEntry4;
+
+                ItemJnlLine4."Entry Type" := "Entry Type";
+                ItemJnlLine4.Quantity :=
+                  CalculateRemQuantity("Entry No.",ItemJnlLine."Posting Date");
+
+                ItemJnlLine4."Quantity (Base)" := ItemJnlLine4.Quantity;
+                ItemJnlLine4."Invoiced Quantity" := ItemJnlLine4.Quantity;
+                ItemJnlLine4."Invoiced Qty. (Base)" := ItemJnlLine4.Quantity;
+                ItemJnlLine4."Location Code" := "Location Code";
+                ItemJnlLine4."Variant Code" := "Variant Code";
+                ItemJnlLine4."Applies-to Entry" := "Entry No.";
+                ItemJnlLine4."Source No." := "Source No.";
+                ItemJnlLine4."Order Type" := "Order Type";
+                ItemJnlLine4."Order No." := "Order No.";
+                ItemJnlLine4."Order Line No." := "Order Line No.";
+
+                IF ItemJnlLine4.Quantity <> 0 THEN BEGIN
+                  ItemJnlLine4.Amount :=
+                    ItemJnlLine."Inventory Value (Revalued)" * ItemJnlLine4.Quantity /
+                    ItemJnlLine.Quantity -
+                    ROUND(
+                      CalculateRemInventoryValue(
+                        "Entry No.",Quantity,ItemJnlLine4.Quantity,
+                        IncludeExpectedCost AND NOT "Completely Invoiced",PostingDate),
+                      GLSetup."Amount Rounding Precision") + Remainder;
+
+                  RemQuantity := RemQuantity - ItemJnlLine4.Quantity;
+
+                  IF RemQuantity = 0 THEN BEGIN
+                    IF NEXT > 0 THEN
+                      REPEAT
+                        IF IncludeEntryInCalc(ItemLedgEntry4,PostingDate,IncludeExpectedCost) THEN BEGIN
+                          RemQuantity := CalculateRemQuantity("Entry No.",ItemJnlLine."Posting Date");
+                          IF RemQuantity > 0 THEN
+                            ERROR(Text008 + Text009,ItemJnlLine4."Item No.");
+                        END;
+                      UNTIL NEXT = 0;
+
+                    ItemJnlLine4.Amount := RemAmountToDistribute;
+                    DistributeCosts := FALSE;
+                  END ELSE BEGIN
+                    REPEAT
+                      IsLastEntry := NEXT = 0;
+                    UNTIL IncludeEntryInCalc(ItemLedgEntry4,PostingDate,IncludeExpectedCost) OR IsLastEntry;
+                    IF IsLastEntry OR (RemQuantity < 0) THEN
+                      ERROR(Text008 + Text009,ItemJnlLine4."Item No.");
+                    Remainder := ItemJnlLine4.Amount - ROUND(ItemJnlLine4.Amount,GLSetup."Amount Rounding Precision");
+                    ItemJnlLine4.Amount := ROUND(ItemJnlLine4.Amount,GLSetup."Amount Rounding Precision");
+                    RemAmountToDistribute := RemAmountToDistribute - ItemJnlLine4.Amount;
+                  END;
+                  ItemJnlLine4."Unit Cost" := ItemJnlLine4.Amount / ItemJnlLine4.Quantity;
+
+                  IF ItemJnlLine4.Amount <> 0 THEN BEGIN
+                    IF IncludeExpectedCost AND NOT ItemLedgEntry5."Completely Invoiced" THEN BEGIN
+                      ItemJnlLine4."Applied Amount" := ROUND(
+                          ItemJnlLine4.Amount * (ItemLedgEntry5.Quantity - ItemLedgEntry5."Invoiced Quantity") /
+                          ItemLedgEntry5.Quantity,
+                          GLSetup."Amount Rounding Precision");
+                    END ELSE
+                      ItemJnlLine4."Applied Amount" := 0;
+                    ItemJnlPostLine.RunWithCheck(ItemJnlLine4);
+                  END;
+                END ELSE BEGIN
+                  REPEAT
+                    IsLastEntry := NEXT = 0;
+                  UNTIL IncludeEntryInCalc(ItemLedgEntry4,PostingDate,IncludeExpectedCost) OR IsLastEntry;
+                  IF IsLastEntry THEN
+                    ERROR(Text008 + Text009,ItemJnlLine4."Item No.");
+                END;
+              END ELSE
+                DistributeCosts := NEXT <> 0;
+            UNTIL NOT DistributeCosts;
+        END;
+
+        IF ItemJnlLine."Update Standard Cost" THEN
+          UpdateStdCost;
+      END;
+
+      OnAfterItemJnlPostSumLine(ItemJnlLine);
+    END;
+
+    LOCAL PROCEDURE IncludeEntryInCalc@7(ItemLedgEntry@1000 : Record 32;PostingDate@1002 : Date;IncludeExpectedCost@1001 : Boolean) : Boolean;
+    BEGIN
+      WITH ItemLedgEntry DO BEGIN
+        IF IncludeExpectedCost THEN
+          EXIT("Posting Date" IN [0D..PostingDate]);
+        EXIT("Completely Invoiced" AND ("Last Invoice Date" IN [0D..PostingDate]));
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateStdCost@5();
+    VAR
+      SKU@1002 : Record 5700;
+      InventorySetup@1000000000 : Record 313;
+    BEGIN
+      WITH ItemJnlLine DO BEGIN
+        InventorySetup.GET;
+        IF InventorySetup."Average Cost Calc. Type" = InventorySetup."Average Cost Calc. Type"::Item THEN
+          UpdateItemStdCost
+        ELSE
+          IF SKU.GET("Location Code","Item No.","Variant Code") THEN BEGIN
+            SKU.VALIDATE("Standard Cost","Unit Cost (Revalued)");
+            SKU.MODIFY;
+          END ELSE
+            UpdateItemStdCost;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateItemStdCost@23();
+    VAR
+      Item@1000 : Record 27;
+    BEGIN
+      WITH ItemJnlLine DO BEGIN
+        Item.GET("Item No.");
+        Item.VALIDATE("Standard Cost","Unit Cost (Revalued)");
+        SetItemSingleLevelCosts(Item,ItemJnlLine);
+        SetItemRolledUpCosts(Item,ItemJnlLine);
+        Item."Last Unit Cost Calc. Date" := "Posting Date";
+        Item.MODIFY;
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckRemainingQty@4();
+    VAR
+      ItemLedgerEntry@1001 : Record 32;
+      RemainingQty@1000 : Decimal;
+    BEGIN
+      RemainingQty := ItemLedgerEntry.CalculateRemQuantity(
+          ItemJnlLine."Applies-to Entry",ItemJnlLine."Posting Date");
+
+      IF RemainingQty <> ItemJnlLine.Quantity THEN
+        ERROR(Text008 + Text009,ItemJnlLine."Item No.");
+    END;
+
+    LOCAL PROCEDURE PostWhseJnlLine@7302(ItemJnlLine@1000 : Record 83;OriginalQuantity@1001 : Decimal;OriginalQuantityBase@1006 : Decimal;VAR TempTrackingSpecification@1003 : TEMPORARY Record 336);
+    VAR
+      WhseJnlLine@1002 : Record 7311;
+      TempWhseJnlLine2@1005 : TEMPORARY Record 7311;
+      ItemTrackingMgt@1004 : Codeunit 6500;
+    BEGIN
+      WITH ItemJnlLine DO BEGIN
+        Quantity := OriginalQuantity;
+        "Quantity (Base)" := OriginalQuantityBase;
+        GetLocation("Location Code");
+        IF NOT ("Entry Type" IN ["Entry Type"::Consumption,"Entry Type"::Output]) THEN
+          IF Location."Bin Mandatory" THEN
+            IF WMSMgmt.CreateWhseJnlLine(ItemJnlLine,ItemJnlTemplate.Type,WhseJnlLine,FALSE) THEN BEGIN
+              ItemTrackingMgt.SplitWhseJnlLine(WhseJnlLine,TempWhseJnlLine2,TempTrackingSpecification,FALSE);
+              IF TempWhseJnlLine2.FINDSET THEN
+                REPEAT
+                  WMSMgmt.CheckWhseJnlLine(TempWhseJnlLine2,1,0,FALSE);
+                  WhseJnlPostLine.RUN(TempWhseJnlLine2);
+                UNTIL TempWhseJnlLine2.NEXT = 0;
+              OnAfterPostWhseJnlLine(ItemJnlLine,SuppressCommit);
+            END;
+
+        IF "Entry Type" = "Entry Type"::Transfer THEN BEGIN
+          GetLocation("New Location Code");
+          IF Location."Bin Mandatory" THEN
+            IF WMSMgmt.CreateWhseJnlLine(ItemJnlLine,ItemJnlTemplate.Type,WhseJnlLine,TRUE) THEN BEGIN
+              ItemTrackingMgt.SplitWhseJnlLine(WhseJnlLine,TempWhseJnlLine2,TempTrackingSpecification,TRUE);
+              IF TempWhseJnlLine2.FINDSET THEN
+                REPEAT
+                  WMSMgmt.CheckWhseJnlLine(TempWhseJnlLine2,1,0,TRUE);
+                  WhseJnlPostLine.RUN(TempWhseJnlLine2);
+                UNTIL TempWhseJnlLine2.NEXT = 0;
+              OnAfterPostWhseJnlLine(ItemJnlLine,SuppressCommit);
+            END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckWMSBin@8(ItemJnlLine@1000 : Record 83);
+    BEGIN
+      WITH ItemJnlLine DO BEGIN
+        GetLocation("Location Code");
+        IF Location."Bin Mandatory" THEN
+          WhseTransaction := TRUE;
+        CASE "Entry Type" OF
+          "Entry Type"::Purchase,"Entry Type"::Sale,
+          "Entry Type"::"Positive Adjmt.","Entry Type"::"Negative Adjmt.":
+            BEGIN
+              IF Location."Directed Put-away and Pick" THEN
+                WMSMgmt.CheckAdjmtBin(
+                  Location,Quantity,
+                  ("Entry Type" IN
+                   ["Entry Type"::Purchase,
+                    "Entry Type"::"Positive Adjmt."]));
+            END;
+          "Entry Type"::Transfer:
+            BEGIN
+              IF Location."Directed Put-away and Pick" THEN
+                WMSMgmt.CheckAdjmtBin(Location,-Quantity,FALSE);
+              GetLocation("New Location Code");
+              IF Location."Directed Put-away and Pick" THEN
+                WMSMgmt.CheckAdjmtBin(Location,Quantity,TRUE);
+              IF Location."Bin Mandatory" THEN
+                WhseTransaction := TRUE;
+            END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetLocation@7301(LocationCode@1000 : Code[10]);
+    BEGIN
+      IF LocationCode = '' THEN
+        CLEAR(Location)
+      ELSE
+        IF Location.Code <> LocationCode THEN
+          Location.GET(LocationCode);
+    END;
+
+    [External]
+    PROCEDURE GetWhseRegNo@6() : Integer;
+    BEGIN
+      EXIT(WhseRegNo);
+    END;
+
+    [External]
+    PROCEDURE GetItemRegNo@9() : Integer;
+    BEGIN
+      EXIT(ItemRegNo);
+    END;
+
+    LOCAL PROCEDURE IsPhysInvtCount@10(ItemJnlTemplate2@1000 : Record 82;PhysInvtCountingPeriodCode@1002 : Code[10];PhysInvtCountingPeriodType@1003 : ' ,Item,SKU') : Boolean;
+    BEGIN
+      EXIT(
+        (ItemJnlTemplate2.Type = ItemJnlTemplate2.Type::"Phys. Inventory") AND
+        (PhysInvtCountingPeriodType <> PhysInvtCountingPeriodType::" ") AND
+        (PhysInvtCountingPeriodCode <> ''));
+    END;
+
+    LOCAL PROCEDURE CheckItemAvailability@14(VAR ItemJnlLine@1000 : Record 83);
+    VAR
+      Item@1003 : Record 27;
+      TempSKU@1001 : TEMPORARY Record 5700;
+      ItemJnlLine2@1005 : Record 83;
+      QtyinItemJnlLine@1002 : Decimal;
+      AvailableQty@1004 : Decimal;
+    BEGIN
+      ItemJnlLine2.COPYFILTERS(ItemJnlLine);
+      IF ItemJnlLine2.FINDSET THEN
+        REPEAT
+          IF NOT TempSKU.GET(ItemJnlLine2."Location Code",ItemJnlLine2."Item No.",ItemJnlLine2."Variant Code") THEN
+            InsertTempSKU(TempSKU,ItemJnlLine2);
+        UNTIL ItemJnlLine2.NEXT = 0;
+
+      IF TempSKU.FINDSET THEN
+        REPEAT
+          QtyinItemJnlLine := CalcRequiredQty(TempSKU,ItemJnlLine2);
+          IF QtyinItemJnlLine < 0 THEN BEGIN
+            Item.GET(TempSKU."Item No.");
+            Item.SETFILTER("Location Filter",TempSKU."Location Code");
+            Item.SETFILTER("Variant Filter",TempSKU."Variant Code");
+            Item.CALCFIELDS("Reserved Qty. on Inventory","Net Change");
+            AvailableQty := Item."Net Change" - Item."Reserved Qty. on Inventory" + SelfReservedQty(TempSKU,ItemJnlLine2);
+
+            IF (Item."Reserved Qty. on Inventory" > 0) AND (AvailableQty < ABS(QtyinItemJnlLine)) THEN
+              IF NOT CONFIRM(
+                   Text010,FALSE,TempSKU.FIELDCAPTION("Item No."),TempSKU."Item No.",TempSKU.FIELDCAPTION("Location Code"),
+                   TempSKU."Location Code",TempSKU.FIELDCAPTION("Variant Code"),TempSKU."Variant Code")
+              THEN
+                ERROR('');
+          END;
+        UNTIL TempSKU.NEXT = 0 ;
+    END;
+
+    LOCAL PROCEDURE InsertTempSKU@18(VAR TempSKU@1000 : TEMPORARY Record 5700;ItemJnlLine@1001 : Record 83);
+    BEGIN
+      WITH TempSKU DO BEGIN
+        INIT;
+        "Location Code" := ItemJnlLine."Location Code";
+        "Item No." := ItemJnlLine."Item No.";
+        "Variant Code" := ItemJnlLine."Variant Code";
+        INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE CalcRequiredQty@19(TempSKU@1000 : TEMPORARY Record 5700;VAR ItemJnlLine@1001 : Record 83) : Decimal;
+    VAR
+      SignFactor@1003 : Integer;
+      QtyinItemJnlLine@1002 : Decimal;
+    BEGIN
+      QtyinItemJnlLine := 0;
+      ItemJnlLine.SETRANGE("Item No.",TempSKU."Item No.");
+      ItemJnlLine.SETRANGE("Location Code",TempSKU."Location Code");
+      ItemJnlLine.SETRANGE("Variant Code",TempSKU."Variant Code");
+      ItemJnlLine.FINDSET;
+      REPEAT
+        IF (ItemJnlLine."Entry Type" IN
+            [ItemJnlLine."Entry Type"::Sale,
+             ItemJnlLine."Entry Type"::"Negative Adjmt.",
+             ItemJnlLine."Entry Type"::Consumption]) OR
+           (ItemJnlLine."Entry Type" = ItemJnlLine."Entry Type"::Transfer)
+        THEN
+          SignFactor := -1
+        ELSE
+          SignFactor := 1;
+        QtyinItemJnlLine += ItemJnlLine."Quantity (Base)" * SignFactor;
+      UNTIL ItemJnlLine.NEXT = 0;
+      EXIT(QtyinItemJnlLine);
+    END;
+
+    LOCAL PROCEDURE SelfReservedQty@20(SKU@1000 : Record 5700;ItemJnlLine@1003 : Record 83) : Decimal;
+    VAR
+      ReservationEntry@1002 : Record 337;
+    BEGIN
+      IF ItemJnlLine."Order Type" <> ItemJnlLine."Order Type"::Production THEN
+        EXIT;
+
+      WITH ReservationEntry DO BEGIN
+        SETRANGE("Item No.",SKU."Item No.");
+        SETRANGE("Location Code",SKU."Location Code");
+        SETRANGE("Variant Code",SKU."Variant Code");
+        SETRANGE("Source Type",DATABASE::"Prod. Order Component");
+        SETRANGE("Source ID",ItemJnlLine."Order No.");
+        IF ISEMPTY THEN
+          EXIT;
+        CALCSUMS("Quantity (Base)");
+        EXIT(-"Quantity (Base)");
+      END;
+    END;
+
+    LOCAL PROCEDURE SetItemSingleLevelCosts@24(VAR Item@1000 : Record 27;ItemJournalLine@1001 : Record 83);
+    BEGIN
+      WITH ItemJournalLine DO BEGIN
+        Item."Single-Level Material Cost" := "Single-Level Material Cost";
+        Item."Single-Level Capacity Cost" := "Single-Level Capacity Cost";
+        Item."Single-Level Subcontrd. Cost" := "Single-Level Subcontrd. Cost";
+        Item."Single-Level Cap. Ovhd Cost" := "Single-Level Cap. Ovhd Cost";
+        Item."Single-Level Mfg. Ovhd Cost" := "Single-Level Mfg. Ovhd Cost";
+      END;
+    END;
+
+    LOCAL PROCEDURE SetItemRolledUpCosts@25(VAR Item@1001 : Record 27;ItemJournalLine@1000 : Record 83);
+    BEGIN
+      WITH ItemJournalLine DO BEGIN
+        Item."Rolled-up Material Cost" := "Rolled-up Material Cost";
+        Item."Rolled-up Capacity Cost" := "Rolled-up Capacity Cost";
+        Item."Rolled-up Subcontracted Cost" := "Rolled-up Subcontracted Cost";
+        Item."Rolled-up Mfg. Ovhd Cost" := "Rolled-up Mfg. Ovhd Cost";
+        Item."Rolled-up Cap. Overhead Cost" := "Rolled-up Cap. Overhead Cost";
+      END;
+    END;
+
+    [External]
+    PROCEDURE SetSuppressCommit@52(NewSuppressCommit@1000 : Boolean);
+    BEGIN
+      SuppressCommit := NewSuppressCommit;
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterCheckLines@31(VAR ItemJnlLine@1000 : Record 83);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterCheckJnlLine@21(VAR ItemJournalLine@1000 : Record 83;CommitIsSuppressed@1001 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterItemJnlPostSumLine@26(VAR ItemJournalLine@1000 : Record 83);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterPostJnlLines@32(VAR ItemJournalBatch@1000 : Record 233;VAR ItemJournalLine@1001 : Record 83;ItemRegNo@1002 : Integer;WhseRegNo@1003 : Integer);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterPostWhseJnlLine@16(ItemJournalLine@1000 : Record 83;CommitIsSuppressed@1001 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeCheckLines@29(VAR ItemJnlLine@1000 : Record 83);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeRaiseExceedLengthError@27(VAR ItemJournalBatch@1000 : Record 233;VAR RaiseError@1001 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnPostLinesBeforePostWhseJnlLine@22(VAR ItemJournalLine@1000 : Record 83;CommitIsSuppressed@1001 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeIncrBatchName@28(VAR ItemJournalLine@1000 : Record 83;VAR IncrBatchName@1001 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeUpdateDeleteLines@30(VAR ItemJournalLine@1000 : Record 83;ItemRegNo@1001 : Integer);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

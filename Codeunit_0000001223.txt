@@ -1,0 +1,152 @@
+OBJECT Codeunit 1223 SEPA CT-Check Line
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:04 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    TableNo=81;
+    OnRun=BEGIN
+            DeletePaymentFileErrors;
+            CheckGenJnlLine(Rec);
+            CheckBank(Rec);
+            CheckCustVendEmpl(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      MustBeBankAccErr@1003 : TextConst 'ENU=The balancing account must be a bank account.';
+      MustBeVendorEmployeeOrCustomerErr@1001 : TextConst 'ENU=The account must be a vendor, customer or employee account.';
+      MustBeVendEmplPmtOrCustRefundErr@1008 : TextConst 'ENU=Only vendor and employee payments and customer refunds are allowed.';
+      MustBePositiveErr@1000 : TextConst 'ENU=The amount must be positive.';
+      TransferDateErr@1002 : TextConst 'ENU=The earliest possible transfer date is today.';
+      EuroCurrErr@1004 : TextConst '@@@="%1= bank account No, %2 export format; Example: Only transactions in euro (EUR) are allowed, because the GIRO bank account is set up to use the SEPACT export format.";ENU=Only transactions in euro (EUR) are allowed, because the %1 bank account is set up to use the %2 export format.';
+      FieldBlankErr@1006 : TextConst '@@@="%1= field name. Example: The Name field must be filled.";ENU=The %1 field must be filled.';
+      FieldKeyBlankErr@1007 : TextConst '@@@="%1=table name, %2=key field value, %3=field name. Example: Customer 10000 must have a value in Name.";ENU=%1 %2 must have a value in %3.';
+
+    LOCAL PROCEDURE CheckGenJnlLine@2(VAR GenJnlLine@1000 : Record 81);
+    VAR
+      GLSetup@1002 : Record 98;
+      BankAccount@1001 : Record 270;
+      GenJournalBatch@1003 : Record 232;
+    BEGIN
+      GLSetup.GET;
+      IF GenJournalBatch.GET(GenJnlLine."Journal Template Name",GenJnlLine."Journal Batch Name") THEN
+        GenJournalBatch.OnCheckGenJournalLineExportRestrictions;
+      WITH GenJnlLine DO BEGIN
+        IF "Bal. Account Type" <> "Bal. Account Type"::"Bank Account" THEN
+          InsertPaymentFileError(MustBeBankAccErr);
+
+        IF "Bal. Account No." = '' THEN
+          AddFieldEmptyError(GenJnlLine,TABLECAPTION,FIELDCAPTION("Bal. Account No."),'');
+
+        IF "Recipient Bank Account" = '' THEN
+          AddFieldEmptyError(GenJnlLine,TABLECAPTION,FIELDCAPTION("Recipient Bank Account"),'');
+
+        IF NOT ("Account Type" IN ["Account Type"::Vendor,"Account Type"::Customer,"Account Type"::Employee]) THEN
+          InsertPaymentFileError(MustBeVendorEmployeeOrCustomerErr);
+
+        IF (("Account Type" = "Account Type"::Vendor) AND ("Document Type" <> "Document Type"::Payment)) OR
+           (("Account Type" = "Account Type"::Customer) AND ("Document Type" <> "Document Type"::Refund)) OR
+           (("Account Type" = "Account Type"::Employee) AND ("Document Type" <> "Document Type"::Payment))
+        THEN
+          InsertPaymentFileError(STRSUBSTNO(MustBeVendEmplPmtOrCustRefundErr));
+
+        IF Amount <= 0 THEN
+          InsertPaymentFileError(MustBePositiveErr);
+
+        IF "Currency Code" <> GLSetup.GetCurrencyCode('EUR') THEN BEGIN
+          BankAccount.GET("Bal. Account No.");
+          InsertPaymentFileError(STRSUBSTNO(EuroCurrErr,"Bal. Account No.",BankAccount."Payment Export Format"));
+        END;
+
+        IF "Posting Date" < TODAY THEN
+          InsertPaymentFileError(TransferDateErr);
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckBank@3(VAR GenJnlLine@1000 : Record 81);
+    VAR
+      BankAccount@1001 : Record 270;
+    BEGIN
+      WITH GenJnlLine DO
+        IF BankAccount.GET("Bal. Account No.") THEN BEGIN
+          IF BankAccount.IBAN = '' THEN
+            AddFieldEmptyError(GenJnlLine,BankAccount.TABLECAPTION,BankAccount.FIELDCAPTION(IBAN),"Bal. Account No.");
+        END;
+    END;
+
+    LOCAL PROCEDURE CheckCustVendEmpl@4(VAR GenJnlLine@1000 : Record 81);
+    VAR
+      Customer@1004 : Record 18;
+      CustomerBankAccount@1003 : Record 287;
+      Vendor@1002 : Record 23;
+      VendorBankAccount@1001 : Record 288;
+      Employee@1005 : Record 5200;
+    BEGIN
+      WITH GenJnlLine DO BEGIN
+        IF "Account No." = '' THEN BEGIN
+          InsertPaymentFileError(MustBeVendorEmployeeOrCustomerErr);
+          EXIT;
+        END;
+        CASE "Account Type" OF
+          "Account Type"::Customer:
+            BEGIN
+              Customer.GET("Account No.");
+              IF Customer.Name = '' THEN
+                AddFieldEmptyError(GenJnlLine,Customer.TABLECAPTION,Customer.FIELDCAPTION(Name),"Account No.");
+              IF "Recipient Bank Account" <> '' THEN BEGIN
+                CustomerBankAccount.GET(Customer."No.","Recipient Bank Account");
+                IF CustomerBankAccount.IBAN = '' THEN
+                  AddFieldEmptyError(
+                    GenJnlLine,CustomerBankAccount.TABLECAPTION,CustomerBankAccount.FIELDCAPTION(IBAN),"Recipient Bank Account");
+              END;
+            END;
+          "Account Type"::Vendor:
+            BEGIN
+              Vendor.GET("Account No.");
+              IF Vendor.Name = '' THEN
+                AddFieldEmptyError(GenJnlLine,Vendor.TABLECAPTION,Vendor.FIELDCAPTION(Name),"Account No.");
+              IF "Recipient Bank Account" <> '' THEN BEGIN
+                VendorBankAccount.GET(Vendor."No.","Recipient Bank Account");
+                IF VendorBankAccount.IBAN = '' THEN
+                  AddFieldEmptyError(
+                    GenJnlLine,VendorBankAccount.TABLECAPTION,VendorBankAccount.FIELDCAPTION(IBAN),"Recipient Bank Account");
+              END;
+            END;
+          "Account Type"::Employee:
+            BEGIN
+              Employee.GET("Account No.");
+              IF Employee.FullName = '' THEN
+                AddFieldEmptyError(GenJnlLine,Employee.TABLECAPTION,Employee.FIELDCAPTION("First Name"),"Account No.");
+              IF "Recipient Bank Account" <> '' THEN BEGIN
+                IF Employee.IBAN = '' THEN
+                  AddFieldEmptyError(
+                    GenJnlLine,Employee.TABLECAPTION,Employee.FIELDCAPTION(IBAN),"Recipient Bank Account");
+              END;
+            END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE AddFieldEmptyError@1(VAR GenJnlLine@1002 : Record 81;TableCaption@1000 : Text;FieldCaption@1001 : Text;KeyValue@1003 : Text);
+    VAR
+      ErrorText@1004 : Text;
+    BEGIN
+      IF KeyValue = '' THEN
+        ErrorText := STRSUBSTNO(FieldBlankErr,FieldCaption)
+      ELSE
+        ErrorText := STRSUBSTNO(FieldKeyBlankErr,TableCaption,KeyValue,FieldCaption);
+      GenJnlLine.InsertPaymentFileError(ErrorText);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

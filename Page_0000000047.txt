@@ -1,0 +1,1130 @@
+OBJECT Page 47 Sales Invoice Subform
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:10:04 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Lines;
+    MultipleNewLines=Yes;
+    LinksAllowed=No;
+    SourceTable=Table37;
+    DelayedInsert=Yes;
+    SourceTableView=WHERE(Document Type=FILTER(Invoice));
+    PageType=ListPart;
+    AutoSplitKey=Yes;
+    OnInit=BEGIN
+             SalesSetup.GET;
+             Currency.InitRoundingPrecision;
+             TempOptionLookupBuffer.FillBuffer(TempOptionLookupBuffer."Lookup Type"::Sales);
+             IsFoundation := ApplicationAreaMgmtFacade.IsFoundationEnabled;
+           END;
+
+    OnOpenPage=VAR
+                 Location@1000 : Record 14;
+                 TaxGroup@1020000 : Record 321;
+               BEGIN
+                 IF Location.READPERMISSION THEN
+                   LocationCodeVisible := NOT Location.ISEMPTY;
+                 TaxGroupCodeVisible := NOT TaxGroup.ISEMPTY;
+               END;
+
+    OnAfterGetRecord=BEGIN
+                       ShowShortcutDimCode(ShortcutDimCode);
+                       UpdateTypeText;
+                       SetItemChargeFieldsStyle;
+                     END;
+
+    OnNewRecord=BEGIN
+                  InitType;
+
+                  // Default to Item for the first line and to previous line type for the others
+                  IF ApplicationAreaMgmtFacade.IsFoundationEnabled THEN
+                    IF xRec."Document No." = '' THEN
+                      Type := Type::Item;
+
+                  CLEAR(ShortcutDimCode);
+                  UpdateTypeText;
+                END;
+
+    OnDeleteRecord=VAR
+                     ReserveSalesLine@1000 : Codeunit 99000832;
+                   BEGIN
+                     IF (Quantity <> 0) AND ItemExists("No.") THEN BEGIN
+                       COMMIT;
+                       IF NOT ReserveSalesLine.DeleteLineConfirm(Rec) THEN
+                         EXIT(FALSE);
+                       ReserveSalesLine.DeleteLine(Rec);
+                     END;
+                   END;
+
+    OnAfterGetCurrRecord=BEGIN
+                           CalculateTotals;
+                           UpdateEditableOnRow;
+                           SetItemChargeFieldsStyle;
+                         END;
+
+    ActionList=ACTIONS
+    {
+      { 1900000004;0 ;ActionContainer;
+                      ActionContainerType=ActionItems }
+      { 37      ;1   ;Action    ;
+                      Name=SelectMultiItems;
+                      AccessByPermission=TableData 27=R;
+                      Ellipsis=Yes;
+                      CaptionML=ENU=Select items;
+                      ToolTipML=ENU=Add two or more items from the full list of your inventory items.;
+                      ApplicationArea=#Basic,#Suite;
+                      Image=NewItem;
+                      OnAction=BEGIN
+                                 SelectMultipleItems;
+                               END;
+                                }
+      { 1907935204;1 ;ActionGroup;
+                      CaptionML=ENU=&Line;
+                      Image=Line }
+      { 1906587504;2 ;ActionGroup;
+                      CaptionML=ENU=F&unctions;
+                      Image=Action }
+      { 1903079504;3 ;Action    ;
+                      AccessByPermission=TableData 7002=R;
+                      Ellipsis=Yes;
+                      CaptionML=ENU=Get &Price;
+                      ToolTipML=ENU=Insert the lowest possible price in the Unit Price field according to any special price that you have set up.;
+                      ApplicationArea=#Basic,#Suite;
+                      Image=Price;
+                      OnAction=BEGIN
+                                 ShowPrices
+                               END;
+                                }
+      { 1907415004;3 ;Action    ;
+                      AccessByPermission=TableData 7004=R;
+                      Ellipsis=Yes;
+                      CaptionML=ENU=Get Li&ne Discount;
+                      ToolTipML=ENU=Insert the best possible discount in the Line Discount field according to any special discounts that you have set up.;
+                      ApplicationArea=#Basic,#Suite;
+                      Image=LineDiscount;
+                      OnAction=BEGIN
+                                 ShowLineDisc
+                               END;
+                                }
+      { 1903098604;3 ;Action    ;
+                      AccessByPermission=TableData 90=R;
+                      CaptionML=ENU=E&xplode BOM;
+                      ToolTipML=ENU=Insert new lines for the components on the bill of materials, for example to sell the parent item as a kit. CAUTION: The line for the parent item will be deleted and represented by a description only. To undo, you must delete the component lines and add a line the parent item again.;
+                      ApplicationArea=#Suite;
+                      Image=ExplodeBOM;
+                      OnAction=BEGIN
+                                 ExplodeBOM;
+                               END;
+                                }
+      { 1900206204;3 ;Action    ;
+                      Name=InsertExtTexts;
+                      AccessByPermission=TableData 279=R;
+                      CaptionML=ENU=Insert &Ext. Text;
+                      ToolTipML=ENU=Insert the extended item description that is set up for the item that is being processed on the line.;
+                      ApplicationArea=#Suite;
+                      Image=Text;
+                      Scope=Repeater;
+                      OnAction=BEGIN
+                                 InsertExtendedText(TRUE);
+                               END;
+                                }
+      { 1900545004;3 ;Action    ;
+                      Name=GetShipmentLines;
+                      AccessByPermission=TableData 110=R;
+                      Ellipsis=Yes;
+                      CaptionML=ENU=Get &Shipment Lines;
+                      ToolTipML=ENU=Select multiple shipments to the same customer because you want to combine them on one invoice.;
+                      ApplicationArea=#Suite;
+                      Image=Shipment;
+                      OnAction=BEGIN
+                                 GetShipment;
+                                 RedistributeTotalsOnAfterValidate;
+                               END;
+                                }
+      { 1905427604;2 ;ActionGroup;
+                      CaptionML=ENU=Item Availability by;
+                      Image=ItemAvailability }
+      { 5       ;3   ;Action    ;
+                      CaptionML=ENU=Event;
+                      ToolTipML=ENU=View how the actual and the projected available balance of an item will develop over time according to supply and demand events.;
+                      ApplicationArea=#Basic,#Suite;
+                      Image=Event;
+                      OnAction=BEGIN
+                                 ItemAvailFormsMgt.ShowItemAvailFromSalesLine(Rec,ItemAvailFormsMgt.ByEvent)
+                               END;
+                                }
+      { 1900639404;3 ;Action    ;
+                      CaptionML=ENU=Period;
+                      ToolTipML=ENU=Show the projected quantity of the item over time according to time periods, such as day, week, or month.;
+                      ApplicationArea=#Basic,#Suite;
+                      Image=Period;
+                      OnAction=BEGIN
+                                 ItemAvailFormsMgt.ShowItemAvailFromSalesLine(Rec,ItemAvailFormsMgt.ByPeriod)
+                               END;
+                                }
+      { 1904974904;3 ;Action    ;
+                      CaptionML=ENU=Variant;
+                      ToolTipML=ENU=View or edit the item's variants. Instead of setting up each color of an item as a separate item, you can set up the various colors as variants of the item.;
+                      ApplicationArea=#Planning;
+                      Image=ItemVariant;
+                      OnAction=BEGIN
+                                 ItemAvailFormsMgt.ShowItemAvailFromSalesLine(Rec,ItemAvailFormsMgt.ByVariant)
+                               END;
+                                }
+      { 1904945204;3 ;Action    ;
+                      AccessByPermission=TableData 14=R;
+                      CaptionML=ENU=Location;
+                      ToolTipML=ENU=View the actual and projected quantity of the item per location.;
+                      ApplicationArea=#Location;
+                      Image=Warehouse;
+                      OnAction=BEGIN
+                                 ItemAvailFormsMgt.ShowItemAvailFromSalesLine(Rec,ItemAvailFormsMgt.ByLocation)
+                               END;
+                                }
+      { 3       ;3   ;Action    ;
+                      AccessByPermission=TableData 5870=R;
+                      CaptionML=ENU=BOM Level;
+                      ToolTipML=ENU=View availability figures for items on bills of materials that show how many units of a parent item you can make based on the availability of child items.;
+                      ApplicationArea=#Assembly;
+                      Image=BOMLevel;
+                      OnAction=BEGIN
+                                 ItemAvailFormsMgt.ShowItemAvailFromSalesLine(Rec,ItemAvailFormsMgt.ByBOM)
+                               END;
+                                }
+      { 23      ;2   ;ActionGroup;
+                      CaptionML=ENU=Related Information }
+      { 1904522204;3 ;Action    ;
+                      AccessByPermission=TableData 348=R;
+                      ShortCutKey=Shift+Ctrl+D;
+                      CaptionML=ENU=Dimensions;
+                      ToolTipML=ENU=View or edit dimensions, such as area, project, or department, that you can assign to sales and purchase documents to distribute costs and analyze transaction history.;
+                      ApplicationArea=#Dimensions;
+                      Image=Dimensions;
+                      Scope=Repeater;
+                      OnAction=BEGIN
+                                 ShowDimensions;
+                               END;
+                                }
+      { 1900948904;3 ;Action    ;
+                      CaptionML=ENU=Co&mments;
+                      ToolTipML=ENU=View or add comments for the record.;
+                      ApplicationArea=#Comments;
+                      Image=ViewComments;
+                      OnAction=BEGIN
+                                 ShowLineComments;
+                               END;
+                                }
+      { 1907184504;3 ;Action    ;
+                      AccessByPermission=TableData 5800=R;
+                      CaptionML=ENU=Item Charge &Assignment;
+                      ToolTipML=ENU=Assign additional direct costs, for example for freight, to the item on the line.;
+                      ApplicationArea=#ItemCharges;
+                      Image=ItemCosts;
+                      OnAction=BEGIN
+                                 ShowItemChargeAssgnt;
+                                 SetItemChargeFieldsStyle;
+                               END;
+                                }
+      { 1905987604;3 ;Action    ;
+                      ShortCutKey=Shift+Ctrl+I;
+                      CaptionML=ENU=Item &Tracking Lines;
+                      ToolTipML=ENU=View or edit serial numbers and lot numbers that are assigned to the item on the document or journal line.;
+                      ApplicationArea=#ItemTracking;
+                      Image=ItemTrackingLines;
+                      OnAction=BEGIN
+                                 OpenItemTrackingLines;
+                               END;
+                                }
+      { 35      ;3   ;Action    ;
+                      Name=DocAttach;
+                      CaptionML=ENU=Attachments;
+                      ToolTipML=ENU=Add a file as an attachment. You can attach images as well as documents.;
+                      ApplicationArea=#All;
+                      Image=Attach;
+                      OnAction=VAR
+                                 DocumentAttachmentDetails@1000 : Page 1173;
+                                 RecRef@1001 : RecordRef;
+                               BEGIN
+                                 RecRef.GETTABLE(Rec);
+                                 DocumentAttachmentDetails.OpenForRecRef(RecRef);
+                                 DocumentAttachmentDetails.RUNMODAL;
+                               END;
+                                }
+      { 17      ;3   ;Action    ;
+                      Name=DeferralSchedule;
+                      CaptionML=ENU=Deferral Schedule;
+                      ToolTipML=ENU=View or edit the deferral schedule that governs how revenue made with this sales document is deferred to different accounting periods when the document is posted.;
+                      ApplicationArea=#Suite;
+                      Enabled="Deferral Code" <> '';
+                      Image=PaymentPeriod;
+                      OnAction=BEGIN
+                                 ShowDeferralSchedule;
+                               END;
+                                }
+    }
+  }
+  CONTROLS
+  {
+    { 1900000001;0;Container;
+                ContainerType=ContentArea }
+
+    { 1   ;1   ;Group     ;
+                GroupType=Repeater }
+
+    { 2   ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the type of entity that will be posted for this sales line, such as Item, Resource, or G/L Account.;
+                ApplicationArea=#Advanced;
+                SourceExpr=Type;
+                OnValidate=BEGIN
+                             NoOnAfterValidate;
+                             UpdateEditableOnRow;
+
+                             IF xRec."No." <> '' THEN
+                               RedistributeTotalsOnAfterValidate;
+
+                             UpdateTypeText;
+                           END;
+                            }
+
+    { 77  ;2   ;Field     ;
+                Name=FilteredTypeField;
+                CaptionML=ENU=Type;
+                ToolTipML=ENU="Specifies the type of transaction that will be posted with the document line. If you select Comment, then you can enter any text in the Description field, such as a message to a customer. ";
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=TypeAsText;
+                TableRelation="Option Lookup Buffer"."Option Caption" WHERE (Lookup Type=CONST(Sales));
+                Visible=IsFoundation;
+                Editable=CurrPageIsEditable;
+                LookupPageID=Option Lookup List;
+                OnValidate=BEGIN
+                             TempOptionLookupBuffer.SetCurrentType(Type);
+                             IF TempOptionLookupBuffer.AutoCompleteOption(TypeAsText,TempOptionLookupBuffer."Lookup Type"::Sales) THEN
+                               VALIDATE(Type,TempOptionLookupBuffer.ID);
+                             TempOptionLookupBuffer.ValidateOption(TypeAsText);
+                             UpdateEditableOnRow;
+                             UpdateTypeText;
+                           END;
+                            }
+
+    { 4   ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the number of a general ledger account, item, resource, additional cost, or fixed asset, depending on the contents of the Type field.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="No.";
+                OnValidate=BEGIN
+                             NoOnAfterValidate;
+                             UpdateEditableOnRow;
+                             ShowShortcutDimCode(ShortcutDimCode);
+                             IF xRec."No." <> '' THEN
+                               RedistributeTotalsOnAfterValidate;
+                             UpdateTypeText;
+                           END;
+
+                ShowMandatory=Type <> Type::" " }
+
+    { 58  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the cross-referenced item number. If you enter a cross reference between yours and your vendor's or customer's item number, then this number will override the standard item number when you enter the cross-reference number on a sales or purchase document.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Cross-Reference No.";
+                Visible=FALSE;
+                OnValidate=BEGIN
+                             NoOnAfterValidate;
+                           END;
+
+                OnLookup=BEGIN
+                           CrossReferenceNoLookUp;
+                           NoOnAfterValidate;
+                           OnCrossReferenceNoOnLookup(Rec);
+                         END;
+                          }
+
+    { 74  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the code of the intercompany partner that the transaction is related to if the entry was created from an intercompany transaction.;
+                ApplicationArea=#Intercompany;
+                SourceExpr="IC Partner Code";
+                Visible=FALSE }
+
+    { 46  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the item or account in your IC partner's company that corresponds to the item or account on the line.;
+                ApplicationArea=#Intercompany;
+                SourceExpr="IC Partner Ref. Type";
+                Visible=FALSE }
+
+    { 70  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the IC partner. If the line is being sent to one of your intercompany partners, this field is used together with the IC Partner Ref. Type field to indicate the item or account in your partner's company that corresponds to the line.;
+                ApplicationArea=#Intercompany;
+                SourceExpr="IC Partner Reference";
+                Visible=FALSE }
+
+    { 30  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the variant of the item on the line.;
+                ApplicationArea=#Planning;
+                SourceExpr="Variant Code";
+                Visible=FALSE }
+
+    { 62  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies that this item is a catalog item.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=Nonstock;
+                Visible=FALSE }
+
+    { 14  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the Tax product posting group. Links business transactions made for the item, resource, or G/L account with the general ledger, to account for Tax amounts resulting from trade with that record.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="VAT Prod. Posting Group";
+                Visible=FALSE;
+                OnValidate=BEGIN
+                             RedistributeTotalsOnAfterValidate;
+                           END;
+                            }
+
+    { 6   ;2   ;Field     ;
+                ToolTipML=ENU=Specifies a description of the entry, which is based on the contents of the Type and No. fields.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=Description;
+                OnValidate=BEGIN
+                             UpdateEditableOnRow;
+
+                             IF "No." = xRec."No." THEN
+                               EXIT;
+
+                             NoOnAfterValidate;
+                             ShowShortcutDimCode(ShortcutDimCode);
+                             IF xRec."No." <> '' THEN
+                               RedistributeTotalsOnAfterValidate;
+                             UpdateTypeText;
+                           END;
+
+                ShowMandatory=NOT IsCommentLine }
+
+    { 50  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the code explaining why the item was returned.;
+                ApplicationArea=#Suite;
+                SourceExpr="Return Reason Code";
+                Visible=FALSE }
+
+    { 32  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the inventory location from which the items sold should be picked and where the inventory decrease is registered.;
+                ApplicationArea=#Location;
+                SourceExpr="Location Code";
+                Visible=LocationCodeVisible;
+                Enabled=NOT IsCommentLine;
+                Editable=NOT IsCommentLine }
+
+    { 76  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the bin where the items are picked or put away.;
+                ApplicationArea=#Warehouse;
+                SourceExpr="Bin Code";
+                Visible=FALSE }
+
+    { 8   ;2   ;Field     ;
+                ToolTipML=ENU=Specifies how many units are being sold.;
+                ApplicationArea=#Basic,#Suite;
+                BlankZero=Yes;
+                SourceExpr=Quantity;
+                Enabled=NOT IsCommentLine;
+                Editable=NOT IsCommentLine;
+                OnValidate=BEGIN
+                             ValidateAutoReserve;
+                             RedistributeTotalsOnAfterValidate;
+                           END;
+
+                ShowMandatory=(NOT IsCommentLine) AND ("No." <> '') }
+
+    { 34  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies how each unit of the item or resource is measured, such as in pieces or hours. By default, the value in the Base Unit of Measure field on the item or resource card is inserted.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Unit of Measure Code";
+                Enabled=UnitofMeasureCodeIsChangeable;
+                Editable=UnitofMeasureCodeIsChangeable;
+                OnValidate=BEGIN
+                             ValidateAutoReserve;
+                             RedistributeTotalsOnAfterValidate;
+                           END;
+                            }
+
+    { 10  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the unit of measure for the item or resource on the sales line.;
+                ApplicationArea=#Suite;
+                SourceExpr="Unit of Measure";
+                Visible=FALSE }
+
+    { 26  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the unit cost of the item on the line.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Unit Cost (LCY)";
+                Visible=FALSE }
+
+    { 88  ;2   ;Field     ;
+                CaptionML=ENU=Sales Price Exists;
+                ToolTipML=ENU=Specifies that there is a specific price for this customer.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=PriceExists;
+                Visible=FALSE;
+                Editable=FALSE }
+
+    { 12  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the price for one unit on the sales line.;
+                ApplicationArea=#Basic,#Suite;
+                BlankZero=Yes;
+                SourceExpr="Unit Price";
+                Enabled=NOT IsCommentLine;
+                Editable=NOT IsCommentLine;
+                OnValidate=BEGIN
+                             RedistributeTotalsOnAfterValidate;
+                           END;
+
+                ShowMandatory=(NOT IsCommentLine) AND ("No." <> '') }
+
+    { 1020002;2;Field     ;
+                ToolTipML=ENU=Specifies if the customer or vendor is liable for sales tax.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Tax Liable";
+                Visible=FALSE;
+                Editable=FALSE }
+
+    { 1020006;2;Field     ;
+                ToolTipML=ENU=Specifies the tax area that is used to calculate and post sales tax.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Tax Area Code";
+                Visible=FALSE;
+                OnValidate=BEGIN
+                             RedistributeTotalsOnAfterValidate;
+                           END;
+                            }
+
+    { 1020004;2;Field     ;
+                ToolTipML=ENU=Specifies the tax group that is used to calculate and post sales tax.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Tax Group Code";
+                Visible=TaxGroupCodeVisible;
+                Enabled=Type <> Type::" ";
+                Editable=Type <> Type::" ";
+                OnValidate=BEGIN
+                             RedistributeTotalsOnAfterValidate;
+                           END;
+
+                ShowMandatory=(Type <> Type::" ") AND ("No." <> '') }
+
+    { 16  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the discount percentage that is granted for the item on the line.;
+                ApplicationArea=#Basic,#Suite;
+                BlankZero=Yes;
+                SourceExpr="Line Discount %";
+                Enabled=NOT IsCommentLine;
+                Editable=NOT IsCommentLine;
+                OnValidate=BEGIN
+                             RedistributeTotalsOnAfterValidate;
+                           END;
+                            }
+
+    { 64  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the net amount, excluding any invoice discount amount, that must be paid for products on the line.;
+                ApplicationArea=#Basic,#Suite;
+                BlankZero=Yes;
+                SourceExpr="Line Amount";
+                Enabled=NOT IsCommentLine;
+                Editable=NOT IsCommentLine;
+                OnValidate=BEGIN
+                             RedistributeTotalsOnAfterValidate;
+                           END;
+
+                ShowMandatory=(NOT IsCommentLine) AND ("No." <> '') }
+
+    { 1020000;2;Field     ;
+                ToolTipML=ENU=Specifies the sum of the amounts in the Amount Including Tax fields on the associated sales lines.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Amount Including VAT" }
+
+    { 90  ;2   ;Field     ;
+                CaptionML=ENU=Sales Line Disc. Exists;
+                ToolTipML=ENU=Specifies that there is a specific discount for this customer.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=LineDiscExists;
+                Visible=FALSE;
+                Editable=FALSE }
+
+    { 40  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the discount amount that is granted for the item on the line.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Line Discount Amount";
+                Visible=FALSE;
+                OnValidate=BEGIN
+                             RedistributeTotalsOnAfterValidate;
+                           END;
+                            }
+
+    { 42  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies if the invoice line is included when the invoice discount is calculated.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Allow Invoice Disc.";
+                Visible=FALSE;
+                OnValidate=BEGIN
+                             CurrPage.SAVERECORD;
+                             AmountWithDiscountAllowed := DocumentTotals.CalcTotalSalesAmountOnlyDiscountAllowed(Rec);
+                             InvoiceDiscountAmount := ROUND(AmountWithDiscountAllowed * InvoiceDiscountPct / 100,Currency."Amount Rounding Precision");
+                             ValidateInvoiceDiscountAmount;
+                           END;
+                            }
+
+    { 80  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the invoice discount amount for the line.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Inv. Discount Amount";
+                Visible=FALSE }
+
+    { 84  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies that you can assign item charges to this line.;
+                ApplicationArea=#ItemCharges;
+                SourceExpr="Allow Item Charge Assignment";
+                Visible=FALSE }
+
+    { 36  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies how many units of the item charge will be assigned to the line.;
+                ApplicationArea=#ItemCharges;
+                SourceExpr="Qty. to Assign";
+                StyleExpr=ItemChargeStyleExpression;
+                OnDrillDown=BEGIN
+                              CurrPage.SAVERECORD;
+                              ShowItemChargeAssgnt;
+                              UpdatePage(FALSE);
+                            END;
+                             }
+
+    { 82  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the quantity of the item charge that was assigned to a specified item when you posted this sales line.;
+                ApplicationArea=#ItemCharges;
+                BlankZero=Yes;
+                SourceExpr="Qty. Assigned";
+                Visible=FALSE;
+                OnDrillDown=BEGIN
+                              CurrPage.SAVERECORD;
+                              ShowItemChargeAssgnt;
+                              UpdatePage(FALSE);
+                            END;
+                             }
+
+    { 52  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the number of the related job. If you fill in this field and the Job Task No. field, then a job ledger entry will be posted together with the sales line.;
+                ApplicationArea=#Jobs;
+                SourceExpr="Job No.";
+                Visible=FALSE;
+                Editable=FALSE;
+                OnValidate=BEGIN
+                             ShowShortcutDimCode(ShortcutDimCode);
+                           END;
+                            }
+
+    { 18  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the number of the related job task.;
+                ApplicationArea=#Jobs;
+                SourceExpr="Job Task No.";
+                Visible=FALSE;
+                Editable=FALSE }
+
+    { 60  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the entry number of the job planning line that the sales line is linked to.;
+                ApplicationArea=#Jobs;
+                SourceExpr="Job Contract Entry No.";
+                Visible=FALSE;
+                Editable=FALSE }
+
+    { 19  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the Tax category in connection with electronic document sending. For example, when you send sales documents through the PEPPOL service, the value in this field is used to populate several fields, such as the ClassifiedTaxCategory element in the Item group. It is also used to populate the TaxCategory element in both the TaxSubtotal and AllowanceCharge group. The number is based on the UNCL5305 standard.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Tax Category";
+                Visible=FALSE }
+
+    { 25  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the code for the shipping agent who is transporting the items.;
+                ApplicationArea=#Suite;
+                SourceExpr="Shipping Agent Code";
+                Visible=FALSE }
+
+    { 27  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the code for the service, such as a one-day delivery, that is offered by the shipping agent.;
+                ApplicationArea=#Suite;
+                SourceExpr="Shipping Agent Service Code";
+                Visible=FALSE }
+
+    { 72  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies which work type the resource applies to when the sale is related to a job.;
+                ApplicationArea=#Manufacturing;
+                SourceExpr="Work Type Code";
+                Visible=FALSE }
+
+    { 54  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the number of the blanket order that the record originates from.;
+                ApplicationArea=#Suite;
+                SourceExpr="Blanket Order No.";
+                Visible=FALSE }
+
+    { 56  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the number of the blanket order line that the record originates from.;
+                ApplicationArea=#Suite;
+                SourceExpr="Blanket Order Line No.";
+                Visible=FALSE }
+
+    { 24  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the date that will be used on related fixed asset ledger entries.;
+                ApplicationArea=#FixedAssets;
+                SourceExpr="FA Posting Date";
+                Visible=FALSE }
+
+    { 44  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies if depreciation was calculated until the FA posting date of the line.;
+                ApplicationArea=#FixedAssets;
+                SourceExpr="Depr. until FA Posting Date";
+                Visible=FALSE }
+
+    { 28  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the code for the depreciation book to which the line will be posted if you have selected Fixed Asset in the Type field for this line.;
+                ApplicationArea=#FixedAssets;
+                SourceExpr="Depreciation Book Code";
+                Visible=FALSE }
+
+    { 68  ;2   ;Field     ;
+                ToolTipML=ENU="Specifies, if the type is Fixed Asset, that information on the line is to be posted to all the assets defined depreciation books. ";
+                ApplicationArea=#FixedAssets;
+                SourceExpr="Use Duplication List";
+                Visible=FALSE }
+
+    { 66  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies a depreciation book code if you want the journal line to be posted to that depreciation book, as well as to the depreciation book in the Depreciation Book Code field.;
+                ApplicationArea=#FixedAssets;
+                SourceExpr="Duplicate in Depreciation Book";
+                Visible=FALSE }
+
+    { 38  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the number of the item ledger entry that the document or journal line is applied from.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Appl.-from Item Entry";
+                Visible=FALSE }
+
+    { 48  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the number of the item ledger entry that the document or journal line is applied -to.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Appl.-to Item Entry";
+                Visible=FALSE }
+
+    { 21  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the deferral template that governs how revenue earned with this sales document is deferred to the different accounting periods when the good or service was delivered.;
+                ApplicationArea=#Suite;
+                SourceExpr="Deferral Code";
+                Visible=FALSE;
+                Enabled=(Type <> Type::"Fixed Asset") AND (Type <> Type::" ");
+                OnAssistEdit=BEGIN
+                               ShowDeferralSchedule;
+                             END;
+                              }
+
+    { 20  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the code for Shortcut Dimension 1, which is one of two global dimension codes that you set up in the General Ledger Setup window.;
+                ApplicationArea=#Dimensions;
+                SourceExpr="Shortcut Dimension 1 Code";
+                Visible=FALSE }
+
+    { 22  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the code for Shortcut Dimension 2, which is one of two global dimension codes that you set up in the General Ledger Setup window.;
+                ApplicationArea=#Dimensions;
+                SourceExpr="Shortcut Dimension 2 Code";
+                Visible=FALSE }
+
+    { 300 ;2   ;Field     ;
+                ApplicationArea=#Suite;
+                SourceExpr=ShortcutDimCode[3];
+                CaptionClass='1,2,3';
+                TableRelation="Dimension Value".Code WHERE (Global Dimension No.=CONST(3),
+                                                            Dimension Value Type=CONST(Standard),
+                                                            Blocked=CONST(No));
+                Visible=FALSE;
+                OnValidate=BEGIN
+                             ValidateShortcutDimCode(3,ShortcutDimCode[3]);
+                           END;
+                            }
+
+    { 302 ;2   ;Field     ;
+                ApplicationArea=#Suite;
+                SourceExpr=ShortcutDimCode[4];
+                CaptionClass='1,2,4';
+                TableRelation="Dimension Value".Code WHERE (Global Dimension No.=CONST(4),
+                                                            Dimension Value Type=CONST(Standard),
+                                                            Blocked=CONST(No));
+                Visible=FALSE;
+                OnValidate=BEGIN
+                             ValidateShortcutDimCode(4,ShortcutDimCode[4]);
+                           END;
+                            }
+
+    { 304 ;2   ;Field     ;
+                ApplicationArea=#Suite;
+                SourceExpr=ShortcutDimCode[5];
+                CaptionClass='1,2,5';
+                TableRelation="Dimension Value".Code WHERE (Global Dimension No.=CONST(5),
+                                                            Dimension Value Type=CONST(Standard),
+                                                            Blocked=CONST(No));
+                Visible=FALSE;
+                OnValidate=BEGIN
+                             ValidateShortcutDimCode(5,ShortcutDimCode[5]);
+                           END;
+                            }
+
+    { 306 ;2   ;Field     ;
+                ApplicationArea=#Suite;
+                SourceExpr=ShortcutDimCode[6];
+                CaptionClass='1,2,6';
+                TableRelation="Dimension Value".Code WHERE (Global Dimension No.=CONST(6),
+                                                            Dimension Value Type=CONST(Standard),
+                                                            Blocked=CONST(No));
+                Visible=FALSE;
+                OnValidate=BEGIN
+                             ValidateShortcutDimCode(6,ShortcutDimCode[6]);
+                           END;
+                            }
+
+    { 308 ;2   ;Field     ;
+                ApplicationArea=#Suite;
+                SourceExpr=ShortcutDimCode[7];
+                CaptionClass='1,2,7';
+                TableRelation="Dimension Value".Code WHERE (Global Dimension No.=CONST(7),
+                                                            Dimension Value Type=CONST(Standard),
+                                                            Blocked=CONST(No));
+                Visible=FALSE;
+                OnValidate=BEGIN
+                             ValidateShortcutDimCode(7,ShortcutDimCode[7]);
+                           END;
+                            }
+
+    { 310 ;2   ;Field     ;
+                ApplicationArea=#Suite;
+                SourceExpr=ShortcutDimCode[8];
+                CaptionClass='1,2,8';
+                TableRelation="Dimension Value".Code WHERE (Global Dimension No.=CONST(8),
+                                                            Dimension Value Type=CONST(Standard),
+                                                            Blocked=CONST(No));
+                Visible=FALSE;
+                OnValidate=BEGIN
+                             ValidateShortcutDimCode(8,ShortcutDimCode[8]);
+                           END;
+                            }
+
+    { 104 ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the document number.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Document No.";
+                Visible=FALSE;
+                Editable=FALSE }
+
+    { 106 ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the line number.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Line No.";
+                Visible=FALSE;
+                Editable=FALSE }
+
+    { 39  ;1   ;Group     ;
+                GroupType=Group }
+
+    { 33  ;2   ;Group     ;
+                GroupType=Group }
+
+    { 7   ;3   ;Field     ;
+                CaptionML=ENU=Subtotal Excl. Tax;
+                ToolTipML=ENU=Specifies the sum of the value in the Line Amount Excl. Tax field on all lines in the document.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=TotalSalesLine."Line Amount";
+                AutoFormatType=1;
+                AutoFormatExpr=Currency.Code;
+                CaptionClass=DocumentTotals.GetTotalLineAmountWithVATAndCurrencyCaption(Currency.Code,TotalSalesHeader."Prices Including VAT");
+                Editable=FALSE }
+
+    { 31  ;3   ;Field     ;
+                Name=Invoice Discount Amount;
+                CaptionML=ENU=Invoice Discount Amount;
+                ToolTipML=ENU=Specifies a discount amount that is deducted from the value in the Total Incl. Tax field. You can enter or change the amount manually.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=InvoiceDiscountAmount;
+                AutoFormatType=1;
+                AutoFormatExpr=Currency.Code;
+                CaptionClass=DocumentTotals.GetInvoiceDiscAmountWithVATAndCurrencyCaption(FIELDCAPTION("Inv. Discount Amount"),Currency.Code);
+                Editable=InvDiscAmountEditable;
+                OnValidate=BEGIN
+                             ValidateInvoiceDiscountAmount;
+                           END;
+                            }
+
+    { 29  ;3   ;Field     ;
+                Name=Invoice Disc. Pct.;
+                CaptionML=ENU=Invoice Discount %;
+                ToolTipML=ENU=Specifies a discount percentage that is granted if criteria that you have set up for the customer are met.;
+                ApplicationArea=#Basic,#Suite;
+                DecimalPlaces=0:2;
+                SourceExpr=InvoiceDiscountPct;
+                Editable=InvDiscAmountEditable;
+                OnValidate=BEGIN
+                             InvoiceDiscountAmount := ROUND(AmountWithDiscountAllowed * InvoiceDiscountPct / 100,Currency."Amount Rounding Precision");
+                             ValidateInvoiceDiscountAmount;
+                           END;
+                            }
+
+    { 15  ;2   ;Group     ;
+                GroupType=Group }
+
+    { 13  ;3   ;Field     ;
+                Name=Total Amount Excl. VAT;
+                DrillDown=No;
+                CaptionML=ENU=Total Amount Excl. Tax;
+                ToolTipML=ENU=Specifies the sum of the value in the Line Amount Excl. Tax field on all lines in the document minus any discount amount in the Invoice Discount Amount field.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=TotalSalesLine.Amount;
+                AutoFormatType=1;
+                AutoFormatExpr=Currency.Code;
+                CaptionClass=DocumentTotals.GetTotalExclVATCaption(Currency.Code);
+                Editable=FALSE }
+
+    { 11  ;3   ;Field     ;
+                Name=Total VAT Amount;
+                CaptionML=ENU=Total Tax;
+                ToolTipML=ENU=Specifies the sum of tax amounts on all lines in the document.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=VATAmount;
+                AutoFormatType=1;
+                AutoFormatExpr=Currency.Code;
+                CaptionClass=DocumentTotals.GetTotalVATCaption(Currency.Code);
+                Editable=FALSE }
+
+    { 9   ;3   ;Field     ;
+                Name=Total Amount Incl. VAT;
+                CaptionML=ENU=Total Amount Incl. Tax;
+                ToolTipML=ENU=Specifies the sum of the value in the Line Amount Incl. Tax field on all lines in the document minus any discount amount in the Invoice Discount Amount field.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=TotalSalesLine."Amount Including VAT";
+                AutoFormatType=1;
+                AutoFormatExpr=Currency.Code;
+                CaptionClass=DocumentTotals.GetTotalInclVATCaption(Currency.Code);
+                Editable=FALSE }
+
+  }
+  CODE
+  {
+    VAR
+      TotalSalesHeader@1014 : Record 36;
+      TotalSalesLine@1013 : Record 37;
+      Currency@1024 : Record 4;
+      SalesSetup@1010 : Record 311;
+      TempOptionLookupBuffer@1018 : TEMPORARY Record 1670;
+      ApplicationAreaMgmtFacade@1008 : Codeunit 9179;
+      TransferExtendedText@1003 : Codeunit 378;
+      SalesPriceCalcMgt@1005 : Codeunit 7000;
+      ItemAvailFormsMgt@1001 : Codeunit 353;
+      SalesCalcDiscByType@1015 : Codeunit 56;
+      DocumentTotals@1016 : Codeunit 57;
+      VATAmount@1017 : Decimal;
+      InvoiceDiscountAmount@1009 : Decimal;
+      InvoiceDiscountPct@1023 : Decimal;
+      AmountWithDiscountAllowed@1021 : Decimal;
+      ShortcutDimCode@1004 : ARRAY [8] OF Code[20];
+      UpdateAllowedVar@1002 : Boolean;
+      Text000@1006 : TextConst 'ENU=Unable to run this function while in View mode.';
+      LocationCodeVisible@1007 : Boolean;
+      InvDiscAmountEditable@1012 : Boolean;
+      IsCommentLine@1000 : Boolean;
+      UnitofMeasureCodeIsChangeable@1011 : Boolean;
+      IsFoundation@1020 : Boolean;
+      CurrPageIsEditable@1019 : Boolean;
+      ItemChargeStyleExpression@1022 : Text;
+      TypeAsText@1098 : Text[30];
+      TaxGroupCodeVisible@1020000 : Boolean;
+
+    [External]
+    PROCEDURE ApproveCalcInvDisc@1();
+    BEGIN
+      CODEUNIT.RUN(CODEUNIT::"Sales-Disc. (Yes/No)",Rec);
+    END;
+
+    LOCAL PROCEDURE ValidateInvoiceDiscountAmount@22();
+    VAR
+      SalesHeader@1000 : Record 36;
+    BEGIN
+      SalesHeader.GET("Document Type","Document No.");
+      SalesCalcDiscByType.ApplyInvDiscBasedOnAmt(InvoiceDiscountAmount,SalesHeader);
+      CurrPage.UPDATE(FALSE);
+    END;
+
+    [External]
+    PROCEDURE CalcInvDisc@8();
+    VAR
+      SalesCalcDiscount@1000 : Codeunit 60;
+    BEGIN
+      SalesCalcDiscount.CalculateInvoiceDiscountOnLine(Rec);
+    END;
+
+    [External]
+    PROCEDURE ExplodeBOM@3();
+    BEGIN
+      CODEUNIT.RUN(CODEUNIT::"Sales-Explode BOM",Rec);
+    END;
+
+    [External]
+    PROCEDURE GetShipment@4();
+    BEGIN
+      CODEUNIT.RUN(CODEUNIT::"Sales-Get Shipment",Rec);
+    END;
+
+    [External]
+    PROCEDURE InsertExtendedText@7(Unconditionally@1000 : Boolean);
+    BEGIN
+      OnBeforeInsertExtendedText(Rec);
+      IF TransferExtendedText.SalesCheckIfAnyExtText(Rec,Unconditionally) THEN BEGIN
+        CurrPage.SAVERECORD;
+        COMMIT;
+        TransferExtendedText.InsertSalesExtText(Rec);
+      END;
+      IF TransferExtendedText.MakeUpdate THEN
+        UpdatePage(TRUE);
+    END;
+
+    [External]
+    PROCEDURE UpdatePage@12(SetSaveRecord@1000 : Boolean);
+    BEGIN
+      CurrPage.UPDATE(SetSaveRecord);
+    END;
+
+    PROCEDURE ShowPrices@15();
+    BEGIN
+      TotalSalesHeader.GET("Document Type","Document No.");
+      CLEAR(SalesPriceCalcMgt);
+      SalesPriceCalcMgt.GetSalesLinePrice(TotalSalesHeader,Rec);
+    END;
+
+    [External]
+    PROCEDURE ShowLineDisc@16();
+    BEGIN
+      TotalSalesHeader.GET("Document Type","Document No.");
+      CLEAR(SalesPriceCalcMgt);
+      SalesPriceCalcMgt.GetSalesLineLineDisc(TotalSalesHeader,Rec);
+    END;
+
+    [External]
+    PROCEDURE SetUpdateAllowed@5(UpdateAllowed@1000 : Boolean);
+    BEGIN
+      UpdateAllowedVar := UpdateAllowed;
+    END;
+
+    [External]
+    PROCEDURE UpdateAllowed@20() : Boolean;
+    BEGIN
+      IF UpdateAllowedVar = FALSE THEN BEGIN
+        MESSAGE(Text000);
+        EXIT(FALSE);
+      END;
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE NoOnAfterValidate@19066594();
+    BEGIN
+      InsertExtendedText(FALSE);
+
+      IF (Type = Type::"Charge (Item)") AND ("No." <> xRec."No.") AND (xRec."No." <> '') THEN
+        CurrPage.SAVERECORD;
+    END;
+
+    LOCAL PROCEDURE UpdateEditableOnRow@11();
+    VAR
+      SalesLine@1000 : Record 37;
+    BEGIN
+      IsCommentLine := NOT HasTypeToFillMandatoryFields;
+      IF NOT IsCommentLine THEN
+        UnitofMeasureCodeIsChangeable := CanEditUnitOfMeasureCode
+      ELSE
+        UnitofMeasureCodeIsChangeable := FALSE;
+
+      IF TotalSalesHeader."No." <> '' THEN BEGIN
+        SalesLine.SETRANGE("Document No.",TotalSalesHeader."No.");
+        SalesLine.SETRANGE("Document Type",TotalSalesHeader."Document Type");
+        IF NOT SalesLine.ISEMPTY THEN
+          InvDiscAmountEditable :=
+            SalesCalcDiscByType.InvoiceDiscIsAllowed(TotalSalesHeader."Invoice Disc. Code") AND CurrPage.EDITABLE;
+      END;
+      CurrPageIsEditable := CurrPage.EDITABLE;
+    END;
+
+    LOCAL PROCEDURE ValidateAutoReserve@19032465();
+    BEGIN
+      IF Reserve = Reserve::Always THEN BEGIN
+        CurrPage.SAVERECORD;
+        AutoReserve;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetTotalSalesHeader@13();
+    BEGIN
+      IF NOT TotalSalesHeader.GET("Document Type","Document No.") THEN
+        CLEAR(TotalSalesHeader);
+      IF Currency.Code <> TotalSalesHeader."Currency Code" THEN
+        IF NOT Currency.GET(TotalSalesHeader."Currency Code") THEN BEGIN
+          CLEAR(Currency);
+          Currency.InitRoundingPrecision;
+        END
+    END;
+
+    LOCAL PROCEDURE CalculateTotals@6();
+    BEGIN
+      GetTotalSalesHeader;
+      TotalSalesHeader.CALCFIELDS("Recalculate Invoice Disc.");
+
+      IF SalesSetup."Calc. Inv. Discount" AND ("Document No." <> '') AND (TotalSalesHeader."Customer Posting Group" <> '') AND
+         TotalSalesHeader."Recalculate Invoice Disc."
+      THEN
+        IF FIND THEN
+          CalcInvDisc;
+
+      DocumentTotals.CalculateSalesPageTotals(TotalSalesLine,VATAmount,Rec);
+      AmountWithDiscountAllowed := DocumentTotals.CalcTotalSalesAmountOnlyDiscountAllowed(Rec);
+      InvoiceDiscountAmount := TotalSalesLine."Inv. Discount Amount";
+      InvoiceDiscountPct := SalesCalcDiscByType.GetCustInvoiceDiscountPct(Rec);
+    END;
+
+    PROCEDURE RedistributeTotalsOnAfterValidate@2();
+    BEGIN
+      CurrPage.SAVERECORD;
+
+      TotalSalesHeader.GET("Document Type","Document No.");
+      DocumentTotals.SalesRedistributeInvoiceDiscountAmounts(Rec,VATAmount,TotalSalesLine);
+      CurrPage.UPDATE;
+    END;
+
+    LOCAL PROCEDURE UpdateTypeText@18();
+    VAR
+      RecRef@1000 : RecordRef;
+    BEGIN
+      RecRef.GETTABLE(Rec);
+      TypeAsText := TempOptionLookupBuffer.FormatOption(RecRef.FIELD(FIELDNO(Type)));
+    END;
+
+    LOCAL PROCEDURE SetItemChargeFieldsStyle@24();
+    BEGIN
+      ItemChargeStyleExpression := '';
+      IF AssignedItemCharge THEN
+        ItemChargeStyleExpression := 'Unfavorable';
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeInsertExtendedText@10(VAR SalesLine@1000 : Record 37);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnCrossReferenceNoOnLookup@9(VAR SalesLine@1000 : Record 37);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

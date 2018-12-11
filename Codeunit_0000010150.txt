@@ -1,0 +1,565 @@
+OBJECT Codeunit 10150 O365 Tax Settings Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:56 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      TaxableCodeTxt@1020001 : TextConst '@@@={Locked};ENU=TAXABLE';
+      PercentTxt@1020000 : TextConst 'ENU=%';
+      DiscardWithNoNameOptionQst@1020005 : TextConst 'ENU=Keep editing,Discard';
+      DiscardWithNoNameInstructionTxt@1020004 : TextConst 'ENU=City or state name must be filled in.';
+      UpdateOtherAreasOptionQst@1020003 : TextConst 'ENU=Continue,Undo';
+      UpdateOtherAreasInstructionTxt@1020002 : TextConst 'ENU=Updating a city or state tax rate will affect all customers using the rate.';
+      CannotSetPSTRateErr@1020007 : TextConst '@@@=%1 - Code of tax area in Canada. E.g. NB,AB...;ENU=It is not possible to set the PST Rate on the %1 tax area.';
+      DefaultTxt@1020008 : TextConst '@@@=Please translate all caps with max length 20 chars.;ENU=DEFAULT';
+      TemplateTaxAreaDoesNotExistMsg@1020006 : TextConst '@@@={locked};ENU=Customer template tax area %1 does not exist.';
+      TemplateInvoicingCategoryTxt@1020009 : TextConst '@@@={locked};ENU=AL Inv template';
+      CannotRemoveDefaultTaxAreaErr@1020010 : TextConst 'ENU=You cannot remove the default tax area.';
+
+    [External]
+    PROCEDURE IsDefaultTaxAreaAPI@1020059(TaxAreaCode@1020001 : Code[20]) : Boolean;
+    VAR
+      CompanyInformation@1020000 : Record 79;
+    BEGIN
+      IF CompanyInformation.GET THEN
+        EXIT(CompanyInformation."Tax Area Code" = TaxAreaCode);
+
+      EXIT(TaxAreaCode = DefaultTxt);
+    END;
+
+    [External]
+    PROCEDURE UpdateSalesTaxSetupWizard@1020020(TempSalesTaxSetupWizard@1020001 : TEMPORARY Record 10807);
+    VAR
+      SalesTaxSetupWizard@1020000 : Record 10807;
+    BEGIN
+      IF SalesTaxSetupWizard.GET THEN
+        SalesTaxSetupWizard.DELETE;
+
+      SalesTaxSetupWizard := TempSalesTaxSetupWizard;
+      SalesTaxSetupWizard.INSERT(TRUE);
+    END;
+
+    [External]
+    PROCEDURE InitializeTaxSetupFromTaxAreaLinesForUS@1020000(VAR TempSalesTaxSetupWizard@1020003 : TEMPORARY Record 10807);
+    VAR
+      TaxAreaLine@1020000 : Record 319;
+      TaxJurisdiction@1020001 : Record 320;
+    BEGIN
+      TaxAreaLine.SETRANGE("Tax Area",TempSalesTaxSetupWizard."Tax Area Code");
+      IF TaxAreaLine.FINDSET THEN
+        REPEAT
+          TaxJurisdiction.SETRANGE(Code,TaxAreaLine."Tax Jurisdiction Code");
+          IF TaxJurisdiction.FINDFIRST THEN
+            IF TaxJurisdiction."Report-to Jurisdiction" = TaxJurisdiction.Code THEN BEGIN
+              TempSalesTaxSetupWizard.State := COPYSTR(TaxJurisdiction.Code,1,MAXSTRLEN(TempSalesTaxSetupWizard.State));
+              TempSalesTaxSetupWizard."State Rate" += GetTaxRate(TaxJurisdiction.Code)
+            END ELSE BEGIN
+              TempSalesTaxSetupWizard.City := TaxJurisdiction.GetName;
+              TempSalesTaxSetupWizard."City Rate" += GetTaxRate(TaxJurisdiction.Code)
+            END;
+        UNTIL TaxAreaLine.NEXT = 0;
+    END;
+
+    [External]
+    PROCEDURE GetProvince@1020002(JurisdictionCode@1020001 : Code[10]) : Text[50];
+    VAR
+      TaxJurisdiction@1020003 : Record 320;
+    BEGIN
+      IF NOT TaxJurisdiction.GET(JurisdictionCode) THEN
+        EXIT('');
+
+      EXIT(TaxJurisdiction.GetDescriptionInCurrentLanguage);
+    END;
+
+    [External]
+    PROCEDURE GetTaxRate@1020005(JurisdictionCode@1020000 : Code[10]) : Decimal;
+    VAR
+      TaxDetail@1000 : Record 322;
+    BEGIN
+      IF GetDefaultTaxDetail(TaxDetail,JurisdictionCode) THEN
+        EXIT(TaxDetail."Tax Below Maximum");
+    END;
+
+    [External]
+    PROCEDURE GetDefaultTaxDetail@1020003(VAR TaxDetail@1000 : Record 322;JurisdictionCode@1020000 : Code[10]) : Boolean;
+    BEGIN
+      TaxDetail.SETRANGE("Tax Jurisdiction Code",JurisdictionCode);
+      TaxDetail.SETRANGE("Tax Group Code",TaxableCodeTxt);
+      TaxDetail.SETRANGE("Tax Type",TaxDetail."Tax Type"::"Sales and Use Tax");
+      IF TaxDetail.FINDLAST THEN
+        EXIT(TRUE);
+
+      TaxDetail.RESET;
+      EXIT(FALSE);
+    END;
+
+    [External]
+    PROCEDURE GetDefaultTaxArea@1020001() : Code[20];
+    VAR
+      CompanyInformation@1020000 : Record 79;
+    BEGIN
+      IF CompanyInformation.GET THEN
+        EXIT(CompanyInformation."Tax Area Code");
+    END;
+
+    PROCEDURE GenerateTaxAreaDescription@1020010(TotalRate@1020001 : Decimal;City@1020002 : Text;State@1020003 : Code[10]) : Text[50];
+    VAR
+      DummyTaxArea@1020004 : Record 318;
+      Result@1020000 : Text;
+    BEGIN
+      Result := FORMAT(TotalRate) + PercentTxt;
+
+      CASE TRUE OF
+        (State <> '') AND (City <> ''):
+          Result := STRSUBSTNO('%1, %2, %3',City,State,Result);
+        City <> '':
+          Result := STRSUBSTNO('%1, %2',City,Result);
+        State <> '':
+          Result := STRSUBSTNO('%1, %2',State,Result);
+      END;
+
+      EXIT(COPYSTR(Result,1,MAXSTRLEN(DummyTaxArea.Description)));
+    END;
+
+    PROCEDURE UpdateTaxAreaDescriptionsWithSameStateOrCity@1020004(SalesTaxSetupWizard@1020004 : Record 10807);
+    VAR
+      TaxArea@1020000 : Record 318;
+      TaxAreaLine@1020002 : Record 319;
+      TempSalesTaxSetupWizard2@1020003 : TEMPORARY Record 10807;
+      SalesLine@1020001 : Record 37;
+    BEGIN
+      TaxAreaLine.SETFILTER(
+        "Tax Jurisdiction Code",'%1|%2',SalesTaxSetupWizard.State,GetCityCodeFromSalesTaxSetup(SalesTaxSetupWizard));
+
+      // For each tax area pair using the modified state or city, regenerate the tax area description
+      // Also update the invoice amount for all existing invoices using these tax areas
+      IF TaxAreaLine.FINDSET THEN
+        REPEAT
+          IF TaxArea.GET(TaxAreaLine."Tax Area") THEN BEGIN
+            TempSalesTaxSetupWizard2.INIT;
+            TempSalesTaxSetupWizard2."Tax Area Code" := TaxArea.Code;
+            InitializeTaxSetupFromTaxAreaLinesForUS(TempSalesTaxSetupWizard2);
+
+            TaxArea.Description := GenerateTaxAreaDescription(
+                TempSalesTaxSetupWizard2."City Rate" + TempSalesTaxSetupWizard2."State Rate",
+                TempSalesTaxSetupWizard2.City,TempSalesTaxSetupWizard2.State);
+            TaxArea.MODIFY(TRUE);
+
+            SalesLine.SETRANGE("Tax Area Code",TaxArea.Code);
+            IF SalesLine.FINDSET THEN
+              REPEAT
+                SalesLine.UpdateAmounts;
+                SalesLine.MODIFY(TRUE);
+              UNTIL SalesLine.NEXT = 0;
+          END;
+        UNTIL TaxAreaLine.NEXT = 0;
+    END;
+
+    PROCEDURE CountTaxAreaLinesWithJurisdictionCode@1020007(JurisdictionCode@1020004 : Code[10]) : Integer;
+    VAR
+      TaxAreaLine@1020001 : Record 319;
+    BEGIN
+      TaxAreaLine.SETRANGE("Tax Jurisdiction Code",JurisdictionCode);
+      EXIT(TaxAreaLine.COUNT);
+    END;
+
+    PROCEDURE HasBeenModifiedUS@1020013(SalesTaxSetupWizard@1020001 : Record 10807) : Boolean;
+    VAR
+      TempSalesTaxSetupWizard@1020000 : TEMPORARY Record 10807;
+    BEGIN
+      TempSalesTaxSetupWizard."Tax Area Code" := SalesTaxSetupWizard."Tax Area Code";
+      InitializeTaxSetupFromTaxAreaLinesForUS(TempSalesTaxSetupWizard);
+
+      IF (TempSalesTaxSetupWizard.City <> SalesTaxSetupWizard.City) OR
+         (TempSalesTaxSetupWizard."City Rate" <> SalesTaxSetupWizard."City Rate") OR
+         (TempSalesTaxSetupWizard.State <> SalesTaxSetupWizard.State) OR
+         (TempSalesTaxSetupWizard."State Rate" <> SalesTaxSetupWizard."State Rate")
+      THEN
+        EXIT(TRUE);
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE OtherTaxAreasWithSameStateOrCityExist@1020006(SalesTaxSetupWizard@1020004 : Record 10807) DoOtherTaxAreasExist : Boolean;
+    VAR
+      TempSalesTaxSetupWizard@1020003 : TEMPORARY Record 10807;
+      CityCode@1020001 : Code[10];
+      ExistingTaxAreaLines@1020000 : Integer;
+    BEGIN
+      TempSalesTaxSetupWizard."Tax Area Code" := SalesTaxSetupWizard."Tax Area Code";
+      InitializeTaxSetupFromTaxAreaLinesForUS(TempSalesTaxSetupWizard);
+
+      ExistingTaxAreaLines := CountTaxAreaLinesWithJurisdictionCode(SalesTaxSetupWizard.State);
+
+      // Only if the state name is unchanged, expect to find one tax area line (for the existing record)
+      IF (SalesTaxSetupWizard.State <> '') AND (SalesTaxSetupWizard.State = TempSalesTaxSetupWizard.State) THEN
+        DoOtherTaxAreasExist := DoOtherTaxAreasExist OR (ExistingTaxAreaLines > 1)
+      ELSE
+        DoOtherTaxAreasExist := DoOtherTaxAreasExist OR (ExistingTaxAreaLines > 0);
+
+      CityCode := GetCityCodeFromSalesTaxSetup(SalesTaxSetupWizard);
+      ExistingTaxAreaLines := CountTaxAreaLinesWithJurisdictionCode(CityCode);
+
+      // Only if the city name is unchanged, expect to find one tax area line (for the existing record)
+      IF (SalesTaxSetupWizard.City <> '') AND (SalesTaxSetupWizard.City = TempSalesTaxSetupWizard.City) THEN
+        DoOtherTaxAreasExist := DoOtherTaxAreasExist OR (ExistingTaxAreaLines > 1)
+      ELSE
+        DoOtherTaxAreasExist := DoOtherTaxAreasExist OR (ExistingTaxAreaLines > 0);
+    END;
+
+    LOCAL PROCEDURE AssignTaxAreaToCustomersAndSalesLines@1020008(TaxAreaCode@1020000 : Code[20]);
+    VAR
+      Customer@1020004 : Record 18;
+      SalesLine@1020001 : Record 37;
+      OldSalesLine@1020002 : Record 37;
+    BEGIN
+      Customer.SETFILTER("Tax Area Code",'%1','');
+      IF NOT Customer.ISEMPTY THEN
+        Customer.MODIFYALL("Tax Area Code",TaxAreaCode);
+
+      SalesLine.LOCKTABLE;
+      SalesLine.SETRANGE("Tax Area Code",TaxAreaCode);
+      SalesLine.SETFILTER(Quantity,'<>%1',0);
+      SalesLine.SETFILTER("Unit Price",'<>%1',0);
+      IF SalesLine.FINDSET THEN
+        REPEAT
+          OldSalesLine := SalesLine;
+          SalesLine.UpdateAmounts;
+          IF (OldSalesLine."Amount Including VAT" <> SalesLine."Amount Including VAT") OR
+             (OldSalesLine.Amount <> SalesLine.Amount)
+          THEN
+            SalesLine.MODIFY;
+        UNTIL SalesLine.NEXT = 0;
+    END;
+
+    PROCEDURE StoreTaxSettingsForUS@1020009(VAR TempSalesTaxSetupWizard@1020000 : TEMPORARY Record 10807;TaxRateDescription@1020004 : Text[50]) : Boolean;
+    VAR
+      TaxArea@1020003 : Record 318;
+      ResponseOptNoName@1020002 : 'Cancel,KeepEditing,Discard';
+      ResponseOptUpdate@1020001 : 'Cancel,Continue,Undo';
+    BEGIN
+      IF NOT HasBeenModifiedUS(TempSalesTaxSetupWizard) THEN
+        EXIT(TRUE);
+
+      IF GUIALLOWED THEN
+        WITH TempSalesTaxSetupWizard DO
+          IF (("City Rate" <> 0) AND (City = '')) OR (("State Rate" <> 0) AND (State = '')) THEN BEGIN
+            ResponseOptNoName := STRMENU(DiscardWithNoNameOptionQst,0,DiscardWithNoNameInstructionTxt);
+            EXIT(ResponseOptNoName = ResponseOptNoName::Discard);
+          END;
+
+      IF GUIALLOWED THEN
+        IF OtherTaxAreasWithSameStateOrCityExist(TempSalesTaxSetupWizard) THEN BEGIN
+          ResponseOptUpdate := STRMENU(UpdateOtherAreasOptionQst,0,UpdateOtherAreasInstructionTxt);
+          IF ResponseOptUpdate = ResponseOptUpdate::Cancel THEN
+            EXIT(FALSE);
+          IF ResponseOptUpdate = ResponseOptUpdate::Undo THEN
+            EXIT(TRUE);
+        END;
+
+      UpdateTaxAreaNameUS(TempSalesTaxSetupWizard);
+      IF TempSalesTaxSetupWizard."Tax Area Code" <> '' THEN BEGIN
+        TempSalesTaxSetupWizard.StoreSalesTaxSetup;
+        IF TaxArea.GET(TempSalesTaxSetupWizard."Tax Area Code") THEN BEGIN
+          TaxArea.VALIDATE(Description,TaxRateDescription);
+          TaxArea.MODIFY;
+        END;
+        AssignTaxAreaToCustomersAndSalesLines(TempSalesTaxSetupWizard."Tax Area Code");
+      END;
+
+      UpdateTaxAreaDescriptionsWithSameStateOrCity(TempSalesTaxSetupWizard);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE StoreTaxSettingsForCA@1020063(VAR TempSalesTaxSetupWizard@1020000 : TEMPORARY Record 10807;VAR TempNativeAPITaxSetup@1020003 : TEMPORARY Record 2850);
+    VAR
+      TaxArea@1020002 : Record 318;
+      TaxAreaLine@1020001 : Record 319;
+    BEGIN
+      IF TempSalesTaxSetupWizard."Tax Area Code" = '' THEN
+        EXIT;
+
+      TempSalesTaxSetupWizard.SetTaxArea(TaxArea);
+      TaxAreaLine.SETRANGE("Tax Area",TempSalesTaxSetupWizard."Tax Area Code");
+      IF NOT TaxAreaLine.ISEMPTY THEN
+        TaxAreaLine.DELETEALL;
+
+      IF TempNativeAPITaxSetup."GST or HST Code" <> '' THEN BEGIN
+        TempSalesTaxSetupWizard.SetTaxJurisdiction(
+          TempNativeAPITaxSetup."GST or HST Code",TempNativeAPITaxSetup."GST or HST Description",GetCARegionCode);
+        TempSalesTaxSetupWizard.SetTaxAreaLine(TaxArea,TempNativeAPITaxSetup."GST or HST Code");
+        TempSalesTaxSetupWizard.SetTaxDetail(
+          TempNativeAPITaxSetup."GST or HST Code",TaxableCodeTxt,TempNativeAPITaxSetup."GST or HST Rate");
+      END;
+      IF TempNativeAPITaxSetup."PST Code" <> '' THEN BEGIN
+        TempSalesTaxSetupWizard.SetTaxJurisdiction(
+          TempNativeAPITaxSetup."PST Code",TempNativeAPITaxSetup."PST Description",TempNativeAPITaxSetup."PST Code");
+        TempSalesTaxSetupWizard.SetTaxAreaLine(TaxArea,TempNativeAPITaxSetup."PST Code");
+        TempSalesTaxSetupWizard.SetTaxDetail(TempNativeAPITaxSetup."PST Code",TaxableCodeTxt,TempNativeAPITaxSetup."PST Rate");
+      END ELSE
+        IF TempNativeAPITaxSetup."PST Rate" <> 0 THEN
+          ERROR(CannotSetPSTRateErr,TempNativeAPITaxSetup.Code);
+    END;
+
+    PROCEDURE UpdateTaxAreaNameUS@1020069(VAR SalesTaxSetupWizard@1020000 : Record 10807);
+    BEGIN
+      IF SalesTaxSetupWizard."Tax Area Code" = '' THEN
+        SalesTaxSetupWizard."Tax Area Code" := SalesTaxSetupWizard.GenerateTaxAreaCode;
+    END;
+
+    [EventSubscriber(Table,2850,OnLoadSalesTaxSettings)]
+    LOCAL PROCEDURE HandleOnLoadSalesTaxSettings@1020030(VAR NativeAPITaxSetup@1020001 : Record 2850;VAR TempTaxAreaBuffer@1020000 : TEMPORARY Record 5504);
+    VAR
+      CompanyInformation@1020002 : Record 79;
+      IsCanada@1020003 : Boolean;
+    BEGIN
+      IF NOT TempTaxAreaBuffer.FINDFIRST THEN
+        EXIT;
+
+      IsCanada := CompanyInformation.IsCanada;
+
+      REPEAT
+        NativeAPITaxSetup.INIT;
+        NativeAPITaxSetup.TRANSFERFIELDS(TempTaxAreaBuffer,TRUE);
+        LoadSalesTaxSettingsFromTaxArea(NativeAPITaxSetup,IsCanada);
+        NativeAPITaxSetup.INSERT(TRUE);
+      UNTIL TempTaxAreaBuffer.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE LoadSalesTaxSettingsFromTaxArea@1020015(VAR NativeAPITaxSetup@1020001 : Record 2850;IsCanada@1020002 : Boolean);
+    VAR
+      O365TaxSettingsManagement@1020003 : Codeunit 10150;
+    BEGIN
+      NativeAPITaxSetup.Default := O365TaxSettingsManagement.IsDefaultTaxAreaAPI(NativeAPITaxSetup.Code);
+
+      IF IsCanada THEN
+        LoadCanadianTaxSettings(NativeAPITaxSetup)
+      ELSE
+        LoadUsTaxSettings(NativeAPITaxSetup);
+    END;
+
+    LOCAL PROCEDURE LoadCanadianTaxSettings@1020016(VAR NativeAPITaxSetup@1020000 : Record 2850);
+    VAR
+      TempSalesTaxSetupWizard@1020002 : TEMPORARY Record 10807;
+    BEGIN
+      NativeAPITaxSetup."Country/Region" := NativeAPITaxSetup."Country/Region"::CA;
+      TempSalesTaxSetupWizard.Initialize;
+      TempSalesTaxSetupWizard."Tax Area Code" := DELCHR(NativeAPITaxSetup.Code,'<>',' ');
+      InitializeTaxSetupFromTaxAreaLinesForCA(TempSalesTaxSetupWizard,NativeAPITaxSetup);
+      NativeAPITaxSetup."Total Tax Percentage" := NativeAPITaxSetup."PST Rate" + NativeAPITaxSetup."GST or HST Rate";
+    END;
+
+    LOCAL PROCEDURE LoadUsTaxSettings@1020017(VAR NativeAPITaxSetup@1020000 : Record 2850);
+    VAR
+      TempSalesTaxSetupWizard@1020002 : TEMPORARY Record 10807;
+    BEGIN
+      NativeAPITaxSetup."Country/Region" := NativeAPITaxSetup."Country/Region"::US;
+
+      TempSalesTaxSetupWizard.Initialize;
+      TempSalesTaxSetupWizard."Tax Area Code" := DELCHR(NativeAPITaxSetup.Code,'<>',' ');
+      InitializeTaxSetupFromTaxAreaLinesForUS(TempSalesTaxSetupWizard);
+      NativeAPITaxSetup.City := TempSalesTaxSetupWizard.City;
+      NativeAPITaxSetup."City Rate" := TempSalesTaxSetupWizard."City Rate";
+      NativeAPITaxSetup.State := TempSalesTaxSetupWizard.State;
+      NativeAPITaxSetup."State Rate" := TempSalesTaxSetupWizard."State Rate";
+      NativeAPITaxSetup."Total Tax Percentage" := NativeAPITaxSetup."State Rate" + NativeAPITaxSetup."City Rate";
+      NativeAPITaxSetup.Description :=
+        GenerateTaxAreaDescription(NativeAPITaxSetup."Total Tax Percentage",NativeAPITaxSetup.City,NativeAPITaxSetup.State)
+    END;
+
+    PROCEDURE AssignDefaultTaxArea@1020022(NewTaxAreaCode@1020003 : Code[20]);
+    VAR
+      Customer@1020001 : Record 18;
+      CompanyInformation@1020000 : Record 79;
+      MarketingSetup@1020004 : Record 5079;
+      CustomerTemplate@1020005 : Record 5105;
+      ConfigTemplateManagement@1020002 : Codeunit 8612;
+    BEGIN
+      ConfigTemplateManagement.ReplaceDefaultValueForAllTemplates(
+        DATABASE::Customer,Customer.FIELDNO("Tax Area Code"),NewTaxAreaCode);
+
+      IF MarketingSetup.GET THEN BEGIN
+        CustomerTemplate.LOCKTABLE;
+        IF CustomerTemplate.GET(MarketingSetup."Cust. Template Company Code") THEN BEGIN
+          CustomerTemplate.VALIDATE("Tax Area Code",NewTaxAreaCode);
+          CustomerTemplate.MODIFY(TRUE);
+        END;
+
+        IF CustomerTemplate.GET(MarketingSetup."Cust. Template Person Code") THEN BEGIN
+          CustomerTemplate.VALIDATE("Tax Area Code",NewTaxAreaCode);
+          CustomerTemplate.MODIFY(TRUE);
+        END;
+      END;
+
+      CompanyInformation.LOCKTABLE;
+      IF CompanyInformation.GET THEN
+        IF CompanyInformation."Tax Area Code" <> NewTaxAreaCode THEN BEGIN
+          CompanyInformation.VALIDATE("Tax Area Code",NewTaxAreaCode);
+          CompanyInformation.MODIFY;
+        END;
+    END;
+
+    LOCAL PROCEDURE InitializeTaxSetupFromTaxAreaLinesForCA@1020018(VAR TempSalesTaxSetupWizard@1020003 : TEMPORARY Record 10807;VAR NativeAPITaxSetup@1020002 : Record 2850);
+    VAR
+      TaxAreaLine@1020000 : Record 319;
+      TaxJurisdiction@1020001 : Record 320;
+    BEGIN
+      TaxAreaLine.SETRANGE("Tax Area",TempSalesTaxSetupWizard."Tax Area Code");
+      IF TaxAreaLine.FINDSET THEN
+        REPEAT
+          TaxJurisdiction.SETRANGE(Code,TaxAreaLine."Tax Jurisdiction Code");
+          IF TaxJurisdiction.FINDFIRST THEN
+            IF TaxJurisdiction."Report-to Jurisdiction" = GetCARegionCode THEN BEGIN
+              NativeAPITaxSetup."GST or HST Code" := TaxJurisdiction.Code;
+              NativeAPITaxSetup."GST or HST Description" := GetProvince(NativeAPITaxSetup."GST or HST Code");
+              NativeAPITaxSetup."GST or HST Rate" := GetTaxRate(NativeAPITaxSetup."GST or HST Code")
+            END ELSE BEGIN
+              NativeAPITaxSetup."PST Code" := TaxJurisdiction.Code;
+              NativeAPITaxSetup."PST Description" := GetProvince(NativeAPITaxSetup."PST Code");
+              NativeAPITaxSetup."PST Rate" := GetTaxRate(NativeAPITaxSetup."PST Code")
+            END;
+        UNTIL TaxAreaLine.NEXT = 0;
+    END;
+
+    [EventSubscriber(Table,2850,OnSaveSalesTaxSettings)]
+    LOCAL PROCEDURE HandleOnSaveSalesTaxSettings@1020012(VAR NewNativeAPITaxSetup@1020000 : Record 2850);
+    VAR
+      CompanyInformation@1020002 : Record 79;
+      TempSalesTaxSetupWizard@1020004 : TEMPORARY Record 10807;
+      TaxArea@1020001 : Record 318;
+      IsCanada@1020003 : Boolean;
+    BEGIN
+      TempSalesTaxSetupWizard.Initialize;
+      TempSalesTaxSetupWizard."Tax Area Code" := DELCHR(NewNativeAPITaxSetup.Code,'<>',' ');
+
+      IsCanada := CompanyInformation.IsCanada;
+
+      IF IsCanada THEN
+        StoreTaxSettingsForCA(TempSalesTaxSetupWizard,NewNativeAPITaxSetup)
+      ELSE BEGIN
+        TempSalesTaxSetupWizard.City := NewNativeAPITaxSetup.City;
+        TempSalesTaxSetupWizard."City Rate" := NewNativeAPITaxSetup."City Rate";
+        TempSalesTaxSetupWizard.State := NewNativeAPITaxSetup.State;
+        TempSalesTaxSetupWizard."State Rate" := NewNativeAPITaxSetup."State Rate";
+        NewNativeAPITaxSetup.Description :=
+          GenerateTaxAreaDescription(NewNativeAPITaxSetup."Total Tax Percentage",NewNativeAPITaxSetup.City,NewNativeAPITaxSetup.State);
+        UpdateSalesTaxSetupWizard(TempSalesTaxSetupWizard);
+        StoreTaxSettingsForUS(TempSalesTaxSetupWizard,NewNativeAPITaxSetup.Description);
+      END;
+
+      IF NewNativeAPITaxSetup.Default THEN
+        AssignDefaultTaxArea(TempSalesTaxSetupWizard."Tax Area Code");
+
+      IF NOT ISNULLGUID(NewNativeAPITaxSetup.Id) THEN
+        EXIT;
+
+      TaxArea.GET(TempSalesTaxSetupWizard."Tax Area Code");
+      NewNativeAPITaxSetup.Id := TaxArea.Id;
+    END;
+
+    [EventSubscriber(Table,2850,OnCanDeleteTaxSetup)]
+    LOCAL PROCEDURE HandleOnCanDeleteTaxSetup@1020019(VAR PreventDeletion@1020000 : Boolean;VAR NativeAPITaxSetup@1020001 : Record 2850);
+    BEGIN
+      IF PreventDeletion THEN
+        EXIT;
+
+      IF NativeAPITaxSetup."Country/Region" <> NativeAPITaxSetup."Country/Region"::US THEN
+        PreventDeletion := TRUE;
+    END;
+
+    [External]
+    PROCEDURE GetTotalTaxRate@1020011(TaxAreaCode@1020000 : Code[20]) TaxRate : Decimal;
+    VAR
+      TaxAreaLine@1020001 : Record 319;
+      TaxJurisdiction@1020003 : Record 320;
+    BEGIN
+      TaxAreaLine.SETRANGE("Tax Area",TaxAreaCode);
+      IF TaxAreaLine.FINDSET THEN
+        REPEAT
+          TaxJurisdiction.SETRANGE(Code,TaxAreaLine."Tax Jurisdiction Code");
+          IF TaxJurisdiction.FINDFIRST THEN
+            TaxRate := TaxRate + GetTaxRate(TaxJurisdiction.Code)
+        UNTIL TaxAreaLine.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE GetCARegionCode@1020023() : Code[10];
+    BEGIN
+      EXIT('CA');
+    END;
+
+    PROCEDURE IsTaxSet@1020014(TaxAreaCode@1020000 : Code[20]) : Boolean;
+    BEGIN
+      EXIT(GetTotalTaxRate(TaxAreaCode) <> 0);
+    END;
+
+    LOCAL PROCEDURE GetCityCodeFromSalesTaxSetup@1020021(VAR SalesTaxSetupWizard@1020000 : Record 10807) : Code[10];
+    BEGIN
+      EXIT(COPYSTR(DELCHR(SalesTaxSetupWizard.City,'<>',' '),1,10));
+    END;
+
+    PROCEDURE CheckCustomerTemplateTaxIntegrity@1020028();
+    VAR
+      ConfigTemplateHeader@1020000 : Record 8618;
+      ConfigTemplateLine@1020001 : Record 8619;
+      DummyCustomer@1020002 : Record 18;
+      TaxArea@1020003 : Record 318;
+      CompanyInformation@1020004 : Record 79;
+    BEGIN
+      ConfigTemplateHeader.SETRANGE("Table ID",DATABASE::Customer);
+      ConfigTemplateHeader.SETRANGE(Enabled,TRUE);
+
+      IF ConfigTemplateHeader.FINDSET THEN
+        REPEAT
+          ConfigTemplateLine.LOCKTABLE;
+          ConfigTemplateLine.SETRANGE("Data Template Code",ConfigTemplateHeader.Code);
+          ConfigTemplateLine.SETRANGE("Table ID",DATABASE::Customer);
+          ConfigTemplateLine.SETRANGE("Field ID",DummyCustomer.FIELDNO("Tax Area Code"));
+
+          IF ConfigTemplateLine.FINDFIRST THEN
+            IF NOT TaxArea.GET(ConfigTemplateLine."Default Value") THEN BEGIN
+              OnBeforeSanitizeCustomerTemplateTax(ConfigTemplateLine);
+              IF CompanyInformation.GET THEN
+                IF TaxArea.GET(CompanyInformation."Tax Area Code") THEN BEGIN
+                  ConfigTemplateLine.VALIDATE("Default Value",CompanyInformation."Tax Area Code");
+                  ConfigTemplateLine.MODIFY(TRUE);
+                END;
+            END;
+        UNTIL ConfigTemplateHeader.NEXT = 0;
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeSanitizeCustomerTemplateTax@1020025(ConfigTemplateLine@1020000 : Record 8619);
+    BEGIN
+    END;
+
+    [EventSubscriber(Codeunit,10150,OnBeforeSanitizeCustomerTemplateTax,"",Skip,Skip)]
+    LOCAL PROCEDURE LogWarningIfTemplateIncorrect@1020024(ConfigTemplateLine@1020000 : Record 8619);
+    BEGIN
+      SENDTRACETAG('00001OQ',TemplateInvoicingCategoryTxt,VERBOSITY::Warning,
+        STRSUBSTNO(TemplateTaxAreaDoesNotExistMsg,ConfigTemplateLine."Default Value"),DATACLASSIFICATION::SystemMetadata);
+    END;
+
+    PROCEDURE DeleteTaxArea@1020026(VAR TaxArea@1020000 : Record 318) : Boolean;
+    BEGIN
+      IF IsDefaultTaxAreaAPI(TaxArea.Code) THEN
+        ERROR(CannotRemoveDefaultTaxAreaErr);
+      EXIT(TaxArea.DELETE(TRUE));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

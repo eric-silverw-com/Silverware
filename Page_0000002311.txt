@@ -1,0 +1,338 @@
+OBJECT Page 2311 BC O365 Sales Inv. Line Subp.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:10:48 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Invoice Line;
+    SaveValues=Yes;
+    DeleteAllowed=No;
+    LinksAllowed=No;
+    SourceTable=Table37;
+    DelayedInsert=Yes;
+    PageType=ListPart;
+    AutoSplitKey=Yes;
+    RefreshOnActivate=Yes;
+    PromotedActionCategoriesML=ENU=New,Process,Report,Manage;
+    OnInit=VAR
+             O365SalesInitialSetup@1000 : Record 2110;
+           BEGIN
+             SalesSetup.GET;
+             IF TaxSetup.GET THEN;
+             Currency.InitRoundingPrecision;
+             O365SalesInvoiceMgmt.ConstructCurrencyFormatString(Rec,CurrencyFormat);
+             IsUsingVAT := O365SalesInitialSetup.IsUsingVAT;
+             Taxable := FALSE;
+           END;
+
+    OnAfterGetRecord=BEGIN
+                       UpdatePriceDescription;
+                       O365SalesInvoiceMgmt.ConstructCurrencyFormatString(Rec,CurrencyFormat);
+                       IF TaxSetup.GET THEN
+                         Taxable := "Tax Group Code" <> TaxSetup."Non-Taxable Tax Group Code";
+                       CALCFIELDS("Posting Date");
+                       LineQuantity := Quantity;
+                       UpdateVATPostingGroupDescription;
+                     END;
+
+    OnNewRecord=VAR
+                  SalesLine@1000 : Record 37;
+                BEGIN
+                  Type := Type::Item;
+                  SalesLine.SETRANGE("Document Type","Document Type");
+                  SalesLine.SETRANGE("Document No.","Document No.");
+                  IF SalesLine.FINDLAST THEN;
+                  "Line No." := SalesLine."Line No." + 10000;
+                  LineQuantity := 1;
+                  CLEAR(VATProductPostingGroupDescription);
+                END;
+
+    OnModifyRecord=BEGIN
+                     UpdatePriceDescription;
+                     MODIFY(TRUE);
+                     CalculateTotals;
+                   END;
+
+    OnAfterGetCurrRecord=BEGIN
+                           DescriptionSelected := Description <> '';
+                         END;
+
+    ActionList=ACTIONS
+    {
+      { 4       ;    ;ActionContainer;
+                      ActionContainerType=ActionItems }
+      { 9       ;1   ;Action    ;
+                      Name=OpenPrice;
+                      CaptionML=ENU=View Price;
+                      ToolTipML=ENU=Opens the price card.;
+                      ApplicationArea=#Basic,#Suite,#Invoicing;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=View;
+                      PromotedCategory=Category4;
+                      PromotedOnly=Yes;
+                      Scope=Repeater;
+                      OnAction=VAR
+                                 Item@1000 : Record 27;
+                               BEGIN
+                                 IF "No." = '' THEN
+                                   EXIT;
+                                 IF Item.GET("No.") THEN
+                                   PAGE.RUNMODAL(PAGE::"BC O365 Item Card",Item);
+                               END;
+                                }
+      { 15      ;1   ;Action    ;
+                      Name=DeleteLine;
+                      CaptionML=ENU=Delete Line;
+                      ToolTipML=ENU=Delete the selected line.;
+                      ApplicationArea=#Basic,#Suite,#Invoicing;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=DeleteRow;
+                      PromotedCategory=Category4;
+                      PromotedOnly=Yes;
+                      Scope=Repeater;
+                      OnAction=BEGIN
+                                 IF "No." = '' THEN
+                                   EXIT;
+
+                                 IF NOT CONFIRM(DeleteQst,TRUE) THEN
+                                   EXIT;
+                                 DELETE(TRUE);
+                               END;
+                                }
+    }
+  }
+  CONTROLS
+  {
+    { 1   ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 6   ;1   ;Group     ;
+                Name=grpGeneral;
+                GroupType=Repeater }
+
+    { 3   ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the number of the record.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="No.";
+                Visible=FALSE;
+                OnValidate=BEGIN
+                             RedistributeTotalsOnAfterValidate;
+                           END;
+                            }
+
+    { 22  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies a description of the item or service on the line.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=Description;
+                LookupPageID=BC O365 Item List;
+                OnValidate=BEGIN
+                             O365SalesInvoiceMgmt.ValidateItemDescription(Rec,DescriptionSelected);
+                             RedistributeTotalsOnAfterValidate;
+                             DescriptionSelected := Description <> '';
+                           END;
+                            }
+
+    { 5   ;2   ;Field     ;
+                Width=5;
+                CaptionML=ENU=Quantity;
+                ToolTipML=ENU=Specifies the quantity of the item or service on the line.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                DecimalPlaces=0:5;
+                SourceExpr=LineQuantity;
+                Enabled=DescriptionSelected;
+                OnValidate=BEGIN
+                             VALIDATE(Quantity,LineQuantity);
+                             RedistributeTotalsOnAfterValidate;
+                             ShowInvoiceDiscountNotification;
+                           END;
+                            }
+
+    { 12  ;2   ;Field     ;
+                Width=10;
+                CaptionML=ENU=Price;
+                ToolTipML=ENU=Specifies the price for one unit on the sales line.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Unit Price";
+                Enabled=DescriptionSelected;
+                OnValidate=BEGIN
+                             O365SalesInvoiceMgmt.ValidateItemPrice(Rec);
+                             RedistributeTotalsOnAfterValidate;
+                           END;
+                            }
+
+    { 7   ;2   ;Field     ;
+                Width=5;
+                CaptionML=ENU=Price per;
+                ToolTipML=ENU=Specifies the sales unit of measure for this product or service.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Unit of Measure";
+                Enabled=DescriptionSelected;
+                LookupPageID=O365 Units of Measure List;
+                OnValidate=BEGIN
+                             IF "Unit of Measure" = '' THEN
+                               "Unit of Measure" := xRec."Unit of Measure";
+                             IF "Unit of Measure" = xRec."Unit of Measure" THEN
+                               EXIT;
+                             O365SalesInvoiceMgmt.ValidateItemUnitOfMeasure(Rec);
+                           END;
+                            }
+
+    { 17  ;2   ;Field     ;
+                Width=5;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Line Discount %";
+                Enabled=DescriptionSelected;
+                OnValidate=BEGIN
+                             RedistributeTotalsOnAfterValidate;
+                             IF HasShownInvoiceDiscountNotification THEN
+                               InvoiceDiscountNotification.RECALL;
+                           END;
+                            }
+
+    { 1020000;2;Field     ;
+                Name=Taxable;
+                CaptionML=ENU=Add sales tax;
+                ToolTipML=ENU=Specifies if you want to add sales tax.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=Taxable;
+                Visible=NOT IsUsingVAT;
+                Enabled=DescriptionSelected;
+                OnValidate=VAR
+                             TaxSetup@1020000 : Record 326;
+                             TaxGroup@1020001 : Record 321;
+                             Item@1020002 : Record 27;
+                           BEGIN
+                             IF TaxSetup.GET AND (TaxSetup."Non-Taxable Tax Group Code" <> '') THEN BEGIN
+                               IF Taxable THEN
+                                 TaxGroup.SETFILTER(Code,'<>%1',TaxSetup."Non-Taxable Tax Group Code")
+                               ELSE
+                                 TaxGroup.SETFILTER(Code,'%1',TaxSetup."Non-Taxable Tax Group Code")
+                             END;
+                             IF TaxGroup.FINDFIRST THEN
+                               VALIDATE("Tax Group Code",TaxGroup.Code);
+
+                             IF Item.WRITEPERMISSION THEN
+                               IF Item.GET("No.") THEN BEGIN
+                                 Item.VALIDATE("Tax Group Code",TaxGroup.Code);
+                                 Item.MODIFY(TRUE);
+                               END;
+
+                             RedistributeTotalsOnAfterValidate;
+                           END;
+                            }
+
+    { 27  ;2   ;Field     ;
+                Width=8;
+                CaptionML=ENU=Tax;
+                ToolTipML=ENU=Specifies the Tax group code for this item.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                NotBlank=Yes;
+                SourceExpr=VATProductPostingGroupDescription;
+                Visible=IsUsingVAT;
+                Enabled=DescriptionSelected;
+                OnValidate=BEGIN
+                             RedistributeTotalsOnAfterValidate;
+                           END;
+
+                OnLookup=VAR
+                           VATProductPostingGroup@1000 : Record 324;
+                         BEGIN
+                           IF PAGE.RUNMODAL(PAGE::"O365 VAT Product Posting Gr.",VATProductPostingGroup) = ACTION::LookupOK THEN BEGIN
+                             VALIDATE("VAT Prod. Posting Group",VATProductPostingGroup.Code);
+                             VATProductPostingGroupDescription := VATProductPostingGroup.Description;
+                             O365SalesInvoiceMgmt.ValidateVATRate(Rec);
+                             RedistributeTotalsOnAfterValidate;
+                           END;
+                         END;
+
+                QuickEntry=FALSE }
+
+    { 2   ;2   ;Field     ;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Line Amount";
+                Enabled=DescriptionSelected;
+                OnValidate=BEGIN
+                             RedistributeTotalsOnAfterValidate;
+                           END;
+                            }
+
+  }
+  CODE
+  {
+    VAR
+      Currency@1008 : Record 4;
+      SalesSetup@1007 : Record 311;
+      TotalSalesHeader@1006 : Record 36;
+      TotalSalesLine@1005 : Record 37;
+      TaxSetup@1012 : Record 326;
+      O365SalesInvoiceMgmt@1021 : Codeunit 2310;
+      DocumentTotals@1004 : Codeunit 57;
+      InvoiceDiscountNotification@1019 : Notification;
+      CurrencyFormat@1001 : Text;
+      VATProductPostingGroupDescription@1027 : Text[50];
+      VATAmount@1002 : Decimal;
+      LineQuantity@1003 : Decimal;
+      HasShownInvoiceDiscountNotification@1000 : Boolean;
+      DescriptionSelected@1010 : Boolean;
+      DeleteQst@1013 : TextConst 'ENU=Are you sure?';
+      IsUsingVAT@1017 : Boolean;
+      Taxable@1020000 : Boolean;
+
+    LOCAL PROCEDURE CalculateTotals@6();
+    BEGIN
+      GetTotalSalesHeader;
+      IF SalesSetup."Calc. Inv. Discount" AND ("Document No." <> '') AND (TotalSalesHeader."Customer Posting Group" <> '') THEN
+        CODEUNIT.RUN(CODEUNIT::"Sales-Calc. Discount",Rec);
+
+      DocumentTotals.CalculateSalesTotals(TotalSalesLine,VATAmount,Rec);
+    END;
+
+    LOCAL PROCEDURE RedistributeTotalsOnAfterValidate@2();
+    BEGIN
+      CurrPage.SAVERECORD;
+
+      TotalSalesHeader.GET("Document Type","Document No.");
+      DocumentTotals.SalesRedistributeInvoiceDiscountAmounts(Rec,VATAmount,TotalSalesLine);
+      CurrPage.UPDATE;
+    END;
+
+    LOCAL PROCEDURE GetTotalSalesHeader@13();
+    BEGIN
+      IF NOT TotalSalesHeader.GET("Document Type","Document No.") THEN
+        CLEAR(TotalSalesHeader);
+      IF Currency.Code <> TotalSalesHeader."Currency Code" THEN
+        IF NOT Currency.GET(TotalSalesHeader."Currency Code") THEN
+          Currency.InitRoundingPrecision;
+    END;
+
+    LOCAL PROCEDURE ShowInvoiceDiscountNotification@4();
+    BEGIN
+      IF HasShownInvoiceDiscountNotification THEN
+        EXIT;
+      IF "Line Discount %" = xRec."Line Discount %" THEN
+        EXIT;
+      O365SalesInvoiceMgmt.ShowInvoiceDiscountNotification(InvoiceDiscountNotification,RECORDID);
+      HasShownInvoiceDiscountNotification := TRUE;
+    END;
+
+    LOCAL PROCEDURE UpdateVATPostingGroupDescription@10();
+    VAR
+      VATProductPostingGroup@1000 : Record 324;
+    BEGIN
+      IF VATProductPostingGroup.GET("VAT Prod. Posting Group") THEN
+        VATProductPostingGroupDescription := VATProductPostingGroup.Description
+      ELSE
+        CLEAR(VATProductPostingGroup);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

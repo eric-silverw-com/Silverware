@@ -1,0 +1,443 @@
+OBJECT Codeunit 5488 Graph Mgt - Reports
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:23 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      BalanceSchedNameTxt@1001 : TextConst '@@@=Max 10 char;ENU=M-BALANCE';
+      BalanceColumnNameTxt@1000 : TextConst '@@@=Max 10 char;ENU=M-BALANCE';
+      CashFlowSchedNameTxt@1003 : TextConst '@@@=Max 10 char;ENU=M-CASHFLOW';
+      NetChangeColumnNameTxt@1002 : TextConst '@@@=Max 10 char;ENU=M-NETCHANG';
+      IncomeSchedNameTxt@1004 : TextConst '@@@=Max 10 char;ENU=M-INCOME';
+      RetainedEarningSchedNameTxt@1011 : TextConst '@@@=Max 10 char;ENU=M-RETAIND';
+      RecordNotProvidedErr@1005 : TextConst 'ENU=A record must be provided for this report API.';
+      HeaderLineTypeTxt@1007 : TextConst '@@@={Locked};ENU=header';
+      DetailLineTypeTxt@1008 : TextConst '@@@={Locked};ENU=detail';
+      FooterLineTypeTxt@1009 : TextConst '@@@={Locked};ENU=total';
+      SpacerLineTypeTxt@1010 : TextConst '@@@={Locked};ENU=spacer';
+
+    PROCEDURE SetUpTrialBalanceAPIData@1(VAR TrialBalanceEntityBuffer@1000 : Record 5488);
+    VAR
+      GLAccount@1002 : Record 15;
+      NewTrialBalanceEntityBuffer@1004 : Record 5488;
+      DateFilter@1001 : Text;
+    BEGIN
+      DateFilter := STRSUBSTNO('%1',DELCHR(TrialBalanceEntityBuffer.GETFILTER("Date Filter"),'<>',''''));
+      IF DateFilter = '' THEN
+        DateFilter := FORMAT(TODAY);
+
+      GLAccount.SETFILTER("Date Filter",DateFilter);
+      IF GLAccount.FINDSET THEN BEGIN
+        REPEAT
+          GLAccount.CALCFIELDS("Debit Amount","Balance at Date");
+          GLAccount.CALCFIELDS("Credit Amount","Balance at Date");
+          TrialBalanceEntityBuffer.INIT;
+          TrialBalanceEntityBuffer."No." := GLAccount."No.";
+          TrialBalanceEntityBuffer.Name := GLAccount.Name;
+          TrialBalanceEntityBuffer."Account Type" := GLAccount."Account Type";
+          TrialBalanceEntityBuffer."Account Id" := GLAccount.Id;
+          IF GLAccount."Account Type" IN
+             [GLAccount."Account Type"::"End-Total",GLAccount."Account Type"::Posting,GLAccount."Account Type"::Total]
+          THEN BEGIN
+            TrialBalanceEntityBuffer."Total Debit" := TransformAmount(GLAccount."Debit Amount");
+            TrialBalanceEntityBuffer."Total Credit" := TransformAmount(GLAccount."Credit Amount");
+            IF GLAccount."Balance at Date" < 0 THEN BEGIN
+              TrialBalanceEntityBuffer."Balance at Date Credit" := TransformAmount(GLAccount."Balance at Date");
+              TrialBalanceEntityBuffer."Balance at Date Debit" := DELCHR(FORMAT(0.0,15,FormatStr(1)),'<',' ');
+            END ELSE BEGIN
+              TrialBalanceEntityBuffer."Balance at Date Debit" := TransformAmount(GLAccount."Balance at Date");
+              TrialBalanceEntityBuffer."Balance at Date Credit" := DELCHR(FORMAT(0.0,15,FormatStr(1)),'<',' ');
+            END;
+          END;
+          TrialBalanceEntityBuffer."Date Filter" := GetDateRangeMax(DateFilter);
+          TrialBalanceEntityBuffer.INSERT;
+        UNTIL GLAccount.NEXT = 0;
+        NewTrialBalanceEntityBuffer.TRANSFERFIELDS(TrialBalanceEntityBuffer);
+        TrialBalanceEntityBuffer.COPY(NewTrialBalanceEntityBuffer);
+      END;
+    END;
+
+    LOCAL PROCEDURE SetUpAccountScheduleBaseAPIData@18(VAR BalanceSheetBuffer@1001 : Record 5487;VAR AccScheduleLineEntity@1020 : Record 5503;ReportType@1015 : 'Balance Sheet,Income Statement,Trial Balance,CashFlow Statement,Aged Accounts Payable,Aged Accounts Receivable,Retained Earnings';DateFilter@1000 : Text);
+    VAR
+      AccScheduleLine@1002 : Record 85;
+      TempColumnLayout@1004 : TEMPORARY Record 334;
+      AccSchedName@1007 : Record 84;
+      AnalysisView@1008 : Record 363;
+      GLSetup@1009 : Record 98;
+      AccSchedManagement@1003 : Codeunit 8;
+      MatrixMgt@1013 : Codeunit 9200;
+      CurrentSchedName@1006 : Code[10];
+      CurrentColumnName@1005 : Code[10];
+      ColumnNo@1010 : Integer;
+      DummyColumnOffset@1011 : Integer;
+      ColumnValues@1012 : ARRAY [12] OF Decimal;
+      DummyUseAmtsInAddCurr@1014 : Boolean;
+    BEGIN
+      CASE ReportType OF
+        ReportType::"Balance Sheet":
+          BEGIN
+            CurrentSchedName := BalanceSchedNameTxt;
+            CurrentColumnName := BalanceColumnNameTxt;
+          END;
+        ReportType::"CashFlow Statement":
+          BEGIN
+            CurrentSchedName := CashFlowSchedNameTxt;
+            CurrentColumnName := NetChangeColumnNameTxt;
+          END;
+        ReportType::"Income Statement":
+          BEGIN
+            CurrentSchedName := IncomeSchedNameTxt;
+            CurrentColumnName := NetChangeColumnNameTxt;
+          END;
+        ReportType::"Retained Earnings":
+          BEGIN
+            CurrentSchedName := RetainedEarningSchedNameTxt;
+            CurrentColumnName := NetChangeColumnNameTxt;
+          END;
+      END;
+
+      IF DateFilter = '' THEN
+        DateFilter := FORMAT(TODAY);
+
+      AccScheduleLine.SETFILTER("Date Filter",DateFilter);
+      AccScheduleLine.SETRANGE("Schedule Name",CurrentSchedName);
+      IF AccScheduleLine.FINDSET THEN BEGIN
+        AccSchedManagement.CopyColumnsToTemp(CurrentColumnName,TempColumnLayout);
+        AccSchedManagement.OpenSchedule(CurrentSchedName,AccScheduleLine);
+        AccSchedManagement.OpenColumns(CurrentColumnName,TempColumnLayout);
+        AccSchedManagement.CheckAnalysisView(CurrentSchedName,CurrentColumnName,TRUE);
+
+        IF AccSchedName.GET(CurrentSchedName) THEN BEGIN
+          CLEAR(AnalysisView);
+          AnalysisView."Dimension 1 Code" := GLSetup."Global Dimension 1 Code";
+          AnalysisView."Dimension 2 Code" := GLSetup."Global Dimension 2 Code";
+        END;
+
+        REPEAT
+          ColumnNo := 0;
+          IF NOT (AccScheduleLine.Totaling = '') AND TempColumnLayout.FINDSET THEN
+            REPEAT
+              EVALUATE(AccScheduleLineEntity."Net Change",DELCHR(FORMAT(0.0,15,FormatStr(1)),'<',' '));
+              ColumnNo := ColumnNo + 1;
+              IF (ColumnNo > DummyColumnOffset) AND (ColumnNo - DummyColumnOffset <= ARRAYLEN(ColumnValues)) THEN
+                ColumnValues[ColumnNo - DummyColumnOffset] :=
+                  MatrixMgt.RoundValue(
+                    AccSchedManagement.CalcCell(AccScheduleLine,TempColumnLayout,DummyUseAmtsInAddCurr),
+                    TempColumnLayout."Rounding Factor")
+            UNTIL TempColumnLayout.NEXT = 0;
+
+          CASE ReportType OF
+            ReportType::"Balance Sheet":
+              BEGIN
+                BalanceSheetBuffer.INIT;
+                BalanceSheetBuffer."Line No." := AccScheduleLine."Line No.";
+                BalanceSheetBuffer.Description := AccScheduleLine.Description;
+                IF NOT (AccScheduleLine.Totaling = '') AND TempColumnLayout.FINDSET THEN
+                  EVALUATE(BalanceSheetBuffer.Balance,DELCHR(FORMAT(ColumnValues[1],15,FormatStr(ColumnNo)),'<',' '));
+                EVALUATE(BalanceSheetBuffer."Date Filter",DateFilter);
+                IF (AccScheduleLine.Description = '') AND (AccScheduleLine.Totaling = '') THEN
+                  BalanceSheetBuffer."Line Type" := SpacerLineTypeTxt
+                ELSE
+                  IF AccScheduleLine."Totaling Type" = AccScheduleLine."Totaling Type"::"Posting Accounts" THEN BEGIN
+                    IF AccScheduleLine.Bold THEN
+                      BalanceSheetBuffer."Line Type" := HeaderLineTypeTxt
+                    ELSE
+                      BalanceSheetBuffer."Line Type" := DetailLineTypeTxt
+                  END ELSE
+                    BalanceSheetBuffer."Line Type" := FooterLineTypeTxt;
+                BalanceSheetBuffer.Indentation := AccScheduleLine.Indentation;
+                BalanceSheetBuffer.INSERT;
+              END;
+            ReportType::"Income Statement",
+            ReportType::"CashFlow Statement",
+            ReportType::"Retained Earnings":
+              BEGIN
+                AccScheduleLineEntity.INIT;
+                AccScheduleLineEntity."Line No." := AccScheduleLine."Line No.";
+                AccScheduleLineEntity.Description := AccScheduleLine.Description;
+                IF NOT (AccScheduleLine.Totaling = '') AND TempColumnLayout.FINDSET THEN
+                  EVALUATE(AccScheduleLineEntity."Net Change",DELCHR(FORMAT(ColumnValues[1],15,FormatStr(ColumnNo))));
+                AccScheduleLineEntity."Date Filter" := GetDateRangeMax(DateFilter);
+                IF (AccScheduleLine.Description = '') AND (AccScheduleLine.Totaling = '') THEN
+                  AccScheduleLineEntity."Line Type" := SpacerLineTypeTxt
+                ELSE
+                  IF AccScheduleLine."Totaling Type" = AccScheduleLine."Totaling Type"::"Posting Accounts" THEN BEGIN
+                    IF AccScheduleLine.Bold THEN
+                      AccScheduleLineEntity."Line Type" := HeaderLineTypeTxt
+                    ELSE
+                      AccScheduleLineEntity."Line Type" := DetailLineTypeTxt
+                  END ELSE
+                    AccScheduleLineEntity."Line Type" := FooterLineTypeTxt;
+                AccScheduleLineEntity.Indentation := AccScheduleLine.Indentation;
+                AccScheduleLineEntity.INSERT;
+              END;
+          END;
+          AccSchedManagement.ForceRecalculate(FALSE);
+        UNTIL AccScheduleLine.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE SetUpBalanceSheetAPIData@2(VAR BalanceSheetBuffer@1016 : Record 5487);
+    VAR
+      TempAccScheduleLineEntity@1015 : TEMPORARY Record 5503;
+      ReportAPIType@1001 : 'Balance Sheet,Income Statement,Trial Balance,CashFlow Statement,Aged Accounts Payable,Aged Accounts Receivable,Retained Earnings';
+      DateFilter@1000 : Text;
+    BEGIN
+      EVALUATE(DateFilter,BalanceSheetBuffer.GETFILTER("Date Filter"));
+      IF DateFilter = '' THEN
+        DateFilter := FORMAT(TODAY);
+
+      SetUpAccountScheduleBaseAPIData(BalanceSheetBuffer,TempAccScheduleLineEntity,
+        ReportAPIType::"Balance Sheet",DateFilter);
+    END;
+
+    PROCEDURE SetUpAccountScheduleBaseAPIDataWrapper@4(VAR AccScheduleLineEntity@1016 : Record 5503;ReportType@1001 : 'Balance Sheet,Income Statement,Trial Balance,CashFlow Statement,Aged Accounts Payable,Aged Accounts Receivable,Retained Earnings');
+    VAR
+      TempBalanceSheetBuffer@1017 : TEMPORARY Record 5487;
+      DateFilter@1000 : Text;
+    BEGIN
+      DateFilter := STRSUBSTNO('%1',DELCHR(AccScheduleLineEntity.GETFILTER("Date Filter"),'<>',''''));
+      IF DateFilter = '' THEN
+        DateFilter := FORMAT(TODAY);
+
+      SetUpAccountScheduleBaseAPIData(TempBalanceSheetBuffer,
+        AccScheduleLineEntity,ReportType,DateFilter);
+    END;
+
+    PROCEDURE SetUpAgedReportAPIData@58(VAR AgedReportEntity@1016 : Record 5499;ReportType@1001 : 'Balance Sheet,Income Statement,Trial Balance,CashFlow Statement,Aged Accounts Payable,Aged Accounts Receivable,Retained Earnings');
+    VAR
+      Customer@1005 : Record 18;
+      Vendor@1007 : Record 23;
+      DummyGuid@1000 : GUID;
+      PeriodLengthFilter@1002 : Text[10];
+      PeriodStartDate@1003 : Date;
+    BEGIN
+      CASE ReportType OF
+        ReportType::"Aged Accounts Receivable":
+          BEGIN
+            IF Customer.FINDSET THEN
+              REPEAT
+                AgedReportEntity.INIT;
+                GetAgedAmounts(AgedReportEntity,Customer);
+                AgedReportEntity.AccountId := Customer.Id;
+                AgedReportEntity."No." := Customer."No.";
+                AgedReportEntity.Name := Customer.Name;
+                AgedReportEntity."Currency Code" := Customer."Currency Code";
+                IF PeriodLengthFilter = '' THEN
+                  PeriodLengthFilter := AgedReportEntity."Period Length";
+                PeriodStartDate := AgedReportEntity."Period Start Date";
+                AgedReportEntity.INSERT;
+              UNTIL Customer.NEXT = 0;
+          END;
+        ReportType::"Aged Accounts Payable":
+          BEGIN
+            IF Vendor.FINDSET THEN
+              REPEAT
+                AgedReportEntity.INIT;
+                GetAgedAmounts(AgedReportEntity,Vendor);
+                AgedReportEntity.AccountId := Vendor.Id;
+                AgedReportEntity."No." := Vendor."No.";
+                AgedReportEntity.Name := Vendor.Name;
+                AgedReportEntity."Currency Code" := Vendor."Currency Code";
+                IF PeriodLengthFilter = '' THEN
+                  PeriodLengthFilter := AgedReportEntity."Period Length";
+                PeriodStartDate := AgedReportEntity."Period Start Date";
+                AgedReportEntity.INSERT;
+              UNTIL Vendor.NEXT = 0;
+          END;
+      END;
+
+      AgedReportEntity.INIT;
+      AgedReportEntity.AccountId := DummyGuid;
+      AgedReportEntity.Name := 'Total';
+      AgedReportEntity.CALCSUMS(Before);
+      AgedReportEntity.Before := AgedReportEntity.Before;
+      AgedReportEntity.CALCSUMS("Period 1");
+      AgedReportEntity."Period 1" := AgedReportEntity."Period 1";
+      AgedReportEntity.CALCSUMS("Period 2");
+      AgedReportEntity."Period 2" := AgedReportEntity."Period 2";
+      AgedReportEntity.CALCSUMS("Period 3");
+      AgedReportEntity."Period 3" := AgedReportEntity."Period 3";
+      AgedReportEntity.CALCSUMS(After);
+      AgedReportEntity.After := AgedReportEntity.After;
+      AgedReportEntity.CALCSUMS(Balance);
+      AgedReportEntity.Balance := AgedReportEntity.Balance;
+      AgedReportEntity."Period Length" := FORMAT(PeriodLengthFilter);
+      AgedReportEntity."Period Start Date" := PeriodStartDate;
+      AgedReportEntity.INSERT;
+    END;
+
+    LOCAL PROCEDURE GetAgedAmounts@61(VAR AgedReportEntity@1016 : Record 5499;CurrentAccount@1000 : Variant);
+    VAR
+      Customer@1005 : Record 18;
+      Vendor@1001 : Record 23;
+      DetailedCustLedgEntry@1011 : Record 379;
+      DetailedVendorLedgEntry@1012 : Record 380;
+      RecRef@1006 : RecordRef;
+      PeriodLength@1007 : DateFormula;
+      PeriodStartDate@1008 : ARRAY [5] OF Date;
+      FilterPeriodStart@1004 : Date;
+      PeriodStartFilter@1003 : Text;
+      PeriodLengthFilter@1002 : Text[10];
+      i@1009 : Integer;
+      LineTotalAmountDue@1010 : Decimal;
+      IsVendor@1013 : Boolean;
+    BEGIN
+      PeriodStartFilter := FORMAT(AgedReportEntity.GETFILTER("Period Start Date"));
+      PeriodLengthFilter := FORMAT(AgedReportEntity.GETFILTER("Period Length"));
+      IF NOT CurrentAccount.ISRECORD THEN
+        ERROR(RecordNotProvidedErr);
+      RecRef.GETTABLE(CurrentAccount);
+
+      IF PeriodStartFilter = '' THEN
+        AgedReportEntity."Period Start Date" := TODAY
+      ELSE BEGIN
+        EVALUATE(FilterPeriodStart,PeriodStartFilter);
+        AgedReportEntity."Period Start Date" := FilterPeriodStart;
+      END;
+
+      IF PeriodLengthFilter = '' THEN
+        EVALUATE(PeriodLengthFilter,'<3M>');
+
+      EVALUATE(PeriodLength,'<->' + FORMAT(PeriodLengthFilter));
+      AgedReportEntity."Period Length" := DELCHR(FORMAT(PeriodLengthFilter),'<>','<>');
+
+      PeriodStartDate[1] := DMY2DATE(31,12,9999);
+      PeriodStartDate[2] := AgedReportEntity."Period Start Date";
+
+      FOR i := 3 TO 4 DO
+        PeriodStartDate[i] := CALCDATE(PeriodLength,PeriodStartDate[i - 1]);
+      PeriodStartDate[5] := DMY2DATE(1,1,1753);
+
+      LineTotalAmountDue := 0;
+      FOR i := 1 TO 4 DO
+        CASE RecRef.NUMBER OF
+          DATABASE::Customer:
+            BEGIN
+              RecRef.SETTABLE(Customer);
+              DetailedCustLedgEntry.SETCURRENTKEY("Customer No.","Initial Entry Due Date");
+              DetailedCustLedgEntry.SETRANGE("Customer No.",Customer."No.");
+              DetailedCustLedgEntry.SETRANGE("Initial Entry Due Date",PeriodStartDate[i + 1],PeriodStartDate[i] - 1);
+
+              IF DetailedCustLedgEntry.FINDFIRST THEN
+                CalculateLineTotalAmount(AgedReportEntity,LineTotalAmountDue,DetailedCustLedgEntry,i);
+            END;
+          DATABASE::Vendor:
+            BEGIN
+              RecRef.SETTABLE(Vendor);
+              IsVendor := TRUE;
+              DetailedVendorLedgEntry.SETCURRENTKEY("Vendor No.","Initial Entry Due Date");
+              DetailedVendorLedgEntry.SETRANGE("Vendor No.",Vendor."No.");
+              DetailedVendorLedgEntry.SETRANGE("Initial Entry Due Date",PeriodStartDate[i + 1],PeriodStartDate[i] - 1);
+
+              IF DetailedVendorLedgEntry.FINDFIRST THEN
+                CalculateLineTotalAmount(AgedReportEntity,LineTotalAmountDue,DetailedVendorLedgEntry,i);
+            END;
+        END;
+
+      IF IsVendor THEN
+        LineTotalAmountDue := -LineTotalAmountDue;
+      AgedReportEntity.Balance := LineTotalAmountDue;
+    END;
+
+    LOCAL PROCEDURE CalculateLineTotalAmount@6(VAR AgedReportEntity@1001 : Record 5499;VAR LineTotalAmountDue@1003 : Decimal;DetailLedgEntryVariant@1000 : Variant;PeriodCount@1002 : Integer);
+    VAR
+      DetailedCustLedgEntry@1006 : Record 379;
+      DetailedVendorLedgEntry@1005 : Record 380;
+      RecRef@1004 : RecordRef;
+    BEGIN
+      IF NOT DetailLedgEntryVariant.ISRECORD THEN
+        ERROR(RecordNotProvidedErr);
+      RecRef.GETTABLE(DetailLedgEntryVariant);
+
+      CASE RecRef.NUMBER OF
+        DATABASE::"Detailed Cust. Ledg. Entry":
+          BEGIN
+            RecRef.SETTABLE(DetailedCustLedgEntry);
+            DetailedCustLedgEntry.CALCSUMS("Amount (LCY)");
+            CASE PeriodCount OF
+              4:
+                AgedReportEntity."Period 3" := DetailedCustLedgEntry."Amount (LCY)";
+              3:
+                AgedReportEntity."Period 2" := DetailedCustLedgEntry."Amount (LCY)";
+              2:
+                AgedReportEntity."Period 1" := DetailedCustLedgEntry."Amount (LCY)";
+              1:
+                AgedReportEntity.Before := DetailedCustLedgEntry."Amount (LCY)";
+            END;
+            LineTotalAmountDue := LineTotalAmountDue + DetailedCustLedgEntry."Amount (LCY)";
+          END;
+        DATABASE::"Detailed Vendor Ledg. Entry":
+          BEGIN
+            RecRef.SETTABLE(DetailedVendorLedgEntry);
+            DetailedVendorLedgEntry.CALCSUMS("Amount (LCY)");
+            CASE PeriodCount OF
+              4:
+                AgedReportEntity."Period 3" := -DetailedVendorLedgEntry."Amount (LCY)";
+              3:
+                AgedReportEntity."Period 2" := -DetailedVendorLedgEntry."Amount (LCY)";
+              2:
+                AgedReportEntity."Period 1" := -DetailedVendorLedgEntry."Amount (LCY)";
+              1:
+                AgedReportEntity.Before := -DetailedVendorLedgEntry."Amount (LCY)";
+            END;
+            LineTotalAmountDue := LineTotalAmountDue + DetailedVendorLedgEntry."Amount (LCY)";
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE FormatStr@8(ColumnNo@1000 : Integer) : Text;
+    VAR
+      ColumnLayoutArr@1002 : ARRAY [12] OF Record 334;
+      MatrixMgt@1001 : Codeunit 9200;
+      DummyUseAmtsInAddCurr@1003 : Boolean;
+    BEGIN
+      EXIT(MatrixMgt.GetFormatString(ColumnLayoutArr[ColumnNo]."Rounding Factor",DummyUseAmtsInAddCurr));
+    END;
+
+    LOCAL PROCEDURE GetDateRangeMax@42(DateFilter@1000 : Text) RangeMax : Date;
+    VAR
+      RegularExpression@1005 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Regex";
+      RegExMatches@1004 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.MatchCollection";
+      Match@1006 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Match";
+      TempDate@1002 : Date;
+    BEGIN
+      RegularExpression := RegularExpression.Regex('(\d{1,2})\/(\d{1,2})\/(\d{2})');
+      RegExMatches := RegularExpression.Matches(DateFilter);
+
+      IF RegExMatches.Count <= 0 THEN BEGIN
+        RangeMax := TODAY;
+        EXIT;
+      END;
+
+      FOREACH Match IN RegExMatches DO BEGIN
+        EVALUATE(TempDate,Match.Value);
+        IF TempDate > RangeMax THEN
+          RangeMax := TempDate;
+      END;
+    END;
+
+    LOCAL PROCEDURE TransformAmount@52(Amount@1150 : Decimal) NewAmount : Text[30];
+    BEGIN
+      IF Amount < 0 THEN
+        NewAmount := DELCHR(FORMAT(Amount * -1,15,FormatStr(1)),'<',' ')
+      ELSE
+        NewAmount := DELCHR(FORMAT(Amount,15,FormatStr(1)),'<',' ');
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

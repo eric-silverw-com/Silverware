@@ -1,0 +1,216 @@
+OBJECT Codeunit 5810 Change Average Cost Setting
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:30 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    TableNo=313;
+    OnRun=BEGIN
+            WindowUpdateDateTime := CURRENTDATETIME;
+            WindowIsOpen := FALSE;
+
+            AvgCostAdjmtEntryPoint.LOCKTABLE;
+            LOCKTABLE;
+            AccPeriod.LOCKTABLE;
+
+            MODIFY;
+
+            IF AccPeriod.ISEMPTY THEN
+              StartingValuationDate := CALCDATE('<-CY>',WORKDATE)
+            ELSE BEGIN
+              AccPeriod.SETRANGE("New Fiscal Year",TRUE);
+              AccPeriod.FIND('-');
+              IF AccPeriod.Closed THEN BEGIN
+                AccPeriod.SETRANGE(Closed,FALSE);
+                AccPeriod.FIND('-');
+                StartingValuationDate := AccPeriod."Starting Date";
+              END;
+              REPEAT
+                AccPeriod."Average Cost Period" := "Average Cost Period";
+                AccPeriod."Average Cost Calc. Type" := "Average Cost Calc. Type";
+                AccPeriod.MODIFY;
+              UNTIL AccPeriod.NEXT = 0;
+            END;
+
+            ProcessItemsFromDate(StartingValuationDate);
+
+            IF WindowIsOpen THEN
+              Window.CLOSE;
+
+            COMMIT;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      AccPeriod@1011 : Record 50;
+      ValueEntry@1007 : Record 5802;
+      Item@1006 : Record 27;
+      InvtSetup@1005 : Record 313;
+      AvgCostAdjmtEntryPoint@1012 : Record 5804;
+      Window@1004 : Dialog;
+      StartingValuationDate@1013 : Date;
+      WindowIsOpen@1003 : Boolean;
+      WindowNo@1002 : Text[20];
+      WindowPostingDate@1001 : Date;
+      WindowUpdateDateTime@1000 : DateTime;
+      Text000@1010 : TextConst 'ENU=Processing Item...\\';
+      Text001@1009 : TextConst 'ENU=Item No.       #1######\';
+      Text002@1008 : TextConst 'ENU=Valuation Date #2######';
+
+    PROCEDURE UpdateAvgCostFromAccPeriodChg@1(AccPeriod@1004 : Record 50);
+    VAR
+      StartingValuationDate@1002 : Date;
+    BEGIN
+      IF NOT InvtSetup.GET THEN
+        EXIT;
+
+      IF NOT (AccPeriod."New Fiscal Year" OR
+              (InvtSetup."Average Cost Period" = InvtSetup."Average Cost Period"::"Accounting Period"))
+      THEN
+        EXIT;
+
+      StartingValuationDate := 0D;
+
+      IF AccPeriod.NEXT(-1) <> 0 THEN
+        StartingValuationDate := AccPeriod."Starting Date";
+      ProcessItemsFromDate(StartingValuationDate);
+    END;
+
+    LOCAL PROCEDURE ProcessItemsFromDate@3(StartingValuationDate@1000 : Date);
+    BEGIN
+      IF Item.FIND('-') THEN
+        REPEAT
+          IF Item."Costing Method" = Item."Costing Method"::Average THEN
+            ProcessItemAvgCostPoint(Item,StartingValuationDate);
+        UNTIL Item.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE ProcessItemAvgCostPoint@6(VAR Item@1000 : Record 27;StartingValuationDate@1001 : Date);
+    BEGIN
+      InvtSetup.GET;
+      AvgCostAdjmtEntryPoint.RESET;
+      AvgCostAdjmtEntryPoint.SETRANGE("Item No.",Item."No.");
+      AvgCostAdjmtEntryPoint.SETFILTER("Valuation Date",'>=%1',StartingValuationDate);
+      AvgCostAdjmtEntryPoint.DELETEALL;
+
+      WITH ValueEntry DO BEGIN
+        RESET;
+        SETCURRENTKEY("Item No.","Valuation Date","Location Code","Variant Code");
+
+        SETRANGE("Item No.",Item."No.");
+        SETFILTER("Valuation Date",'>=%1',StartingValuationDate);
+        IF FIND('-') THEN BEGIN
+          REPEAT
+            UpDateWindow("Item No.","Valuation Date");
+
+            AvgCostAdjmtEntryPoint.UpdateValuationDate(ValueEntry);
+
+            SETRANGE("Valuation Date","Valuation Date");
+            IF InvtSetup."Average Cost Calc. Type" =
+               InvtSetup."Average Cost Calc. Type"::"Item & Location & Variant"
+            THEN BEGIN
+              SETRANGE("Location Code","Location Code");
+              SETRANGE("Variant Code","Variant Code");
+            END;
+            IF FIND('+') THEN;
+            SETRANGE("Valuation Date");
+            SETRANGE("Location Code");
+            SETRANGE("Variant Code");
+          UNTIL NEXT = 0;
+          Item."Cost is Adjusted" := FALSE;
+          Item.MODIFY;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE OpenWindow@59();
+    BEGIN
+      Window.OPEN(
+        Text000 +
+        Text001 +
+        Text002);
+      WindowIsOpen := TRUE;
+      WindowUpdateDateTime := CURRENTDATETIME;
+    END;
+
+    LOCAL PROCEDURE UpDateWindow@56(NewWindowNo@1001 : Code[20];NewWindowPostingDate@1000 : Date);
+    BEGIN
+      WindowNo := NewWindowNo;
+      WindowPostingDate := NewWindowPostingDate;
+
+      IF IsTimeForUpdate THEN BEGIN
+        IF NOT WindowIsOpen THEN
+          OpenWindow;
+        Window.UPDATE(1,WindowNo);
+        Window.UPDATE(2,WindowPostingDate);
+      END;
+    END;
+
+    LOCAL PROCEDURE IsTimeForUpdate@69() : Boolean;
+    BEGIN
+      IF WindowUpdateDateTime = 0DT THEN
+        WindowUpdateDateTime := CURRENTDATETIME;
+      IF CURRENTDATETIME - WindowUpdateDateTime >= 1000 THEN BEGIN
+        WindowUpdateDateTime := CURRENTDATETIME;
+        EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+    END;
+
+    [EventSubscriber(Table,50,OnAfterDeleteEvent)]
+    LOCAL PROCEDURE UpdateAvgCostOnAfterDeleteAccountingPeriod@2(VAR Rec@1000 : Record 50;RunTrigger@1001 : Boolean);
+    BEGIN
+      IF NOT RunTrigger OR Rec.ISTEMPORARY THEN
+        EXIT;
+
+      UpdateAvgCostFromAccPeriodChg(Rec);
+    END;
+
+    [EventSubscriber(Table,50,OnAfterInsertEvent)]
+    LOCAL PROCEDURE UpdateAvgCostOnAfterInsertAccountingPeriod@4(VAR Rec@1000 : Record 50;RunTrigger@1001 : Boolean);
+    BEGIN
+      IF NOT RunTrigger OR Rec.ISTEMPORARY THEN
+        EXIT;
+
+      UpdateAvgCostFromAccPeriodChg(Rec);
+    END;
+
+    [EventSubscriber(Table,50,OnAfterModifyEvent)]
+    LOCAL PROCEDURE UpdateAvgCostOnAfterModifyAccountingPeriod@5(VAR Rec@1000 : Record 50;VAR xRec@1001 : Record 50;RunTrigger@1002 : Boolean);
+    BEGIN
+      IF NOT RunTrigger OR Rec.ISTEMPORARY THEN
+        EXIT;
+
+      UpdateAvgCostFromAccPeriodChg(Rec);
+    END;
+
+    [EventSubscriber(Table,50,OnAfterRenameEvent)]
+    LOCAL PROCEDURE UpdateAvgCostOnAfterRenameAccountingPeriod@7(VAR Rec@1000 : Record 50;VAR xRec@1001 : Record 50;RunTrigger@1002 : Boolean);
+    VAR
+      AccountingPeriod@1003 : Record 50;
+    BEGIN
+      IF NOT RunTrigger OR Rec.ISTEMPORARY THEN
+        EXIT;
+
+      IF NOT (Rec."New Fiscal Year" OR xRec."New Fiscal Year") THEN
+        EXIT;
+
+      IF (xRec."Starting Date" < Rec."Starting Date") AND (xRec."Starting Date" <> 0D) THEN
+        AccountingPeriod := xRec
+      ELSE
+        AccountingPeriod := Rec;
+
+      UpdateAvgCostFromAccPeriodChg(AccountingPeriod);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

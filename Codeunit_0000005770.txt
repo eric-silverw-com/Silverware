@@ -1,0 +1,188 @@
+OBJECT Codeunit 5770 Whse.-Service Release
+{
+  OBJECT-PROPERTIES
+  {
+    Date=;
+    Time=;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      WhseRqst@1004 : Record 5765;
+      ServiceLine@1003 : Record 5902;
+      Location@1002 : Record 14;
+      OldLocationCode@1001 : Code[10];
+      First@1000 : Boolean;
+
+    [External]
+    PROCEDURE Release@1(ServiceHeader@1000 : Record 5900);
+    VAR
+      WhseType@1001 : 'Inbound,Outbound';
+      OldWhseType@1002 : 'Inbound,Outbound';
+    BEGIN
+      OnBeforeRelease(ServiceHeader);
+
+      WITH ServiceHeader DO BEGIN
+        IF "Document Type" <> "Document Type"::Order THEN
+          EXIT;
+
+        WhseRqst."Source Document" := WhseRqst."Source Document"::"Service Order";
+
+        ServiceLine.SETCURRENTKEY("Document Type","Document No.","Location Code");
+        ServiceLine.SETRANGE("Document Type","Document Type");
+        ServiceLine.SETRANGE("Document No.","No.");
+        ServiceLine.SETRANGE(Type,ServiceLine.Type::Item);
+        ServiceLine.SETRANGE("Job No.",'');
+        OnAfterReleaseSetFilters(ServiceLine,ServiceHeader);
+        IF ServiceLine.FINDSET THEN BEGIN
+          First := TRUE;
+          REPEAT
+            IF ("Document Type" = "Document Type"::Order) AND (ServiceLine.Quantity >= 0) THEN
+              WhseType := WhseType::Outbound
+            ELSE
+              WhseType := WhseType::Inbound;
+
+            IF First OR (ServiceLine."Location Code" <> OldLocationCode) OR (WhseType <> OldWhseType) THEN
+              CreateWhseRqst(ServiceHeader,ServiceLine,WhseType);
+
+            First := FALSE;
+            OldLocationCode := ServiceLine."Location Code";
+            OldWhseType := WhseType;
+          UNTIL ServiceLine.NEXT = 0;
+        END;
+        SetWhseRqstFiltersByStatus(ServiceHeader,WhseRqst,"Release Status"::Open);
+        WhseRqst.DELETEALL(TRUE);
+      END;
+
+      OnAfterRelease(ServiceHeader);
+    END;
+
+    [External]
+    PROCEDURE Reopen@2(ServiceHeader@1000 : Record 5900);
+    VAR
+      WhseRqst@1001 : Record 5765;
+    BEGIN
+      OnBeforeReopen(ServiceHeader);
+
+      WITH ServiceHeader DO BEGIN
+        WhseRqst.Type := WhseRqst.Type::Outbound;
+        SetWhseRqstFiltersByStatus(ServiceHeader,WhseRqst,"Release Status"::"Released to Ship");
+        WhseRqst.LOCKTABLE;
+        IF WhseRqst.FINDSET THEN
+          REPEAT
+            WhseRqst."Document Status" := "Release Status"::Open;
+            WhseRqst.MODIFY;
+          UNTIL WhseRqst.NEXT = 0;
+      END;
+
+      OnAfterReopen(ServiceHeader);
+    END;
+
+    LOCAL PROCEDURE CreateWhseRqst@3(VAR ServiceHeader@1000 : Record 5900;VAR ServiceLine@1003 : Record 5902;WhseType@1002 : 'Inbound,Outbound');
+    VAR
+      ServiceLine2@1001 : Record 5902;
+    BEGIN
+      IF ((WhseType = WhseType::Outbound) AND
+          (Location.RequireShipment(ServiceLine."Location Code") OR
+           Location.RequirePicking(ServiceLine."Location Code"))) OR
+         ((WhseType = WhseType::Inbound) AND
+          (Location.RequireReceive(ServiceLine."Location Code") OR
+           Location.RequirePutaway(ServiceLine."Location Code")))
+      THEN BEGIN
+        ServiceLine2.COPY(ServiceLine);
+        ServiceLine2.SETRANGE("Location Code",ServiceLine."Location Code");
+        ServiceLine2.SETRANGE("Unit of Measure Code",'');
+        IF ServiceLine2.FINDFIRST THEN
+          ServiceLine2.TESTFIELD("Unit of Measure Code");
+
+        WITH WhseRqst DO BEGIN
+          Type := WhseType;
+          "Source Type" := DATABASE::"Service Line";
+          "Source Subtype" := ServiceHeader."Document Type";
+          "Source No." := ServiceHeader."No.";
+          "Shipping Advice" := ServiceHeader."Shipping Advice";
+          "Document Status" := ServiceHeader."Release Status"::"Released to Ship";
+          "Location Code" := ServiceLine."Location Code";
+          "Destination Type" := "Destination Type"::Customer;
+          "Destination No." := ServiceHeader."Bill-to Customer No.";
+          "External Document No." := '';
+          "Shipment Date" := ServiceLine.GetShipmentDate;
+          "Shipment Method Code" := ServiceHeader."Shipment Method Code";
+          "Shipping Agent Code" := ServiceHeader."Shipping Agent Code";
+          "Completely Handled" := CalcCompletelyShipped(ServiceLine);
+          OnBeforeCreateWhseRequest(WhseRqst,ServiceHeader,ServiceLine);
+          IF NOT INSERT THEN
+            MODIFY;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE CalcCompletelyShipped@5(ServiceLine@1000 : Record 5902) : Boolean;
+    VAR
+      ServiceLineWithItem@1001 : Record 5902;
+    BEGIN
+      WITH ServiceLineWithItem DO BEGIN
+        SETRANGE("Document Type",ServiceLine."Document Type");
+        SETRANGE("Document No.",ServiceLine."Document No.");
+        SETRANGE("Location Code",ServiceLine."Location Code");
+        SETRANGE(Type,Type::Item);
+        SETRANGE("Completely Shipped",FALSE);
+        EXIT(ISEMPTY);
+      END;
+    END;
+
+    LOCAL PROCEDURE SetWhseRqstFiltersByStatus@4(ServiceHeader@1002 : Record 5900;VAR WarehouseRequest@1001 : Record 5765;Status@1000 : 'Open,Released to Ship,,Pending Approval,Pending Prepayment');
+    BEGIN
+      WITH WarehouseRequest DO BEGIN
+        RESET;
+        SETCURRENTKEY("Source Type","Source Subtype","Source No.");
+        SETRANGE(Type,Type);
+        SETRANGE("Source Type",DATABASE::"Service Line");
+        SETRANGE("Source Subtype",ServiceHeader."Document Type");
+        SETRANGE("Source No.",ServiceHeader."No.");
+        SETRANGE("Document Status",Status);
+      END;
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterRelease@8(VAR ServiceHeader@1000 : Record 5900);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterReleaseSetFilters@7(VAR ServiceLine@1000 : Record 5902;ServiceHeader@1001 : Record 5900);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterReopen@9(VAR ServiceHeader@1000 : Record 5900);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeCreateWhseRequest@6(VAR WarehouseRequest@1000 : Record 5765;ServiceHeader@1001 : Record 5900;ServiceLine@1002 : Record 5902);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeRelease@10(VAR ServiceHeader@1000 : Record 5900);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeReopen@11(VAR ServiceHeader@1000 : Record 5900);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,247 @@
+OBJECT Report 10500 GST/HST Internet File Transfer
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:13:43 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 254=imd;
+    CaptionML=ENU=GST/HST Internet File Transfer;
+    ApplicationArea=#Basic,#Suite;
+    ProcessingOnly=Yes;
+    OnPreReport=VAR
+                  RBMgt@1030000 : Codeunit 419;
+                BEGIN
+                  IF StartDate = 0D THEN
+                    ERROR(Text004);
+                  IF EndDate = 0D THEN
+                    ERROR(Text006);
+                  IF StartDate > EndDate THEN
+                    ERROR(Text005);
+
+                  FileName := RBMgt.ServerTempFileName('tax');
+                END;
+
+    OnPostReport=VAR
+                   ToFile@1030000 : Text[1024];
+                 BEGIN
+                   ToFile := 'GSTHST.tax';
+                   DOWNLOAD(FileName,Text002,'',Text001,ToFile);
+                 END;
+
+    UseRequestPage=Yes;
+    UsageCategory=Tasks;
+  }
+  DATASET
+  {
+    { 7612;    ;DataItem;                    ;
+               DataItemTable=Table254;
+               DataItemTableView=SORTING(Entry No.);
+               OnPreDataItem=BEGIN
+                               CLEAR(VATFile);
+                               VATFile.TEXTMODE := TRUE;
+                               VATFile.WRITEMODE := TRUE;
+                               VATFile.CREATE(FileName);
+                             END;
+
+               OnAfterGetRecord=VAR
+                                  VATEntry@1030000 : Record 254;
+                                BEGIN
+                                  IF ("Posting Date" >= StartDate) AND ("Posting Date" <= EndDate) THEN BEGIN
+                                    CASE "GST/HST" OF
+                                      "GST/HST"::Rebate:
+                                        Rebate := Rebate + Amount;
+                                      "GST/HST"::Acquisition:
+                                        TaxDueOnAcquisition := TaxDueOnAcquisition + Amount;
+                                      "GST/HST"::"Self Assessment":
+                                        OtherGSTHST := OtherGSTHST + Amount;
+                                      "GST/HST"::"New Housing Rebates":
+                                        IF ((DATE2DMY("Posting Date",2) > 6) AND (DATE2DMY("Posting Date",3) = 2010)) OR
+                                           (DATE2DMY("Posting Date",3) > 2010)
+                                        THEN
+                                          NewHousingRebates := NewHousingRebates + Amount;
+                                      "GST/HST"::"Pension Rebate":
+                                        IF "Posting Date" > 041011D THEN
+                                          PensionRebate := PensionRebate + Amount;
+                                    END;
+
+                                    CASE Type OF
+                                      Type::Purchase:
+                                        TotalITCAdjsmnt := TotalITCAdjsmnt + Amount;
+                                      Type::Sale:
+                                        BEGIN
+                                          SalesOtherRevenue := SalesOtherRevenue + Base;
+                                          TotalGSTHSTAdjstmnt := TotalGSTHSTAdjstmnt + Amount;
+                                        END;
+                                      Type::Settlement:
+                                        PaidByInstallments := PaidByInstallments + Base;
+                                    END;
+                                  END;
+
+                                  VATEntry.COPY("VAT Entry");
+                                  IF VATEntry.NEXT = 0 THEN BEGIN
+                                    CheckValue(NewHousingRebates,'135');
+                                    CheckValue(PensionRebate,'136');
+                                    WriteToFile;
+                                  END;
+                                END;
+
+               OnPostDataItem=BEGIN
+                                VATFile.CLOSE;
+                              END;
+                               }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      SaveValues=Yes;
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=ENU=Options }
+
+      { 1030000;2;Field     ;
+                  Name=StartDate;
+                  CaptionML=ENU=Start Date;
+                  ToolTipML=ENU=Specifies the date from which GST/HST information is included.;
+                  SourceExpr=StartDate }
+
+      { 1030002;2;Field     ;
+                  Name=EndDate;
+                  CaptionML=ENU=End Date;
+                  ToolTipML=ENU=Specifies the date to which GST/HST information is included.;
+                  SourceExpr=EndDate }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      CompanyInfo@1030000 : Record 79;
+      AccountIdentifier@1030001 : Record 10100;
+      VATFile@1030025 : File;
+      StartDate@1030002 : Date;
+      EndDate@1030003 : Date;
+      SalesOtherRevenue@1030004 : Decimal;
+      TotalGSTHSTAdjstmnt@1030005 : Decimal;
+      TotalITCAdjsmnt@1030006 : Decimal;
+      PaidByInstallments@1030007 : Decimal;
+      Rebate@1030008 : Decimal;
+      TaxDueOnAcquisition@1030009 : Decimal;
+      OtherGSTHST@1030010 : Decimal;
+      NewHousingRebates@1030026 : Decimal;
+      FileName@1030027 : Text[250];
+      Text001@1030017 : TextConst '@@@="Only translate ''Tax Files'' and ''All Files'' {Split=r""[\|\(]\*\.[^ |)]*[|) ]?""}";ENU=Tax Files (*.tax)|*.tax|All Files (*.*)|*.*';
+      Text002@1030018 : TextConst 'ENU=Export HST/GST File';
+      Text004@1030019 : TextConst 'ENU=Start Date should not be blank.';
+      Text005@1030020 : TextConst 'ENU=End Date should be greater than the Start Date.';
+      Text006@1030023 : TextConst 'ENU=End Date should not be blank.';
+      Text007@1030022 : TextConst 'ENU=Account Number is not defined for GST/HST in Account Identifiers.';
+      Text008@1030024 : TextConst 'ENU=Amount in field %1 cannot have more than %2 digits.';
+      PensionRebate@1020001 : Decimal;
+      Text009@1020002 : TextConst 'ENU=Amount in field %1 cannot be more than amount in field %2.';
+
+    [External]
+    PROCEDURE WriteToFile@1030000();
+    BEGIN
+      SalesOtherRevenue := ABS(SalesOtherRevenue);
+      TotalGSTHSTAdjstmnt := ABS(TotalGSTHSTAdjstmnt);
+
+      CompanyInfo.GET;
+      IF AccountIdentifier.GET(CompanyInfo."Federal ID No.",AccountIdentifier."Program Identifier"::RT) THEN BEGIN
+        VATFile.WRITE(
+          'SFT*' + CompanyInfo."Software Identification Code" + '~TRS*GST34' + '~ACN*' +
+          CompanyInfo."Federal ID No." + 'RT' + AccountIdentifier."Reference No." + '~SDT*' +
+          FormatDates(StartDate) + '~NDT*' + FormatDates(EndDate) + '~101*' +
+          FormatDecimals(SalesOtherRevenue,13,'101') + '~105*' +
+          FormatDecimals(TotalGSTHSTAdjstmnt,11,'105') + '~108*' +
+          FormatDecimals(TotalITCAdjsmnt,11,'108') + '~109*' +
+          FormatDecimals(TotalGSTHSTAdjstmnt - TotalITCAdjsmnt,11,'109') + '~110*' +
+          FormatDecimals(PaidByInstallments,11,'110') + '~111*' +
+          FormatDecimals(Rebate,11,'111') + '~205*' +
+          FormatDecimals(TaxDueOnAcquisition,11,'205') + '~405*' +
+          FormatDecimals(OtherGSTHST,11,'405') + '~114*' +
+          FormatDecimals(
+            CheckForPositive(
+              TotalGSTHSTAdjstmnt - TotalITCAdjsmnt - Rebate +
+              TaxDueOnAcquisition + OtherGSTHST),11,'114') + '~115*' +
+          FormatDecimals(
+            CheckForNegative(
+              TotalGSTHSTAdjstmnt - TotalITCAdjsmnt - Rebate +
+              TaxDueOnAcquisition + OtherGSTHST),11,'115') + '~135*' +
+          FormatDecimals(NewHousingRebates,11,'135') + '~136*' +
+          FormatDecimals(PensionRebate,11,'136') + '~EOD');
+      END ELSE
+        ERROR(Text007);
+    END;
+
+    [External]
+    PROCEDURE FormatDecimals@1030001(DecValue@1030000 : Decimal;MaxDigits@1030003 : Integer;FieldName@1030002 : Text[3]) : Text[13];
+    VAR
+      DecValueString@1030001 : Text[30];
+    BEGIN
+      DecValueString := DELCHR(FORMAT(DecValue),'=',',');
+
+      IF DecValue <> 0 THEN BEGIN
+        IF STRPOS(DecValueString,'.') <> 0 THEN BEGIN
+          IF STRLEN(DecValueString) - STRPOS(DecValueString,'.') = 1 THEN
+            DecValueString := INSSTR(DELCHR(DecValueString,'=','.'),'0',STRLEN(DecValueString) + 1)
+          ELSE
+            DecValueString := DELCHR(DecValueString,'=','.')
+        END ELSE
+          DecValueString := INSSTR(DecValueString,'00',STRLEN(DecValueString) + 1);
+        IF STRLEN(DecValueString) > MaxDigits THEN
+          ERROR(Text008,FieldName,MaxDigits);
+        EXIT(DecValueString);
+      END;
+      EXIT('000')
+    END;
+
+    [External]
+    PROCEDURE FormatDates@1030002(Date@1030000 : Date) : Text[8];
+    BEGIN
+      EXIT(FORMAT(Date,0,'<Closing><Year4><Month,2><Day,2>'));
+    END;
+
+    [External]
+    PROCEDURE CheckForNegative@1030003(DecValue@1030000 : Decimal) : Decimal;
+    BEGIN
+      IF DecValue <= 0 THEN
+        EXIT(0);
+      EXIT(DecValue);
+    END;
+
+    [External]
+    PROCEDURE CheckForPositive@1030004(DecValue@1030000 : Decimal) : Decimal;
+    BEGIN
+      IF DecValue >= 0 THEN
+        EXIT(0);
+      EXIT(ABS(DecValue));
+    END;
+
+    LOCAL PROCEDURE CheckValue@1020000(Value@1020000 : Decimal;FieldName@1020002 : Text[3]);
+    BEGIN
+      IF Value > TotalITCAdjsmnt THEN
+        ERROR(Text009,FieldName,'108');
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

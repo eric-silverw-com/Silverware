@@ -1,0 +1,488 @@
+OBJECT Codeunit 2003 ML Prediction Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:15 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      AzureMLConnector@1008 : Codeunit 2001;
+      NotInitializedErr@1003 : TextConst 'ENU=The request has not been properly initialized.';
+      RecordVar@1004 : Variant;
+      LabelNo@1007 : Integer;
+      ConfidenceNo@1026 : Integer;
+      FeatureNumbers@1006 : ARRAY [25] OF Integer;
+      LastFeatureIndex@1005 : Integer;
+      UsingKeyvaultCredentials@1019 : Boolean;
+      NotRecordVariantErr@1009 : TextConst 'ENU=The variant must be a record variant.';
+      FieldDoesNotExistErr@1010 : TextConst '@@@="%1 = field ID";ENU=A field with the ID %1 does not exist.';
+      TooManyFeaturesErr@1011 : TextConst '@@@="%1 = max number of features";ENU=Cannot train or predict because you have added more than %1 features to the model.';
+      LabelCannotBeFeatureErr@1012 : TextConst 'ENU=You have used the same field as the feature and as the label. A field can be either the label or feature, but not both.';
+      FeatureRepeatedErr@1013 : TextConst 'ENU=You can add a field as a feature only one time.';
+      TrainingPercent@1014 : Decimal;
+      ApiUri@1000 : Text[250];
+      ApiKey@1001 : Text[200];
+      ApiTimeout@1002 : Integer;
+      TrainingPercentageErr@1015 : TextConst 'ENU=The training percentage must be a decimal number between 0 and 1.';
+      SomethingWentWrongErr@1016 : TextConst '@@@="%1 = detailed error";ENU=Oops, something went wrong when connecting to the Azure Machine Learning endpoint. Please contact your system administrator. %1.';
+      DetailedErrorErr@1017 : TextConst 'ENU="Details: "';
+      ErrorResponseTxt@1018 : TextConst '@@@={LOCKED};ENU="Error code: "';
+      AzureMachineLearningLimitReachedErr@1020 : TextConst 'ENU=The Microsoft Azure Machine Learning limit has been reached. Please contact your system administrator.';
+
+    [External]
+    PROCEDURE DefaultInitialize@17();
+    BEGIN
+      LabelNo := 0;
+      ConfidenceNo := 0;
+      LastFeatureIndex := 0;
+      TrainingPercent := 0.8;
+    END;
+
+    [External]
+    PROCEDURE Initialize@4(Uri@1000 : Text[250];Key@1001 : Text[200];TimeOutSeconds@1002 : Integer);
+    BEGIN
+      ApiUri := Uri;
+      ApiKey := Key;
+      ApiTimeout := TimeOutSeconds;
+      UsingKeyvaultCredentials := FALSE;
+      DefaultInitialize;
+    END;
+
+    [External]
+    PROCEDURE InitializeWithKeyVaultCredentials@12(TimeOutSeconds@1000 : Integer);
+    VAR
+      CortanaIntelligenceUsage@1001 : Record 2003;
+      AzureKeyVaultManagement@1002 : Codeunit 2200;
+      LimitType@1003 : Option;
+      LimitValue@1004 : Decimal;
+    BEGIN
+      IF CortanaIntelligenceUsage.GetSingleInstance(CortanaIntelligenceUsage.Service::"Machine Learning") THEN
+        IF CortanaIntelligenceUsage."Total Resource Usage" > CortanaIntelligenceUsage."Original Resource Limit" THEN
+          ERROR(AzureMachineLearningLimitReachedErr);
+      AzureKeyVaultManagement.GetMachineLearningCredentials(ApiUri,ApiKey,LimitType,LimitValue);
+      ApiTimeout := TimeOutSeconds;
+      UsingKeyvaultCredentials := TRUE;
+      DefaultInitialize;
+    END;
+
+    PROCEDURE SetMessageHandler@7(MessageHandler@1000 : DotNet "'System.Net.Http, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Net.Http.HttpMessageHandler");
+    BEGIN
+      AzureMLConnector.SetMessageHandler(MessageHandler);
+    END;
+
+    [External]
+    PROCEDURE SetRecord@1(RecordVariant@1000 : Variant);
+    VAR
+      DataTypeManagement@1001 : Codeunit 701;
+      RecRef@1002 : RecordRef;
+    BEGIN
+      IF NOT DataTypeManagement.GetRecordRef(RecordVariant,RecRef) THEN
+        ERROR(NotRecordVariantErr);
+      RecordVar := RecordVariant;
+    END;
+
+    [External]
+    PROCEDURE GetRecord@20(VAR RecordVariant@1000 : Variant);
+    BEGIN
+      RecordVariant := RecordVar;
+    END;
+
+    [External]
+    PROCEDURE AddFeature@13(FeatureFieldNo@1000 : Integer);
+    VAR
+      FeatureIndex@1001 : Integer;
+    BEGIN
+      IF LastFeatureIndex >= MaxNoFeatures THEN
+        ERROR(TooManyFeaturesErr,MaxNoFeatures);
+
+      IF FeatureFieldNo = LabelNo THEN
+        ERROR(LabelCannotBeFeatureErr);
+
+      TestFieldNumber(FeatureFieldNo);
+
+      FOR FeatureIndex := 1 TO LastFeatureIndex DO BEGIN
+        IF FeatureNumbers[FeatureIndex] = FeatureFieldNo THEN
+          ERROR(FeatureRepeatedErr);
+      END;
+
+      LastFeatureIndex := LastFeatureIndex + 1;
+      FeatureNumbers[LastFeatureIndex] := FeatureFieldNo;
+    END;
+
+    [External]
+    PROCEDURE SetLabel@5(LabelFieldNo@1000 : Integer);
+    VAR
+      DataTypeManagement@1003 : Codeunit 701;
+      RecRef@1001 : RecordRef;
+    BEGIN
+      DataTypeManagement.GetRecordRef(RecordVar,RecRef);
+      TestFieldNumber(LabelFieldNo);
+      LabelNo := LabelFieldNo;
+    END;
+
+    [External]
+    PROCEDURE SetConfidence@35(ConfidenceFieldNo@1000 : Integer);
+    VAR
+      DataTypeManagement@1003 : Codeunit 701;
+      RecRef@1001 : RecordRef;
+    BEGIN
+      DataTypeManagement.GetRecordRef(RecordVar,RecRef);
+      TestFieldNumber(ConfidenceFieldNo);
+      ConfidenceNo := ConfidenceFieldNo;
+    END;
+
+    [External]
+    PROCEDURE SetTrainingPercent@18(TrainingPercentValue@1000 : Decimal);
+    BEGIN
+      IF (TrainingPercentValue <= 0) OR (TrainingPercentValue >= 1) THEN
+        ERROR(TrainingPercentageErr);
+
+      TrainingPercent := TrainingPercentValue;
+    END;
+
+    [External]
+    PROCEDURE GetTrainingPercent@69() : Decimal;
+    BEGIN
+      EXIT(TrainingPercent);
+    END;
+
+    [External]
+    PROCEDURE Train@2(VAR Model@1004 : Text;VAR Quality@1005 : Decimal);
+    VAR
+      OutputValue@1000 : Text;
+      CallAzureEndPoint@1001 : Boolean;
+    BEGIN
+      CallAzureEndPoint := TRUE;
+      OnBeforeTrain(Model,Quality,CallAzureEndPoint);
+      IF NOT CallAzureEndPoint THEN
+        EXIT;
+      AzureMLConnector.Initialize(ApiKey,ApiUri,ApiTimeout);
+      TestInitialized;
+      AzureMLConnector.AddParameter('method','train');
+      AzureMLConnector.AddParameter('train_percent',FORMAT(TrainingPercent,0,9));
+      CreateInput;
+      IF NOT AzureMLConnector.SendToAzureMLInternal(UsingKeyvaultCredentials) THEN
+        ERROR(SomethingWentWrongErr,GetLastDetailedError);
+
+      AzureMLConnector.GetOutput(1,1,OutputValue);
+      Model := OutputValue;
+      AzureMLConnector.GetOutput(1,2,OutputValue);
+      EVALUATE(Quality,OutputValue,9);
+    END;
+
+    [External]
+    PROCEDURE Predict@15(Model@1002 : Text);
+    VAR
+      CallAzureEndPoint@1000 : Boolean;
+    BEGIN
+      CallAzureEndPoint := TRUE;
+      OnBeforePredict(RecordVar,CallAzureEndPoint);
+      IF NOT CallAzureEndPoint THEN
+        EXIT;
+      AzureMLConnector.Initialize(ApiKey,ApiUri,ApiTimeout);
+      TestInitialized;
+      AzureMLConnector.AddParameter('method','predict');
+      AzureMLConnector.AddParameter('model',Model);
+      CreateInput;
+      IF NOT AzureMLConnector.SendToAzureMLInternal(UsingKeyvaultCredentials) THEN
+        ERROR(SomethingWentWrongErr,GetLastDetailedError);
+
+      LoadPrediction;
+    END;
+
+    [External]
+    PROCEDURE Evaluate@16(Model@1002 : Text;VAR Quality@1001 : Decimal);
+    VAR
+      OutputValue@1003 : Text;
+      CallAzureEndPoint@1000 : Boolean;
+    BEGIN
+      CallAzureEndPoint := TRUE;
+      OnBeforeEvaluate(Model,Quality,RecordVar,CallAzureEndPoint);
+      IF NOT CallAzureEndPoint THEN
+        EXIT;
+      AzureMLConnector.Initialize(ApiKey,ApiUri,ApiTimeout);
+      TestInitialized;
+      AzureMLConnector.AddParameter('method','evaluate');
+      AzureMLConnector.AddParameter('model',Model);
+      CreateInput;
+      IF NOT AzureMLConnector.SendToAzureMLInternal(UsingKeyvaultCredentials) THEN
+        ERROR(SomethingWentWrongErr,GetLastDetailedError);
+
+      AzureMLConnector.GetOutput(1,1,OutputValue);
+      EVALUATE(Quality,OutputValue,9);
+    END;
+
+    [External]
+    PROCEDURE IsDataSufficientForClassification@19() : Boolean;
+    VAR
+      TypeHelper@1008 : Codeunit 10;
+      RecRef@1002 : RecordRef;
+      FieldRef@1001 : FieldRef;
+      LabelDict@1005 : DotNet "'mscorlib'.System.Collections.Generic.Dictionary`2";
+      TotalRecordCount@1004 : Integer;
+      LabelDictKey@1006 : Text;
+      LabelDictValue@1011 : Integer;
+      Element@1009 : Integer;
+      MinLabelCount@1007 : Integer;
+      MinLabelCountInitialized@1000 : Boolean;
+    BEGIN
+      IF NOT IsDataSufficientBase(RecRef) THEN
+        EXIT(FALSE);
+
+      CreateLabelDictionary(LabelDict);
+      REPEAT
+        FieldRef := RecRef.FIELD(LabelNo);
+        LabelDictKey := FORMAT(FieldRef.VALUE,0,9);
+        IF LabelDict.TryGetValue(LabelDictKey,LabelDictValue) THEN BEGIN
+          LabelDict.Remove(LabelDictKey);
+          LabelDict.Add(LabelDictKey,LabelDictValue + 1);
+        END ELSE
+          LabelDict.Add(LabelDictKey,1);
+        TotalRecordCount += 1;
+      UNTIL RecRef.NEXT = 0;
+
+      MinLabelCountInitialized := FALSE;
+      FOREACH Element IN LabelDict.Values DO BEGIN
+        IF NOT MinLabelCountInitialized THEN BEGIN
+          MinLabelCount := Element;
+          MinLabelCountInitialized := TRUE;
+        END ELSE
+          IF Element < MinLabelCount THEN
+            MinLabelCount := Element;
+      END;
+
+      IF MinLabelCount = TotalRecordCount THEN
+        EXIT(FALSE); // there is only one label in the dataset
+
+      // The certainity needed for at least one of the labels to be in the training set should be 99%
+      EXIT(TotalRecordCount >= (TypeHelper.CalculateLog(1 - 0.99) /
+                                TypeHelper.CalculateLog(1 - (MinLabelCount / TotalRecordCount)) /
+                                TrainingPercent));
+    END;
+
+    [External]
+    PROCEDURE IsDataSufficientForRegression@37() : Boolean;
+    VAR
+      RecRef@1002 : RecordRef;
+    BEGIN
+      EXIT(IsDataSufficientBase(RecRef));
+    END;
+
+    PROCEDURE IsDataSufficientBase@21(VAR RecRef@1000 : RecordRef) : Boolean;
+    VAR
+      DataTypeManagement@1001 : Codeunit 701;
+    BEGIN
+      TestFeatureLabelInitialized;
+      DataTypeManagement.GetRecordRef(RecordVar,RecRef);
+
+      IF NOT RecRef.FINDSET THEN
+        EXIT(FALSE);
+
+      // 20 is the minimum number of data points for which the decision
+      // tree algorithm we are using will create a model with multiple nodes
+      EXIT(TrainingPercent * RecRef.COUNT >= 20);
+    END;
+
+    LOCAL PROCEDURE CreateLabelDictionary@33(VAR LabelDict@1000 : DotNet "'mscorlib'.System.Collections.Generic.Dictionary`2");
+    VAR
+      Type@1001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Type";
+      Activator@1002 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Activator";
+      Arr@1003 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array";
+      DummyString@1004 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.String";
+      DummyInt@1005 : Integer;
+    BEGIN
+      // A new object of type dictionary<String, int> is created. This object holds the Label as the key and the
+      // value as the number of records in the dataset with that label.
+      Arr := Arr.CreateInstance(GETDOTNETTYPE(Type),2);
+      Arr.SetValue(GETDOTNETTYPE(DummyString),0);
+      Arr.SetValue(GETDOTNETTYPE(DummyInt),1);
+
+      Type := GETDOTNETTYPE(LabelDict);
+      Type := Type.MakeGenericType(Arr);
+
+      LabelDict := Activator.CreateInstance(Type);
+    END;
+
+    LOCAL PROCEDURE TestFieldNumber@54(FieldNumber@1000 : Integer);
+    VAR
+      DataTypeManagement@1002 : Codeunit 701;
+      RecRef@1001 : RecordRef;
+    BEGIN
+      DataTypeManagement.GetRecordRef(RecordVar,RecRef);
+      IF NOT RecRef.FIELDEXIST(FieldNumber) THEN
+        ERROR(FieldDoesNotExistErr,FieldNumber);
+    END;
+
+    LOCAL PROCEDURE TestInitialized@8();
+    VAR
+      Initialized@1000 : Boolean;
+    BEGIN
+      Initialized := TRUE;
+      IF NOT AzureMLConnector.IsInitialized THEN
+        Initialized := FALSE;
+
+      TestFeatureLabelInitialized;
+
+      IF NOT Initialized THEN
+        ERROR(NotInitializedErr);
+    END;
+
+    LOCAL PROCEDURE TestFeatureLabelInitialized@40();
+    VAR
+      Initialized@1000 : Boolean;
+    BEGIN
+      Initialized := TRUE;
+      IF FORMAT(RecordVar) = '' THEN
+        Initialized := FALSE;
+      IF LabelNo = 0 THEN
+        Initialized := FALSE;
+      IF LastFeatureIndex = 0 THEN
+        Initialized := FALSE;
+      IF NOT Initialized THEN
+        ERROR(NotInitializedErr);
+    END;
+
+    LOCAL PROCEDURE CreateInput@9();
+    VAR
+      DataTypeManagement@1001 : Codeunit 701;
+      RecRef@1003 : RecordRef;
+      FieldRef@1006 : FieldRef;
+      ColumnNo@1000 : Integer;
+    BEGIN
+      FOR ColumnNo := 1 TO MaxNoFeatures DO
+        AzureMLConnector.AddInputColumnName(STRSUBSTNO('feature%1',ColumnNo));
+      AzureMLConnector.AddInputColumnName('label');
+
+      DataTypeManagement.GetRecordRef(RecordVar,RecRef);
+      IF RecRef.FINDSET THEN
+        REPEAT
+          AzureMLConnector.AddInputRow;
+          FOR ColumnNo := 1 TO MaxNoFeatures DO BEGIN
+            IF ColumnNo <= LastFeatureIndex THEN BEGIN
+              FieldRef := RecRef.FIELD(FeatureNumbers[ColumnNo]);
+              IF FORMAT(FieldRef.CLASS) = 'FlowField' THEN
+                FieldRef.CALCFIELD;
+              AzureMLConnector.AddInputValue(FORMAT(FieldRef.VALUE,0,9));
+              AzureMLConnector.AddParameter(STRSUBSTNO('featuretype%1',ColumnNo),FORMAT(FieldRef.TYPE));
+            END ELSE
+              AzureMLConnector.AddInputValue('');
+          END;
+
+          FieldRef := RecRef.FIELD(LabelNo);
+          IF FORMAT(FieldRef.CLASS) = 'FlowField' THEN
+            FieldRef.CALCFIELD;
+          AzureMLConnector.AddInputValue(FORMAT(FieldRef.VALUE,0,9));
+          AzureMLConnector.AddParameter('labeltype',FORMAT(FieldRef.TYPE));
+        UNTIL RecRef.NEXT = 0;
+    END;
+
+    PROCEDURE GetParameter@14(Name@1000 : Text) : Text;
+    VAR
+      ParameterValue@1001 : Text;
+    BEGIN
+      AzureMLConnector.GetParameter(Name,ParameterValue);
+      EXIT(ParameterValue);
+    END;
+
+    PROCEDURE GetInput@3(RowNo@1000 : Integer;ColumnNo@1001 : Integer) : Text;
+    VAR
+      InputValue@1002 : Text;
+    BEGIN
+      AzureMLConnector.GetInput(RowNo,ColumnNo,InputValue);
+      EXIT(InputValue);
+    END;
+
+    PROCEDURE GetInputLength@10() : Integer;
+    VAR
+      Length@1000 : Integer;
+    BEGIN
+      AzureMLConnector.GetInputLength(Length);
+      EXIT(Length);
+    END;
+
+    LOCAL PROCEDURE GetLastDetailedError@28() : Text;
+    VAR
+      DetailedErrorTxt@1000 : Text;
+      DetailedErrorStart@1001 : Integer;
+    BEGIN
+      DetailedErrorStart := STRPOS(GETLASTERRORTEXT,ErrorResponseTxt);
+      IF DetailedErrorStart > 0 THEN BEGIN
+        DetailedErrorTxt := COPYSTR(GETLASTERRORTEXT,STRPOS(GETLASTERRORTEXT,ErrorResponseTxt));
+        DetailedErrorTxt := COPYSTR(DetailedErrorTxt,1,STRPOS(DetailedErrorTxt,'\') - 1);
+        EXIT('\' + DetailedErrorErr + DetailedErrorTxt);
+      END;
+      EXIT('\' + DetailedErrorErr + GETLASTERRORTEXT);
+    END;
+
+    LOCAL PROCEDURE LoadPrediction@30();
+    VAR
+      DataTypeManagement@1002 : Codeunit 701;
+      ConfigValidateManagement@1001 : Codeunit 8617;
+      RecRef@1003 : RecordRef;
+      FieldRef@1000 : FieldRef;
+      LabelColumnNumber@1005 : Integer;
+      ConfidenceColumnNumber@1012 : Integer;
+      RowNumber@1004 : Integer;
+      Label@1006 : Text[250];
+      Confidence@1009 : Text[250];
+      OutputValue@1007 : Text;
+    BEGIN
+      RowNumber := 1;
+      LabelColumnNumber := MaxNoFeatures + 1;
+      ConfidenceColumnNumber := LabelColumnNumber + 1;
+      DataTypeManagement.GetRecordRef(RecordVar,RecRef);
+      IF RecRef.FINDSET THEN
+        REPEAT
+          IF ConfidenceNo <> 0 THEN BEGIN
+            AzureMLConnector.GetOutput(RowNumber,ConfidenceColumnNumber,OutputValue);
+            Confidence := COPYSTR(OutputValue,1,MAXSTRLEN(Confidence));
+            FieldRef := RecRef.FIELD(ConfidenceNo);
+            ConfigValidateManagement.EvaluateValueWithValidate(FieldRef,Confidence,TRUE);
+          END;
+
+          AzureMLConnector.GetOutput(RowNumber,LabelColumnNumber,OutputValue);
+          Label := COPYSTR(OutputValue,1,MAXSTRLEN(Label));
+          FieldRef := RecRef.FIELD(LabelNo);
+          ConfigValidateManagement.EvaluateValueWithValidate(FieldRef,Label,TRUE);
+          RecRef.MODIFY(TRUE);
+          RowNumber := RowNumber + 1;
+        UNTIL RecRef.NEXT = 0;
+      IF RecRef.FINDSET THEN
+        RecRef.SETTABLE(RecordVar);
+    END;
+
+    [External]
+    PROCEDURE MaxNoFeatures@62() : Integer;
+    BEGIN
+      EXIT(ARRAYLEN(FeatureNumbers));
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeTrain@6(VAR Model@1001 : Text;VAR Quality@1000 : Decimal;VAR CallAzureEndPoint@1002 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforePredict@11(VAR RecordVariant@1001 : Variant;VAR CallAzureEndPoint@1000 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeEvaluate@67(Model@1003 : Text;VAR Quality@1002 : Decimal;VAR RecordVariant@1001 : Variant;VAR CallAzureEndPoint@1000 : Boolean);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

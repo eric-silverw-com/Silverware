@@ -1,0 +1,93 @@
+OBJECT Codeunit 2111 O365 Sales Background Setup
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:15 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 5079=rimd;
+    OnRun=BEGIN
+            InitializeGraphSync(TRUE,TRUE);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      GraphSyncCategoryTxt@1001 : TextConst '@@@={LOCKED};ENU=AL Graph Sync';
+      GraphSyncModifiedTelemetryTxt@1000 : TextConst '@@@={LOCKED};ENU="Graph sync has been modified to %1; delta sync triggered: %2."';
+
+    PROCEDURE InitializeGraphSync@31(EnableGraphSync@1007 : Boolean;TriggerDeltaSync@1006 : Boolean);
+    VAR
+      MarketingSetup@1000 : Record 5079;
+      CompanyInformation@1002 : Record 79;
+      AzureADUserManagement@1003 : Codeunit 9010;
+      WebhookManagement@1001 : Codeunit 5377;
+      GraphSyncRunner@1005 : Codeunit 5452;
+      TenantDetail@1004 : DotNet "'Microsoft.Dynamics.Nav.LicensingService.Model, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.LicensingService.Model.TenantInfo";
+    BEGIN
+      MarketingSetup.LOCKTABLE;
+      IF NOT MarketingSetup.GET THEN
+        MarketingSetup.INSERT(TRUE);
+
+      IF MarketingSetup."Sync with Microsoft Graph" <> EnableGraphSync THEN BEGIN
+        MarketingSetup.VALIDATE("Sync with Microsoft Graph",EnableGraphSync);
+        MarketingSetup.MODIFY(TRUE);
+        OnAfterGraphSyncModified(EnableGraphSync,TriggerDeltaSync);
+      END;
+
+      IF NOT EnableGraphSync THEN
+        EXIT;
+
+      IF NOT WebhookManagement.IsCurrentClientTypeAllowed THEN
+        EXIT;
+
+      IF NOT WebhookManagement.IsSyncAllowed THEN
+        EXIT;
+
+      IF NOT GraphSyncRunner.IsGraphSyncEnabled THEN
+        EXIT;
+
+      IF TriggerDeltaSync THEN
+        TASKSCHEDULER.CREATETASK(CODEUNIT::"Graph Subscription Management",CODEUNIT::"Graph Delta Sync",
+          TRUE,COMPANYNAME,CURRENTDATETIME + 200); // Add 200 ms
+
+      CompanyInformation.GET;
+      IF CompanyInformation."Sync with O365 Bus. profile" THEN
+        TASKSCHEDULER.CREATETASK(CODEUNIT::"Business Profile Sync. Runner",0,TRUE,COMPANYNAME,0DT)
+      ELSE
+        IF AzureADUserManagement.GetTenantDetail(TenantDetail) THEN BEGIN
+          CompanyInformation.LOCKTABLE;
+          CompanyInformation.GET;
+
+          CompanyInformation.Name := COPYSTR(TenantDetail.DisplayName,1,MAXSTRLEN(CompanyInformation.Name));
+          CompanyInformation.Address := COPYSTR(TenantDetail.Street,1,MAXSTRLEN(CompanyInformation.Address));
+          CompanyInformation.City := COPYSTR(TenantDetail.City,1,MAXSTRLEN(CompanyInformation.City));
+          CompanyInformation."Post Code" := COPYSTR(TenantDetail.PostalCode,1,MAXSTRLEN(CompanyInformation."Post Code"));
+          CompanyInformation.County := COPYSTR(TenantDetail.State,1,MAXSTRLEN(CompanyInformation.County));
+          CompanyInformation."Country/Region Code" :=
+            COPYSTR(TenantDetail.CountryLetterCode,1,MAXSTRLEN(CompanyInformation."Country/Region Code"));
+          CompanyInformation.MODIFY(FALSE);
+        END;
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterGraphSyncModified@2(NewGraphSyncValue@1001 : Boolean;TriggerDeltaSync@1000 : Boolean);
+    BEGIN
+    END;
+
+    [EventSubscriber(Codeunit,2111,OnAfterGraphSyncModified,"",Skip,Skip)]
+    LOCAL PROCEDURE LogGraphSyncSubscriber@1(NewGraphSyncValue@1000 : Boolean;TriggerDeltaSync@1001 : Boolean);
+    BEGIN
+      SENDTRACETAG('00001IJ',GraphSyncCategoryTxt,VERBOSITY::Normal,
+        STRSUBSTNO(GraphSyncModifiedTelemetryTxt,NewGraphSyncValue,TriggerDeltaSync),DATACLASSIFICATION::SystemMetadata);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

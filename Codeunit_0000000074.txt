@@ -1,0 +1,270 @@
+OBJECT Codeunit 74 Purch.-Get Receipt
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:07:48 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    TableNo=39;
+    OnRun=BEGIN
+            PurchHeader.GET("Document Type","Document No.");
+            PurchHeader.TESTFIELD("Document Type",PurchHeader."Document Type"::Invoice);
+            PurchHeader.TESTFIELD(Status,PurchHeader.Status::Open);
+
+            PurchRcptLine.SETCURRENTKEY("Pay-to Vendor No.");
+            PurchRcptLine.SETRANGE("Pay-to Vendor No.",PurchHeader."Pay-to Vendor No.");
+            PurchRcptLine.SETRANGE("Buy-from Vendor No.",PurchHeader."Buy-from Vendor No.");
+            PurchRcptLine.SETFILTER("Qty. Rcd. Not Invoiced",'<>0');
+            PurchRcptLine.SETRANGE("Currency Code",PurchHeader."Currency Code");
+
+            GetReceipts.SETTABLEVIEW(PurchRcptLine);
+            GetReceipts.LOOKUPMODE := TRUE;
+            GetReceipts.SetPurchHeader(PurchHeader);
+            GetReceipts.RUNMODAL;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=The %1 on the %2 %3 and the %4 %5 must be the same.';
+      PurchHeader@1001 : Record 38;
+      PurchLine@1002 : Record 39;
+      PurchRcptHeader@1003 : Record 120;
+      PurchRcptLine@1004 : Record 121;
+      GetReceipts@1005 : Page 5709;
+
+    [External]
+    PROCEDURE CreateInvLines@1(VAR PurchRcptLine2@1000 : Record 121);
+    VAR
+      TransferLine@1001 : Boolean;
+      PrepmtAmtToDeductRounding@1002 : Decimal;
+    BEGIN
+      WITH PurchRcptLine2 DO BEGIN
+        SETFILTER("Qty. Rcd. Not Invoiced",'<>0');
+        IF FIND('-') THEN BEGIN
+          PurchLine.LOCKTABLE;
+          PurchLine.SETRANGE("Document Type",PurchHeader."Document Type");
+          PurchLine.SETRANGE("Document No.",PurchHeader."No.");
+          PurchLine."Document Type" := PurchHeader."Document Type";
+          PurchLine."Document No." := PurchHeader."No.";
+
+          OnBeforeInsertLines(PurchHeader);
+
+          REPEAT
+            IF PurchRcptHeader."No." <> "Document No." THEN BEGIN
+              PurchRcptHeader.GET("Document No.");
+              TransferLine := TRUE;
+              IF PurchRcptHeader."Currency Code" <> PurchHeader."Currency Code" THEN BEGIN
+                MESSAGE(
+                  Text000,
+                  PurchHeader.FIELDCAPTION("Currency Code"),
+                  PurchHeader.TABLECAPTION,PurchHeader."No.",
+                  PurchRcptHeader.TABLECAPTION,PurchRcptHeader."No.");
+                TransferLine := FALSE;
+              END;
+              IF PurchRcptHeader."Pay-to Vendor No." <> PurchHeader."Pay-to Vendor No." THEN BEGIN
+                MESSAGE(
+                  Text000,
+                  PurchHeader.FIELDCAPTION("Pay-to Vendor No."),
+                  PurchHeader.TABLECAPTION,PurchHeader."No.",
+                  PurchRcptHeader.TABLECAPTION,PurchRcptHeader."No.");
+                TransferLine := FALSE;
+              END;
+              OnBeforeTransferLineToPurchaseDoc(PurchRcptHeader,PurchRcptLine2,PurchHeader,TransferLine);
+            END;
+            IF TransferLine THEN BEGIN
+              PurchRcptLine := PurchRcptLine2;
+              PurchRcptLine.TESTFIELD("VAT Bus. Posting Group",PurchHeader."VAT Bus. Posting Group");
+              PurchRcptLine.InsertInvLineFromRcptLine(PurchLine);
+              CalcUpdatePrepmtAmtToDeductRounding(PurchRcptLine,PurchLine,PrepmtAmtToDeductRounding);
+              IF Type = Type::"Charge (Item)" THEN
+                GetItemChargeAssgnt(PurchRcptLine2,PurchLine."Qty. to Invoice");
+            END;
+          UNTIL NEXT = 0;
+
+          OnAfterInsertLines(PurchHeader);
+
+          CalcInvoiceDiscount(PurchLine);
+          IF TransferLine THEN
+            AdjustPrepmtAmtToDeductRounding(PurchLine,PrepmtAmtToDeductRounding);
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE SetPurchHeader@2(VAR PurchHeader2@1000 : Record 38);
+    BEGIN
+      PurchHeader.GET(PurchHeader2."Document Type",PurchHeader2."No.");
+      PurchHeader.TESTFIELD("Document Type",PurchHeader."Document Type"::Invoice);
+    END;
+
+    [External]
+    PROCEDURE GetItemChargeAssgnt@5800(VAR PurchRcptLine@1000 : Record 121;QtyToInv@1003 : Decimal);
+    VAR
+      PurchOrderLine@1001 : Record 39;
+      ItemChargeAssgntPurch@1002 : Record 5805;
+    BEGIN
+      WITH PurchRcptLine DO
+        IF PurchOrderLine.GET(PurchOrderLine."Document Type"::Order,"Order No.","Order Line No.")
+        THEN BEGIN
+          ItemChargeAssgntPurch.LOCKTABLE;
+          ItemChargeAssgntPurch.RESET;
+          ItemChargeAssgntPurch.SETRANGE("Document Type",PurchOrderLine."Document Type");
+          ItemChargeAssgntPurch.SETRANGE("Document No.",PurchOrderLine."Document No.");
+          ItemChargeAssgntPurch.SETRANGE("Document Line No.",PurchOrderLine."Line No.");
+          IF ItemChargeAssgntPurch.FINDFIRST THEN BEGIN
+            ItemChargeAssgntPurch.CALCSUMS("Qty. to Assign");
+            IF ItemChargeAssgntPurch."Qty. to Assign" <> 0 THEN
+              CopyItemChargeAssgnt(
+                PurchOrderLine,PurchRcptLine,ItemChargeAssgntPurch."Qty. to Assign",QtyToInv / ItemChargeAssgntPurch."Qty. to Assign");
+          END;
+        END;
+    END;
+
+    LOCAL PROCEDURE CopyItemChargeAssgnt@5801(PurchOrderLine@1000 : Record 39;PurchRcptLine@1001 : Record 121;QtyToAssign@1002 : Decimal;QtyFactor@1008 : Decimal);
+    VAR
+      PurchRcptLine2@1003 : Record 121;
+      PurchLine2@1004 : Record 39;
+      ItemChargeAssgntPurch@1005 : Record 5805;
+      ItemChargeAssgntPurch2@1006 : Record 5805;
+      InsertChargeAssgnt@1007 : Boolean;
+      LineQtyToAssign@1009 : Decimal;
+    BEGIN
+      WITH PurchOrderLine DO BEGIN
+        ItemChargeAssgntPurch.SETRANGE("Document Type","Document Type");
+        ItemChargeAssgntPurch.SETRANGE("Document No.","Document No.");
+        ItemChargeAssgntPurch.SETRANGE("Document Line No.","Line No.");
+        IF ItemChargeAssgntPurch.FIND('-') THEN
+          REPEAT
+            IF ItemChargeAssgntPurch."Qty. to Assign" <> 0 THEN BEGIN
+              ItemChargeAssgntPurch2 := ItemChargeAssgntPurch;
+              ItemChargeAssgntPurch2."Qty. to Assign" := ROUND(QtyFactor * ItemChargeAssgntPurch2."Qty. to Assign",0.00001);
+              PurchLine2.SETRANGE("Receipt No.",PurchRcptLine."Document No.");
+              PurchLine2.SETRANGE("Receipt Line No.",PurchRcptLine."Line No.");
+              IF PurchLine2.FIND('-') THEN
+                REPEAT
+                  PurchLine2.CALCFIELDS("Qty. to Assign");
+                  InsertChargeAssgnt := PurchLine2."Qty. to Assign" <> PurchLine2.Quantity;
+                UNTIL (PurchLine2.NEXT = 0) OR InsertChargeAssgnt;
+
+              IF InsertChargeAssgnt THEN BEGIN
+                ItemChargeAssgntPurch2."Document Type" := PurchLine2."Document Type";
+                ItemChargeAssgntPurch2."Document No." := PurchLine2."Document No.";
+                ItemChargeAssgntPurch2."Document Line No." := PurchLine2."Line No.";
+                ItemChargeAssgntPurch2."Qty. Assigned" := 0;
+                LineQtyToAssign :=
+                  ItemChargeAssgntPurch2."Qty. to Assign" - GetQtyAssignedInNewLine(ItemChargeAssgntPurch2);
+                InsertChargeAssgnt := LineQtyToAssign <> 0;
+                IF InsertChargeAssgnt THEN BEGIN
+                  IF ABS(QtyToAssign) < ABS(LineQtyToAssign) THEN
+                    ItemChargeAssgntPurch2."Qty. to Assign" := QtyToAssign;
+                  IF ABS(PurchLine2.Quantity - PurchLine2."Qty. to Assign") <
+                     ABS(LineQtyToAssign)
+                  THEN
+                    ItemChargeAssgntPurch2."Qty. to Assign" :=
+                      PurchLine2.Quantity - PurchLine2."Qty. to Assign";
+                  ItemChargeAssgntPurch2.VALIDATE("Unit Cost");
+
+                  IF ItemChargeAssgntPurch2."Applies-to Doc. Type" = "Document Type" THEN BEGIN
+                    ItemChargeAssgntPurch2."Applies-to Doc. Type" := PurchLine2."Document Type";
+                    ItemChargeAssgntPurch2."Applies-to Doc. No." := PurchLine2."Document No.";
+                    PurchRcptLine2.SETCURRENTKEY("Order No.","Order Line No.");
+                    PurchRcptLine2.SETRANGE("Order No.",ItemChargeAssgntPurch."Applies-to Doc. No.");
+                    PurchRcptLine2.SETRANGE("Order Line No.",ItemChargeAssgntPurch."Applies-to Doc. Line No.");
+                    PurchRcptLine2.SETRANGE("Document No.",PurchRcptLine."Document No.");
+                    IF PurchRcptLine2.FINDFIRST THEN BEGIN
+                      PurchLine2.SETCURRENTKEY("Document Type","Receipt No.","Receipt Line No.");
+                      PurchLine2.SETRANGE("Document Type",PurchLine2."Document Type"::Invoice);
+                      PurchLine2.SETRANGE("Receipt No.",PurchRcptLine2."Document No.");
+                      PurchLine2.SETRANGE("Receipt Line No.",PurchRcptLine2."Line No.");
+                      IF PurchLine2.FIND('-') AND (PurchLine2.Quantity <> 0) THEN
+                        ItemChargeAssgntPurch2."Applies-to Doc. Line No." := PurchLine2."Line No."
+                      ELSE
+                        InsertChargeAssgnt := FALSE;
+                    END ELSE
+                      InsertChargeAssgnt := FALSE;
+                  END;
+                END;
+              END;
+
+              IF InsertChargeAssgnt AND (ItemChargeAssgntPurch2."Qty. to Assign" <> 0) THEN BEGIN
+                ItemChargeAssgntPurch2.INSERT;
+                QtyToAssign := QtyToAssign - ItemChargeAssgntPurch2."Qty. to Assign";
+              END;
+            END;
+          UNTIL ItemChargeAssgntPurch.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetQtyAssignedInNewLine@4(ItemChargeAssgntPurch@1000 : Record 5805) : Decimal;
+    BEGIN
+      WITH ItemChargeAssgntPurch DO BEGIN
+        SETRANGE("Document Type","Document Type");
+        SETRANGE("Document No.","Document No.");
+        SETRANGE("Document Line No.","Document Line No.");
+        SETRANGE("Applies-to Doc. Type","Applies-to Doc. Type");
+        SETRANGE("Applies-to Doc. No.","Applies-to Doc. No.");
+        SETRANGE("Applies-to Doc. Line No.","Applies-to Doc. Line No.");
+        CALCSUMS("Qty. to Assign");
+        EXIT("Qty. to Assign");
+      END;
+    END;
+
+    LOCAL PROCEDURE CalcInvoiceDiscount@14(VAR PurchLine@1001 : Record 39);
+    VAR
+      PurchSetup@1000 : Record 312;
+      PurchCalcDiscount@1002 : Codeunit 70;
+    BEGIN
+      PurchSetup.GET;
+      IF PurchSetup."Calc. Inv. Discount" THEN
+        PurchCalcDiscount.CalculateInvoiceDiscountOnLine(PurchLine);
+    END;
+
+    LOCAL PROCEDURE CalcUpdatePrepmtAmtToDeductRounding@3(PurchRcptLine@1005 : Record 121;PurchaseLine@1002 : Record 39;VAR RoundingAmount@1004 : Decimal);
+    VAR
+      PurchOrderLine@1003 : Record 39;
+      Fraction@1001 : Decimal;
+      FractionAmount@1000 : Decimal;
+    BEGIN
+      IF (PurchaseLine."Prepayment %" > 0) AND (PurchaseLine."Prepayment %" < 100) AND
+         (PurchaseLine."Document Type" = PurchaseLine."Document Type"::Invoice)
+      THEN BEGIN
+        PurchOrderLine.GET(PurchOrderLine."Document Type"::Order,PurchRcptLine."Order No.",PurchRcptLine."Order Line No.");
+        Fraction := PurchRcptLine.Quantity / PurchOrderLine.Quantity;
+        FractionAmount := Fraction * PurchOrderLine."Prepmt Amt to Deduct";
+        RoundingAmount += PurchaseLine."Prepmt Amt to Deduct" - FractionAmount;
+      END;
+    END;
+
+    LOCAL PROCEDURE AdjustPrepmtAmtToDeductRounding@19(VAR PurchaseLine@1000 : Record 39;RoundingAmount@1001 : Decimal);
+    BEGIN
+      IF ROUND(RoundingAmount) <> 0 THEN BEGIN
+        PurchaseLine."Prepmt Amt to Deduct" -= ROUND(RoundingAmount);
+        PurchaseLine.MODIFY;
+      END;
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterInsertLines@15(VAR PurchHeader@1000 : Record 38);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeInsertLines@5(VAR PurchaseHeader@1000 : Record 38);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeTransferLineToPurchaseDoc@13(PurchRcptHeader@1000 : Record 120;PurchRcptLine@1001 : Record 121;VAR PurchaseHeader@1002 : Record 38;VAR TransferLine@1003 : Boolean);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

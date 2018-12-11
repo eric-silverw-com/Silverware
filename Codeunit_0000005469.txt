@@ -1,0 +1,141 @@
+OBJECT Codeunit 5469 Library API - General Journal
+{
+  OBJECT-PROPERTIES
+  {
+    Date=;
+    Time=;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      GenJnlManagement@1001 : Codeunit 230;
+      NoSeriesMgt@1000 : Codeunit 396;
+
+    PROCEDURE InitializeLine@17(VAR GenJournalLine@1003 : Record 81;LineNo@1004 : Integer;DocumentNo@1005 : Code[20];ExternalDocumentNo@1008 : Code[35]);
+    VAR
+      GenJournalBatch@1001 : Record 232;
+      CopyValuesFromGenJnlLine@1007 : Record 81;
+      CopyValuesFromGenJnlLineSpecified@1002 : Boolean;
+      BottomLine@1000 : Boolean;
+    BEGIN
+      GenJournalBatch.GET(GenJournalLine."Journal Template Name",GenJournalLine."Journal Batch Name");
+
+      GenJournalLine."Line No." := LineNo;
+      GetCopyValuesFromLine(GenJournalLine,CopyValuesFromGenJnlLine,CopyValuesFromGenJnlLineSpecified,BottomLine);
+
+      IF BottomLine AND
+         (LineNo <> 0)
+      THEN BEGIN
+        GenJournalLine."Line No." := 0;
+        SetUpNewLine(GenJournalLine,CopyValuesFromGenJnlLine,CopyValuesFromGenJnlLineSpecified,BottomLine);
+        GenJournalLine."Line No." := LineNo;
+      END ELSE
+        SetUpNewLine(GenJournalLine,CopyValuesFromGenJnlLine,CopyValuesFromGenJnlLineSpecified,BottomLine);
+
+      GenJournalLine."External Document No." := ExternalDocumentNo;
+      IF DocumentNo <> '' THEN
+        GenJournalLine."Document No." := DocumentNo
+      ELSE
+        AlterDocNoBasedOnExternalDocNo(GenJournalLine,CopyValuesFromGenJnlLine,GenJournalBatch,CopyValuesFromGenJnlLineSpecified);
+    END;
+
+    PROCEDURE EnsureGenJnlBatchExists@1(TemplateNameTxt@1000 : Text[10];BatchNameTxt@1001 : Text[10]);
+    VAR
+      GenJournalBatch@1002 : Record 232;
+    BEGIN
+      IF NOT GenJournalBatch.GET(TemplateNameTxt,BatchNameTxt) THEN BEGIN
+        GenJournalBatch.VALIDATE("Journal Template Name",TemplateNameTxt);
+        GenJournalBatch.SetupNewBatch;
+        GenJournalBatch.VALIDATE(Name,BatchNameTxt);
+        GenJournalBatch.VALIDATE(Description,GenJournalBatch.Name);
+        GenJournalBatch.INSERT(TRUE);
+        COMMIT;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetCopyValuesFromLine@6(VAR GenJournalLine@1002 : Record 81;VAR CopyValuesFromGenJnlLine@1001 : Record 81;VAR CopyValuesFromGenJnlLineSpecified@1000 : Boolean;VAR BottomLine@1003 : Boolean);
+    BEGIN
+      // This function is replicating the behavior of the page
+      // If line is at the bottom, we will copy values from previous line
+      // If line is in the middle, we will copy values from next line
+      BottomLine := TRUE;
+      CopyValuesFromGenJnlLineSpecified := FALSE;
+
+      IF GenJournalLine."Line No." <> 0 THEN BEGIN
+        CopyValuesFromGenJnlLine.RESET;
+        CopyValuesFromGenJnlLine.COPYFILTERS(GenJournalLine);
+        CopyValuesFromGenJnlLine.SETFILTER("Line No.",'>%1',GenJournalLine."Line No.");
+        IF CopyValuesFromGenJnlLine.FINDFIRST THEN BEGIN
+          CopyValuesFromGenJnlLineSpecified := TRUE;
+          BottomLine := FALSE;
+          EXIT;
+        END;
+      END;
+
+      IF NOT CopyValuesFromGenJnlLineSpecified THEN BEGIN
+        CopyValuesFromGenJnlLine.RESET;
+        CopyValuesFromGenJnlLine.COPYFILTERS(GenJournalLine);
+        IF CopyValuesFromGenJnlLine.FINDLAST THEN
+          CopyValuesFromGenJnlLineSpecified := TRUE;
+      END;
+    END;
+
+    LOCAL PROCEDURE SetUpNewLine@7(VAR GenJournalLine@1003 : Record 81;CopyValuesFromGenJnlLine@1002 : Record 81;CopyValuesFromGenJnlLineSpecified@1001 : Boolean;BottomLine@1000 : Boolean);
+    VAR
+      Balance@1007 : Decimal;
+      TotalBalance@1006 : Decimal;
+      ShowBalance@1005 : Boolean;
+      ShowTotalBalance@1004 : Boolean;
+    BEGIN
+      IF CopyValuesFromGenJnlLineSpecified THEN
+        GenJnlManagement.CalcBalance(
+          GenJournalLine,CopyValuesFromGenJnlLine,Balance,TotalBalance,ShowBalance,ShowTotalBalance);
+
+      GenJournalLine.SetUpNewLine(CopyValuesFromGenJnlLine,Balance,BottomLine);
+
+      IF GenJournalLine."Line No." = 0 THEN
+        GenJournalLine.VALIDATE(
+          "Line No.",GenJournalLine.GetNewLineNo(GenJournalLine."Journal Template Name",GenJournalLine."Journal Batch Name"));
+    END;
+
+    LOCAL PROCEDURE AlterDocNoBasedOnExternalDocNo@5(VAR GenJournalLine@1001 : Record 81;CopyValuesFromGenJnlLine@1002 : Record 81;GenJnlBatch@1003 : Record 232;CopyValuesFromGenJnlLineSpecified@1000 : Boolean);
+    VAR
+      NoSeriesLine@1004 : Record 309;
+    BEGIN
+      IF CopyValuesFromGenJnlLineSpecified AND
+         (CopyValuesFromGenJnlLine."Document No." = GenJournalLine."Document No.") AND
+         (CopyValuesFromGenJnlLine."External Document No." <> GenJournalLine."External Document No.")
+      THEN BEGIN
+        IF GenJnlBatch."No. Series" <> '' THEN BEGIN
+          NoSeriesMgt.SetNoSeriesLineFilter(NoSeriesLine,GenJnlBatch."No. Series",GenJournalLine."Posting Date");
+          IF NoSeriesLine."Increment-by No." > 1 THEN
+            NoSeriesMgt.IncrementNoText(GenJournalLine."Document No.",NoSeriesLine."Increment-by No.")
+          ELSE
+            GenJournalLine."Document No." := INCSTR(GenJournalLine."Document No.");
+        END ELSE
+          GenJournalLine."Document No." := INCSTR(GenJournalLine."Document No.");
+      END;
+    END;
+
+    PROCEDURE GetBatchNameFromId@2(JournalBatchId@1001 : GUID) : Code[10];
+    VAR
+      GenJournalBatch@1000 : Record 232;
+    BEGIN
+      GenJournalBatch.SETRANGE(Id,JournalBatchId);
+      GenJournalBatch.FINDFIRST;
+
+      EXIT(GenJournalBatch.Name);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

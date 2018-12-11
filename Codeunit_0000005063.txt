@@ -1,0 +1,775 @@
+OBJECT Codeunit 5063 ArchiveManagement
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:18 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1000 : TextConst 'ENU=Document %1 has been archived.';
+      Text002@1003 : TextConst 'ENU=Do you want to Restore %1 %2 Version %3?';
+      Text003@1002 : TextConst 'ENU=%1 %2 has been restored.';
+      Text004@1001 : TextConst 'ENU=Document restored from Version %1.';
+      Text005@1004 : TextConst 'ENU=%1 %2 has been partly posted.\Restore not possible.';
+      Text006@1005 : TextConst 'ENU=Entries exist for on or more of the following:\  - %1\  - %2\  - %3.\Restoration of document will delete these entries.\Continue with restore?';
+      Text007@1006 : TextConst 'ENU=Archive %1 no.: %2?';
+      Text008@1007 : TextConst 'ENU=Item Tracking Line';
+      ReleaseSalesDoc@1008 : Codeunit 414;
+      Text009@1009 : TextConst 'ENU=Unposted %1 %2 does not exist anymore.\It is not possible to restore the %1.';
+      DeferralUtilities@1010 : Codeunit 1720;
+      RecordLinkManagement@1011 : Codeunit 447;
+
+    [External]
+    PROCEDURE AutoArchiveSalesDocument@18(VAR SalesHeader@1004 : Record 36);
+    VAR
+      SalesReceivablesSetup@1000 : Record 311;
+    BEGIN
+      SalesReceivablesSetup.GET;
+
+      WITH SalesHeader DO
+        CASE "Document Type" OF
+          "Document Type"::Quote:
+            CASE SalesReceivablesSetup."Archive Quotes" OF
+              SalesReceivablesSetup."Archive Quotes"::Always:
+                ArchSalesDocumentNoConfirm(SalesHeader);
+              SalesReceivablesSetup."Archive Quotes"::Question:
+                ArchiveSalesDocument(SalesHeader);
+            END;
+          "Document Type"::Order:
+            IF SalesReceivablesSetup."Archive Orders" THEN BEGIN
+              PrepareDeferralsForSalesOrder(SalesHeader);
+              ArchSalesDocumentNoConfirm(SalesHeader);
+            END;
+          "Document Type"::"Blanket Order":
+            IF SalesReceivablesSetup."Archive Blanket Orders" THEN
+              ArchSalesDocumentNoConfirm(SalesHeader);
+          "Document Type"::"Return Order":
+            IF SalesReceivablesSetup."Archive Return Orders" THEN
+              ArchSalesDocumentNoConfirm(SalesHeader);
+        END;
+
+      OnAfterAutoArchiveSalesDocument(SalesHeader);
+    END;
+
+    [External]
+    PROCEDURE AutoArchivePurchDocument@17(VAR PurchaseHeader@1000 : Record 38);
+    VAR
+      PurchasesPayablesSetup@1001 : Record 312;
+    BEGIN
+      PurchasesPayablesSetup.GET;
+
+      WITH PurchaseHeader DO
+        CASE "Document Type" OF
+          "Document Type"::Quote:
+            CASE PurchasesPayablesSetup."Archive Quotes" OF
+              PurchasesPayablesSetup."Archive Quotes"::Always:
+                ArchPurchDocumentNoConfirm(PurchaseHeader);
+              PurchasesPayablesSetup."Archive Quotes"::Question:
+                ArchivePurchDocument(PurchaseHeader);
+            END;
+          "Document Type"::Order:
+            IF PurchasesPayablesSetup."Archive Orders" THEN BEGIN
+              PrepareDeferralsPurchaseOrder(PurchaseHeader);
+              ArchPurchDocumentNoConfirm(PurchaseHeader);
+            END;
+          "Document Type"::"Blanket Order":
+            IF PurchasesPayablesSetup."Archive Blanket Orders" THEN
+              ArchPurchDocumentNoConfirm(PurchaseHeader);
+          "Document Type"::"Return Order":
+            IF PurchasesPayablesSetup."Archive Return Orders" THEN
+              ArchPurchDocumentNoConfirm(PurchaseHeader);
+        END;
+
+      OnAfterAutoArchivePurchDocument(PurchaseHeader);
+    END;
+
+    [External]
+    PROCEDURE ArchiveSalesDocument@2(VAR SalesHeader@1004 : Record 36);
+    BEGIN
+      IF CONFIRM(
+           Text007,TRUE,SalesHeader."Document Type",
+           SalesHeader."No.")
+      THEN BEGIN
+        StoreSalesDocument(SalesHeader,FALSE);
+        MESSAGE(Text001,SalesHeader."No.");
+      END;
+    END;
+
+    [External]
+    PROCEDURE ArchivePurchDocument@10(VAR PurchHeader@1000 : Record 38);
+    BEGIN
+      IF CONFIRM(
+           Text007,TRUE,PurchHeader."Document Type",
+           PurchHeader."No.")
+      THEN BEGIN
+        StorePurchDocument(PurchHeader,FALSE);
+        MESSAGE(Text001,PurchHeader."No.");
+      END;
+    END;
+
+    [External]
+    PROCEDURE StoreSalesDocument@4(VAR SalesHeader@1000 : Record 36;InteractionExist@1005 : Boolean);
+    VAR
+      SalesLine@1002 : Record 37;
+      SalesHeaderArchive@1004 : Record 5107;
+      SalesLineArchive@1001 : Record 5108;
+    BEGIN
+      SalesHeaderArchive.INIT;
+      SalesHeaderArchive.TRANSFERFIELDS(SalesHeader);
+      SalesHeaderArchive."Archived By" := USERID;
+      SalesHeaderArchive."Date Archived" := WORKDATE;
+      SalesHeaderArchive."Time Archived" := TIME;
+      SalesHeaderArchive."Version No." := GetNextVersionNo(
+          DATABASE::"Sales Header",SalesHeader."Document Type",SalesHeader."No.",SalesHeader."Doc. No. Occurrence");
+      SalesHeaderArchive."Interaction Exist" := InteractionExist;
+      RecordLinkManagement.CopyLinks(SalesHeader,SalesHeaderArchive);
+      OnBeforeSalesHeaderArchiveInsert(SalesHeaderArchive,SalesHeader);
+      SalesHeaderArchive.INSERT;
+      OnAfterSalesHeaderArchiveInsert(SalesHeaderArchive,SalesHeader);
+
+      StoreSalesDocumentComments(
+        SalesHeader."Document Type",SalesHeader."No.",
+        SalesHeader."Doc. No. Occurrence",SalesHeaderArchive."Version No.");
+
+      SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+      SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+      IF SalesLine.FINDSET THEN
+        REPEAT
+          WITH SalesLineArchive DO BEGIN
+            INIT;
+            TRANSFERFIELDS(SalesLine);
+            "Doc. No. Occurrence" := SalesHeader."Doc. No. Occurrence";
+            "Version No." := SalesHeaderArchive."Version No.";
+            RecordLinkManagement.CopyLinks(SalesLine,SalesLineArchive);
+            INSERT;
+          END;
+          IF SalesLine."Deferral Code" <> '' THEN
+            StoreDeferrals(DeferralUtilities.GetSalesDeferralDocType,SalesLine."Document Type",
+              SalesLine."Document No.",SalesLine."Line No.",SalesHeader."Doc. No. Occurrence",SalesHeaderArchive."Version No.");
+
+          OnAfterStoreSalesLineArchive(SalesHeader,SalesLine,SalesHeaderArchive,SalesLineArchive);
+        UNTIL SalesLine.NEXT = 0;
+
+      OnAfterStoreSalesDocument(SalesHeader,SalesHeaderArchive);
+    END;
+
+    [External]
+    PROCEDURE StorePurchDocument@12(VAR PurchHeader@1001 : Record 38;InteractionExist@1000 : Boolean);
+    VAR
+      PurchLine@1005 : Record 39;
+      PurchHeaderArchive@1004 : Record 5109;
+      PurchLineArchive@1003 : Record 5110;
+    BEGIN
+      PurchHeaderArchive.INIT;
+      PurchHeaderArchive.TRANSFERFIELDS(PurchHeader);
+      PurchHeaderArchive."Archived By" := USERID;
+      PurchHeaderArchive."Date Archived" := WORKDATE;
+      PurchHeaderArchive."Time Archived" := TIME;
+      PurchHeaderArchive."Version No." := GetNextVersionNo(
+          DATABASE::"Purchase Header",PurchHeader."Document Type",PurchHeader."No.",PurchHeader."Doc. No. Occurrence");
+      PurchHeaderArchive."Interaction Exist" := InteractionExist;
+      RecordLinkManagement.CopyLinks(PurchHeader,PurchHeaderArchive);
+      OnBeforePurchHeaderArchiveInsert(PurchHeaderArchive,PurchHeader);
+      PurchHeaderArchive.INSERT;
+      OnAfterPurchHeaderArchiveInsert(PurchHeaderArchive,PurchHeader);
+
+      StorePurchDocumentComments(
+        PurchHeader."Document Type",PurchHeader."No.",
+        PurchHeader."Doc. No. Occurrence",PurchHeaderArchive."Version No.");
+
+      PurchLine.SETRANGE("Document Type",PurchHeader."Document Type");
+      PurchLine.SETRANGE("Document No.",PurchHeader."No.");
+      IF PurchLine.FINDSET THEN
+        REPEAT
+          WITH PurchLineArchive DO BEGIN
+            INIT;
+            TRANSFERFIELDS(PurchLine);
+            "Doc. No. Occurrence" := PurchHeader."Doc. No. Occurrence";
+            "Version No." := PurchHeaderArchive."Version No.";
+            RecordLinkManagement.CopyLinks(PurchLine,PurchLineArchive);
+            INSERT;
+          END;
+          IF PurchLine."Deferral Code" <> '' THEN
+            StoreDeferrals(DeferralUtilities.GetPurchDeferralDocType,PurchLine."Document Type",
+              PurchLine."Document No.",PurchLine."Line No.",PurchHeader."Doc. No. Occurrence",PurchHeaderArchive."Version No.");
+
+          OnAfterStorePurchLineArchive(PurchHeader,PurchLine,PurchHeaderArchive,PurchLineArchive);
+        UNTIL PurchLine.NEXT = 0;
+
+      OnAfterStorePurchDocument(PurchHeader,PurchHeaderArchive);
+    END;
+
+    [External]
+    PROCEDURE RestoreSalesDocument@7(VAR SalesHeaderArchive@1000 : Record 5107);
+    VAR
+      SalesHeader@1001 : Record 36;
+      SalesShptHeader@1000000001 : Record 110;
+      SalesInvHeader@1000000002 : Record 112;
+      ReservEntry@1000000005 : Record 337;
+      ItemChargeAssgntSales@1000000007 : Record 5809;
+      ConfirmRequired@1000000006 : Boolean;
+      RestoreDocument@1000000009 : Boolean;
+      OldOpportunityNo@1015 : Code[20];
+      IsHandled@1002 : Boolean;
+      DoCheck@1003 : Boolean;
+    BEGIN
+      OnBeforeRestoreSalesDocument(SalesHeaderArchive,IsHandled);
+      IF IsHandled THEN
+        EXIT;
+
+      IF NOT SalesHeader.GET(SalesHeaderArchive."Document Type",SalesHeaderArchive."No.") THEN
+        ERROR(Text009,SalesHeaderArchive."Document Type",SalesHeaderArchive."No.");
+
+      SalesHeader.TESTFIELD(Status,SalesHeader.Status::Open);
+
+      DoCheck := TRUE;
+      OnBeforeCheckIfDocumentIsPartiallyPosted(SalesHeaderArchive,DoCheck);
+
+      IF (SalesHeader."Document Type" = SalesHeader."Document Type"::Order) AND DoCheck THEN BEGIN
+        SalesShptHeader.RESET;
+        SalesShptHeader.SETCURRENTKEY("Order No.");
+        SalesShptHeader.SETRANGE("Order No.",SalesHeader."No.");
+        IF NOT SalesShptHeader.ISEMPTY THEN
+          ERROR(Text005,SalesHeader."Document Type",SalesHeader."No.");
+        SalesInvHeader.RESET;
+        SalesInvHeader.SETCURRENTKEY("Order No.");
+        SalesInvHeader.SETRANGE("Order No.",SalesHeader."No.");
+        IF NOT SalesInvHeader.ISEMPTY THEN
+          ERROR(Text005,SalesHeader."Document Type",SalesHeader."No.");
+      END;
+
+      ConfirmRequired := FALSE;
+      ReservEntry.RESET;
+      ReservEntry.SETCURRENTKEY("Source ID","Source Ref. No.","Source Type","Source Subtype");
+      ReservEntry.SETRANGE("Source ID",SalesHeader."No.");
+      ReservEntry.SETRANGE("Source Type",DATABASE::"Sales Line");
+      ReservEntry.SETRANGE("Source Subtype",SalesHeader."Document Type");
+      IF ReservEntry.FINDFIRST THEN
+        ConfirmRequired := TRUE;
+
+      ItemChargeAssgntSales.RESET;
+      ItemChargeAssgntSales.SETRANGE("Document Type",SalesHeader."Document Type");
+      ItemChargeAssgntSales.SETRANGE("Document No.",SalesHeader."No.");
+      IF ItemChargeAssgntSales.FINDFIRST THEN
+        ConfirmRequired := TRUE;
+
+      RestoreDocument := FALSE;
+      IF ConfirmRequired THEN BEGIN
+        IF CONFIRM(
+             Text006,FALSE,ReservEntry.TABLECAPTION,ItemChargeAssgntSales.TABLECAPTION,Text008)
+        THEN
+          RestoreDocument := TRUE;
+      END ELSE
+        IF CONFIRM(
+             Text002,TRUE,SalesHeaderArchive."Document Type",
+             SalesHeaderArchive."No.",SalesHeaderArchive."Version No.")
+        THEN
+          RestoreDocument := TRUE;
+      IF RestoreDocument THEN BEGIN
+        SalesHeader.TESTFIELD("Doc. No. Occurrence",SalesHeaderArchive."Doc. No. Occurrence");
+        SalesHeaderArchive.CALCFIELDS("Work Description");
+        IF SalesHeader."Opportunity No." <> '' THEN BEGIN
+          OldOpportunityNo := SalesHeader."Opportunity No.";
+          SalesHeader."Opportunity No." := '';
+        END;
+        SalesHeader.DELETELINKS;
+        SalesHeader.DELETE(TRUE);
+        SalesHeader.INIT;
+
+        SalesHeader.SetHideValidationDialog(TRUE);
+        SalesHeader."Document Type" := SalesHeaderArchive."Document Type";
+        SalesHeader."No." := SalesHeaderArchive."No.";
+        SalesHeader.INSERT(TRUE);
+        SalesHeader.TRANSFERFIELDS(SalesHeaderArchive);
+        SalesHeader.Status := SalesHeader.Status::Open;
+
+        IF SalesHeaderArchive."Sell-to Contact No." <> '' THEN
+          SalesHeader.VALIDATE("Sell-to Contact No.",SalesHeaderArchive."Sell-to Contact No.")
+        ELSE
+          SalesHeader.VALIDATE("Sell-to Customer No.",SalesHeaderArchive."Sell-to Customer No.");
+        IF SalesHeaderArchive."Bill-to Contact No." <> '' THEN
+          SalesHeader.VALIDATE("Bill-to Contact No.",SalesHeaderArchive."Bill-to Contact No.")
+        ELSE
+          SalesHeader.VALIDATE("Bill-to Customer No.",SalesHeaderArchive."Bill-to Customer No.");
+        SalesHeader.VALIDATE("Salesperson Code",SalesHeaderArchive."Salesperson Code");
+        SalesHeader.VALIDATE("Payment Terms Code",SalesHeaderArchive."Payment Terms Code");
+        SalesHeader.VALIDATE("Payment Discount %",SalesHeaderArchive."Payment Discount %");
+        SalesHeader."Shortcut Dimension 1 Code" := SalesHeaderArchive."Shortcut Dimension 1 Code";
+        SalesHeader."Shortcut Dimension 2 Code" := SalesHeaderArchive."Shortcut Dimension 2 Code";
+        SalesHeader."Dimension Set ID" := SalesHeaderArchive."Dimension Set ID";
+        RecordLinkManagement.CopyLinks(SalesHeaderArchive,SalesHeader);
+
+        SalesHeader.LinkSalesDocWithOpportunity(OldOpportunityNo);
+        OnAfterTransferFromArchToSalesHeader(SalesHeader,SalesHeaderArchive);
+
+        SalesHeader.MODIFY(TRUE);
+
+        RestoreSalesLines(SalesHeaderArchive,SalesHeader);
+
+        SalesHeader.Status := SalesHeader.Status::Released;
+        ReleaseSalesDoc.Reopen(SalesHeader);
+        OnAfterRestoreSalesDocument(SalesHeader,SalesHeaderArchive);
+        MESSAGE(Text003,SalesHeader."Document Type",SalesHeader."No.");
+      END;
+    END;
+
+    LOCAL PROCEDURE RestoreSalesLines@24(VAR SalesHeaderArchive@1000 : Record 5107;SalesHeader@1005 : Record 36);
+    VAR
+      SalesLine@1003 : Record 37;
+      SalesLineArchive@1002 : Record 5108;
+    BEGIN
+      RestoreSalesLineComments(SalesHeaderArchive,SalesHeader);
+
+      SalesLineArchive.SETRANGE("Document Type",SalesHeaderArchive."Document Type");
+      SalesLineArchive.SETRANGE("Document No.",SalesHeaderArchive."No.");
+      SalesLineArchive.SETRANGE("Doc. No. Occurrence",SalesHeaderArchive."Doc. No. Occurrence");
+      SalesLineArchive.SETRANGE("Version No.",SalesHeaderArchive."Version No.");
+      IF SalesLineArchive.FINDSET THEN
+        REPEAT
+          WITH SalesLine DO BEGIN
+            INIT;
+            TRANSFERFIELDS(SalesLineArchive);
+            INSERT(TRUE);
+            OnRestoreSalesLinesOnAfterSalesLineInsert(SalesLine,SalesLineArchive);
+            IF Type <> Type::" " THEN BEGIN
+              VALIDATE("No.");
+              IF SalesLineArchive."Variant Code" <> '' THEN
+                VALIDATE("Variant Code",SalesLineArchive."Variant Code");
+              IF SalesLineArchive."Unit of Measure Code" <> '' THEN
+                VALIDATE("Unit of Measure Code",SalesLineArchive."Unit of Measure Code");
+              VALIDATE("Location Code",SalesLineArchive."Location Code");
+              IF Quantity <> 0 THEN
+                VALIDATE(Quantity,SalesLineArchive.Quantity);
+              VALIDATE("Unit Price",SalesLineArchive."Unit Price");
+              VALIDATE("Unit Cost (LCY)",SalesLineArchive."Unit Cost (LCY)");
+              VALIDATE("Line Discount %",SalesLineArchive."Line Discount %");
+              IF SalesLineArchive."Inv. Discount Amount" <> 0 THEN
+                VALIDATE("Inv. Discount Amount",SalesLineArchive."Inv. Discount Amount");
+              IF Amount <> SalesLineArchive.Amount THEN
+                VALIDATE(Amount,SalesLineArchive.Amount);
+              VALIDATE(Description,SalesLineArchive.Description);
+            END;
+            "Shortcut Dimension 1 Code" := SalesLineArchive."Shortcut Dimension 1 Code";
+            "Shortcut Dimension 2 Code" := SalesLineArchive."Shortcut Dimension 2 Code";
+            "Dimension Set ID" := SalesLineArchive."Dimension Set ID";
+            "Deferral Code" := SalesLineArchive."Deferral Code";
+            RestoreDeferrals(DeferralUtilities.GetSalesDeferralDocType,
+              SalesLineArchive."Document Type",
+              SalesLineArchive."Document No.",
+              SalesLineArchive."Line No.",
+              SalesHeaderArchive."Doc. No. Occurrence",
+              SalesHeaderArchive."Version No.");
+            RecordLinkManagement.CopyLinks(SalesLineArchive,SalesLine);
+            OnAfterTransferFromArchToSalesLine(SalesLine,SalesLineArchive);
+            MODIFY(TRUE);
+          END;
+          OnAfterRestoreSalesLine(SalesHeader,SalesLine,SalesHeaderArchive,SalesLineArchive);
+        UNTIL SalesLineArchive.NEXT = 0;
+    END;
+
+    [External]
+    PROCEDURE GetNextOccurrenceNo@3(TableId@1003 : Integer;DocType@1001 : 'Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order';DocNo@1000 : Code[20]) : Integer;
+    VAR
+      SalesHeaderArchive@1002 : Record 5107;
+      PurchHeaderArchive@1004 : Record 5109;
+    BEGIN
+      CASE TableId OF
+        DATABASE::"Sales Header":
+          BEGIN
+            SalesHeaderArchive.LOCKTABLE;
+            SalesHeaderArchive.SETRANGE("Document Type",DocType);
+            SalesHeaderArchive.SETRANGE("No.",DocNo);
+            IF SalesHeaderArchive.FINDLAST THEN
+              EXIT(SalesHeaderArchive."Doc. No. Occurrence" + 1);
+
+            EXIT(1);
+          END;
+        DATABASE::"Purchase Header":
+          BEGIN
+            PurchHeaderArchive.LOCKTABLE;
+            PurchHeaderArchive.SETRANGE("Document Type",DocType);
+            PurchHeaderArchive.SETRANGE("No.",DocNo);
+            IF PurchHeaderArchive.FINDLAST THEN
+              EXIT(PurchHeaderArchive."Doc. No. Occurrence" + 1);
+
+            EXIT(1);
+          END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE GetNextVersionNo@1(TableId@1004 : Integer;DocType@1000 : 'Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order';DocNo@1001 : Code[20];DocNoOccurrence@1003 : Integer) : Integer;
+    VAR
+      SalesHeaderArchive@1002 : Record 5107;
+      PurchHeaderArchive@1005 : Record 5109;
+    BEGIN
+      CASE TableId OF
+        DATABASE::"Sales Header":
+          BEGIN
+            SalesHeaderArchive.LOCKTABLE;
+            SalesHeaderArchive.SETRANGE("Document Type",DocType);
+            SalesHeaderArchive.SETRANGE("No.",DocNo);
+            SalesHeaderArchive.SETRANGE("Doc. No. Occurrence",DocNoOccurrence);
+            IF SalesHeaderArchive.FINDLAST THEN
+              EXIT(SalesHeaderArchive."Version No." + 1);
+
+            EXIT(1);
+          END;
+        DATABASE::"Purchase Header":
+          BEGIN
+            PurchHeaderArchive.LOCKTABLE;
+            PurchHeaderArchive.SETRANGE("Document Type",DocType);
+            PurchHeaderArchive.SETRANGE("No.",DocNo);
+            PurchHeaderArchive.SETRANGE("Doc. No. Occurrence",DocNoOccurrence);
+            IF PurchHeaderArchive.FINDLAST THEN
+              EXIT(PurchHeaderArchive."Version No." + 1);
+
+            EXIT(1);
+          END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE SalesDocArchiveGranule@6() : Boolean;
+    VAR
+      SalesHeaderArchive@1000 : Record 5107;
+      SalesSetup@1020000 : Record 311;
+    BEGIN
+      SalesSetup.GET;
+      IF NOT SalesSetup."Archive Quotes and Orders" THEN
+        EXIT(FALSE);
+      EXIT(SalesHeaderArchive.WRITEPERMISSION);
+    END;
+
+    [External]
+    PROCEDURE PurchaseDocArchiveGranule@5() : Boolean;
+    VAR
+      PurchaseHeaderArchive@1000 : Record 5109;
+      PurchaseSetup@1020000 : Record 312;
+    BEGIN
+      PurchaseSetup.GET;
+      IF NOT PurchaseSetup."Archive Quotes and Orders" THEN
+        EXIT(FALSE);
+      EXIT(PurchaseHeaderArchive.WRITEPERMISSION);
+    END;
+
+    LOCAL PROCEDURE StoreSalesDocumentComments@8(DocType@1005 : Option;DocNo@1004 : Code[20];DocNoOccurrence@1002 : Integer;VersionNo@1001 : Integer);
+    VAR
+      SalesCommentLine@1008 : Record 44;
+      SalesCommentLineArch@1007 : Record 5126;
+    BEGIN
+      SalesCommentLine.SETRANGE("Document Type",DocType);
+      SalesCommentLine.SETRANGE("No.",DocNo);
+      IF SalesCommentLine.FINDSET THEN
+        REPEAT
+          SalesCommentLineArch.INIT;
+          SalesCommentLineArch.TRANSFERFIELDS(SalesCommentLine);
+          SalesCommentLineArch."Doc. No. Occurrence" := DocNoOccurrence;
+          SalesCommentLineArch."Version No." := VersionNo;
+          SalesCommentLineArch.INSERT;
+        UNTIL SalesCommentLine.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE StorePurchDocumentComments@15(DocType@1005 : Option;DocNo@1004 : Code[20];DocNoOccurrence@1002 : Integer;VersionNo@1001 : Integer);
+    VAR
+      PurchCommentLine@1009 : Record 43;
+      PurchCommentLineArch@1010 : Record 5125;
+    BEGIN
+      PurchCommentLine.SETRANGE("Document Type",DocType);
+      PurchCommentLine.SETRANGE("No.",DocNo);
+      IF PurchCommentLine.FINDSET THEN
+        REPEAT
+          PurchCommentLineArch.INIT;
+          PurchCommentLineArch.TRANSFERFIELDS(PurchCommentLine);
+          PurchCommentLineArch."Doc. No. Occurrence" := DocNoOccurrence;
+          PurchCommentLineArch."Version No." := VersionNo;
+          PurchCommentLineArch.INSERT;
+        UNTIL PurchCommentLine.NEXT = 0;
+    END;
+
+    [External]
+    PROCEDURE ArchSalesDocumentNoConfirm@13(VAR SalesHeader@1004 : Record 36);
+    BEGIN
+      StoreSalesDocument(SalesHeader,FALSE);
+    END;
+
+    [External]
+    PROCEDURE ArchPurchDocumentNoConfirm@9(VAR PurchHeader@1000 : Record 38);
+    BEGIN
+      StorePurchDocument(PurchHeader,FALSE);
+    END;
+
+    LOCAL PROCEDURE StoreDeferrals@11(DeferralDocType@1004 : Integer;DocType@1003 : Integer;DocNo@1002 : Code[20];LineNo@1009 : Integer;DocNoOccurrence@1001 : Integer;VersionNo@1000 : Integer);
+    VAR
+      DeferralHeaderArchive@1005 : Record 5127;
+      DeferralLineArchive@1006 : Record 5128;
+      DeferralHeader@1007 : Record 1701;
+      DeferralLine@1008 : Record 1702;
+    BEGIN
+      IF DeferralHeader.GET(DeferralDocType,'','',DocType,DocNo,LineNo) THEN BEGIN
+        DeferralHeaderArchive.INIT;
+        DeferralHeaderArchive.TRANSFERFIELDS(DeferralHeader);
+        DeferralHeaderArchive."Doc. No. Occurrence" := DocNoOccurrence;
+        DeferralHeaderArchive."Version No." := VersionNo;
+        DeferralHeaderArchive.INSERT;
+
+        DeferralLine.SETRANGE("Deferral Doc. Type",DeferralDocType);
+        DeferralLine.SETRANGE("Gen. Jnl. Template Name",'');
+        DeferralLine.SETRANGE("Gen. Jnl. Batch Name",'');
+        DeferralLine.SETRANGE("Document Type",DocType);
+        DeferralLine.SETRANGE("Document No.",DocNo);
+        DeferralLine.SETRANGE("Line No.",LineNo);
+        IF DeferralLine.FINDSET THEN
+          REPEAT
+            DeferralLineArchive.INIT;
+            DeferralLineArchive.TRANSFERFIELDS(DeferralLine);
+            DeferralLineArchive."Doc. No. Occurrence" := DocNoOccurrence;
+            DeferralLineArchive."Version No." := VersionNo;
+            DeferralLineArchive.INSERT;
+          UNTIL DeferralLine.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE RestoreDeferrals@16(DeferralDocType@1005 : Integer;DocType@1004 : Integer;DocNo@1003 : Code[20];LineNo@1002 : Integer;DocNoOccurrence@1001 : Integer;VersionNo@1000 : Integer);
+    VAR
+      DeferralHeaderArchive@1009 : Record 5127;
+      DeferralLineArchive@1008 : Record 5128;
+      DeferralHeader@1007 : Record 1701;
+      DeferralLine@1006 : Record 1702;
+    BEGIN
+      IF DeferralHeaderArchive.GET(DeferralDocType,DocType,DocNo,DocNoOccurrence,VersionNo,LineNo) THEN BEGIN
+        // Updates the header if is exists already and removes all the lines
+        DeferralUtilities.SetDeferralRecords(DeferralHeader,
+          DeferralDocType,'','',
+          DocType,DocNo,LineNo,
+          DeferralHeaderArchive."Calc. Method",
+          DeferralHeaderArchive."No. of Periods",
+          DeferralHeaderArchive."Amount to Defer",
+          DeferralHeaderArchive."Start Date",
+          DeferralHeaderArchive."Deferral Code",
+          DeferralHeaderArchive."Schedule Description",
+          DeferralHeaderArchive."Initial Amount to Defer",
+          TRUE,
+          DeferralHeaderArchive."Currency Code");
+
+        // Add lines as exist in the archives
+        DeferralLineArchive.SETRANGE("Deferral Doc. Type",DeferralDocType);
+        DeferralLineArchive.SETRANGE("Document Type",DocType);
+        DeferralLineArchive.SETRANGE("Document No.",DocNo);
+        DeferralLineArchive.SETRANGE("Doc. No. Occurrence",DocNoOccurrence);
+        DeferralLineArchive.SETRANGE("Version No.",VersionNo);
+        DeferralLineArchive.SETRANGE("Line No.",LineNo);
+        IF DeferralLineArchive.FINDSET THEN
+          REPEAT
+            DeferralLine.INIT;
+            DeferralLine.TRANSFERFIELDS(DeferralLineArchive);
+            DeferralLine.INSERT;
+          UNTIL DeferralLineArchive.NEXT = 0;
+      END ELSE
+        // Removes any lines that may have been defaulted
+        DeferralUtilities.RemoveOrSetDeferralSchedule('',DeferralDocType,'','',DocType,DocNo,LineNo,0,0D,'','',TRUE);
+    END;
+
+    LOCAL PROCEDURE RestoreSalesLineComments@14(SalesHeaderArchive@1000 : Record 5107;SalesHeader@1003 : Record 36);
+    VAR
+      SalesCommentLineArchive@1001 : Record 5126;
+      SalesCommentLine@1002 : Record 44;
+      NextLine@1004 : Integer;
+    BEGIN
+      SalesCommentLineArchive.SETRANGE("Document Type",SalesHeaderArchive."Document Type");
+      SalesCommentLineArchive.SETRANGE("No.",SalesHeaderArchive."No.");
+      SalesCommentLineArchive.SETRANGE("Doc. No. Occurrence",SalesHeaderArchive."Doc. No. Occurrence");
+      SalesCommentLineArchive.SETRANGE("Version No.",SalesHeaderArchive."Version No.");
+      IF SalesCommentLineArchive.FINDSET THEN
+        REPEAT
+          SalesCommentLine.INIT;
+          SalesCommentLine.TRANSFERFIELDS(SalesCommentLineArchive);
+          SalesCommentLine.INSERT;
+        UNTIL SalesCommentLineArchive.NEXT = 0;
+
+      SalesCommentLine.SETRANGE("Document Type",SalesHeader."Document Type");
+      SalesCommentLine.SETRANGE("No.",SalesHeader."No.");
+      SalesCommentLine.SETRANGE("Document Line No.",0);
+      IF SalesCommentLine.FINDLAST THEN
+        NextLine := SalesCommentLine."Line No.";
+      NextLine += 10000;
+      SalesCommentLine.INIT;
+      SalesCommentLine."Document Type" := SalesHeader."Document Type";
+      SalesCommentLine."No." := SalesHeader."No.";
+      SalesCommentLine."Document Line No." := 0;
+      SalesCommentLine."Line No." := NextLine;
+      SalesCommentLine.Date := WORKDATE;
+      SalesCommentLine.Comment := STRSUBSTNO(Text004,FORMAT(SalesHeaderArchive."Version No."));
+      SalesCommentLine.INSERT;
+    END;
+
+    [External]
+    PROCEDURE RoundSalesDeferralsForArchive@25(SalesHeader@1001 : Record 36;VAR SalesLine@1000 : Record 37);
+    VAR
+      DeferralHeader@1002 : Record 1701;
+      AmtToDefer@1004 : Decimal;
+      AmtToDeferACY@1003 : Decimal;
+    BEGIN
+      SalesLine.SETFILTER("Deferral Code",'<>%1','');
+      IF SalesLine.FINDSET THEN
+        REPEAT
+          IF DeferralHeader.GET(DeferralUtilities.GetSalesDeferralDocType,'','',
+               SalesLine."Document Type",SalesLine."Document No.",SalesLine."Line No.")
+          THEN
+            DeferralUtilities.RoundDeferralAmount(
+              DeferralHeader,SalesHeader."Currency Code",
+              SalesHeader."Currency Factor",SalesHeader."Posting Date",
+              AmtToDeferACY,AmtToDefer);
+
+        UNTIL SalesLine.NEXT = 0;
+    END;
+
+    [External]
+    PROCEDURE RoundPurchaseDeferralsForArchive@26(PurchaseHeader@1000 : Record 38;VAR PurchaseLine@1001 : Record 39);
+    VAR
+      DeferralHeader@1004 : Record 1701;
+      AmtToDefer@1003 : Decimal;
+      AmtToDeferACY@1002 : Decimal;
+    BEGIN
+      PurchaseLine.SETFILTER("Deferral Code",'<>%1','');
+      IF PurchaseLine.FINDSET THEN
+        REPEAT
+          IF DeferralHeader.GET(DeferralUtilities.GetPurchDeferralDocType,'','',
+               PurchaseLine."Document Type",PurchaseLine."Document No.",PurchaseLine."Line No.")
+          THEN
+            DeferralUtilities.RoundDeferralAmount(
+              DeferralHeader,PurchaseHeader."Currency Code",
+              PurchaseHeader."Currency Factor",PurchaseHeader."Posting Date",
+              AmtToDeferACY,AmtToDefer);
+        UNTIL PurchaseLine.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE PrepareDeferralsForSalesOrder@19(SalesHeader@1000 : Record 36);
+    VAR
+      SalesLine@1001 : Record 37;
+    BEGIN
+      IF SalesHeader."Document Type" = SalesHeader."Document Type"::Order THEN BEGIN
+        SalesLine.RESET;
+        SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+        SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+        SalesLine.SETFILTER("Qty. Invoiced (Base)",'<>%1',0);
+        IF SalesLine.ISEMPTY THEN
+          EXIT;
+        RoundSalesDeferralsForArchive(SalesHeader,SalesLine);
+      END;
+    END;
+
+    LOCAL PROCEDURE PrepareDeferralsPurchaseOrder@20(PurchaseHeader@1000 : Record 38);
+    VAR
+      PurchaseLine@1001 : Record 39;
+    BEGIN
+      IF PurchaseHeader."Document Type" = PurchaseHeader."Document Type"::Order THEN BEGIN
+        PurchaseLine.RESET;
+        PurchaseLine.SETRANGE("Document Type",PurchaseHeader."Document Type");
+        PurchaseLine.SETRANGE("Document No.",PurchaseHeader."No.");
+        PurchaseLine.SETFILTER("Qty. Invoiced (Base)",'<>%1',0);
+        IF PurchaseLine.ISEMPTY THEN
+          EXIT;
+        RoundPurchaseDeferralsForArchive(PurchaseHeader,PurchaseLine);
+      END;
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterAutoArchivePurchDocument@29(VAR PurchaseHeader@1000 : Record 38);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterAutoArchiveSalesDocument@28(VAR SalesHeader@1000 : Record 36);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterStoreSalesDocument@38(VAR SalesHeader@1000 : Record 36;VAR SalesHeaderArchive@1001 : Record 5107);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterStoreSalesLineArchive@21(VAR SalesHeader@1000 : Record 36;VAR SalesLine@1001 : Record 37;VAR SalesHeaderArchive@1002 : Record 5107;VAR SalesLineArchive@1003 : Record 5108);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterStorePurchDocument@39(VAR PurchaseHeader@1000 : Record 38;VAR PurchaseHeaderArchive@1001 : Record 5109);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterStorePurchLineArchive@22(VAR PurchHeader@1000 : Record 38;VAR PurchLine@1001 : Record 39;VAR PurchHeaderArchive@1002 : Record 5109;VAR PurchLineArchive@1003 : Record 5110);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterRestoreSalesDocument@40(VAR SalesHeader@1000 : Record 36;VAR SalesHeaderArchive@1001 : Record 5107);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterRestoreSalesLine@23(VAR SalesHeader@1000 : Record 36;VAR SalesLine@1001 : Record 37;VAR SalesHeaderArchive@1002 : Record 5107;VAR SalesLineArchive@1003 : Record 5108);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterSalesHeaderArchiveInsert@32(VAR SalesHeaderArchive@1000 : Record 5107;SalesHeader@1001 : Record 36);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterPurchHeaderArchiveInsert@34(VAR PurchaseHeaderArchive@1000 : Record 5109;PurchaseHeader@1001 : Record 38);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterTransferFromArchToSalesHeader@35(VAR SalesHeader@1000 : Record 36;VAR SalesHeaderArchive@1001 : Record 5107);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterTransferFromArchToSalesLine@37(VAR SalesLine@1001 : Record 37;VAR SalesLineArchive@1000 : Record 5108);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeRestoreSalesDocument@27(VAR SalesHeaderArchive@1000 : Record 5107;VAR IsHandled@1001 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeCheckIfDocumentIsPartiallyPosted@30(VAR SalesHeaderArchive@1000 : Record 5107;VAR DoCheck@1001 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeSalesHeaderArchiveInsert@31(VAR SalesHeaderArchive@1000 : Record 5107;SalesHeader@1001 : Record 36);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforePurchHeaderArchiveInsert@33(VAR PurchaseHeaderArchive@1000 : Record 5109;PurchaseHeader@1001 : Record 38);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnRestoreSalesLinesOnAfterSalesLineInsert@36(VAR SalesLine@1000 : Record 37;VAR SalesLineArchive@1001 : Record 5108);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

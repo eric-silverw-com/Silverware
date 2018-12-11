@@ -1,0 +1,96 @@
+OBJECT Codeunit 1638 Office Jobs Handler
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:13 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    TableNo=1600;
+    OnRun=BEGIN
+            RedirectOfficeJobJournal(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      JobsRegExTxt@1002 : TextConst '@@@={Locked};ENU=([^:]+):([^:]+):([0-9]+)';
+      UnableToFindJobErr@1000 : TextConst '@@@="%1 = Job No; %2 = Job Task No; %3 = Job Planning Line";ENU=Cannot find job number %1, job task number %2, line number %3.';
+
+    [External]
+    PROCEDURE IsJobsHostType@1(OfficeAddinContext@1000 : Record 1600) IsJob : Boolean;
+    VAR
+      RegEx@1002 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Regex";
+      Match@1001 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Match";
+    BEGIN
+      IF OfficeAddinContext.IsAppointment AND (OfficeAddinContext.Subject <> '') THEN BEGIN
+        Match := RegEx.Match(OfficeAddinContext.Subject,JobsRegExTxt);
+        IsJob := Match.Success;
+      END;
+    END;
+
+    PROCEDURE GetJobProperties@8(OfficeAddinContext@1005 : Record 1600;VAR JobNo@1000 : Text;VAR JobTaskNo@1001 : Text;VAR JobPlanningLineNo@1002 : Integer);
+    VAR
+      RegEx@1004 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Regex";
+      Match@1003 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Match";
+    BEGIN
+      Match := RegEx.Match(OfficeAddinContext.Subject,JobsRegExTxt);
+
+      IF Match.Success THEN BEGIN
+        JobNo := Match.Groups.Item(1).Value;
+        JobTaskNo := Match.Groups.Item(2).Value;
+        EVALUATE(JobPlanningLineNo,Match.Groups.Item(3).Value);
+      END;
+    END;
+
+    [External]
+    PROCEDURE SubmitJobPlanningLine@2(JobPlanningLine@1000 : Record 1003;JobJournalTemplateName@1004 : Code[10];JobJournalBatchName@1003 : Code[10]);
+    VAR
+      JobJournalLine@1005 : Record 210;
+      TempOfficeJobJournal@1001 : TEMPORARY Record 1615;
+      JobTransferLine@1002 : Codeunit 1004;
+    BEGIN
+      SetJobJournalRange(JobJournalLine,JobPlanningLine);
+
+      JobTransferLine.FromPlanningLineToJnlLine(
+        JobPlanningLine,JobPlanningLine."Planning Date",JobJournalTemplateName,JobJournalBatchName,JobJournalLine);
+
+      JobPlanningLine.FIND;
+      TempOfficeJobJournal.Initialize(JobPlanningLine);
+      PAGE.RUN(PAGE::"Office Job Journal",TempOfficeJobJournal);
+    END;
+
+    [External]
+    PROCEDURE SetJobJournalRange@5(VAR JobJournalLine@1002 : Record 210;JobPlanningLine@1000 : Record 1003);
+    BEGIN
+      JobJournalLine.SETRANGE("Job No.",JobPlanningLine."Job No.");
+      JobJournalLine.SETRANGE("Job Task No.",JobPlanningLine."Job Task No.");
+      JobJournalLine.SETRANGE("Job Planning Line No.",JobPlanningLine."Line No.");
+    END;
+
+    LOCAL PROCEDURE RedirectOfficeJobJournal@6(OfficeAddinContext@1003 : Record 1600);
+    VAR
+      TempOfficeJobJournal@1010 : TEMPORARY Record 1615;
+      JobPlanningLine@1004 : Record 1003;
+      OfficeErrorEngine@1013 : Codeunit 1632;
+      JobNo@1002 : Text;
+      JobTaskNo@1001 : Text;
+      JobPlanningLineNo@1000 : Integer;
+    BEGIN
+      GetJobProperties(OfficeAddinContext,JobNo,JobTaskNo,JobPlanningLineNo);
+
+      IF JobPlanningLine.GET(JobNo,JobTaskNo,JobPlanningLineNo) THEN BEGIN
+        TempOfficeJobJournal.Initialize(JobPlanningLine);
+        PAGE.RUN(PAGE::"Office Job Journal",TempOfficeJobJournal);
+      END ELSE
+        OfficeErrorEngine.ShowError(STRSUBSTNO(UnableToFindJobErr,JobNo,JobTaskNo,JobPlanningLineNo));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

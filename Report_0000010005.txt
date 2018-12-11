@@ -1,0 +1,172 @@
+OBJECT Report 10005 Export GIFI Info. to Excel
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:13:25 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Export GIFI Info. to Excel;
+    ApplicationArea=#Basic,#Suite;
+    ProcessingOnly=Yes;
+    OnPreReport=BEGIN
+                  CompanyInformation.GET;
+                  GIFIFilterString := GIFICode.GETFILTER(Code);
+                  IF AsOfDate = 0D THEN
+                    ERROR(Text001);
+
+                  RowNo := 1;
+                END;
+
+    UsageCategory=ReportsAndAnalysis;
+  }
+  DATASET
+  {
+    { 1338;    ;DataItem;GIFICode            ;
+               DataItemTable=Table10015;
+               DataItemTableView=SORTING(Code);
+               OnPreDataItem=VAR
+                               DummyGLAccount@1030000 : Record 15;
+                             BEGIN
+                               IF GIFIFilterString <> '' THEN
+                                 SETFILTER(Code,GIFIFilterString);
+                               ColNo := 1;
+                               EnterCell(RowNo,ColNo,TABLECAPTION,'',TRUE);
+                               ColNo := ColNo + 1;
+                               IF PrintGIFIName THEN BEGIN
+                                 EnterCell(RowNo,ColNo,FIELDCAPTION(Name),'',TRUE);
+                                 ColNo := ColNo + 1;
+                               END;
+                               EnterCell(RowNo,ColNo,DummyGLAccount.FIELDCAPTION("Balance at Date"),'',TRUE);
+                               RowNo := RowNo + 1;
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  ExportBalance(GIFICode);
+                                END;
+
+               OnPostDataItem=BEGIN
+                                TempExcelBuffer.CreateBookAndOpenExcel('',COMPANYNAME,Text003,CompanyInformation.Name,USERID);
+                              END;
+
+               ReqFilterFields=Code }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      SaveValues=Yes;
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=ENU=Options }
+
+      { 1020000;2;Field     ;
+                  CaptionML=ENU=Balance As Of Date;
+                  ToolTipML=ENU=Specifies, in MMDDYY format, the date that the financial information will be based on. The financial information will be based on the account balances as of this date.;
+                  SourceExpr=AsOfDate }
+
+      { 1020006;2;Field     ;
+                  CaptionML=ENU=Use Add. Rpt. Currency;
+                  ToolTipML=ENU=Specifies if you want to export the balances in the additional reporting currency. Clear this field if you want to export the balances in the local currency ($). Make your selection based on which one of these two currencies is Canadian dollars.;
+                  SourceExpr=UseAddRptCurr }
+
+      { 1020004;2;Field     ;
+                  CaptionML=ENU=Include GIFI Name;
+                  ToolTipML=ENU=Specifies if you want to have the name of each GIFI code exported to the Excel spreadsheet using an additional column. Otherwise, only the GIFI code and the financial amount will be included in the spreadsheet.;
+                  SourceExpr=PrintGIFIName }
+
+      { 1020002;2;Field     ;
+                  CaptionML=ENU=Include Unused Codes;
+                  ToolTipML=ENU=Specifies if you want to include a row in the spreadsheet for each GIFI code in the table, even if the balance for that GIFI code is zero. Otherwise only GIFI codes which have non-zero balances will be exported.;
+                  SourceExpr=IncludeZero }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      CompanyInformation@1020002 : Record 79;
+      TempExcelBuffer@1020010 : TEMPORARY Record 370;
+      AsOfDate@1020001 : Date;
+      PrintGIFIName@1020004 : Boolean;
+      UseAddRptCurr@1020009 : Boolean;
+      IncludeZero@1020014 : Boolean;
+      Text001@1020007 : TextConst 'ENU=You must enter an As Of Date.';
+      RowNo@1020008 : Integer;
+      ColNo@1020011 : Integer;
+      Text002@1020012 : TextConst 'ENU="0_);(0)"';
+      Text003@1020000 : TextConst 'ENU=GIFI';
+      GIFIFilterString@1020013 : Text;
+
+    LOCAL PROCEDURE EnterCell@1020000(RowNo@1020000 : Integer;ColumnNo@1020001 : Integer;CellValue@1020002 : Text[250];NumberFormat@1020003 : Text[30];Bold@1020004 : Boolean);
+    BEGIN
+      TempExcelBuffer.INIT;
+      TempExcelBuffer.VALIDATE("Row No.",RowNo);
+      TempExcelBuffer.VALIDATE("Column No.",ColumnNo);
+      IF NumberFormat <> '' THEN BEGIN
+        TempExcelBuffer."Cell Type" := TempExcelBuffer."Cell Type"::Number;
+        TempExcelBuffer.NumberFormat := NumberFormat;
+      END ELSE
+        TempExcelBuffer."Cell Type" := TempExcelBuffer."Cell Type"::Text;
+
+      TempExcelBuffer."Cell Value as Text" := CellValue;
+
+      TempExcelBuffer.Bold := Bold;
+      TempExcelBuffer.INSERT;
+    END;
+
+    LOCAL PROCEDURE ExportBalance@1030003(VAR GIFICode@1030000 : Record 10015);
+    VAR
+      GLAccount@1030001 : Record 15;
+      BalanceAtDate@1030002 : Decimal;
+      AdditionalCurrencyBalanceAtDate@1030003 : Decimal;
+    BEGIN
+      CurrReport.CREATETOTALS(GLAccount."Balance at Date",GLAccount."Add.-Currency Balance at Date");
+      GLAccount.SETRANGE("Date Filter",0D,AsOfDate);
+      GLAccount.SETRANGE("GIFI Code",GIFICode.Code);
+
+      IF GLAccount.FINDSET THEN
+        REPEAT
+          GLAccount.CALCFIELDS("Balance at Date","Add.-Currency Balance at Date");
+          BalanceAtDate += GLAccount."Balance at Date";
+          AdditionalCurrencyBalanceAtDate += GLAccount."Add.-Currency Balance at Date";
+        UNTIL GLAccount.NEXT = 0;
+
+      IF IncludeZero OR
+         (BalanceAtDate <> 0) OR
+         (AdditionalCurrencyBalanceAtDate <> 0)
+      THEN BEGIN
+        ColNo := 1;
+        EnterCell(RowNo,ColNo,GIFICode.Code,'',FALSE);
+        ColNo := ColNo + 1;
+        IF PrintGIFIName THEN BEGIN
+          EnterCell(RowNo,ColNo,GIFICode.Name,'',FALSE);
+          ColNo := ColNo + 1;
+        END;
+        IF UseAddRptCurr THEN
+          EnterCell(RowNo,ColNo,FORMAT(AdditionalCurrencyBalanceAtDate),Text002,FALSE)
+        ELSE
+          EnterCell(RowNo,ColNo,FORMAT(BalanceAtDate),Text002,FALSE);
+        RowNo := RowNo + 1;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

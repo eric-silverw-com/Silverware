@@ -1,0 +1,407 @@
+OBJECT Codeunit 10250 Bulk Vendor Remit Reporting
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:56 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      BankAccount@1020003 : Record 270;
+      CustomLayoutReporting@1020000 : Codeunit 8800;
+      PreviewModeNoExportMsg@1020001 : TextConst 'ENU=Preview mode is enabled for one or more reports. File export is not possible for any data.';
+      VendRemittanceReportSelectionErr@1020002 : TextConst 'ENU=You must add at least one Vendor Remittance report to the report selection.';
+      BankPaymentType@1020004 : Integer;
+
+    [External]
+    PROCEDURE RunWithRecord@1020001(VAR GenJournalLine@1020004 : Record 81);
+    VAR
+      ReportSelections@1020003 : Record 77;
+      Vendor@1020001 : Record 23;
+      Customer@1020000 : Record 18;
+      GenJournalBatch@1020008 : Record 232;
+      GenJournalLineRecRef@1020005 : RecordRef;
+      GenJournalLineFieldName@1020002 : Text;
+      JoinDatabaseNumber@1020006 : Integer;
+      JoinDatabaseFieldName@1020007 : Text;
+    BEGIN
+      GenJournalLine.SETFILTER("Check Exported",'=FALSE');
+
+      GenJournalLineRecRef.GETTABLE(GenJournalLine);
+      GenJournalLineRecRef.SETVIEW(GenJournalLine.GETVIEW);
+
+      GenJournalLine.FIND('-');
+      GenJournalBatch.GET(GenJournalLine."Journal Template Name",GenJournalLine."Journal Batch Name");
+      GenJournalBatch.OnCheckGenJournalLineExportRestrictions;
+
+      // Based on the types of the accounts, set up the report layout joins appropriate.
+      CASE GenJournalLine."Bal. Account Type" OF
+        GenJournalLine."Bal. Account Type"::Vendor:
+          BEGIN
+            GenJournalLineFieldName := GenJournalLine.FIELDNAME("Bal. Account No.");
+            JoinDatabaseNumber := DATABASE::Vendor;
+            JoinDatabaseFieldName := Vendor.FIELDNAME("No.");
+          END;
+        GenJournalLine."Bal. Account Type"::Customer:
+          BEGIN
+            GenJournalLineFieldName := GenJournalLine.FIELDNAME("Bal. Account No.");
+            JoinDatabaseNumber := DATABASE::Customer;
+            JoinDatabaseFieldName := Customer.FIELDNAME("No.");
+          END;
+        GenJournalLine."Bal. Account Type"::"Bank Account":
+          CASE GenJournalLine."Account Type" OF
+            GenJournalLine."Account Type"::Customer:
+              BEGIN
+                GenJournalLineFieldName := GenJournalLine.FIELDNAME("Account No.");
+                JoinDatabaseNumber := DATABASE::Customer;
+                JoinDatabaseFieldName := Customer.FIELDNAME("No.");
+              END;
+            GenJournalLine."Account Type"::Vendor:
+              BEGIN
+                GenJournalLineFieldName := GenJournalLine.FIELDNAME("Account No.");
+                JoinDatabaseNumber := DATABASE::Vendor;
+                JoinDatabaseFieldName := Vendor.FIELDNAME("No.");
+              END;
+          END;
+        ELSE
+          GenJournalLine.FIELDERROR("Bal. Account No.");
+      END;
+
+      BankPaymentType := GenJournalLine."Bank Payment Type";
+
+      CheckReportSelectionsExists;
+
+      // Set up data, request pages, etc.
+      CustomLayoutReporting.InitializeData(
+        ReportSelections.Usage::"V.Remittance",GenJournalLineRecRef,
+        GenJournalLineFieldName,JoinDatabaseNumber,JoinDatabaseFieldName,FALSE);
+
+      IF NOT PreviewModeSelected THEN
+        UpdateDocNo(GenJournalLineRecRef)
+      ELSE
+        ClearDocNoPreview(GenJournalLineRecRef);
+
+      // Run reports
+      CustomLayoutReporting.SetOutputFileBaseName('Remittance Advice');
+      CustomLayoutReporting.ProcessReport;
+
+      // Export to file if we don't have anything in preview mode
+      IF NOT PreviewModeSelected THEN
+        SetExportReportOptionsAndExport(GenJournalLineRecRef);
+    END;
+
+    LOCAL PROCEDURE PreviewModeSelected@1020008() : Boolean;
+    VAR
+      ReportSelections@1020004 : Record 77;
+      ReportOutputType@1020002 : Integer;
+      PreviewMode@1020001 : Boolean;
+      FirstLoop@1020000 : Boolean;
+    BEGIN
+      // Check to see if any of the associated reports are in 'preview' mode:
+      ReportSelections.SETRANGE(Usage,ReportSelections.Usage::"V.Remittance");
+
+      FirstLoop := TRUE;
+      IF ReportSelections.FIND('-') THEN
+        REPEAT
+          ReportOutputType := CustomLayoutReporting.GetOutputOption(ReportSelections."Report ID");
+          // We don't need to test for mixed preview and non-preview in the first loop
+          IF FirstLoop THEN BEGIN
+            FirstLoop := FALSE;
+            PreviewMode := (ReportOutputType = CustomLayoutReporting.GetPreviewOption)
+          END ELSE
+            // If we have mixed preview and non-preview, then display a message that we're not going to export to file
+            IF (PreviewMode AND (ReportOutputType <> CustomLayoutReporting.GetPreviewOption)) OR
+               (NOT PreviewMode AND (ReportOutputType = CustomLayoutReporting.GetPreviewOption))
+            THEN BEGIN
+              MESSAGE(PreviewModeNoExportMsg);
+              PreviewMode := TRUE;
+            END;
+        UNTIL ReportSelections.NEXT = 0;
+
+      EXIT(PreviewMode);
+    END;
+
+    LOCAL PROCEDURE SetExportReportOptionsAndExport@1020007(VAR GenJournalLineRecRef@1020009 : RecordRef);
+    VAR
+      ReportSelections@1020002 : Record 77;
+      GenJournalLine@1020006 : Record 81;
+      BankAccountNo@1020003 : Code[20];
+      GenJournalLineBankAccount@1020000 : Code[20];
+      OptionText@1020001 : Text;
+      OptionCode@1020010 : Code[20];
+    BEGIN
+      ReportSelections.SETRANGE(Usage,ReportSelections.Usage::"V.Remittance");
+      IF ReportSelections.FIND('-') THEN
+        REPEAT
+          // Ensure that the report has valid request parameters before trying to access them and run the export
+          IF CustomLayoutReporting.HasRequestParameterData(ReportSelections."Report ID") THEN BEGIN
+            // Get the same options from the user-selected options for this export report run
+            // Items in the request page XML use the 'Source' as their name
+            OptionText :=
+              CustomLayoutReporting.GetOptionValueFromRequestPageForReport(ReportSelections."Report ID",'BankAccount."No."');
+            OptionCode := COPYSTR(OptionText,1,20);
+            EVALUATE(BankAccountNo,OptionCode);
+            IF GenJournalLineRecRef.FINDFIRST THEN BEGIN
+              REPEAT
+                GenJournalLineRecRef.SETTABLE(GenJournalLine);
+                IF GenJournalLine."Account Type" = GenJournalLine."Account Type"::"Bank Account" THEN
+                  GenJournalLineBankAccount := GenJournalLine."Account No."
+                ELSE
+                  GenJournalLineBankAccount := GenJournalLine."Bal. Account No.";
+
+                IF ProcessLine(GenJournalLine) AND (BankAccountNo = GenJournalLineBankAccount) THEN BEGIN
+                  UpdateCheckInfoForGenLedgLine(GenJournalLine);
+
+                  CreateEFTRecord(GenJournalLine,BankAccountNo);
+
+                  CreateCreditTransferRegister(BankAccountNo,GenJournalLine."Bal. Account No.",BankPaymentType);
+                END;
+              UNTIL GenJournalLineRecRef.NEXT = 0;
+            END;
+          END;
+        UNTIL ReportSelections.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE CheckReportSelectionsExists@1020003();
+    VAR
+      ReportSelections@1020000 : Record 77;
+    BEGIN
+      ReportSelections.SETRANGE(Usage,ReportSelections.Usage::"V.Remittance");
+      ReportSelections.SETFILTER("Report ID",'<>0');
+      IF NOT ReportSelections.FINDFIRST THEN
+        ERROR(VendRemittanceReportSelectionErr);
+    END;
+
+    LOCAL PROCEDURE CreateEFTRecord@1020000(GenJournalLine@1020000 : Record 81;BankAccountNo@1020001 : Code[20]);
+    VAR
+      EFTExport@1020003 : Record 10810;
+    BEGIN
+      WITH GenJournalLine DO BEGIN
+        EFTExport.INIT;
+        EFTExport."Journal Template Name" := "Journal Template Name";
+        EFTExport."Journal Batch Name" := "Journal Batch Name";
+        EFTExport."Line No." := "Line No.";
+        EFTExport."Sequence No." := GetNextSequenceNo;
+
+        EFTExport."Bank Account No." := BankAccountNo;
+        EFTExport."Bank Payment Type" := "Bank Payment Type";
+        EFTExport."Transaction Code" := "Transaction Code";
+        EFTExport."Document Type" := "Document Type";
+        EFTExport."Posting Date" := "Posting Date";
+        EFTExport."Account Type" := "Account Type";
+        EFTExport."Account No." := "Account No.";
+        EFTExport."Applies-to ID" := "Applies-to ID";
+        EFTExport."Document No." := "Document No.";
+        EFTExport.Description := Description;
+        EFTExport."Currency Code" := "Currency Code";
+        EFTExport."Bal. Account No." := "Bal. Account No.";
+        EFTExport."Bal. Account Type" := "Bal. Account Type";
+        EFTExport."Applies-to Doc. Type" := "Applies-to Doc. Type";
+        EFTExport."Applies-to Doc. No." := "Applies-to Doc. No.";
+        EFTExport."Check Exported" := "Check Exported";
+        EFTExport."Check Printed" := "Check Printed";
+        EFTExport."Exported to Payment File" := "Exported to Payment File";
+        EFTExport."Amount (LCY)" := "Amount (LCY)";
+        EFTExport."Foreign Exchange Reference" := "Foreign Exchange Reference";
+        EFTExport."Foreign Exchange Indicator" := "Foreign Exchange Indicator";
+        EFTExport."Foreign Exchange Ref.Indicator" := "Foreign Exchange Ref.Indicator";
+        EFTExport."Country/Region Code" := "Country/Region Code";
+        EFTExport."Source Code" := "Source Code";
+        EFTExport."Company Entry Description" := "Company Entry Description";
+        EFTExport."Transaction Type Code" := "Transaction Type Code";
+        EFTExport."Payment Related Information 1" := "Payment Related Information 1";
+        EFTExport."Payment Related Information 2" := "Payment Related Information 2";
+        EFTExport."Gateway Operator OFAC Scr.Inc" := "Gateway Operator OFAC Scr.Inc";
+        EFTExport."Secondary OFAC Scr.Indicator" := "Secondary OFAC Scr.Indicator";
+        EFTExport."Origin. DFI ID Qualifier" := "Origin. DFI ID Qualifier";
+        EFTExport."Receiv. DFI ID Qualifier" := "Receiv. DFI ID Qualifier";
+        EFTExport."Document Date" := "Document Date";
+        EFTExport."Document No." := "Document No.";
+
+        EFTExport.INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateCheckInfoForGenLedgLine@1020002(VAR GenJournalLine@1020000 : Record 81);
+    BEGIN
+      GenJournalLine."Check Printed" := TRUE;
+      GenJournalLine."Check Exported" := TRUE;
+      GenJournalLine."Exported to Payment File" := TRUE;
+
+      GenJournalLine.MODIFY;
+    END;
+
+    LOCAL PROCEDURE UpdateDocNo@1020011(VAR GenJournalLineRecRef@1020000 : RecordRef);
+    VAR
+      GenJournalLine@1020001 : Record 81;
+      ReportSelections@1020008 : Record 77;
+      BankAccountNo@1020006 : Code[20];
+      GenJournalLineBankAccount@1020005 : Code[20];
+      OptionText@1020003 : Text;
+      OptionCode@1020002 : Code[20];
+    BEGIN
+      ReportSelections.SETRANGE(Usage,ReportSelections.Usage::"V.Remittance");
+      IF ReportSelections.FIND('-') THEN BEGIN
+        REPEAT
+          IF CustomLayoutReporting.HasRequestParameterData(ReportSelections."Report ID") THEN BEGIN
+            // Get the same options from the user-selected options for this export report run
+            // Items in the request page XML use the 'Source' as their name
+            OptionText :=
+              CustomLayoutReporting.GetOptionValueFromRequestPageForReport(ReportSelections."Report ID",'BankAccount."No."');
+            OptionCode := COPYSTR(OptionText,1,20);
+            EVALUATE(BankAccountNo,OptionCode);
+
+            IF GenJournalLineRecRef.FINDFIRST THEN BEGIN
+              REPEAT
+                GenJournalLineRecRef.SETTABLE(GenJournalLine);
+                IF GenJournalLine."Account Type" = GenJournalLine."Account Type"::"Bank Account" THEN
+                  GenJournalLineBankAccount := GenJournalLine."Account No."
+                ELSE
+                  GenJournalLineBankAccount := GenJournalLine."Bal. Account No.";
+
+                IF ProcessLine(GenJournalLine) AND (BankAccountNo = GenJournalLineBankAccount) THEN
+                  UpdateDocNoForGenLedgLine(GenJournalLine,BankAccountNo);
+              UNTIL GenJournalLineRecRef.NEXT = 0;
+            END;
+          END;
+        UNTIL ReportSelections.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateDocNoForGenLedgLine@1020009(VAR GenJournalLine@1020000 : Record 81;BankAccountNo@1020001 : Code[20]);
+    BEGIN
+      BankAccount.GET(BankAccountNo);
+      BankAccount."Last Remittance Advice No." := INCSTR(BankAccount."Last Remittance Advice No.");
+      BankAccount.MODIFY;
+
+      GenJournalLine."Document No." := BankAccount."Last Remittance Advice No.";
+
+      GenJournalLine.MODIFY;
+
+      InsertIntoCheckLedger(GenJournalLine,BankAccountNo);
+    END;
+
+    LOCAL PROCEDURE InsertIntoCheckLedger@1020004(GenJournalLine@1020000 : Record 81;BankAccountNo@1020001 : Code[20]);
+    VAR
+      CheckLedgerEntry@1020002 : Record 272;
+      BankAccount@1020003 : Record 270;
+      CheckManagement@1020004 : Codeunit 367;
+      BankAccountIs@1020005 : 'Acnt,BalAcnt';
+    BEGIN
+      BankAccount.GET(BankAccountNo);
+
+      IF GenJournalLine."Account Type" = GenJournalLine."Account Type"::"Bank Account" THEN
+        BankAccountIs := BankAccountIs::Acnt
+      ELSE
+        BankAccountIs := BankAccountIs::BalAcnt;
+
+      WITH CheckLedgerEntry DO BEGIN
+        INIT;
+        "Bank Account No." := BankAccount."No.";
+        "Posting Date" := GenJournalLine."Document Date";
+        "Document Type" := GenJournalLine."Document Type";
+        "Document No." := GenJournalLine."Document No.";
+        Description := GenJournalLine.Description;
+        "Bank Payment Type" := "Bank Payment Type"::"Electronic Payment";
+        "Entry Status" := "Entry Status"::Exported;
+        "Check Date" := GenJournalLine."Document Date";
+        "Check No." := GenJournalLine."Document No.";
+
+        IF BankAccountIs = BankAccountIs::Acnt THEN BEGIN
+          "Bal. Account Type" := GenJournalLine."Bal. Account Type";
+          "Bal. Account No." := GenJournalLine."Bal. Account No.";
+          Amount := -GenJournalLine."Amount (LCY)";
+        END ELSE BEGIN
+          "Bal. Account Type" := GenJournalLine."Account Type";
+          "Bal. Account No." := GenJournalLine."Account No.";
+          Amount := GenJournalLine."Amount (LCY)";
+        END;
+      END;
+      CheckManagement.InsertCheck(CheckLedgerEntry,GenJournalLine.RECORDID);
+    END;
+
+    LOCAL PROCEDURE CreateCreditTransferRegister@1020006(BankAccountNo@1020002 : Code[20];BalAccountNo@1020003 : Code[20];BankPaymentType@1020008 : Integer);
+    VAR
+      BankExportImportSetup@1020006 : Record 1200;
+      CreditTransferRegister@1020001 : Record 1205;
+      DataExchDef@1020000 : Record 1222;
+      BankAccount@1020004 : Record 270;
+      NewIdentifier@1020005 : Code[20];
+      PaymentExportDirection@1020007 : Integer;
+    BEGIN
+      BankAccount.GET(BankAccountNo);
+
+      IF BankPaymentType = 3 THEN // Electronic Payment
+        BankExportImportSetup.GET(BankAccount."Payment Export Format")
+      ELSE
+        IF BankPaymentType = 4 THEN // Electronic Payment IAT
+          BankExportImportSetup.GET(BankAccount."EFT Export Code");
+
+      PaymentExportDirection := BankExportImportSetup.Direction;
+      IF PaymentExportDirection <> 3 THEN // Export-EFT
+        IF BankAccount."Payment Export Format" <> '' THEN BEGIN
+          DataExchDef.GET(BankAccount."Payment Export Format");
+          NewIdentifier := DataExchDef.Code;
+        END ELSE
+          NewIdentifier := '';
+
+      CreditTransferRegister.CreateNew(NewIdentifier,BalAccountNo);
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE GetNextSequenceNo@1020015() : Integer;
+    VAR
+      EFTExport@1020000 : Record 10810;
+    BEGIN
+      EFTExport.SETCURRENTKEY("Sequence No.");
+      EFTExport.SETRANGE("Sequence No.");
+      IF EFTExport.FINDLAST THEN
+        EXIT(EFTExport."Sequence No." + 1);
+
+      EXIT(1);
+    END;
+
+    PROCEDURE ProcessLine@1020005(GenJournalLine@1020000 : Record 81) : Boolean;
+    VAR
+      ExportNewLines@1020001 : Boolean;
+    BEGIN
+      ExportNewLines := FALSE;
+      IF GenJournalLine."Amount (LCY)" <> 0 THEN
+        IF ((GenJournalLine."Bank Payment Type" = GenJournalLine."Bank Payment Type"::"Electronic Payment") OR
+            (GenJournalLine."Bank Payment Type" = GenJournalLine."Bank Payment Type"::"Electronic Payment-IAT")) AND
+           (GenJournalLine."Check Exported" = FALSE)
+        THEN
+          ExportNewLines := TRUE;
+
+      EXIT(ExportNewLines);
+    END;
+
+    LOCAL PROCEDURE ClearDocNoPreview@1020013(VAR GenJournalLineRecRef@1020000 : RecordRef);
+    VAR
+      GenJournalLine@1020001 : Record 81;
+    BEGIN
+      IF GenJournalLineRecRef.FINDFIRST THEN BEGIN
+        REPEAT
+          GenJournalLineRecRef.SETTABLE(GenJournalLine);
+
+          IF ProcessLine(GenJournalLine) THEN BEGIN
+            GenJournalLine."Document No." := '';
+            GenJournalLine.MODIFY;
+          END;
+        UNTIL GenJournalLineRecRef.NEXT = 0;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

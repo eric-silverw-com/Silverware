@@ -1,0 +1,638 @@
+OBJECT Codeunit 7600 Calendar Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:49 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Customer@1003 : Record 18;
+      Vendor@1004 : Record 23;
+      Location@1005 : Record 14;
+      CompanyInfo@1006 : Record 79;
+      ServMgtSetup@1014 : Record 5911;
+      Shippingagent@1007 : Record 5790;
+      BaseCalChange@1011 : Record 7601;
+      CustCalChange@1001 : Record 7602;
+      TempCustChange@1002 : TEMPORARY Record 7602;
+      TempCounter@1013 : Integer;
+      Text001@1015 : TextConst 'ENU=Yes';
+      Text002@1016 : TextConst 'ENU=No';
+      Text003@1017 : TextConst 'ENU=The expression %1 cannot be negative.';
+      OldSourceType@1050 : Integer;
+      OldSourceCode@1051 : Code[20];
+      OldAdditionalSourceCode@1052 : Code[20];
+      OldCalendarCode@1053 : Code[10];
+
+    [External]
+    PROCEDURE ShowCustomizedCalendar@1(ForSourcetype@1000 : 'Company,Customer,Vendor,Location,Shipping Agent,Service';ForSourceCode@1001 : Code[20];ForAdditionalSourceCode@1003 : Code[20];ForBaseCalendarCode@1002 : Code[10]);
+    VAR
+      TempCustomizedCalEntry@1004 : TEMPORARY Record 7603;
+    BEGIN
+      TempCustomizedCalEntry.DELETEALL;
+      TempCustomizedCalEntry.INIT;
+      TempCustomizedCalEntry."Source Type" := ForSourcetype;
+      TempCustomizedCalEntry."Source Code" := ForSourceCode;
+      TempCustomizedCalEntry."Additional Source Code" := ForAdditionalSourceCode;
+      TempCustomizedCalEntry."Base Calendar Code" := ForBaseCalendarCode;
+      TempCustomizedCalEntry.INSERT;
+      PAGE.RUN(PAGE::"Customized Calendar Entries",TempCustomizedCalEntry);
+    END;
+
+    LOCAL PROCEDURE GetCalendarCode@7(SourceType@1001 : 'Company,Customer,Vendor,Location,Shipping Agent,Service';SourceCode@1000 : Code[20];AdditionalSourceCode@1002 : Code[20]) : Code[10];
+    BEGIN
+      CASE SourceType OF
+        SourceType::Company:
+          IF CompanyInfo.GET THEN
+            EXIT(CompanyInfo."Base Calendar Code");
+        SourceType::Customer:
+          IF Customer.GET(SourceCode) THEN
+            EXIT(Customer."Base Calendar Code");
+        SourceType::Vendor:
+          IF Vendor.GET(SourceCode) THEN
+            EXIT(Vendor."Base Calendar Code");
+        SourceType::"Shipping Agent":
+          BEGIN
+            IF Shippingagent.GET(SourceCode,AdditionalSourceCode) THEN
+              EXIT(Shippingagent."Base Calendar Code");
+
+            IF CompanyInfo.GET THEN
+              EXIT(CompanyInfo."Base Calendar Code");
+          END;
+        SourceType::Location:
+          BEGIN
+            IF Location.GET(SourceCode) THEN
+              IF Location."Base Calendar Code" <> '' THEN
+                EXIT(Location."Base Calendar Code");
+            IF CompanyInfo.GET THEN
+              EXIT(CompanyInfo."Base Calendar Code");
+          END;
+        SourceType::Service:
+          IF ServMgtSetup.GET THEN
+            EXIT(ServMgtSetup."Base Calendar Code");
+      END;
+    END;
+
+    PROCEDURE GetMaxDate@16() : Date;
+    VAR
+      Date@1000 : Record 2000000007;
+    BEGIN
+      Date.SETRANGE("Period Type",Date."Period Type"::Date);
+      Date.FINDLAST;
+      EXIT(NORMALDATE(Date."Period End"));
+    END;
+
+    [External]
+    PROCEDURE CheckDateStatus@5(CalendarCode@1000 : Code[10];TargetDate@1001 : Date;VAR Description@1002 : Text[50]) : Boolean;
+    BEGIN
+      BaseCalChange.RESET;
+      BaseCalChange.SETRANGE("Base Calendar Code",CalendarCode);
+      IF BaseCalChange.FINDSET THEN
+        REPEAT
+          CASE BaseCalChange."Recurring System" OF
+            BaseCalChange."Recurring System"::" ":
+              IF TargetDate = BaseCalChange.Date THEN BEGIN
+                Description := BaseCalChange.Description;
+                EXIT(BaseCalChange.Nonworking);
+              END;
+            BaseCalChange."Recurring System"::"Weekly Recurring":
+              IF DATE2DWY(TargetDate,1) = BaseCalChange.Day THEN BEGIN
+                Description := BaseCalChange.Description;
+                EXIT(BaseCalChange.Nonworking);
+              END;
+            BaseCalChange."Recurring System"::"Annual Recurring":
+              IF (DATE2DMY(TargetDate,2) = DATE2DMY(BaseCalChange.Date,2)) AND
+                 (DATE2DMY(TargetDate,1) = DATE2DMY(BaseCalChange.Date,1))
+              THEN BEGIN
+                Description := BaseCalChange.Description;
+                EXIT(BaseCalChange.Nonworking);
+              END;
+          END;
+        UNTIL BaseCalChange.NEXT = 0;
+      Description := '';
+    END;
+
+    [External]
+    PROCEDURE CheckCustomizedDateStatus@2(SourceType@1003 : 'Company,Customer,Vendor,Location,Shipping Agent,Service';SourceCode@1004 : Code[20];AdditionalSourceCode@1005 : Code[20];CalendarCode@1002 : Code[10];TargetDate@1001 : Date;VAR Description@1000 : Text[50]) : Boolean;
+    BEGIN
+      CombineChanges(SourceType,SourceCode,AdditionalSourceCode,CalendarCode);
+      TempCustChange.RESET;
+      TempCustChange.SETCURRENTKEY("Entry No.");
+      IF TempCustChange.FINDSET THEN
+        REPEAT
+          CASE TempCustChange."Recurring System" OF
+            TempCustChange."Recurring System"::" ":
+              IF TargetDate = TempCustChange.Date THEN BEGIN
+                Description := TempCustChange.Description;
+                EXIT(TempCustChange.Nonworking);
+              END;
+            TempCustChange."Recurring System"::"Weekly Recurring":
+              IF DATE2DWY(TargetDate,1) = TempCustChange.Day THEN BEGIN
+                Description := TempCustChange.Description;
+                EXIT(TempCustChange.Nonworking);
+              END;
+            TempCustChange."Recurring System"::"Annual Recurring":
+              IF (DATE2DMY(TargetDate,2) = DATE2DMY(TempCustChange.Date,2)) AND
+                 (DATE2DMY(TargetDate,1) = DATE2DMY(TempCustChange.Date,1))
+              THEN BEGIN
+                Description := TempCustChange.Description;
+                EXIT(TempCustChange.Nonworking);
+              END;
+          END;
+        UNTIL TempCustChange.NEXT = 0;
+      Description := '';
+    END;
+
+    LOCAL PROCEDURE CombineChanges@4(SourceType@1003 : 'Company,Customer,Vendor,Location,Shipping Agent,Service';SourceCode@1002 : Code[20];AdditionalSourceCode@1001 : Code[20];CalendarCode@1000 : Code[10]);
+    BEGIN
+      IF (SourceType = OldSourceType) AND
+         (SourceCode = OldSourceCode) AND (AdditionalSourceCode = OldAdditionalSourceCode) AND (CalendarCode = OldCalendarCode)
+      THEN
+        EXIT;
+
+      TempCustChange.RESET;
+      TempCustChange.DELETEALL;
+
+      TempCounter := 0;
+      CustCalChange.RESET;
+      CustCalChange.SETRANGE("Source Type",SourceType);
+      CustCalChange.SETRANGE("Source Code",SourceCode);
+      CustCalChange.SETRANGE("Base Calendar Code",CalendarCode);
+      CustCalChange.SETRANGE("Additional Source Code",AdditionalSourceCode);
+      IF CustCalChange.FINDSET THEN
+        REPEAT
+          TempCounter := TempCounter + 1;
+          TempCustChange.INIT;
+          TempCustChange."Source Type" := CustCalChange."Source Type";
+          TempCustChange."Source Code" := CustCalChange."Source Code";
+          TempCustChange."Base Calendar Code" := CustCalChange."Base Calendar Code";
+          TempCustChange."Additional Source Code" := CustCalChange."Additional Source Code";
+          TempCustChange.Date := CustCalChange.Date;
+          TempCustChange.Description := CustCalChange.Description;
+          TempCustChange.Day := CustCalChange.Day;
+          TempCustChange.Nonworking := CustCalChange.Nonworking;
+          TempCustChange."Recurring System" := CustCalChange."Recurring System";
+          TempCustChange."Entry No." := TempCounter;
+          TempCustChange.INSERT;
+        UNTIL CustCalChange.NEXT = 0;
+
+      BaseCalChange.RESET;
+      BaseCalChange.SETRANGE("Base Calendar Code",CalendarCode);
+      IF BaseCalChange.FINDSET THEN
+        REPEAT
+          TempCounter := TempCounter + 1;
+          TempCustChange.INIT;
+          TempCustChange."Entry No." := TempCounter;
+          TempCustChange."Source Type" := SourceType;
+          TempCustChange."Source Code" := SourceCode;
+          TempCustChange."Base Calendar Code" := BaseCalChange."Base Calendar Code";
+          TempCustChange.Date := BaseCalChange.Date;
+          TempCustChange.Description := BaseCalChange.Description;
+          TempCustChange.Day := BaseCalChange.Day;
+          TempCustChange.Nonworking := BaseCalChange.Nonworking;
+          TempCustChange."Recurring System" := BaseCalChange."Recurring System";
+          TempCustChange.INSERT;
+        UNTIL BaseCalChange.NEXT = 0;
+
+      OldSourceType := SourceType;
+      OldSourceCode := SourceCode;
+      OldAdditionalSourceCode := AdditionalSourceCode;
+      OldCalendarCode := CalendarCode;
+    END;
+
+    [External]
+    PROCEDURE CreateWhereUsedEntries@3(BaseCalendarCode@1000 : Code[10]);
+    VAR
+      WhereUsedBaseCalendar@1001 : Record 7604;
+    BEGIN
+      WhereUsedBaseCalendar.DELETEALL;
+      IF CompanyInfo.GET THEN
+        IF CompanyInfo."Base Calendar Code" = BaseCalendarCode THEN BEGIN
+          WhereUsedBaseCalendar.INIT;
+          WhereUsedBaseCalendar."Base Calendar Code" := BaseCalendarCode;
+          WhereUsedBaseCalendar."Source Type" := WhereUsedBaseCalendar."Source Type"::Company;
+          WhereUsedBaseCalendar."Source Name" := CompanyInfo.Name;
+          WhereUsedBaseCalendar."Customized Changes Exist" :=
+            CustomizedChangesExist(
+              WhereUsedBaseCalendar."Source Type"::Company,'','',BaseCalendarCode);
+          WhereUsedBaseCalendar.INSERT;
+        END;
+
+      Customer.RESET;
+      Customer.SETRANGE("Base Calendar Code",BaseCalendarCode);
+      IF Customer.FINDSET THEN
+        REPEAT
+          WhereUsedBaseCalendar.INIT;
+          WhereUsedBaseCalendar."Base Calendar Code" := BaseCalendarCode;
+          WhereUsedBaseCalendar."Source Type" := WhereUsedBaseCalendar."Source Type"::Customer;
+          WhereUsedBaseCalendar."Source Code" := Customer."No.";
+          WhereUsedBaseCalendar."Source Name" := Customer.Name;
+          WhereUsedBaseCalendar."Customized Changes Exist" :=
+            CustomizedChangesExist(
+              WhereUsedBaseCalendar."Source Type"::Customer,Customer."No.",'',BaseCalendarCode);
+          WhereUsedBaseCalendar.INSERT;
+        UNTIL Customer.NEXT = 0;
+
+      Vendor.RESET;
+      Vendor.SETRANGE("Base Calendar Code",BaseCalendarCode);
+      IF Vendor.FINDSET THEN
+        REPEAT
+          WhereUsedBaseCalendar.INIT;
+          WhereUsedBaseCalendar."Base Calendar Code" := BaseCalendarCode;
+          WhereUsedBaseCalendar."Source Type" := WhereUsedBaseCalendar."Source Type"::Vendor;
+          WhereUsedBaseCalendar."Source Code" := Vendor."No.";
+          WhereUsedBaseCalendar."Source Name" := Vendor.Name;
+          WhereUsedBaseCalendar."Customized Changes Exist" :=
+            CustomizedChangesExist(
+              WhereUsedBaseCalendar."Source Type"::Vendor,Vendor."No.",'',BaseCalendarCode);
+          WhereUsedBaseCalendar.INSERT;
+        UNTIL Vendor.NEXT = 0;
+
+      Location.RESET;
+      Location.SETRANGE("Base Calendar Code",BaseCalendarCode);
+      IF Location.FINDSET THEN
+        REPEAT
+          WhereUsedBaseCalendar.INIT;
+          WhereUsedBaseCalendar."Base Calendar Code" := BaseCalendarCode;
+          WhereUsedBaseCalendar."Source Type" := WhereUsedBaseCalendar."Source Type"::Location;
+          WhereUsedBaseCalendar."Source Code" := Location.Code;
+          WhereUsedBaseCalendar."Source Name" := Location.Name;
+          WhereUsedBaseCalendar."Customized Changes Exist" :=
+            CustomizedChangesExist(
+              WhereUsedBaseCalendar."Source Type"::Location,Location.Code,'',BaseCalendarCode);
+          WhereUsedBaseCalendar.INSERT;
+        UNTIL Location.NEXT = 0;
+
+      Shippingagent.RESET;
+      Shippingagent.SETRANGE("Base Calendar Code",BaseCalendarCode);
+      IF Shippingagent.FINDSET THEN
+        REPEAT
+          WhereUsedBaseCalendar.INIT;
+          WhereUsedBaseCalendar."Base Calendar Code" := BaseCalendarCode;
+          WhereUsedBaseCalendar."Source Type" := WhereUsedBaseCalendar."Source Type"::"Shipping Agent";
+          WhereUsedBaseCalendar."Source Code" := Shippingagent."Shipping Agent Code";
+          WhereUsedBaseCalendar."Additional Source Code" := Shippingagent.Code;
+          WhereUsedBaseCalendar."Source Name" := Shippingagent.Description;
+          WhereUsedBaseCalendar."Customized Changes Exist" :=
+            CustomizedChangesExist(
+              WhereUsedBaseCalendar."Source Type"::"Shipping Agent",Shippingagent."Shipping Agent Code",
+              Shippingagent.Code,BaseCalendarCode);
+          WhereUsedBaseCalendar.INSERT;
+        UNTIL Shippingagent.NEXT = 0;
+
+      IF ServMgtSetup.GET THEN
+        IF ServMgtSetup."Base Calendar Code" = BaseCalendarCode THEN BEGIN
+          WhereUsedBaseCalendar.INIT;
+          WhereUsedBaseCalendar."Base Calendar Code" := BaseCalendarCode;
+          WhereUsedBaseCalendar."Source Type" := WhereUsedBaseCalendar."Source Type"::Service;
+          WhereUsedBaseCalendar."Source Name" := ServMgtSetup.TABLECAPTION;
+          WhereUsedBaseCalendar."Customized Changes Exist" :=
+            CustomizedChangesExist(
+              WhereUsedBaseCalendar."Source Type"::Service,'','',BaseCalendarCode);
+          WhereUsedBaseCalendar.INSERT;
+        END;
+
+      COMMIT;
+    END;
+
+    [External]
+    PROCEDURE CustomizedChangesExist@8(SourceType@1003 : 'Company,Customer,Vendor,Location,Shipping Agent,Service';SourceCode@1002 : Code[20];AdditionalSourceCode@1001 : Code[20];BaseCalendarCode@1000 : Code[10]) : Boolean;
+    BEGIN
+      CustCalChange.RESET;
+      CustCalChange.SETRANGE("Source Type",SourceType);
+      CustCalChange.SETRANGE("Source Code",SourceCode);
+      CustCalChange.SETRANGE("Additional Source Code",AdditionalSourceCode);
+      CustCalChange.SETRANGE("Base Calendar Code",BaseCalendarCode);
+      IF CustCalChange.FINDFIRST THEN
+        EXIT(TRUE);
+    END;
+
+    [External]
+    PROCEDURE CustomizedCalendarExistText@9(SourceType@1004 : 'Company,Customer,Vendor,Location,Shipping Agent,Service';SourceCode@1003 : Code[20];AdditionalSourceCode@1002 : Code[20];BaseCalendarCode@1001 : Code[10]) : Text[10];
+    BEGIN
+      IF CustomizedChangesExist(SourceType,SourceCode,AdditionalSourceCode,BaseCalendarCode) THEN
+        EXIT(Text001);
+      EXIT(Text002);
+    END;
+
+    [External]
+    PROCEDURE CalcDateBOC@6(OrgDateExpression@1000 : Text[30];OrgDate@1001 : Date;FirstSourceType@1002 : 'Company,Customer,Vendor,Location,Shipping Agent,Service';FirstSourceCode@1003 : Code[20];FirstAddCode@1006 : Code[20];SecondSourceType@1007 : 'Company,Customer,Vendor,Location,Shipping Agent,Service';SecondSourceCode@1008 : Code[20];SecondAddCode@1009 : Code[20];CheckBothCalendars@1016 : Boolean) : Date;
+    VAR
+      FirstCalCode@1010 : Code[10];
+      SecondCalCode@1011 : Code[10];
+      LoopTerminator@1005 : Boolean;
+      LoopCounter@1014 : Integer;
+      NewDate@1012 : Date;
+      TempDesc@1013 : Text[30];
+      Nonworking@1015 : Boolean;
+      Nonworking2@1017 : Boolean;
+      LoopFactor@1018 : Integer;
+      CalConvTimeFrame@1004 : Integer;
+      DateFormula@1019 : DateFormula;
+      Ok@1020 : Boolean;
+      NegDateFormula@1021 : DateFormula;
+      Handled@1022 : Boolean;
+    BEGIN
+      OnBeforeCalcDateBOC(
+        FirstCalCode,FirstSourceType,FirstSourceCode,FirstAddCode,
+        SecondCalCode,SecondSourceType,SecondSourceCode,SecondAddCode,CalConvTimeFrame,Handled);
+
+      IF NOT Handled THEN BEGIN
+        IF (FirstSourceType = FirstSourceType::"Shipping Agent") AND
+           ((FirstSourceCode = '') OR (FirstAddCode = ''))
+        THEN BEGIN
+          FirstSourceType := FirstSourceType::Company;
+          FirstSourceCode := '';
+          FirstAddCode := '';
+        END;
+        IF (SecondSourceType = SecondSourceType::"Shipping Agent") AND
+           ((SecondSourceCode = '') OR (SecondAddCode = ''))
+        THEN BEGIN
+          SecondSourceType := SecondSourceType::Company;
+          SecondSourceCode := '';
+          SecondAddCode := '';
+        END;
+        IF (FirstSourceType = FirstSourceType::Location) AND
+           (FirstSourceCode = '')
+        THEN BEGIN
+          FirstSourceType := FirstSourceType::Company;
+          FirstSourceCode := '';
+        END;
+        IF (SecondSourceType = SecondSourceType::Location) AND
+           (SecondSourceCode = '')
+        THEN BEGIN
+          SecondSourceType := SecondSourceType::Company;
+          SecondSourceCode := '';
+        END;
+        IF CompanyInfo.GET THEN
+          CalConvTimeFrame := CALCDATE(CompanyInfo."Cal. Convergence Time Frame",WORKDATE) - WORKDATE;
+
+        FirstCalCode := GetCalendarCode(FirstSourceType,FirstSourceCode,FirstAddCode);
+        SecondCalCode := GetCalendarCode(SecondSourceType,SecondSourceCode,SecondAddCode);
+
+        OnCalcDateBOCOnAfterGetCalendarCodes(
+          FirstSourceType,FirstSourceCode,FirstAddCode,FirstCalCode,
+          SecondSourceType,SecondSourceCode,SecondAddCode,SecondCalCode);
+      END;
+
+      EVALUATE(DateFormula,OrgDateExpression);
+      EVALUATE(NegDateFormula,'<-0D>');
+
+      IF OrgDate = 0D THEN
+        OrgDate := WORKDATE;
+      IF (CALCDATE(DateFormula,OrgDate) >= OrgDate) AND (DateFormula <> NegDateFormula) THEN
+        LoopFactor := 1
+      ELSE
+        LoopFactor := -1;
+
+      NewDate := OrgDate;
+      IF CALCDATE(DateFormula,OrgDate) <> OrgDate THEN
+        REPEAT
+          NewDate := NewDate + LoopFactor;
+          IF CheckBothCalendars AND (FirstCalCode = '') AND (SecondCalCode <> '') THEN
+            Ok := NOT CheckCustomizedDateStatus(
+                SecondSourceType,SecondSourceCode,SecondAddCode,SecondCalCode,NewDate,TempDesc)
+          ELSE
+            Ok := NOT CheckCustomizedDateStatus(
+                FirstSourceType,FirstSourceCode,FirstAddCode,FirstCalCode,NewDate,TempDesc);
+          OnCalcDateBOCOnAfterCheckDates(NewDate,TempDesc,Ok);
+          IF Ok THEN
+            LoopCounter := LoopCounter + 1;
+          IF NewDate >= OrgDate + CalConvTimeFrame THEN
+            LoopCounter := ABS(CALCDATE(DateFormula,OrgDate) - OrgDate);
+        UNTIL LoopCounter = ABS(CALCDATE(DateFormula,OrgDate) - OrgDate);
+
+      LoopCounter := 0;
+      REPEAT
+        LoopCounter := LoopCounter + 1;
+        Nonworking :=
+          CheckCustomizedDateStatus(
+            FirstSourceType,FirstSourceCode,FirstAddCode,FirstCalCode,NewDate,TempDesc);
+        Nonworking2 :=
+          CheckCustomizedDateStatus(
+            SecondSourceType,SecondSourceCode,SecondAddCode,SecondCalCode,NewDate,TempDesc);
+        OnCalcDateBOCOnAfterSetNonworking(FirstCalCode,SecondCalCode,NewDate,TempDesc,Nonworking,Nonworking2);
+        IF Nonworking THEN BEGIN
+          NewDate := NewDate + LoopFactor;
+        END ELSE BEGIN
+          IF NOT CheckBothCalendars THEN
+            EXIT(NewDate);
+
+          IF (Nonworking = FALSE) AND
+             (Nonworking2 = FALSE)
+          THEN
+            EXIT(NewDate);
+
+          NewDate := NewDate + LoopFactor;
+        END;
+        IF LoopCounter >= CalConvTimeFrame THEN
+          LoopTerminator := TRUE;
+      UNTIL LoopTerminator = TRUE;
+      EXIT(NewDate);
+    END;
+
+    [External]
+    PROCEDURE CalcDateBOC2@11(OrgDateExpression@1000 : Text[30];OrgDate@1001 : Date;FirstSourceType@1002 : 'Company,Customer,Vendor,Location,Shipping Agent,Service';FirstSourceCode@1003 : Code[20];FirstAddCode@1006 : Code[20];SecondSourceType@1007 : 'Company,Customer,Vendor,Location,Shipping Agent,Service';SecondSourceCode@1008 : Code[20];SecondAddCode@1009 : Code[20];CheckBothCalendars@1016 : Boolean) : Date;
+    VAR
+      NewOrgDateExpression@1021 : Text[30];
+    BEGIN
+      // Use this procedure to subtract time expression.
+      NewOrgDateExpression := ReverseSign(OrgDateExpression);
+      EXIT(CalcDateBOC(NewOrgDateExpression,OrgDate,FirstSourceType,FirstSourceCode,FirstAddCode,
+          SecondSourceType,SecondSourceCode,SecondAddCode,CheckBothCalendars));
+    END;
+
+    LOCAL PROCEDURE ReverseSign@10(DateFormulaExpr@1000 : Text[30]) : Text[30];
+    VAR
+      NewDateFormulaExpr@1001 : Text[30];
+      Formula@1002 : DateFormula;
+    BEGIN
+      EVALUATE(Formula,DateFormulaExpr);
+      NewDateFormulaExpr := CONVERTSTR(FORMAT(Formula),'+-','-+');
+      IF NOT (DateFormulaExpr[1] IN ['+','-']) THEN
+        NewDateFormulaExpr := '-' + NewDateFormulaExpr;
+      EXIT(NewDateFormulaExpr);
+    END;
+
+    [External]
+    PROCEDURE CheckDateFormulaPositive@12(CurrentDateFormula@1000 : DateFormula);
+    BEGIN
+      IF CALCDATE(CurrentDateFormula) < TODAY THEN
+        ERROR(Text003,CurrentDateFormula);
+    END;
+
+    [External]
+    PROCEDURE CalcTimeDelta@13(EndingTime@1001 : Time;StartingTime@1000 : Time) Result : Integer;
+    BEGIN
+      Result := EndingTime - StartingTime;
+      IF (Result <> 0) AND (EndingTime = 235959T) THEN
+        Result += 1000;
+    END;
+
+    [External]
+    PROCEDURE CalcTimeSubtract@14(Time@1000 : Time;Value@1001 : Integer) Result : Time;
+    BEGIN
+      Result := Time - Value;
+      IF (Result <> 000000T) AND (Time = 235959T) AND (Value <> 0) THEN
+        Result += 1000;
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeCalcDateBOC@15(VAR FirstCalCode@1006 : Code[10];VAR FirstSourceType@1005 : 'Company,Customer,Vendor,Location,Shipping Agent,Service';VAR FirstSourceCode@1004 : Code[20];VAR FirstAddCode@1003 : Code[20];VAR SecondCalcCode@1007 : Code[10];VAR SecondSourceType@1002 : 'Company,Customer,Vendor,Location,Shipping Agent,Service';VAR SecondSourceCode@1001 : Code[20];VAR SecondAddCode@1000 : Code[20];VAR CalConvTimeFrame@1009 : Integer;VAR Handled@1008 : Boolean);
+    BEGIN
+    END;
+
+    PROCEDURE DeleteCustomizedBaseCalendarData@18(SourceType@1004 : Option;SourceCode@1003 : Code[20]);
+    VAR
+      CustomizedCalendarChange@1002 : Record 7602;
+      CustomizedCalendarEntry@1001 : Record 7603;
+      WhereUsedBaseCalendar@1000 : Record 7604;
+    BEGIN
+      CustomizedCalendarChange.SETRANGE("Source Type",SourceType);
+      CustomizedCalendarChange.SETRANGE("Source Code",SourceCode);
+      CustomizedCalendarChange.DELETEALL;
+
+      CustomizedCalendarEntry.SETRANGE("Source Type",SourceType);
+      CustomizedCalendarEntry.SETRANGE("Source Code",SourceCode);
+      CustomizedCalendarEntry.DELETEALL;
+
+      WhereUsedBaseCalendar.SETRANGE("Source Type",SourceType);
+      WhereUsedBaseCalendar.SETRANGE("Source Code",SourceCode);
+      WhereUsedBaseCalendar.DELETEALL;
+    END;
+
+    PROCEDURE RenameCustomizedBaseCalendarData@17(SourceType@1004 : Option;SourceCode@1003 : Code[20];xSourceCode@1005 : Code[20]);
+    VAR
+      CustomizedCalendarChange@1002 : Record 7602;
+      TempCustomizedCalendarChange@1006 : TEMPORARY Record 7602;
+      CustomizedCalendarEntry@1001 : Record 7603;
+      TempCustomizedCalendarEntry@1007 : TEMPORARY Record 7603;
+      WhereUsedBaseCalendar@1000 : Record 7604;
+      TempWhereUsedBaseCalendar@1008 : TEMPORARY Record 7604;
+    BEGIN
+      CustomizedCalendarChange.SETRANGE("Source Type",SourceType);
+      CustomizedCalendarChange.SETRANGE("Source Code",xSourceCode);
+      IF CustomizedCalendarChange.FINDSET THEN
+        REPEAT
+          TempCustomizedCalendarChange := CustomizedCalendarChange;
+          TempCustomizedCalendarChange.INSERT;
+        UNTIL CustomizedCalendarChange.NEXT = 0;
+      IF TempCustomizedCalendarChange.FINDSET THEN
+        REPEAT
+          CLEAR(CustomizedCalendarChange);
+          CustomizedCalendarChange := TempCustomizedCalendarChange;
+          CustomizedCalendarChange.RENAME(
+            CustomizedCalendarChange."Source Type",
+            SourceCode,
+            CustomizedCalendarChange."Additional Source Code",
+            CustomizedCalendarChange."Base Calendar Code",
+            CustomizedCalendarChange."Recurring System",
+            CustomizedCalendarChange.Date,
+            CustomizedCalendarChange.Day,
+            CustomizedCalendarChange."Entry No.");
+        UNTIL TempCustomizedCalendarChange.NEXT = 0;
+
+      CustomizedCalendarEntry.SETRANGE("Source Type",SourceType);
+      CustomizedCalendarEntry.SETRANGE("Source Code",xSourceCode);
+      IF CustomizedCalendarEntry.FINDSET THEN
+        REPEAT
+          TempCustomizedCalendarEntry := CustomizedCalendarEntry;
+          TempCustomizedCalendarEntry.INSERT;
+        UNTIL CustomizedCalendarEntry.NEXT = 0;
+      IF TempCustomizedCalendarEntry.FINDSET THEN
+        REPEAT
+          CLEAR(CustomizedCalendarEntry);
+          CustomizedCalendarEntry := TempCustomizedCalendarEntry;
+          CustomizedCalendarEntry.RENAME(
+            CustomizedCalendarEntry."Source Type",
+            SourceCode,
+            CustomizedCalendarEntry."Additional Source Code",
+            CustomizedCalendarEntry."Base Calendar Code",
+            CustomizedCalendarEntry.Date);
+        UNTIL TempCustomizedCalendarEntry.NEXT = 0;
+
+      WhereUsedBaseCalendar.SETRANGE("Source Type",SourceType);
+      WhereUsedBaseCalendar.SETRANGE("Source Code",xSourceCode);
+      IF WhereUsedBaseCalendar.FINDSET THEN
+        REPEAT
+          TempWhereUsedBaseCalendar := WhereUsedBaseCalendar;
+          TempWhereUsedBaseCalendar.INSERT;
+        UNTIL WhereUsedBaseCalendar.NEXT = 0;
+      IF TempWhereUsedBaseCalendar.FINDSET THEN
+        REPEAT
+          CLEAR(WhereUsedBaseCalendar);
+          WhereUsedBaseCalendar := TempWhereUsedBaseCalendar;
+          WhereUsedBaseCalendar.RENAME(
+            WhereUsedBaseCalendar."Base Calendar Code",
+            WhereUsedBaseCalendar."Source Type",
+            SourceCode,
+            WhereUsedBaseCalendar."Source Name");
+        UNTIL TempWhereUsedBaseCalendar.NEXT = 0;
+    END;
+
+    PROCEDURE ReverseDateFormula@27(VAR ReversedDateFormula@1001 : DateFormula;DateFormula@1000 : DateFormula);
+    VAR
+      DateFormulaAsText@1002 : Text;
+      ReversedDateFormulaAsText@1006 : Text;
+      SummandPositions@1004 : ARRAY [100] OF Integer;
+      i@1003 : Integer;
+      j@1005 : Integer;
+    BEGIN
+      CLEAR(ReversedDateFormula);
+      DateFormulaAsText := FORMAT(DateFormula);
+      IF DateFormulaAsText = '' THEN
+        EXIT;
+
+      IF NOT (COPYSTR(DateFormulaAsText,1,1) IN ['+','-']) THEN
+        DateFormulaAsText := '+' + DateFormulaAsText;
+
+      FOR i := 1 TO STRLEN(DateFormulaAsText) DO
+        IF DateFormulaAsText[i] IN ['+','-'] THEN BEGIN
+          SummandPositions[j + 1] := i;
+          j += 1;
+          IF DateFormulaAsText[i] = '+' THEN
+            DateFormulaAsText[i] := '-'
+          ELSE
+            DateFormulaAsText[i] := '+';
+        END;
+
+      FOR i := j DOWNTO 1 DO BEGIN
+        IF i = j THEN
+          ReversedDateFormulaAsText := COPYSTR(DateFormulaAsText,SummandPositions[i])
+        ELSE
+          ReversedDateFormulaAsText :=
+            ReversedDateFormulaAsText + COPYSTR(DateFormulaAsText,SummandPositions[i],SummandPositions[i + 1] - SummandPositions[i]);
+      END;
+
+      EVALUATE(ReversedDateFormula,ReversedDateFormulaAsText);
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnCalcDateBOCOnAfterCheckDates@21(NewDate@1000 : Date;Description@1001 : Text[30];VAR Ok@1002 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnCalcDateBOCOnAfterGetCalendarCodes@19(FirstSourceType@1006 : 'Company,Customer,Vendor,Location,Shipping Agent,Service';FirstSourceCode@1005 : Code[20];FirstAddCode@1004 : Code[20];VAR FirstCalcCode@1007 : Code[10];SecondSourceType@1003 : 'Company,Customer,Vendor,Location,Shipping Agent,Service';SecondSourceCode@1002 : Code[20];SecondAddCode@1001 : Code[20];VAR SecondCalCode@1000 : Code[10]);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnCalcDateBOCOnAfterSetNonworking@24(FirstCalcCode@1000 : Code[10];SecondCalcCode@1001 : Code[10];NewDate@1002 : Date;Description@1003 : Text[30];VAR Nonworking@1004 : Boolean;VAR Nonworking2@1005 : Boolean);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

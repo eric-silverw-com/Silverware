@@ -1,0 +1,191 @@
+OBJECT Codeunit 9090 Postcode Service Manager
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:52 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      TechnicalErr@1000 : TextConst 'ENU=A general technical error occurred while contacting remote service.';
+      ServiceNotConfiguredErr@1002 : TextConst 'ENU=ZIP Code service is not configured.';
+      DisabledTok@1001 : TextConst 'ENU=Disabled';
+
+    PROCEDURE DiscoverPostcodeServices@1002(VAR TempServiceListNameValueBuffer@1000 : TEMPORARY Record 823);
+    BEGIN
+      OnDiscoverPostcodeServices(TempServiceListNameValueBuffer);
+    END;
+
+    PROCEDURE ShowConfigurationPage@1011(ServiceKey@1000 : Text;VAR IsSuccessful@1001 : Boolean);
+    BEGIN
+      OnShowConfigurationPage(ServiceKey,IsSuccessful);
+    END;
+
+    [External]
+    PROCEDURE IsServiceConfigured@16(ServiceKey@1000 : Text;VAR IsConfigured@1001 : Boolean);
+    BEGIN
+      OnCheckIsServiceConfigured(ServiceKey,IsConfigured);
+    END;
+
+    [External]
+    PROCEDURE GetAddressList@1008(TempEnteredAutocompleteAddress@1000 : TEMPORARY Record 9090;VAR TempAddressListNameValueBuffer@1002 : TEMPORARY Record 823) : Boolean;
+    VAR
+      IsSuccessful@1004 : Boolean;
+      ErrorMsg@1003 : Text;
+    BEGIN
+      IsSuccessful := TRUE;
+      IF NOT TryGetAddressList(GetActiveService,TempEnteredAutocompleteAddress,TempAddressListNameValueBuffer,IsSuccessful,ErrorMsg) THEN BEGIN
+        IsSuccessful := FALSE;
+        ErrorMsg := TechnicalErr;
+      END;
+
+      HandleErrorsIfNeccessary(IsSuccessful,ErrorMsg);
+      EXIT(IsSuccessful);
+    END;
+
+    [External]
+    PROCEDURE GetAddress@1005(TempSelectedAddressNameValueBuffer@1001 : TEMPORARY Record 823;VAR TempEnteredAutocompleteAddress@1002 : TEMPORARY Record 9090;VAR TempAutocompleteAddress@1000 : TEMPORARY Record 9090) : Boolean;
+    VAR
+      IsSuccessful@1005 : Boolean;
+      ErrorMsg@1004 : Text;
+    BEGIN
+      IsSuccessful := TRUE;
+      IF NOT TryGetAddress(GetActiveService,TempEnteredAutocompleteAddress,
+           TempSelectedAddressNameValueBuffer,TempAutocompleteAddress,IsSuccessful,ErrorMsg)
+      THEN BEGIN
+        IsSuccessful := FALSE;
+        ErrorMsg := TechnicalErr;
+      END;
+
+      HandleErrorsIfNeccessary(IsSuccessful,ErrorMsg);
+      EXIT(IsSuccessful);
+    END;
+
+    PROCEDURE SetSelectedService@9(ServiceKey@1000 : Text);
+    VAR
+      PostcodeServiceConfig@1001 : Record 9091;
+    BEGIN
+      IF NOT PostcodeServiceConfig.FINDFIRST THEN BEGIN
+        PostcodeServiceConfig.INIT;
+        PostcodeServiceConfig.INSERT;
+      END;
+
+      PostcodeServiceConfig.SaveServiceKey(COPYSTR(ServiceKey,250));
+      COMMIT;
+    END;
+
+    [External]
+    PROCEDURE RegisterService@1001(VAR TempServiceListNameValueBuffer@1000 : TEMPORARY Record 823;ServiceIdentifier@1001 : Text[250];ServiceName@1002 : Text[250]);
+    BEGIN
+      InsertNameValueBuffer(TempServiceListNameValueBuffer,ServiceIdentifier,ServiceName);
+    END;
+
+    [External]
+    PROCEDURE AddSelectionAddress@1009(VAR TempAddressListNameValueBuffer@1000 : TEMPORARY Record 823;Identifier@1001 : Text[250];DisplayString@1002 : Text[250]);
+    BEGIN
+      InsertNameValueBuffer(TempAddressListNameValueBuffer,Identifier,DisplayString);
+    END;
+
+    [External]
+    PROCEDURE IsConfigured@1015() : Boolean;
+    VAR
+      PostcodeServiceConfig@1000 : Record 9091;
+      IsSerConf@1001 : Boolean;
+    BEGIN
+      IF NOT PostcodeServiceConfig.FINDFIRST THEN
+        EXIT(FALSE);
+
+      IF PostcodeServiceConfig.GetServiceKey = DisabledTok THEN
+        EXIT(FALSE);
+
+      IsServiceConfigured(PostcodeServiceConfig.GetServiceKey,IsSerConf);
+      EXIT(IsSerConf);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryGetAddressList@1006(ServiceKey@1002 : Text;TempEnteredAutocompleteAddress@1001 : TEMPORARY Record 9090;VAR TempAddressListNameValueBuffer@1000 : TEMPORARY Record 823;VAR IsSuccessful@1003 : Boolean;VAR ErrorMSg@1004 : Text);
+    BEGIN
+      OnRetrieveAddressList(ServiceKey,TempEnteredAutocompleteAddress,TempAddressListNameValueBuffer,IsSuccessful,ErrorMSg);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryGetAddress@1013(ServiceKey@1005 : Text;TempEnteredAutocompleteAddress@1004 : TEMPORARY Record 9090;TempSelectedAddressNameValueBuffer@1003 : TEMPORARY Record 823;VAR TempAutocompleteAddress@1002 : TEMPORARY Record 9090;VAR IsSuccessful@1001 : Boolean;VAR ErrorMsg@1000 : Text);
+    BEGIN
+      OnRetrieveAddress(ServiceKey,TempEnteredAutocompleteAddress,TempSelectedAddressNameValueBuffer,
+        TempAutocompleteAddress,IsSuccessful,ErrorMsg);
+    END;
+
+    LOCAL PROCEDURE HandleErrorsIfNeccessary@1012(IsSuccessful@1001 : Boolean;ErrorMsg@1000 : Text);
+    BEGIN
+      IF NOT IsSuccessful THEN
+        MESSAGE(ErrorMsg);
+    END;
+
+    LOCAL PROCEDURE InsertNameValueBuffer@1010(VAR TempNameValueBuffer@1000 : TEMPORARY Record 823;Name@1001 : Text[250];Value@1002 : Text[250]);
+    VAR
+      LastId@1003 : Integer;
+    BEGIN
+      LastId := 0;
+      IF TempNameValueBuffer.FINDLAST THEN
+        LastId := TempNameValueBuffer.ID;
+
+      TempNameValueBuffer.INIT;
+      TempNameValueBuffer.ID := LastId + 1;
+      TempNameValueBuffer.Name := Name;
+      TempNameValueBuffer.Value := Value;
+      TempNameValueBuffer.INSERT;
+    END;
+
+    PROCEDURE GetActiveService@1021() : Text;
+    VAR
+      PostcodeServiceConfig@1000 : Record 9091;
+    BEGIN
+      IF NOT PostcodeServiceConfig.FINDFIRST THEN
+        ERROR(ServiceNotConfiguredErr);
+
+      EXIT(PostcodeServiceConfig.GetServiceKey);
+    END;
+
+    [Integration]
+    PROCEDURE OnDiscoverPostcodeServices@1000(VAR TempServiceListNameValueBuffer@1000 : TEMPORARY Record 823);
+    BEGIN
+      // Emit broadcast message to find all postcode service
+    END;
+
+    [Integration]
+    PROCEDURE OnRetrieveAddressList@1007(ServiceKey@1000 : Text;TempEnteredAutocompleteAddress@1002 : TEMPORARY Record 9090;VAR TempAddressListNameValueBuffer@1003 : TEMPORARY Record 823;VAR IsSuccessful@1004 : Boolean;VAR ErrorMsg@1005 : Text);
+    BEGIN
+      // Retrieve the list of possible UK addresses or autocompletetion based on parameters
+    END;
+
+    [Integration]
+    PROCEDURE OnRetrieveAddress@1003(ServiceKey@1000 : Text;TempEnteredAutocompleteAddress@1002 : TEMPORARY Record 9090;TempSelectedAddressNameValueBuffer@1003 : TEMPORARY Record 823;VAR TempAutocompleteAddress@1001 : TEMPORARY Record 9090;VAR IsSuccessful@1006 : Boolean;VAR ErrorMsg@1005 : Text);
+    BEGIN
+      // Retrieve specific address
+    END;
+
+    [Integration]
+    PROCEDURE OnShowConfigurationPage@1004(ServiceKey@1000 : Text;VAR Successful@1001 : Boolean);
+    BEGIN
+      // Notify services to create their configuration records if necessary
+    END;
+
+    [Integration]
+    PROCEDURE OnCheckIsServiceConfigured@13(ServiceKey@1000 : Text;VAR IsConfigured@1001 : Boolean);
+    BEGIN
+      // Retrieve information from service if it is configured
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,255 @@
+OBJECT Codeunit 1636 Office Contact Handler
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:13 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    TableNo=1600;
+    OnRun=BEGIN
+            IF Email <> '' THEN
+              RedirectContact(Rec)
+            ELSE
+              ShowContactSelection(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      SelectAContactTxt@1000 : TextConst 'ENU=Select a contact';
+
+    LOCAL PROCEDURE RedirectContact@11(TempOfficeAddinContext@1002 : TEMPORARY Record 1600);
+    VAR
+      Contact@1000 : Record 5050;
+      TempOfficeContactAssociations@1001 : TEMPORARY Record 1625;
+    BEGIN
+      IF TempOfficeAddinContext."Contact No." <> '' THEN
+        Contact.SETRANGE("No.",TempOfficeAddinContext."Contact No.")
+      ELSE
+        Contact.SETRANGE("Search E-Mail",UPPERCASE(TempOfficeAddinContext.Email));
+
+      IF NOT Contact.FINDFIRST THEN
+        PAGE.RUN(PAGE::"Office New Contact Dlg")
+      ELSE
+        WITH TempOfficeContactAssociations DO BEGIN
+          CollectMultipleContacts(Contact,TempOfficeContactAssociations,TempOfficeAddinContext);
+          IF (COUNT > 1) AND (TempOfficeAddinContext.Command <> '') THEN
+            SETRANGE("Associated Table",TempOfficeAddinContext.CommandType);
+
+          IF COUNT = 1 THEN BEGIN
+            FINDFIRST;
+            ShowCustomerVendor(TempOfficeAddinContext,Contact,"Associated Table",GetContactNo);
+            EXIT;
+          END;
+
+          SETRANGE(Type,Type::"Contact Person");
+          IF COUNT = 1 THEN BEGIN
+            FINDFIRST;
+            ShowCustomerVendor(TempOfficeAddinContext,Contact,"Associated Table",GetContactNo);
+            EXIT;
+          END;
+
+          SETRANGE(Type);
+          IF COUNT > 1 THEN
+            PAGE.RUN(PAGE::"Office Contact Associations",TempOfficeContactAssociations);
+        END;
+    END;
+
+    [External]
+    PROCEDURE ShowContactSelection@2(OfficeAddinContext@1000 : Record 1600);
+    VAR
+      Contact@1002 : Record 5050;
+      ContactList@1001 : Page 5052;
+    BEGIN
+      FilterContacts(OfficeAddinContext,Contact);
+      ContactList.SETTABLEVIEW(Contact);
+      ContactList.LOOKUPMODE(TRUE);
+      ContactList.CAPTION(SelectAContactTxt);
+      IF ContactList.LOOKUPMODE THEN;
+      ContactList.RUN;
+    END;
+
+    [External]
+    PROCEDURE ShowCustomerVendor@8(TempOfficeAddinContext@1006 : TEMPORARY Record 1600;Contact@1005 : Record 5050;AssociatedTable@1000 : Option;LinkNo@1001 : Code[20]);
+    VAR
+      OfficeContactAssociations@1002 : Record 1625;
+      Customer@1003 : Record 18;
+      Vendor@1004 : Record 23;
+    BEGIN
+      CASE AssociatedTable OF
+        OfficeContactAssociations."Associated Table"::Customer:
+          BEGIN
+            IF TempOfficeAddinContext.CommandType = OfficeContactAssociations."Associated Table"::Vendor THEN
+              PAGE.RUN(PAGE::"Office No Vendor Dlg",Contact)
+            ELSE
+              IF Customer.GET(LinkNo) THEN
+                RedirectCustomer(Customer,TempOfficeAddinContext);
+            EXIT;
+          END;
+        OfficeContactAssociations."Associated Table"::Vendor:
+          BEGIN
+            IF TempOfficeAddinContext.CommandType = OfficeContactAssociations."Associated Table"::Customer THEN
+              PAGE.RUN(PAGE::"Office No Customer Dlg",Contact)
+            ELSE
+              IF Vendor.GET(LinkNo) THEN
+                RedirectVendor(Vendor,TempOfficeAddinContext);
+            EXIT;
+          END;
+        ELSE
+          IF TempOfficeAddinContext.CommandType = OfficeContactAssociations."Associated Table"::Customer THEN BEGIN
+            PAGE.RUN(PAGE::"Office No Customer Dlg",Contact);
+            EXIT;
+          END;
+          IF TempOfficeAddinContext.CommandType = OfficeContactAssociations."Associated Table"::Vendor THEN BEGIN
+            PAGE.RUN(PAGE::"Office No Vendor Dlg",Contact);
+            EXIT;
+          END;
+      END;
+
+      Contact.GET(LinkNo);
+      PAGE.RUN(PAGE::"Contact Card",Contact)
+    END;
+
+    LOCAL PROCEDURE CollectMultipleContacts@7(VAR Contact@1000 : Record 5050;VAR TempOfficeContactAssociations@1001 : TEMPORARY Record 1625;TempOfficeAddinContext@1005 : TEMPORARY Record 1600);
+    VAR
+      ContactBusinessRelation@1002 : Record 5054;
+    BEGIN
+      FilterContactBusinessRelations(Contact,ContactBusinessRelation);
+      IF TempOfficeAddinContext.IsAppointment THEN
+        ContactBusinessRelation.SETRANGE("Link to Table",ContactBusinessRelation."Link to Table"::Customer);
+      IF ContactBusinessRelation.FINDSET THEN
+        REPEAT
+          ContactBusinessRelation.CALCFIELDS("Business Relation Description");
+          WITH TempOfficeContactAssociations DO
+            IF NOT GET(ContactBusinessRelation."Contact No.",Contact.Type,ContactBusinessRelation."Link to Table") THEN BEGIN
+              CLEAR(TempOfficeContactAssociations);
+              INIT;
+              TRANSFERFIELDS(ContactBusinessRelation);
+              "Contact Name" := Contact.Name;
+              Type := Contact.Type;
+              "Business Relation Description" := ContactBusinessRelation."Business Relation Description";
+              IF ContactBusinessRelation."Link to Table" = TempOfficeAddinContext.CommandType THEN BEGIN
+                "Contact No." := Contact."No.";
+                "Associated Table" := TempOfficeAddinContext.CommandType;
+              END;
+              INSERT;
+            END;
+        UNTIL ContactBusinessRelation.NEXT = 0
+      ELSE
+        IF Contact.FINDSET THEN
+          REPEAT
+            CreateUnlinkedContactAssociation(TempOfficeContactAssociations,Contact);
+          UNTIL Contact.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE CreateUnlinkedContactAssociation@5(VAR TempOfficeContactAssociations@1000 : TEMPORARY Record 1625;Contact@1001 : Record 5050);
+    BEGIN
+      CLEAR(TempOfficeContactAssociations);
+      WITH TempOfficeContactAssociations DO BEGIN
+        SETRANGE("No.",Contact."Company No.");
+        IF FINDFIRST AND (Type = Contact.Type::Company) THEN
+          DELETE;
+
+        IF ISEMPTY THEN BEGIN
+          INIT;
+          "No." := Contact."Company No.";
+          IF "No." = '' THEN
+            "No." := Contact."No.";
+          "Contact No." := Contact."No.";
+          "Contact Name" := Contact.Name;
+          Type := Contact.Type;
+          INSERT;
+        END;
+
+        SETRANGE("No.");
+      END;
+    END;
+
+    LOCAL PROCEDURE FilterContactBusinessRelations@4(VAR Contact@1000 : Record 5050;VAR ContactBusinessRelation@1001 : Record 5054);
+    VAR
+      ContactFilter@1002 : Text;
+    BEGIN
+      // Filter contact business relations based on the specified list of contacts
+      IF Contact.FINDSET THEN
+        REPEAT
+          IF STRPOS(ContactFilter,Contact."No.") = 0 THEN
+            ContactFilter += Contact."No." + '|';
+          IF (STRPOS(ContactFilter,Contact."Company No.") = 0) AND (Contact."Company No." <> '') THEN
+            ContactFilter += Contact."Company No." + '|';
+        UNTIL Contact.NEXT = 0;
+
+      ContactBusinessRelation.SETFILTER("Contact No.",DELCHR(ContactFilter,'>','|'));
+    END;
+
+    LOCAL PROCEDURE FilterContacts@1(OfficeAddinContext@1001 : Record 1600;VAR Contact@1000 : Record 5050);
+    VAR
+      ContactBusinessRelation@1002 : Record 5054;
+    BEGIN
+      WITH ContactBusinessRelation DO
+        CASE TRUE OF
+          OfficeAddinContext.Command <> '':
+            SETRANGE("Link to Table",OfficeAddinContext.CommandType);
+          OfficeAddinContext.IsAppointment:
+            SETRANGE("Link to Table","Link to Table"::Customer);
+          ELSE
+            EXIT;
+        END;
+
+      IF ContactBusinessRelation.FINDSET THEN BEGIN
+        Contact.FILTERGROUP(-1);
+        REPEAT
+          Contact.SETRANGE("Company No.",ContactBusinessRelation."Contact No.");
+          Contact.SETRANGE("No.",ContactBusinessRelation."Contact No.");
+          IF Contact.FINDSET THEN
+            REPEAT
+              Contact.MARK(TRUE);
+            UNTIL Contact.NEXT = 0;
+        UNTIL ContactBusinessRelation.NEXT = 0;
+
+        Contact.MARKEDONLY(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE RedirectCustomer@19(Customer@1000 : Record 18;VAR TempOfficeAddinContext@1002 : TEMPORARY Record 1600);
+    VAR
+      OfficeDocumentHandler@1001 : Codeunit 1637;
+    BEGIN
+      PAGE.RUN(PAGE::"Customer Card",Customer);
+      OfficeDocumentHandler.HandleSalesCommand(Customer,TempOfficeAddinContext);
+    END;
+
+    LOCAL PROCEDURE RedirectVendor@30(Vendor@1000 : Record 23;VAR TempOfficeAddinContext@1001 : TEMPORARY Record 1600);
+    VAR
+      OfficeDocumentHandler@1002 : Codeunit 1637;
+    BEGIN
+      PAGE.RUN(PAGE::"Vendor Card",Vendor);
+      OfficeDocumentHandler.HandlePurchaseCommand(Vendor,TempOfficeAddinContext);
+    END;
+
+    [EventSubscriber(Page,5052,OnClosePageEvent)]
+    LOCAL PROCEDURE OnContactSelected@3(VAR Rec@1000 : Record 5050);
+    VAR
+      TempOfficeAddinContext@1002 : TEMPORARY Record 1600;
+      OfficeMgt@1001 : Codeunit 1630;
+    BEGIN
+      IF OfficeMgt.IsAvailable THEN BEGIN
+        OfficeMgt.GetContext(TempOfficeAddinContext);
+        IF TempOfficeAddinContext.Email = '' THEN BEGIN
+          TempOfficeAddinContext.Name := Rec.Name;
+          TempOfficeAddinContext.Email := Rec."E-Mail";
+          TempOfficeAddinContext."Contact No." := Rec."No.";
+          OfficeMgt.AddRecipient(Rec.Name,Rec."E-Mail");
+          OfficeMgt.InitializeContext(TempOfficeAddinContext);
+        END;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

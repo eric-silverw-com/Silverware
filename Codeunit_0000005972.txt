@@ -1,0 +1,204 @@
+OBJECT Codeunit 5972 Service Info-Pane Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=;
+    Time=;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Item@1001 : Record 27;
+      ServHeader@1003 : Record 5900;
+      SalesPriceCalcMgt@1002 : Codeunit 7000;
+
+    [External]
+    PROCEDURE CalcAvailability@18(VAR ServLine@1000 : Record 5902) : Decimal;
+    VAR
+      AvailableToPromise@1001 : Codeunit 5790;
+      GrossRequirement@1002 : Decimal;
+      ScheduledReceipt@1003 : Decimal;
+      PeriodType@1006 : 'Day,Week,Month,Quarter,Year';
+      AvailabilityDate@1004 : Date;
+      LookaheadDateformula@1005 : DateFormula;
+    BEGIN
+      IF GetItem(ServLine) THEN BEGIN
+        IF ServLine."Needed by Date" <> 0D THEN
+          AvailabilityDate := ServLine."Needed by Date"
+        ELSE
+          AvailabilityDate := WORKDATE;
+
+        Item.RESET;
+        Item.SETRANGE("Date Filter",0D,AvailabilityDate);
+        Item.SETRANGE("Variant Filter",ServLine."Variant Code");
+        Item.SETRANGE("Location Filter",ServLine."Location Code");
+        Item.SETRANGE("Drop Shipment Filter",FALSE);
+
+        EXIT(
+          AvailableToPromise.QtyAvailabletoPromise(
+            Item,
+            GrossRequirement,
+            ScheduledReceipt,
+            AvailabilityDate,
+            PeriodType,
+            LookaheadDateformula));
+      END;
+    END;
+
+    [External]
+    PROCEDURE CalcNoOfSubstitutions@20(VAR ServLine@1000 : Record 5902) : Integer;
+    BEGIN
+      IF GetItem(ServLine) THEN BEGIN
+        Item.CALCFIELDS("No. of Substitutes");
+        EXIT(Item."No. of Substitutes");
+      END;
+    END;
+
+    [External]
+    PROCEDURE CalcNoOfSalesPrices@19(VAR ServLine@1000 : Record 5902) : Integer;
+    BEGIN
+      IF GetItem(ServLine) THEN BEGIN
+        GetServHeader(ServLine);
+        EXIT(SalesPriceCalcMgt.NoOfServLinePrice(ServHeader,ServLine,TRUE));
+      END;
+    END;
+
+    [External]
+    PROCEDURE CalcNoOfSalesLineDisc@22(VAR ServLine@1001 : Record 5902) : Integer;
+    BEGIN
+      IF GetItem(ServLine) THEN BEGIN
+        GetServHeader(ServLine);
+        EXIT(SalesPriceCalcMgt.NoOfServLineLineDisc(ServHeader,ServLine,TRUE));
+      END;
+    END;
+
+    LOCAL PROCEDURE GetItem@24(VAR ServLine@1000 : Record 5902) : Boolean;
+    BEGIN
+      WITH Item DO BEGIN
+        IF (ServLine.Type <> ServLine.Type::Item) OR (ServLine."No." = '') THEN
+          EXIT(FALSE);
+
+        IF ServLine."No." <> "No." THEN
+          GET(ServLine."No.");
+        EXIT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetServHeader@13(ServLine@1000 : Record 5902);
+    BEGIN
+      IF (ServLine."Document Type" <> ServHeader."Document Type") OR
+         (ServLine."Document No." <> ServHeader."No.")
+      THEN
+        ServHeader.GET(ServLine."Document Type",ServLine."Document No.");
+    END;
+
+    [External]
+    PROCEDURE CalcNoOfServItemComponents@27(VAR ServItemLine@1000 : Record 5901) : Integer;
+    VAR
+      ServItem@1002 : Record 5940;
+      ServItemComponent@1001 : Record 5941;
+    BEGIN
+      IF ServItem.GET(ServItemLine."Service Item No.") THEN BEGIN
+        ServItemComponent.RESET;
+        ServItemComponent.SETRANGE(Active,TRUE);
+        ServItemComponent.SETRANGE("Parent Service Item No.",ServItemLine."Service Item No.");
+        EXIT(ServItemComponent.COUNT);
+      END;
+    END;
+
+    [External]
+    PROCEDURE CalcNoOfTroubleshootings@26(VAR ServItemLine@1000 : Record 5901) : Integer;
+    VAR
+      ServItem@1002 : Record 5940;
+      TroubleshootingSetup@1001 : Record 5945;
+    BEGIN
+      TroubleshootingSetup.RESET;
+      TroubleshootingSetup.SETRANGE(Type,TroubleshootingSetup.Type::"Service Item");
+      TroubleshootingSetup.SETRANGE("No.",ServItemLine."Service Item No.");
+      IF NOT TroubleshootingSetup.ISEMPTY THEN
+        EXIT(TroubleshootingSetup.COUNT);
+      IF NOT ServItem.GET(ServItemLine."Service Item No.") THEN
+        EXIT(0);
+      TroubleshootingSetup.SETRANGE(Type,TroubleshootingSetup.Type::Item);
+      TroubleshootingSetup.SETRANGE("No.",ServItem."Item No.");
+      IF NOT TroubleshootingSetup.ISEMPTY THEN
+        EXIT(TroubleshootingSetup.COUNT);
+      TroubleshootingSetup.SETRANGE(Type,TroubleshootingSetup.Type::"Service Item Group");
+      TroubleshootingSetup.SETRANGE("No.",ServItem."Service Item Group Code");
+      EXIT(TroubleshootingSetup.COUNT);
+    END;
+
+    [External]
+    PROCEDURE CalcNoOfSkilledResources@25(VAR ServItemLine@1001 : Record 5901) : Integer;
+    VAR
+      ServItem@1003 : Record 5940;
+      Res@1000 : Record 156;
+      ServOrderAllocMgt@1005 : Codeunit 5930;
+      NoOfSkilledResources@1002 : Integer;
+      ResourceSkillType@1004 : 'Resource,Service Item Group,Item,Service Item';
+    BEGIN
+      IF ServItem.GET(ServItemLine."Service Item No.") THEN BEGIN
+        Res.RESET;
+        IF Res.FIND('-') THEN
+          REPEAT
+            IF ServOrderAllocMgt.ResourceQualified(Res."No.",ResourceSkillType::"Service Item",ServItem."No.") THEN
+              NoOfSkilledResources += 1;
+          UNTIL Res.NEXT = 0;
+        EXIT(NoOfSkilledResources);
+      END;
+    END;
+
+    [External]
+    PROCEDURE ShowServItemComponents@28(VAR ServItemLine@1000 : Record 5901);
+    VAR
+      ServItem@1002 : Record 5940;
+      ServItemComponent@1001 : Record 5941;
+    BEGIN
+      IF ServItem.GET(ServItemLine."Service Item No.") THEN BEGIN
+        ServItemComponent.RESET;
+        ServItemComponent.SETRANGE(Active,TRUE);
+        ServItemComponent.SETRANGE("Parent Service Item No.",ServItemLine."Service Item No.");
+        PAGE.RUNMODAL(PAGE::"Service Item Component List",ServItemComponent);
+      END;
+    END;
+
+    [External]
+    PROCEDURE ShowTroubleshootings@29(VAR ServItemLine@1000 : Record 5901);
+    VAR
+      ServItem@1002 : Record 5940;
+      TroubleshootingSetup@1001 : Record 5945;
+    BEGIN
+      IF ServItem.GET(ServItemLine."Service Item No.") THEN BEGIN
+        TroubleshootingSetup.RESET;
+        TroubleshootingSetup.SETRANGE(Type,TroubleshootingSetup.Type::"Service Item");
+        TroubleshootingSetup.SETRANGE("No.",ServItemLine."Service Item No.");
+        PAGE.RUNMODAL(PAGE::"Troubleshooting Setup",TroubleshootingSetup);
+      END;
+    END;
+
+    [External]
+    PROCEDURE ShowSkilledResources@30(VAR ServItemLine@1000 : Record 5901);
+    VAR
+      ServItem@1002 : Record 5940;
+      ResourceSkill@1003 : Record 5956;
+      SkilledResourceList@1001 : Page 6023;
+    BEGIN
+      IF ServItem.GET(ServItemLine."Service Item No.") THEN BEGIN
+        CLEAR(SkilledResourceList);
+        SkilledResourceList.Initialize(ResourceSkill.Type::"Service Item",ServItem."No.",ServItem.Description);
+        SkilledResourceList.RUNMODAL;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

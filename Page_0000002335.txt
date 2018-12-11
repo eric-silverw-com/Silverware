@@ -1,0 +1,289 @@
+OBJECT Page 2335 BC O365 Email Account Settings
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:10:48 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=" ";
+    DeleteAllowed=No;
+    SourceTable=Table409;
+    PageType=CardPart;
+    SourceTableTemporary=Yes;
+    RefreshOnActivate=Yes;
+    OnOpenPage=VAR
+                 GraphMail@1000 : Codeunit 405;
+               BEGIN
+                 INIT;
+                 INSERT;
+
+                 LookupMode := CurrPage.LOOKUPMODE;
+
+                 GraphMailAvailable := GraphMail.HasConfiguration;
+
+                 UpdateRec;
+               END;
+
+    OnAfterGetRecord=BEGIN
+                       UpdateRec;
+                     END;
+
+    OnModifyRecord=BEGIN
+                     IF NOT CurrPage.LOOKUPMODE THEN
+                       IF ValidateSettings(TRUE) THEN
+                         StoreSMTPSetup;
+                   END;
+
+    OnQueryClosePage=BEGIN
+                       IF NOT CurrPage.LOOKUPMODE THEN
+                         IF ValidateSettings(TRUE) THEN
+                           StoreSMTPSetup;
+                     END;
+
+  }
+  CONTROLS
+  {
+    { 5   ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 4   ;1   ;Group     ;
+                GroupType=Group;
+                InstructionalTextML=ENU=Your invoices will be sent from the following email account. }
+
+    { 2   ;1   ;Field     ;
+                Name=Email Provider;
+                CaptionML=ENU=Email Account Type;
+                ToolTipML=ENU=Specifies your email provider.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=EmailProvider;
+                OnValidate=BEGIN
+                             CASE EmailProvider OF
+                               EmailProvider::"Office 365":
+                                 SMTPMail.ApplyOffice365Smtp(Rec);
+                               EmailProvider::Outlook:
+                                 SMTPMail.ApplyOutlookSmtp(Rec);
+                               EmailProvider::Gmail:
+                                 SMTPMail.ApplyGmailSmtp(Rec);
+                               EmailProvider::Yahoo:
+                                 SMTPMail.ApplyYahooSmtp(Rec);
+                               EmailProvider::"Other Email Provider":
+                                 "SMTP Server" := '';
+                             END;
+
+                             AdvancedSettingsVisible := EmailProvider = EmailProvider::"Other Email Provider";
+
+                             Password := '';
+                             PasswordModified := TRUE;
+                           END;
+                            }
+
+    { 12  ;1   ;Group     ;
+                GroupType=Group }
+
+    { 13  ;2   ;Group     ;
+                Visible=AdvancedSettingsVisible;
+                GroupType=Group;
+                InstructionalTextML=ENU=Enter the SMTP Server Details. }
+
+    { 8   ;3   ;Field     ;
+                Name=Authentication;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=Authentication }
+
+    { 7   ;3   ;Field     ;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="SMTP Server";
+                ShowMandatory=TRUE }
+
+    { 6   ;3   ;Field     ;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="SMTP Server Port" }
+
+    { 3   ;3   ;Field     ;
+                Name=Secure Connection;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Secure Connection" }
+
+    { 16  ;1   ;Group     ;
+                GroupType=Group }
+
+    { 17  ;2   ;Group     ;
+                GroupType=Group }
+
+    { 10  ;3   ;Field     ;
+                CaptionML=ENU=Email;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=FromAccount;
+                Importance=Promoted;
+                OnValidate=VAR
+                             MailManagement@1000 : Codeunit 9520;
+                           BEGIN
+                             SplitUserIdAndSendAs(FromAccount);
+
+                             IF GetSender <> '' THEN
+                               MailManagement.CheckValidEmailAddress("User ID");
+                           END;
+                            }
+
+    { 9   ;3   ;Field     ;
+                Name=Password;
+                ExtendedDatatype=Masked;
+                CaptionML=ENU=Password;
+                ToolTipML=ENU=Specifies the password used for logging into the server.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=Password;
+                OnValidate=BEGIN
+                             PasswordModified := TRUE;
+                             "Password Key" := CREATEGUID; // trigger modify
+                           END;
+                            }
+
+    { 11  ;3   ;Field     ;
+                Name=TestEmailLbl;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=TestEmailLbl;
+                Editable=FALSE;
+                Style=StandardAccent;
+                StyleExpr=TRUE;
+                OnDrillDown=BEGIN
+                              ValidateSettings(FALSE);
+
+                              SendTestEmailAction;
+                            END;
+
+                ShowCaption=No }
+
+    { 14  ;1   ;Group     ;
+                Visible=NOT LookupMode;
+                GroupType=Group }
+
+    { 15  ;2   ;Field     ;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=SendViaGraphLbl;
+                Visible=GraphMailAvailable;
+                Editable=FALSE;
+                OnDrillDown=BEGIN
+                              PAGE.RUNMODAL(PAGE::"Graph Mail Setup");
+                              CurrPage.UPDATE;
+                            END;
+
+                ShowCaption=No }
+
+  }
+  CODE
+  {
+    VAR
+      SMTPMail@1016 : Codeunit 400;
+      AdvancedSettingsVisible@1013 : Boolean;
+      FromAccount@1010 : Text[250];
+      Password@1005 : Text[250];
+      PasswordModified@1006 : Boolean;
+      LookupMode@1007 : Boolean;
+      EmailProvider@1003 : 'Office 365,Outlook,Gmail,Yahoo,Other Email Provider';
+      DummyPasswordTxt@1001 : TextConst '@@@={Locked};ENU=***';
+      TestEmailLbl@1000 : TextConst 'ENU=Send test email';
+      EmailMissingUserPassErr@1004 : TextConst 'ENU=You must provide a user name and password to send email.';
+      MissingServerSettingsErr@1002 : TextConst 'ENU=You must provide server information to send email.';
+      SendViaGraphLbl@1008 : TextConst 'ENU=Send email from my account';
+      GraphMailAvailable@1009 : Boolean;
+
+    PROCEDURE StoreSMTPSetup@31();
+    VAR
+      SMTPMailSetup@1000 : Record 409;
+    BEGIN
+      IF NOT SMTPMailSetup.GET THEN BEGIN
+        SMTPMailSetup.INIT;
+        SMTPMailSetup.INSERT;
+      END;
+
+      // preserve old password key in case we need to remove it
+      "Password Key" := SMTPMailSetup."Password Key";
+
+      SMTPMailSetup.TRANSFERFIELDS(Rec,FALSE);
+
+      IF PasswordModified THEN BEGIN
+        IF Password = '' THEN
+          SMTPMailSetup.RemovePassword
+        ELSE
+          SMTPMailSetup.SetPassword(Password);
+      END;
+
+      SMTPMailSetup.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE SendTestEmailAction@10();
+    BEGIN
+      StoreSMTPSetup;
+      COMMIT;
+      CODEUNIT.RUN(CODEUNIT::"SMTP Test Mail");
+    END;
+
+    LOCAL PROCEDURE GetEmailProvider@11(VAR SMTPMailSetup@1000 : Record 409);
+    BEGIN
+      IF SMTPMail.IsOffice365Setup(SMTPMailSetup) THEN
+        EmailProvider := EmailProvider::"Office 365"
+      ELSE
+        IF SMTPMail.IsOutlookSetup(SMTPMailSetup) THEN
+          EmailProvider := EmailProvider::Outlook
+        ELSE
+          IF SMTPMail.IsGmailSetup(SMTPMailSetup) THEN
+            EmailProvider := EmailProvider::Gmail
+          ELSE
+            IF SMTPMail.IsYahooSetup(SMTPMailSetup) THEN
+              EmailProvider := EmailProvider::Yahoo
+            ELSE
+              EmailProvider := EmailProvider::"Other Email Provider";
+
+      AdvancedSettingsVisible := EmailProvider = EmailProvider::"Other Email Provider";
+    END;
+
+    [TryFunction]
+    PROCEDURE ValidateSettings@1(EmptyAuthInfoValid@1000 : Boolean);
+    BEGIN
+      IF EmailProvider = EmailProvider::"Other Email Provider" THEN BEGIN
+        IF (NOT EmptyAuthInfoValid) AND ("SMTP Server" = '') THEN
+          ERROR(MissingServerSettingsErr);
+        EXIT;
+      END;
+
+      IF EmptyAuthInfoValid AND ("User ID" = '') AND (Password = '') THEN
+        EXIT;
+
+      IF ("User ID" = '') OR (Password = '') THEN
+        ERROR(EmailMissingUserPassErr);
+    END;
+
+    PROCEDURE UpdateRec@2();
+    VAR
+      User@1002 : Record 2000000120;
+      SMTPMailSetup@1000 : Record 409;
+      SMTPMail@1001 : Codeunit 400;
+    BEGIN
+      IF SMTPMailSetup.GetSetup AND SMTPMail.IsEnabled THEN BEGIN
+        TRANSFERFIELDS(SMTPMailSetup);
+        GetEmailProvider(SMTPMailSetup)
+      END ELSE BEGIN
+        SMTPMail.ApplyOffice365Smtp(Rec);
+        EmailProvider := EmailProvider::"Office 365";
+        IF User.GET(USERSECURITYID) THEN
+          "User ID" := User."Authentication Email";
+      END;
+
+      MODIFY;
+
+      IF SMTPMailSetup.HasPassword THEN
+        Password := DummyPasswordTxt;
+
+      PasswordModified := FALSE;
+
+      FromAccount := GetConnectionString;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

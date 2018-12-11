@@ -1,0 +1,158 @@
+OBJECT Codeunit 5053 TAPIManagement
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:17 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1001 : TextConst 'ENU=No Contact found.';
+      Text002@1000 : TextConst 'ENU=No registered phone numbers have been found for this %1.';
+
+    [External]
+    PROCEDURE Dial@1(PhoneNumber@1001 : Text[80]) : Boolean;
+    BEGIN
+      HYPERLINK(STRSUBSTNO('tel:%1',PhoneNumber));
+      EXIT(TRUE);
+    END;
+
+    [External]
+    PROCEDURE DialContCustVendBank@5(TableNo@1000 : Integer;No@1001 : Code[20];PhoneNo@1002 : Text[30];ContAltAddrCode@1003 : Code[10]);
+    VAR
+      ContBusRel@1005 : Record 5054;
+      Contact@1006 : Record 5050;
+      Task@1008 : Record 5080;
+      TempSegmentLine@1007 : TEMPORARY Record 5077;
+    BEGIN
+      CASE TableNo OF
+        DATABASE::Contact:
+          Contact.GET(No);
+        DATABASE::"To-do":
+          BEGIN
+            Task.GET(No);
+            Task.TESTFIELD("Contact No.");
+            Contact.GET(Task."Contact No.");
+          END;
+        ELSE BEGIN
+          ContBusRel.RESET;
+          ContBusRel.SETCURRENTKEY("Link to Table","No.");
+          CASE TableNo OF
+            DATABASE::Customer:
+              ContBusRel.SETRANGE("Link to Table",ContBusRel."Link to Table"::Customer);
+            DATABASE::Vendor:
+              ContBusRel.SETRANGE("Link to Table",ContBusRel."Link to Table"::Vendor);
+            DATABASE::"Bank Account":
+              ContBusRel.SETRANGE("Link to Table",ContBusRel."Link to Table"::"Bank Account");
+          END;
+          ContBusRel.SETRANGE("No.",No);
+          IF ContBusRel.FINDFIRST THEN
+            Contact.GET(ContBusRel."Contact No.")
+          ELSE
+            ERROR(Text001);
+        END;
+      END;
+
+      // Call Make Phone Call Wizard
+      TempSegmentLine.MakePhoneCallFromContact(Contact,Task,TableNo,PhoneNo,ContAltAddrCode);
+    END;
+
+    [External]
+    PROCEDURE ShowNumbers@4(ContactNo@1000 : Code[20];ContAltAddrCode@1001 : Code[10]) : Text[260];
+    VAR
+      TempCommunicationMethod@1002 : TEMPORARY Record 5100;
+      Contact@1003 : Record 5050;
+      Contact2@1004 : Record 5050;
+      ContAltAddrCode2@1006 : Code[10];
+    BEGIN
+      IF NOT Contact.GET(ContactNo) THEN
+        EXIT;
+
+      IF ContAltAddrCode = '' THEN
+        ContAltAddrCode2 := Contact.ActiveAltAddress(TODAY)
+      ELSE
+        ContAltAddrCode2 := ContAltAddrCode;
+
+      CreateCommMethod(Contact,TempCommunicationMethod,ContactNo,ContAltAddrCode);
+
+      // Get linked company phonenumbers
+      IF (Contact.Type = Contact.Type::Person) AND (Contact."Company No." <> '') THEN BEGIN
+        Contact2.GET(Contact."Company No.");
+
+        IF ContAltAddrCode = '' THEN
+          ContAltAddrCode2 := Contact2.ActiveAltAddress(TODAY)
+        ELSE
+          ContAltAddrCode2 := ContAltAddrCode;
+
+        CreateCommMethod(Contact2,TempCommunicationMethod,ContactNo,ContAltAddrCode2);
+      END;
+      IF TempCommunicationMethod.FINDFIRST THEN BEGIN
+        IF PAGE.RUNMODAL(PAGE::"Contact Through",TempCommunicationMethod) = ACTION::LookupOK THEN
+          EXIT(TempCommunicationMethod.Number);
+      END ELSE
+        ERROR(Text002,Contact.TABLECAPTION);
+    END;
+
+    LOCAL PROCEDURE TrimCode@3(Code@1001 : Code[20]) TrimString@1000 : Text[20];
+    BEGIN
+      TrimString := COPYSTR(Code,1,1) + LOWERCASE(COPYSTR(Code,2,STRLEN(Code) - 1))
+    END;
+
+    LOCAL PROCEDURE CreateCommMethod@2(Contact@1000 : Record 5050;VAR TempCommunicationMethod@1001 : TEMPORARY Record 5100;ContactNo@1002 : Code[20];ContAltAddrCode@1004 : Code[10]);
+    VAR
+      ContAltAddr@1005 : Record 5051;
+    BEGIN
+      WITH TempCommunicationMethod DO BEGIN
+        INIT;
+        "Contact No." := ContactNo;
+        Name := Contact.Name;
+        IF Contact."Phone No." <> '' THEN BEGIN
+          Key += 1;
+          Description := COPYSTR(Contact.FIELDCAPTION("Phone No."),1,MAXSTRLEN(Description));
+          Number := Contact."Phone No.";
+          Type := Contact.Type;
+          INSERT;
+        END;
+        IF Contact."Mobile Phone No." <> '' THEN BEGIN
+          Key += 1;
+          Description := COPYSTR(Contact.FIELDCAPTION("Mobile Phone No."),1,MAXSTRLEN(Description));
+          Number := Contact."Mobile Phone No.";
+          Type := Contact.Type;
+          INSERT;
+        END;
+
+        // Alternative address
+        IF ContAltAddr.GET(Contact."No.",ContAltAddrCode) THEN BEGIN
+          IF ContAltAddr."Phone No." <> '' THEN BEGIN
+            Key += 1;
+            Description :=
+              COPYSTR(TrimCode(ContAltAddr.Code) + ' - ' + ContAltAddr.FIELDCAPTION("Phone No."),1,MAXSTRLEN(Description));
+            Number := ContAltAddr."Phone No.";
+            Type := Contact.Type;
+            INSERT;
+          END;
+          IF ContAltAddr."Mobile Phone No." <> '' THEN BEGIN
+            Key += 1;
+            Description :=
+              COPYSTR(TrimCode(ContAltAddr.Code) + ' - ' + ContAltAddr.FIELDCAPTION("Mobile Phone No."),1,MAXSTRLEN(Description));
+            Number := ContAltAddr."Mobile Phone No.";
+            Type := Contact.Type;
+            INSERT;
+          END;
+        END;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

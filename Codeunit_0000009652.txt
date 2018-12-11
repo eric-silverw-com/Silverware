@@ -1,0 +1,106 @@
+OBJECT Codeunit 9652 Edit RDLC Report Layout
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:53 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    TableNo=9650;
+    OnRun=BEGIN
+            EditReportLayout(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      LoadDocQst@1000 : TextConst 'ENU=The report layout has been opened in SQL Report Builder.\\Edit the report layout in SQL Report Builder and save the changes. Then return to this message and choose Yes to import the changes or No to cancel the changes.\Do you want to import the changes?';
+      NoReportBuilderPresentErr@1001 : TextConst 'ENU=Microsoft Report Builder is not installed on this computer.';
+
+    LOCAL PROCEDURE EditReportLayout@4(VAR CustomReportLayout@1015 : Record 9650);
+    VAR
+      TempBlob@1009 : Record 99008535;
+      FileMgt@1005 : Codeunit 419;
+      Process@1001 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Diagnostics.Process" RUNONCLIENT;
+      FileName@1003 : Text;
+      RBFileName@1000 : Text;
+      LoadModifiedDoc@1002 : Boolean;
+    BEGIN
+      CustomReportLayout.TestLayout;
+
+      RBFileName := GetReportBuilderExe;
+      IF RBFileName = '' THEN
+        ERROR(NoReportBuilderPresentErr);
+
+      CustomReportLayout.GetLayoutBlob(TempBlob);
+      FileName := FileMgt.BLOBExport(TempBlob,'report.rdl',FALSE);
+
+      Process := Process.Start(RBFileName,'"' + FileName + '"');
+
+      LoadModifiedDoc := CONFIRM(LoadDocQst);
+
+      IF LoadModifiedDoc THEN BEGIN
+        FileMgt.BLOBImport(TempBlob,FileName);
+        CustomReportLayout.ImportLayoutBlob(TempBlob,'');
+      END;
+
+      IF NOT Process.HasExited THEN
+        Process.CloseMainWindow;
+
+      FileMgt.DeleteClientFile(FileName);
+    END;
+
+    LOCAL PROCEDURE GetReportBuilderExe@1() : Text;
+    VAR
+      Registry@1000 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.Microsoft.Win32.Registry" RUNONCLIENT;
+      FileVersion@1004 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Diagnostics.FileVersionInfo";
+      FileName@1002 : Text;
+      length@1001 : Integer;
+      offset@1003 : Integer;
+      FileVersionMajor@1005 : Integer;
+    BEGIN
+      FileName := Registry.GetValue('HKEY_CLASSES_ROOT\MSReportBuilder_ReportFile_32\shell\Open\command','','');
+      IF (FileName = '') OR (FileName = 'null') THEN
+        ERROR(NoReportBuilderPresentErr);
+      length := STRPOS(UPPERCASE(FileName),'.EXE');
+      // Strip leading quotes if any
+
+      IF length > 0 THEN BEGIN
+        length += 3;
+        IF FileName[1] = '"' THEN BEGIN
+          offset := 1;
+          length -= 1;
+        END;
+        FileName := COPYSTR(FileName,offset + 1,length);
+      END ELSE
+        FileName := '';
+
+      IF FileName <> '' THEN BEGIN
+        FileVersion := FileVersion.GetVersionInfo(FileName);
+        FileVersionMajor := FileVersion.ProductMajorPart;
+      END ELSE
+        FileVersionMajor := 0;
+
+      // Report Builder 2016 (File version 14.*)
+      IF FileVersionMajor <> 14 THEN BEGIN
+        FileName :=
+          Registry.GetValue('HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Microsoft SQL Server\Report Builder','location','');
+        IF (FileName <> '') OR (FileName <> 'null') THEN BEGIN
+          FileName := FileName + '\MSReportBuilder.exe';
+          FileVersion := FileVersion.GetVersionInfo(FileName);
+          IF FileVersion.ProductMajorPart < 14 THEN
+            FileName := '';
+        END ELSE
+          FileName := '';
+      END;
+      EXIT(FileName);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

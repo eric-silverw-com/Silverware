@@ -1,0 +1,147 @@
+OBJECT Table 2155 O365 Payment Instructions
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:14:36 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnDelete=VAR
+               DocumentDescription@1000 : Text;
+             BEGIN
+               IF Default THEN
+                 ERROR(CannotDeleteDefaultErr);
+
+               DocumentDescription := FindDraftsUsingInstructions;
+               IF DocumentDescription <> '' THEN
+                 ERROR(PaymentIsUsedErr,FindDraftsUsingInstructions);
+
+               IF GUIALLOWED THEN
+                 IF NOT CONFIRM(DoYouWantToDeleteQst) THEN
+                   ERROR('');
+
+               DeleteTranslationsForRecord;
+             END;
+
+    CaptionML=ENU=O365 Payment Instructions;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Id                  ;Integer       ;AutoIncrement=Yes;
+                                                   DataClassification=SystemMetadata;
+                                                   CaptionML=ENU=Id }
+    { 5   ;   ;Name                ;Text20        ;CaptionML=ENU=Name }
+    { 6   ;   ;Payment Instructions;Text250       ;CaptionML=ENU=Payment Instruction }
+    { 7   ;   ;Payment Instructions Blob;BLOB     ;CaptionML=ENU=Payment Instructions Blob }
+    { 8   ;   ;Default             ;Boolean       ;OnValidate=VAR
+                                                                O365PaymentInstructions@1000 : Record 2155;
+                                                              BEGIN
+                                                                IF Default THEN BEGIN
+                                                                  O365PaymentInstructions.SETFILTER(Id,'<>%1',Id);
+                                                                  O365PaymentInstructions.MODIFYALL(Default,FALSE,FALSE);
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ENU=Default }
+  }
+  KEYS
+  {
+    {    ;Id                                      ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      DocumentDescriptionTxt@1000 : TextConst '@@@="%1=Document description (e.g. Invoice, Estimate,...); %2=Document Number";ENU=%1 %2';
+      PaymentIsUsedErr@1001 : TextConst '@@@=%1: Document type and number;ENU=You cannot delete the Payment Instructions because at least one invoice (%1) is using them.';
+      CannotDeleteDefaultErr@1002 : TextConst 'ENU=You cannot delete the default Payment Instructions.';
+      LanguageManagement@1003 : Codeunit 43;
+      DoYouWantToDeleteQst@1004 : TextConst 'ENU=Are you sure you want to delete the payment instructions?';
+
+    PROCEDURE GetPaymentInstructions@14() : Text;
+    VAR
+      TempBlob@1000 : Record 99008535;
+      CR@1001 : Text[1];
+    BEGIN
+      CALCFIELDS("Payment Instructions Blob");
+      IF NOT "Payment Instructions Blob".HASVALUE THEN
+        EXIT("Payment Instructions");
+      CR[1] := 10;
+      TempBlob.Blob := "Payment Instructions Blob";
+      EXIT(TempBlob.ReadAsText(CR,TEXTENCODING::Windows));
+    END;
+
+    PROCEDURE SetPaymentInstructions@15(NewInstructions@1001 : Text);
+    VAR
+      TempBlob@1000 : Record 99008535;
+    BEGIN
+      CLEAR("Payment Instructions Blob");
+      "Payment Instructions" := COPYSTR(NewInstructions,1,MAXSTRLEN("Payment Instructions"));
+      IF STRLEN(NewInstructions) <= MAXSTRLEN("Payment Instructions") THEN
+        EXIT; // No need to store anything in the blob
+      IF NewInstructions = '' THEN
+        EXIT;
+      TempBlob.WriteAsText(NewInstructions,TEXTENCODING::Windows);
+      "Payment Instructions Blob" := TempBlob.Blob;
+      MODIFY;
+    END;
+
+    PROCEDURE FindDraftsUsingInstructions@1() DocumentDescription : Text;
+    VAR
+      SalesHeader@1000 : Record 36;
+    BEGIN
+      DocumentDescription := '';
+      SalesHeader.SETRANGE("Payment Instructions Id",Id);
+
+      IF SalesHeader.FINDFIRST THEN
+        DocumentDescription := STRSUBSTNO(DocumentDescriptionTxt,SalesHeader.GetDocTypeTxt,SalesHeader."No.");
+    END;
+
+    PROCEDURE GetNameInCurrentLanguage@2() : Text[20];
+    VAR
+      O365PaymentInstrTransl@1000 : Record 2156;
+      LanguageCode@1001 : Code[10];
+    BEGIN
+      LanguageCode := LanguageManagement.GetLanguageCodeFromLanguageID(GLOBALLANGUAGE);
+
+      IF NOT O365PaymentInstrTransl.GET(Id,LanguageCode) THEN
+        EXIT(Name);
+
+      EXIT(O365PaymentInstrTransl."Transl. Name");
+    END;
+
+    PROCEDURE GetPaymentInstructionsInCurrentLanguage@3() : Text;
+    VAR
+      O365PaymentInstrTransl@1000 : Record 2156;
+      LanguageCode@1001 : Code[10];
+    BEGIN
+      LanguageCode := LanguageManagement.GetLanguageCodeFromLanguageID(GLOBALLANGUAGE);
+
+      IF NOT O365PaymentInstrTransl.GET(Id,LanguageCode) THEN
+        EXIT(GetPaymentInstructions);
+
+      EXIT(O365PaymentInstrTransl.GetTransPaymentInstructions);
+    END;
+
+    PROCEDURE DeleteTranslationsForRecord@4();
+    VAR
+      O365PaymentInstrTransl@1000 : Record 2156;
+    BEGIN
+      O365PaymentInstrTransl.SETRANGE(Id,Id);
+      O365PaymentInstrTransl.DELETEALL(TRUE);
+    END;
+
+    PROCEDURE CopyInstructionsInCurrentLanguageToBlob@5(VAR TempBlob@1000 : Record 99008535);
+    BEGIN
+      TempBlob.WriteAsText(GetPaymentInstructionsInCurrentLanguage,TEXTENCODING::Windows);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

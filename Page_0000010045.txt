@@ -1,0 +1,278 @@
+OBJECT Page 10045 Purchase Invoice Stats.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:12:09 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Editable=No;
+    CaptionML=ENU=Purchase Invoice Statistics;
+    SourceTable=Table122;
+    PageType=ListPlus;
+    OnAfterGetRecord=VAR
+                       TempSalesTaxAmtLine@1020002 : TEMPORARY Record 10011;
+                       PrevPrintOrder@1020001 : Integer;
+                       PrevTaxPercent@1020000 : Decimal;
+                     BEGIN
+                       CLEARALL;
+                       TaxArea.GET("Tax Area Code");
+
+                       IF "Currency Code" = '' THEN
+                         Currency.InitRoundingPrecision
+                       ELSE
+                         Currency.GET("Currency Code");
+
+                       PurchInvLine.SETRANGE("Document No.","No.");
+
+                       IF PurchInvLine.FIND('-') THEN
+                         REPEAT
+                           VendAmount := VendAmount + PurchInvLine.Amount;
+                           AmountInclVAT := AmountInclVAT + PurchInvLine."Amount Including VAT";
+                           IF "Prices Including VAT" THEN
+                             InvDiscAmount := InvDiscAmount + PurchInvLine."Inv. Discount Amount" / (1 + PurchInvLine."VAT %" / 100)
+                           ELSE
+                             InvDiscAmount := InvDiscAmount + PurchInvLine."Inv. Discount Amount";
+                           LineQty := LineQty + PurchInvLine.Quantity;
+                           TotalNetWeight := TotalNetWeight + (PurchInvLine.Quantity * PurchInvLine."Net Weight");
+                           TotalGrossWeight := TotalGrossWeight + (PurchInvLine.Quantity * PurchInvLine."Gross Weight");
+                           TotalVolume := TotalVolume + (PurchInvLine.Quantity * PurchInvLine."Unit Volume");
+                           IF PurchInvLine."Units per Parcel" > 0 THEN
+                             TotalParcels := TotalParcels + ROUND(PurchInvLine.Quantity / PurchInvLine."Units per Parcel",1,'>');
+                           IF PurchInvLine."VAT %" <> TaxPercentage THEN
+                             IF TaxPercentage = 0 THEN
+                               TaxPercentage := PurchInvLine."VAT %"
+                             ELSE
+                               TaxPercentage := -1;
+                         UNTIL PurchInvLine.NEXT = 0;
+                       TaxAmount := AmountInclVAT - VendAmount;
+                       InvDiscAmount := ROUND(InvDiscAmount,Currency."Amount Rounding Precision");
+
+                       IF "Currency Code" = '' THEN
+                         AmountLCY := VendAmount
+                       ELSE
+                         AmountLCY :=
+                           CurrExchRate.ExchangeAmtFCYToLCY(
+                             WORKDATE,"Currency Code",VendAmount,"Currency Factor");
+
+                       IF NOT Vend.GET("Pay-to Vendor No.") THEN
+                         CLEAR(Vend);
+                       Vend.CALCFIELDS("Balance (LCY)");
+
+                       AmountInclVAT := VendAmount;
+                       TaxAmount := 0;
+                       SalesTaxCalculate.StartSalesTaxCalculation;
+                       TempSalesTaxLine.DELETEALL;
+                       IF TaxArea."Use External Tax Engine" THEN
+                         SalesTaxCalculate.CallExternalTaxEngineForDoc(DATABASE::"Purch. Inv. Header",0,"No.")
+                       ELSE BEGIN
+                         SalesTaxCalculate.AddPurchInvoiceLines("No.");
+                         SalesTaxCalculate.EndSalesTaxCalculation("Posting Date");
+                       END;
+                       SalesTaxCalculate.GetSalesTaxAmountLineTable(TempSalesTaxLine);
+                       SalesTaxCalculate.GetSummarizedSalesTaxTable(TempSalesTaxAmtLine);
+                       IF TaxArea."Country/Region" = TaxArea."Country/Region"::CA THEN
+                         BreakdownTitle := Text006
+                       ELSE
+                         BreakdownTitle := Text007;
+                       WITH TempSalesTaxAmtLine DO BEGIN
+                         RESET;
+                         SETCURRENTKEY("Print Order","Tax Area Code for Key","Tax Jurisdiction Code");
+                         IF FINDSET THEN BEGIN
+                           REPEAT
+                             IF ("Print Order" = 0) OR
+                                ("Print Order" <> PrevPrintOrder) OR
+                                ("Tax %" <> PrevTaxPercent)
+                             THEN BEGIN
+                               BrkIdx := BrkIdx + 1;
+                               IF BrkIdx > ARRAYLEN(BreakdownAmt) THEN BEGIN
+                                 BrkIdx := BrkIdx - 1;
+                                 BreakdownLabel[BrkIdx] := Text008;
+                               END ELSE
+                                 BreakdownLabel[BrkIdx] := STRSUBSTNO("Print Description","Tax %");
+                             END;
+                             BreakdownAmt[BrkIdx] := BreakdownAmt[BrkIdx] + "Tax Amount";
+                             TaxAmount := TaxAmount + "Tax Amount";
+                           UNTIL NEXT = 0;
+                           AmountInclVAT := AmountInclVAT + TaxAmount;
+                         END;
+                       END;
+                       CurrPage.SubForm.PAGE.SetTempTaxAmountLine(TempSalesTaxLine);
+                       CurrPage.SubForm.PAGE.InitGlobals("Currency Code",FALSE,FALSE,FALSE,FALSE,"VAT Base Discount %");
+                     END;
+
+  }
+  CONTROLS
+  {
+    { 1900000001;0;Container;
+                ContainerType=ContentArea }
+
+    { 24  ;1   ;Group     ;
+                CaptionML=ENU=General }
+
+    { 2   ;2   ;Field     ;
+                CaptionML=ENU=Amount;
+                ToolTipML=ENU=Specifies the transaction amount.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=VendAmount + InvDiscAmount;
+                AutoFormatType=1;
+                AutoFormatExpr="Currency Code" }
+
+    { 6   ;2   ;Field     ;
+                CaptionML=ENU=Inv. Discount Amount;
+                ToolTipML=ENU=Specifies the invoice discount amount for the entire sales document. If the Calc. Inv. Discount field in the Purchases & Payables Setup window is selected, the discount is automatically calculated.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=InvDiscAmount;
+                AutoFormatType=1;
+                AutoFormatExpr="Currency Code" }
+
+    { 12  ;2   ;Field     ;
+                CaptionML=ENU=Total;
+                ToolTipML=ENU=Specifies the total amount less any invoice discount amount and exclusive of tax for the posted document.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=VendAmount;
+                AutoFormatType=1;
+                AutoFormatExpr="Currency Code" }
+
+    { 16  ;2   ;Field     ;
+                CaptionML=ENU=Tax Amount;
+                ToolTipML=ENU=Specifies the tax amount.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=TaxAmount;
+                AutoFormatType=1;
+                AutoFormatExpr="Currency Code" }
+
+    { 20  ;2   ;Field     ;
+                CaptionML=ENU=Total Incl. Tax;
+                ToolTipML=ENU=Specifies the total amount, including tax, that has been posted as invoiced.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=AmountInclVAT;
+                AutoFormatType=1;
+                AutoFormatExpr="Currency Code" }
+
+    { 26  ;2   ;Field     ;
+                CaptionML=ENU=Purchase ($);
+                ToolTipML=ENU=Specifies the purchase amount.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=AmountLCY;
+                AutoFormatType=1 }
+
+    { 3   ;2   ;Field     ;
+                CaptionML=ENU=Quantity;
+                ToolTipML=ENU=Specifies the item quantity.;
+                ApplicationArea=#Basic,#Suite;
+                DecimalPlaces=0:5;
+                SourceExpr=LineQty }
+
+    { 13  ;2   ;Field     ;
+                CaptionML=ENU=Parcels;
+                ToolTipML=ENU=Specifies the number of parcels on the document.;
+                DecimalPlaces=0:5;
+                SourceExpr=TotalParcels }
+
+    { 7   ;2   ;Field     ;
+                CaptionML=ENU=Net Weight;
+                ToolTipML=ENU=Specifies the net weight of items on the sales order.;
+                ApplicationArea=#Basic,#Suite;
+                DecimalPlaces=0:5;
+                SourceExpr=TotalNetWeight }
+
+    { 10  ;2   ;Field     ;
+                CaptionML=ENU=Gross Weight;
+                ToolTipML=ENU=Specifies the gross weight of items on the document.;
+                DecimalPlaces=0:5;
+                SourceExpr=TotalGrossWeight }
+
+    { 17  ;2   ;Field     ;
+                CaptionML=ENU=Volume;
+                ToolTipML=ENU=Specifies the volume of the invoiced items.;
+                DecimalPlaces=0:5;
+                SourceExpr=TotalVolume }
+
+    { 1020001;2;Field     ;
+                Name=BreakdownTitle;
+                ApplicationArea=#Basic,#Suite;
+                CaptionClass=FORMAT(BreakdownTitle);
+                Editable=FALSE }
+
+    { 1020004;2;Field     ;
+                ApplicationArea=#Basic,#Suite;
+                BlankZero=Yes;
+                SourceExpr=BreakdownAmt[1];
+                CaptionClass=FORMAT(BreakdownLabel[1]);
+                Editable=FALSE }
+
+    { 1020005;2;Field     ;
+                ApplicationArea=#Basic,#Suite;
+                BlankZero=Yes;
+                SourceExpr=BreakdownAmt[2];
+                CaptionClass=FORMAT(BreakdownLabel[2]);
+                Editable=FALSE }
+
+    { 1020007;2;Field     ;
+                ApplicationArea=#Basic,#Suite;
+                BlankZero=Yes;
+                SourceExpr=BreakdownAmt[3];
+                CaptionClass=FORMAT(BreakdownLabel[3]);
+                Editable=FALSE }
+
+    { 1020009;2;Field     ;
+                ApplicationArea=#Basic,#Suite;
+                BlankZero=Yes;
+                SourceExpr=BreakdownAmt[4];
+                CaptionClass=FORMAT(BreakdownLabel[4]);
+                Editable=FALSE }
+
+    { 18  ;1   ;Part      ;
+                Name=SubForm;
+                ApplicationArea=#Basic,#Suite;
+                PagePartID=Page10040;
+                Editable=FALSE }
+
+    { 1901061301;1;Group  ;
+                CaptionML=ENU=Vendor }
+
+    { 21  ;2   ;Field     ;
+                CaptionML=ENU=Balance ($);
+                ToolTipML=ENU="Specifies the customer's balance. ";
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=Vend."Balance (LCY)";
+                AutoFormatType=1 }
+
+  }
+  CODE
+  {
+    VAR
+      CurrExchRate@1002 : Record 330;
+      PurchInvLine@1003 : Record 123;
+      Vend@1004 : Record 23;
+      TempSalesTaxLine@1020001 : TEMPORARY Record 10011;
+      Currency@1018 : Record 4;
+      TaxArea@1020002 : Record 318;
+      SalesTaxCalculate@1020000 : Codeunit 398;
+      VendAmount@1006 : Decimal;
+      AmountInclVAT@1007 : Decimal;
+      InvDiscAmount@1008 : Decimal;
+      AmountLCY@1009 : Decimal;
+      LineQty@1010 : Decimal;
+      TotalNetWeight@1011 : Decimal;
+      TotalGrossWeight@1012 : Decimal;
+      TotalVolume@1013 : Decimal;
+      TotalParcels@1014 : Decimal;
+      TaxAmount@1015 : Decimal;
+      TaxPercentage@1016 : Decimal;
+      BreakdownTitle@1020006 : Text[35];
+      BreakdownLabel@1020005 : ARRAY [4] OF Text[30];
+      BreakdownAmt@1020004 : ARRAY [4] OF Decimal;
+      BrkIdx@1020003 : Integer;
+      Text006@1020009 : TextConst 'ENU=Tax Breakdown:';
+      Text007@1020008 : TextConst 'ENU=Sales Tax Breakdown:';
+      Text008@1020007 : TextConst 'ENU=Other Taxes';
+
+    BEGIN
+    END.
+  }
+}
+

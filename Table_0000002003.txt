@@ -1,0 +1,221 @@
+OBJECT Table 2003 Cortana Intelligence Usage
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:14:35 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 2003=rimd;
+    CaptionML=ENU=Cortana Intelligence Usage;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Service             ;Option        ;CaptionML=ENU=Service;
+                                                   OptionCaptionML=ENU=Machine Learning,Computer Vision;
+                                                   OptionString=Machine Learning,Computer Vision }
+    { 2   ;   ;Total Resource Usage;Decimal       ;CaptionML=ENU=Total Resource Usage;
+                                                   MinValue=0;
+                                                   Editable=No }
+    { 3   ;   ;Original Resource Limit;Decimal    ;CaptionML=ENU=Original Resource Limit;
+                                                   MinValue=0;
+                                                   Editable=No }
+    { 4   ;   ;Limit Period        ;Option        ;CaptionML=ENU=Limit Period;
+                                                   OptionCaptionML=ENU=Year,Month,Day,Hour;
+                                                   OptionString=Year,Month,Day,Hour;
+                                                   Editable=No }
+    { 5   ;   ;Last DateTime Updated;DateTime     ;CaptionML=ENU=Last DateTime Updated;
+                                                   Editable=No }
+  }
+  KEYS
+  {
+    {    ;Service                                 ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      ProcessingTimeLessThanZeroErr@1000 : TextConst 'ENU=The available Azure Machine Learning processing time is less than or equal to zero.';
+      AzureMLCategoryTxt@1005 : TextConst '@@@=Locked;ENU=AzureMLCategory';
+      AzureMLLimitReachedTxt@1006 : TextConst '@@@=Locked;ENU=The Azure ML usage limit has been reached';
+      TestMode@1004 : Boolean;
+      TestTime@1003 : Time;
+      TestDate@1002 : Date;
+      ImageAnalysisIsSetup@1001 : Boolean;
+
+    [External]
+    PROCEDURE IncrementTotalProcessingTime@3(ServiceOption@1001 : Option;AzureMLServiceProcessingTime@1000 : Decimal);
+    BEGIN
+      IF AzureMLServiceProcessingTime <= 0 THEN
+        ERROR(ProcessingTimeLessThanZeroErr);
+
+      IF GetSingleInstance(ServiceOption) THEN BEGIN
+        "Total Resource Usage" += AzureMLServiceProcessingTime;
+        "Last DateTime Updated" := GetCurrentDateTime;
+        MODIFY(TRUE);
+      END;
+    END;
+
+    [External]
+    PROCEDURE IsAzureMLLimitReached@5(ServiceOption@1001 : Option;AzureMLUsageLimit@1000 : Decimal) : Boolean;
+    BEGIN
+      IF GetSingleInstance(ServiceOption) THEN
+        IF GetTotalProcessingTime(ServiceOption) >= AzureMLUsageLimit THEN BEGIN
+          SENDTRACETAG('00001T1',AzureMLCategoryTxt,VERBOSITY::Normal,AzureMLLimitReachedTxt,DATACLASSIFICATION::SystemMetadata);
+          EXIT(TRUE);
+        END;
+      EXIT(FALSE);
+    END;
+
+    [External]
+    PROCEDURE GetTotalProcessingTime@8(ServiceOption@1000 : Option) : Decimal;
+    BEGIN
+      // in case Azure ML is used by other features processing time should be added here
+      IF GetSingleInstance(ServiceOption) THEN
+        EXIT("Total Resource Usage");
+    END;
+
+    [External]
+    PROCEDURE GetSingleInstance@9(ServiceOption@1008 : Option) : Boolean;
+    VAR
+      ImageAnalysisSetup@1010 : Record 2020;
+      AzureKeyVaultManagement@1000 : Codeunit 2200;
+      PermissionManager@1007 : Codeunit 9002;
+      ApiUri@1001 : Text[250];
+      ApiKey@1002 : Text[200];
+      LimitType@1005 : Option;
+      LimitValue@1003 : Decimal;
+      LimitValueInt@1009 : Integer;
+      CallModify@1004 : Boolean;
+      ResetTotalProcessingTime@1006 : Boolean;
+    BEGIN
+      IF (ServiceOption = Service::"Machine Learning") AND (NOT PermissionManager.SoftwareAsAService) THEN
+        EXIT(FALSE);
+
+      SETRANGE(Service,ServiceOption);
+      IF NOT FINDFIRST THEN BEGIN
+        INIT;
+        Service := ServiceOption;
+        "Last DateTime Updated" := GetCurrentDateTime;
+        INSERT;
+      END;
+
+      CASE ServiceOption OF
+        Service::"Computer Vision":
+          BEGIN
+            IF "Original Resource Limit" = 0 THEN BEGIN
+              "Original Resource Limit" := 999;
+              "Limit Period" := "Limit Period"::Year;
+            END;
+
+            IF NOT ImageAnalysisSetup.GET THEN BEGIN
+              ImageAnalysisSetup.INIT;
+              ImageAnalysisSetup.INSERT;
+            END;
+
+            IF (NOT ImageAnalysisIsSetup) AND
+               (ImageAnalysisSetup.GetApiKey = '') AND (ImageAnalysisSetup."Api Uri" = '') AND
+               PermissionManager.SoftwareAsAService
+            THEN
+              IF AzureKeyVaultManagement.GetImageAnalysisCredentials(ApiKey,ApiUri,LimitType,LimitValueInt) THEN BEGIN
+                "Original Resource Limit" := LimitValueInt;
+                "Limit Period" := LimitType;
+                CallModify := TRUE;
+              END;
+          END;
+        Service::"Machine Learning":
+          IF AzureKeyVaultManagement.GetMachineLearningCredentials(ApiUri,ApiKey,LimitType,LimitValue) THEN BEGIN
+            "Original Resource Limit" := LimitValue;
+            "Limit Period" := LimitType;
+            CallModify := TRUE;
+          END;
+      END;
+
+      CASE "Limit Period" OF
+        "Limit Period"::Year:
+          ResetTotalProcessingTime := HasChangedYear("Last DateTime Updated");
+        "Limit Period"::Month:
+          ResetTotalProcessingTime := HasChangedMonth("Last DateTime Updated");
+        "Limit Period"::Day:
+          ResetTotalProcessingTime := HasChangedDay("Last DateTime Updated");
+        "Limit Period"::Hour:
+          ResetTotalProcessingTime := HasChangedHour("Last DateTime Updated");
+      END;
+      IF ResetTotalProcessingTime THEN BEGIN
+        "Total Resource Usage" := 0;
+        CallModify := TRUE;
+      END;
+
+      IF CallModify THEN
+        MODIFY;
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE SetTestMode@1(InputTestDate@1000 : Date;InputTestTime@1001 : Time);
+    BEGIN
+      TestMode := TRUE;
+      TestDate := InputTestDate;
+      TestTime := InputTestTime;
+    END;
+
+    LOCAL PROCEDURE GetCurrentDateTime@6() : DateTime;
+    BEGIN
+      IF TestMode THEN
+        EXIT(CREATEDATETIME(TestDate,TestTime));
+
+      EXIT(CURRENTDATETIME);
+    END;
+
+    LOCAL PROCEDURE GetCurentDate@7() : Date;
+    BEGIN
+      EXIT(DT2DATE(GetCurrentDateTime));
+    END;
+
+    PROCEDURE HasChangedYear@21(PreviousDateTime@1000 : DateTime) : Boolean;
+    BEGIN
+      EXIT(HasChangedPeriod(PreviousDateTime,3));
+    END;
+
+    PROCEDURE HasChangedMonth@20(PreviousDateTime@1000 : DateTime) : Boolean;
+    BEGIN
+      EXIT(HasChangedPeriod(PreviousDateTime,2) OR HasChangedYear(PreviousDateTime));
+    END;
+
+    PROCEDURE HasChangedDay@16(PreviousDateTime@1000 : DateTime) : Boolean;
+    BEGIN
+      EXIT(HasChangedPeriod(PreviousDateTime,1) OR HasChangedMonth(PreviousDateTime));
+    END;
+
+    LOCAL PROCEDURE HasChangedPeriod@2(PreviousDateTime@1000 : DateTime;What@1001 : Integer) : Boolean;
+    BEGIN
+      EXIT(DATE2DMY(GetCurentDate,What) <> DATE2DMY(DT2DATE(PreviousDateTime),What));
+    END;
+
+    PROCEDURE HasChangedHour@10(PreviousDateTime@1000 : DateTime) : Boolean;
+    VAR
+      PreviousRounded@1002 : DateTime;
+      CurrentRounded@1003 : DateTime;
+    BEGIN
+      PreviousRounded := ROUNDDATETIME(PreviousDateTime,1000 * 3600,'<');
+      CurrentRounded := ROUNDDATETIME(GetCurrentDateTime,1000 * 3600,'<');
+      EXIT(CurrentRounded <> PreviousRounded);
+    END;
+
+    PROCEDURE SetImageAnalysisIsSetup@11(NewValue@1000 : Boolean);
+    BEGIN
+      ImageAnalysisIsSetup := NewValue;
+    END;
+
+    BEGIN
+    {
+      // This table is used for Azure Machine Learning related features to control that amount of time used by all
+      // these features in total does not exceed the limit defined by Azure ML.The table is singleton and used only in SaaS.
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,421 @@
+OBJECT Codeunit 884 ReadSoft OCR Master Data Sync
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:00 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      SyncVendorsUriTxt@1020 : TextConst '@@@={Locked};ENU=masterdata/rest/%1/suppliers';
+      SyncVendorBankAccountsUriTxt@1019 : TextConst '@@@={Locked};ENU=masterdata/rest/%1/supplierbankaccounts';
+      SyncModifiedVendorsMsg@1017 : TextConst 'ENU=Send updated vendors to the OCR service.';
+      SyncBankAccountsMsg@1016 : TextConst 'ENU=Send vendor bank accounts to the OCR service.';
+      SyncSuccessfulSimpleMsg@1003 : TextConst 'ENU=Synchronization succeeded.';
+      SyncSuccessfulDetailedMsg@1015 : TextConst '@@@=%1 number of created entities, %2 number of updated entities, %3 number of deleted entities;ENU=Synchronization succeeded. Created: %1, Updated: %2, Deleted: %3';
+      SyncFailedSimpleMsg@1014 : TextConst 'ENU=Synchronization failed.';
+      SyncFailedDetailedMsg@1013 : TextConst '@@@=%1 error code, %2 error message;ENU=Synchronization failed. Code: %1, Message: %2';
+      InvalidResponseMsg@1012 : TextConst 'ENU=Response is invalid.';
+      MasterDataSyncMsg@1006 : TextConst '@@@="#1 place holder for SendingPackageMsg ";ENU=Master data synchronization.\#1########################################';
+      SendingPackageMsg@1005 : TextConst '@@@=%1 package number, %2 package count;ENU=Sending package %1 of %2';
+      MaxPortionSizeTxt@1004 : TextConst '@@@={Locked};ENU=3000';
+      MethodPutTok@1002 : TextConst '@@@={Locked};ENU=PUT';
+      MethodPostTok@1001 : TextConst '@@@={Locked};ENU=POST';
+      OCRServiceSetup@1021 : Record 1270;
+      OCRServiceMgt@1022 : Codeunit 1294;
+      Window@1011 : Dialog;
+      WindowUpdateDateTime@1010 : DateTime;
+      OrganizationId@1023 : Text;
+      PackageNo@1009 : Integer;
+      PackageCount@1008 : Integer;
+      MaxPortionSizeValue@1007 : Integer;
+
+    [External]
+    PROCEDURE SyncMasterData@3(Resync@1000 : Boolean;Silent@1001 : Boolean) : Boolean;
+    VAR
+      LastSyncTime@1004 : DateTime;
+      SyncStartTime@1009 : DateTime;
+    BEGIN
+      OCRServiceMgt.GetOcrServiceSetupExtended(OCRServiceSetup,TRUE);
+      OCRServiceSetup.TESTFIELD("Master Data Sync Enabled");
+
+      IF Resync THEN BEGIN
+        CLEAR(OCRServiceSetup."Master Data Last Sync");
+        OCRServiceSetup.MODIFY;
+        COMMIT;
+      END;
+
+      LastSyncTime := OCRServiceSetup."Master Data Last Sync";
+      SyncStartTime := CURRENTDATETIME;
+
+      IF NOT SyncVendors(LastSyncTime,SyncStartTime) THEN BEGIN
+        IF NOT Silent THEN
+          MESSAGE(SyncFailedSimpleMsg);
+        EXIT(FALSE);
+      END;
+
+      OCRServiceSetup."Master Data Last Sync" := SyncStartTime;
+      OCRServiceSetup.MODIFY;
+      IF NOT Silent THEN
+        MESSAGE(SyncSuccessfulSimpleMsg);
+      EXIT(TRUE);
+    END;
+
+    [External]
+    PROCEDURE ResetLastSyncTime@2();
+    BEGIN
+      IF NOT IsSyncEnabled THEN
+        EXIT;
+      OCRServiceSetup.GET;
+      IF OCRServiceSetup."Master Data Last Sync" = 0DT THEN
+        EXIT;
+      CLEAR(OCRServiceSetup."Master Data Last Sync");
+      OCRServiceSetup.MODIFY;
+      COMMIT;
+    END;
+
+    [External]
+    PROCEDURE IsSyncEnabled@1() : Boolean;
+    VAR
+      OCRServiceSetup@1000 : Record 1270;
+    BEGIN
+      IF NOT OCRServiceSetup.GET THEN
+        EXIT(FALSE);
+
+      IF NOT OCRServiceSetup."Master Data Sync Enabled" THEN
+        EXIT(FALSE);
+
+      IF NOT OCRServiceSetup.Enabled THEN
+        EXIT(FALSE);
+
+      IF OCRServiceSetup."Service URL" = '' THEN
+        EXIT(FALSE);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CheckSyncResponse@104(VAR ResponseStream@1000 : InStream;ActivityDescription@1010 : Text) : Boolean;
+    VAR
+      XMLDOMManagement@1004 : Codeunit 6224;
+      XMLRootNode@1003 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      XMLNode@1002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      NoOfCreated@1006 : Integer;
+      NoOfUpdated@1005 : Integer;
+      NoOfDeleted@1001 : Integer;
+      ErrorCode@1009 : Text;
+      ErrorMessage@1007 : Text;
+    BEGIN
+      XMLDOMManagement.LoadXMLNodeFromInStream(ResponseStream,XMLRootNode);
+      CASE XMLRootNode.Name OF
+        'UpdateResult':
+          BEGIN
+            IF XMLDOMManagement.FindNode(XMLRootNode,'Created',XMLNode) THEN
+              EVALUATE(NoOfCreated,XMLNode.InnerText,9);
+            IF XMLDOMManagement.FindNode(XMLRootNode,'Updated',XMLNode) THEN
+              EVALUATE(NoOfUpdated,XMLNode.InnerText,9);
+            IF XMLDOMManagement.FindNode(XMLRootNode,'Deleted',XMLNode) THEN
+              EVALUATE(NoOfDeleted,XMLNode.InnerText,9);
+            OCRServiceMgt.LogActivitySucceeded(
+              OCRServiceSetup.RECORDID,ActivityDescription,STRSUBSTNO(SyncSuccessfulDetailedMsg,NoOfCreated,NoOfUpdated,NoOfDeleted));
+            EXIT(TRUE);
+          END;
+        'ServiceError':
+          BEGIN
+            IF XMLDOMManagement.FindNode(XMLRootNode,'Code',XMLNode) THEN
+              ErrorCode := XMLNode.InnerText;
+            IF XMLDOMManagement.FindNode(XMLRootNode,'Message',XMLNode) THEN
+              ErrorMessage := XMLNode.InnerText;
+            OCRServiceMgt.LogActivityFailed(
+              OCRServiceSetup.RECORDID,ActivityDescription,STRSUBSTNO(SyncFailedDetailedMsg,ErrorCode,ErrorMessage));
+            EXIT(FALSE);
+          END;
+        ELSE BEGIN
+          OCRServiceMgt.LogActivityFailed(OCRServiceSetup.RECORDID,ActivityDescription,InvalidResponseMsg);
+          EXIT(FALSE);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE SyncVendors@92(StartDateTime@1001 : DateTime;EndDateTime@1000 : DateTime) : Boolean;
+    VAR
+      TempBlobModifiedVendor@1003 : TEMPORARY Record 99008535;
+      TempBlobBankAccount@1004 : TEMPORARY Record 99008535;
+      ModifiedVendorCount@1011 : Integer;
+      BankAccountCount@1010 : Integer;
+      ModifyVendorPackageCount@1008 : Integer;
+      BankAccountPackageCount@1009 : Integer;
+      TotalPackageCount@1005 : Integer;
+      Success@1006 : Boolean;
+      ModifiedVendorFirstPortionAction@1015 : Code[6];
+    BEGIN
+      IF StartDateTime > 0DT THEN
+        ModifiedVendorFirstPortionAction := MethodPostTok
+      ELSE
+        ModifiedVendorFirstPortionAction := MethodPutTok;
+
+      GetModifiedVendors(TempBlobModifiedVendor,StartDateTime,EndDateTime);
+      GetVendorBankAccounts(TempBlobBankAccount,StartDateTime,EndDateTime);
+
+      ModifiedVendorCount := TempBlobModifiedVendor.COUNT;
+      BankAccountCount := TempBlobBankAccount.COUNT;
+
+      IF (ModifiedVendorCount > 0) OR (StartDateTime = 0DT) THEN
+        ModifyVendorPackageCount := (ModifiedVendorCount DIV MaxPortionSize) + 1;
+      IF BankAccountCount > 0 THEN
+        BankAccountPackageCount := (TempBlobBankAccount.COUNT DIV MaxPortionSize) + 1;
+      TotalPackageCount := ModifyVendorPackageCount + BankAccountPackageCount;
+
+      IF TotalPackageCount = 0 THEN
+        EXIT(TRUE);
+
+      CheckOrganizationId;
+
+      OpenWindow(TotalPackageCount);
+
+      Success := SyncMasterDataEntities(
+          TempBlobModifiedVendor,VendorsUri,ModifiedVendorFirstPortionAction,MethodPostTok,
+          'Suppliers',SyncModifiedVendorsMsg,MaxPortionSize);
+
+      IF Success THEN
+        Success := SyncMasterDataEntities(
+            TempBlobBankAccount,VendorBankAccountsUri,MethodPutTok,MethodPutTok,
+            'SupplierBankAccounts',SyncBankAccountsMsg,MaxPortionSize);
+
+      CloseWindow;
+
+      EXIT(Success);
+    END;
+
+    LOCAL PROCEDURE SyncMasterDataEntities@62(VAR TempBlob@1000 : TEMPORARY Record 99008535;RequestUri@1002 : Text;FirstPortionAction@1003 : Code[6];NextPortionAction@1012 : Code[6];RootNodeName@1004 : Text;ActivityDescription@1006 : Text;PortionSize@1011 : Integer) : Boolean;
+    VAR
+      ResponseStream@1005 : InStream;
+      EntityCount@1009 : Integer;
+      PortionCount@1008 : Integer;
+      PortionNumber@1007 : Integer;
+      LastPortion@1010 : Boolean;
+      Data@1001 : Text;
+      RequestAction@1013 : Code[6];
+    BEGIN
+      EntityCount := TempBlob.COUNT;
+
+      IF EntityCount = 0 THEN BEGIN
+        IF FirstPortionAction <> MethodPutTok THEN
+          EXIT(TRUE);
+        PortionCount := 1;
+        PortionSize := 0;
+      END ELSE BEGIN
+        PortionCount := (EntityCount DIV PortionSize) + 1;
+        TempBlob.FINDFIRST;
+      END;
+
+      RequestAction := FirstPortionAction;
+      FOR PortionNumber := 1 TO PortionCount DO BEGIN
+        UpdateWindow;
+        Data := GetMasterDataEntitiesXml(TempBlob,RootNodeName,PortionSize,LastPortion);
+        IF NOT OCRServiceMgt.RsoRequest(RequestUri,RequestAction,Data,ResponseStream) THEN BEGIN
+          OCRServiceMgt.LogActivityFailed(OCRServiceSetup.RECORDID,ActivityDescription,SyncFailedSimpleMsg);
+          EXIT(FALSE);
+        END;
+        IF NOT CheckSyncResponse(ResponseStream,ActivityDescription) THEN
+          EXIT(FALSE);
+        IF LastPortion THEN
+          BREAK;
+        RequestAction := NextPortionAction;
+      END;
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE GetModifiedVendors@76(VAR TempBlob@1003 : Record 99008535;StartDateTime@1001 : DateTime;EndDateTime@1000 : DateTime);
+    VAR
+      OCRVendors@1002 : Query 134;
+      Index@1005 : Integer;
+      Data@1004 : Text;
+    BEGIN
+      OCRVendors.SETRANGE(Modified_On,StartDateTime,EndDateTime);
+      IF OCRVendors.OPEN THEN
+        WHILE OCRVendors.READ DO BEGIN
+          Index += 1;
+          Data := GetModifiedVendorXml(OCRVendors);
+          PutToBuffer(TempBlob,Index,Data);
+        END;
+    END;
+
+    LOCAL PROCEDURE GetVendorBankAccounts@74(VAR TempBlob@1003 : Record 99008535;StartDateTime@1001 : DateTime;EndDateTime@1002 : DateTime);
+    VAR
+      OCRVendorBankAccounts@1000 : Query 135;
+      VendorId@1006 : GUID;
+      AccountIndex@1007 : Integer;
+      VendorIndex@1005 : Integer;
+      Data@1004 : Text;
+    BEGIN
+      OCRVendorBankAccounts.SETRANGE(Modified_On,StartDateTime,EndDateTime);
+      IF NOT OCRVendorBankAccounts.OPEN THEN
+        EXIT;
+
+      WHILE OCRVendorBankAccounts.READ DO BEGIN
+        IF AccountIndex = 0 THEN
+          VendorId := OCRVendorBankAccounts.Id;
+        AccountIndex += 1;
+        IF VendorId <> OCRVendorBankAccounts.Id THEN BEGIN
+          VendorIndex += 1;
+          PutToBuffer(TempBlob,VendorIndex,Data);
+          VendorId := OCRVendorBankAccounts.Id;
+          Data := '';
+        END;
+        Data += GetVendorBankAccountXml(OCRVendorBankAccounts);
+      END;
+      VendorIndex += 1;
+      PutToBuffer(TempBlob,VendorIndex,Data);
+    END;
+
+    LOCAL PROCEDURE GetMasterDataEntitiesXml@109(VAR TempBlob@1000 : Record 99008535;RootNodeName@1002 : Text;PortionSize@1004 : Integer;VAR LastPortion@1007 : Boolean) : Text;
+    VAR
+      Data@1001 : Text;
+      Count@1006 : Integer;
+    BEGIN
+      Data := '';
+      IF PortionSize = 0 THEN
+        LastPortion := TRUE
+      ELSE
+        FOR Count := 1 TO PortionSize DO BEGIN
+          Data += GetFromBuffer(TempBlob);
+          IF TempBlob.NEXT = 0 THEN BEGIN
+            LastPortion := TRUE;
+            BREAK;
+          END;
+        END;
+      Data := STRSUBSTNO('<%1 xmlns:i="http://www.w3.org/2001/XMLSchema-instance">%2</%3>',RootNodeName,Data,RootNodeName);
+      EXIT(Data);
+    END;
+
+    LOCAL PROCEDURE GetModifiedVendorXml@69(VAR OCRVendors@1000 : Query 134) : Text;
+    VAR
+      XMLDOMManagement@1003 : Codeunit 6224;
+      DotNetXmlDocument@1006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XmlNode@1002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      XmlNodeChild@1001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      Blocked@1007 : Boolean;
+    BEGIN
+      Blocked := OCRVendors.Blocked <> OCRVendors.Blocked::" ";
+      DotNetXmlDocument := DotNetXmlDocument.XmlDocument;
+      XMLDOMManagement.AddRootElement(DotNetXmlDocument,'Supplier',XmlNode);
+
+      // when using XML as the input for API, the element order needs to match exactly
+      XMLDOMManagement.AddElement(XmlNode,'SupplierNumber',OCRVendors.No,'',XmlNodeChild);
+      XMLDOMManagement.AddElement(XmlNode,'Name',OCRVendors.Name,'',XmlNodeChild);
+      XMLDOMManagement.AddElement(XmlNode,'TaxRegistrationNumber',OCRVendors.VAT_Registration_No,'',XmlNodeChild);
+      XMLDOMManagement.AddElement(XmlNode,'Street',OCRVendors.Address,'',XmlNodeChild);
+      XMLDOMManagement.AddElement(XmlNode,'PostalCode',OCRVendors.Post_Code,'',XmlNodeChild);
+      XMLDOMManagement.AddElement(XmlNode,'City',OCRVendors.City,'',XmlNodeChild);
+      XMLDOMManagement.AddElement(XmlNode,'Blocked',FORMAT(Blocked,0,9),'',XmlNodeChild);
+      XMLDOMManagement.AddElement(XmlNode,'TelephoneNumber',OCRVendors.Phone_No,'',XmlNodeChild);
+
+      EXIT(DotNetXmlDocument.OuterXml);
+    END;
+
+    LOCAL PROCEDURE GetVendorBankAccountXml@68(VAR OCRVendorBankAccounts@1000 : Query 135) : Text;
+    VAR
+      XMLDOMManagement@1001 : Codeunit 6224;
+      DotNetXmlDocument@1004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XmlNode@1002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      XmlNodeChild@1008 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+    BEGIN
+      DotNetXmlDocument := DotNetXmlDocument.XmlDocument;
+      XMLDOMManagement.AddRootElement(DotNetXmlDocument,'SupplierBankAccount',XmlNode);
+
+      // when using XML as the input for API, the element order needs to match exactly
+      XMLDOMManagement.AddElement(XmlNode,'BankName',OCRVendorBankAccounts.Name,'',XmlNodeChild);
+      XMLDOMManagement.AddElement(XmlNode,'SupplierNumber',OCRVendorBankAccounts.No,'',XmlNodeChild);
+      XMLDOMManagement.AddElement(XmlNode,'BankNumber',OCRVendorBankAccounts.Bank_Branch_No,'',XmlNodeChild);
+      XMLDOMManagement.AddElement(XmlNode,'AccountNumber',OCRVendorBankAccounts.Bank_Account_No,'',XmlNodeChild);
+
+      EXIT(DotNetXmlDocument.OuterXml);
+    END;
+
+    LOCAL PROCEDURE PutToBuffer@101(VAR TempBlob@1000 : Record 99008535;Index@1003 : Integer;Data@1001 : Text);
+    VAR
+      OutStream@1002 : OutStream;
+    BEGIN
+      TempBlob.INIT;
+      TempBlob."Primary Key" := Index;
+      TempBlob.Blob.CREATEOUTSTREAM(OutStream);
+      OutStream.WRITETEXT(Data);
+      TempBlob.INSERT;
+    END;
+
+    LOCAL PROCEDURE GetFromBuffer@102(VAR TempBlob@1000 : Record 99008535) : Text;
+    VAR
+      InStream@1002 : InStream;
+      Data@1001 : Text;
+    BEGIN
+      IF TempBlob.ISEMPTY THEN
+        EXIT;
+      TempBlob.CALCFIELDS(Blob);
+      TempBlob.Blob.CREATEINSTREAM(InStream);
+      InStream.READTEXT(Data);
+      EXIT(Data);
+    END;
+
+    LOCAL PROCEDURE VendorsUri@60() : Text;
+    BEGIN
+      EXIT(STRSUBSTNO(SyncVendorsUriTxt,OrganizationId));
+    END;
+
+    LOCAL PROCEDURE VendorBankAccountsUri@59() : Text;
+    BEGIN
+      EXIT(STRSUBSTNO(SyncVendorBankAccountsUriTxt,OrganizationId));
+    END;
+
+    LOCAL PROCEDURE CheckOrganizationId@58();
+    BEGIN
+      OrganizationId := OCRServiceSetup."Organization ID";
+      IF OrganizationId = '' THEN BEGIN
+        OCRServiceMgt.UpdateOrganizationInfo(OCRServiceSetup);
+        OrganizationId := OCRServiceSetup."Organization ID";
+      END;
+      OCRServiceSetup.TESTFIELD("Organization ID");
+    END;
+
+    LOCAL PROCEDURE MaxPortionSize@110() : Integer;
+    BEGIN
+      IF MaxPortionSizeValue = 0 THEN
+        EVALUATE(MaxPortionSizeValue,MaxPortionSizeTxt);
+      EXIT(MaxPortionSizeValue);
+    END;
+
+    LOCAL PROCEDURE OpenWindow@100(Count@1000 : Integer);
+    BEGIN
+      PackageNo := 0;
+      PackageCount := Count;
+      WindowUpdateDateTime := CURRENTDATETIME;
+      Window.OPEN(MasterDataSyncMsg);
+      Window.UPDATE(1,'');
+    END;
+
+    LOCAL PROCEDURE UpdateWindow@99();
+    BEGIN
+      PackageNo += 1;
+      IF CURRENTDATETIME - WindowUpdateDateTime >= 300 THEN BEGIN
+        WindowUpdateDateTime := CURRENTDATETIME;
+        Window.UPDATE(1,STRSUBSTNO(SendingPackageMsg,PackageNo,PackageCount));
+      END;
+    END;
+
+    LOCAL PROCEDURE CloseWindow@112();
+    BEGIN
+      Window.CLOSE;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

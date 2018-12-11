@@ -1,0 +1,1066 @@
+OBJECT Report 10115 Vendor 1099 Magnetic Media
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:13:32 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Vendor 1099 Magnetic Media;
+               ENC=Vendor 1099 Magnetic Media];
+    ApplicationArea=#Basic,#Suite;
+    ProcessingOnly=Yes;
+    OnInitReport=BEGIN
+                   TestFile := ' ';
+                   PriorYear := ' ';
+                   SequenceNo := 0;
+                 END;
+
+    OnPreReport=VAR
+                  FileMgt@1020000 : Codeunit 419;
+                BEGIN
+                  IF TransCode = '' THEN
+                    ERROR(Text005);
+                  IF ContactPhoneNo = '' THEN
+                    ERROR(Text001);
+                  IF ContactName = '' THEN
+                    ERROR(Text002);
+                  IF VendContactName = '' THEN
+                    ERROR(Text004);
+                  IF VendContactPhoneNo = '' THEN
+                    ERROR(Text003);
+                  IF VendorInfo.Name = '' THEN
+                    ERROR(Text006);
+                  IF VendorInfo.Address = '' THEN
+                    ERROR(Text006);
+                  IF VendorInfo.City = '' THEN
+                    ERROR(Text006);
+                  IF VendorInfo.County = '' THEN
+                    ERROR(Text006);
+                  IF VendorInfo."Post Code" = '' THEN
+                    ERROR(Text006);
+                  IF VendorInfo."E-Mail" = '' THEN
+                    ERROR(Text006);
+
+                  FormType := 0;
+
+                  // Create date range which covers the entire calendar year
+                  PeriodDate[1] := DMY2DATE(1,1,Year);
+                  PeriodDate[2] := DMY2DATE(31,12,Year);
+
+                  CLEAR(PayeeNum);
+                  CLEAR(ARecNum);
+
+                  LastMISCNo := 17;
+                  LastDIVNo := 17;
+                  LastINTNo := 13;
+                  MagMediaManagement.RUN;
+
+                  Window.OPEN(
+                    'Exporting...\\' +
+                    'Table    #1####################');
+
+                  ServerTempFileName := FileMgt.ServerTempFileName('');
+                  CLEAR(IRSData);
+                  IRSData.TEXTMODE := TRUE;
+                  IRSData.WRITEMODE := TRUE;
+                  IRSData.CREATE(ServerTempFileName);
+                  Window.UPDATE(1,'IRSTAX');
+                END;
+
+    OnPostReport=BEGIN
+                   IRSData.CLOSE;
+                   IF FileName = '' THEN
+                     FileMgt.DownloadHandler(ServerTempFileName,'','',FileMgt.GetToFilterText('',ServerTempFileName),ClientFileNameTxt)
+                   ELSE
+                     FileMgt.CopyServerFile(ServerTempFileName,FileName,TRUE);
+                   FileMgt.DeleteServerFile(ServerTempFileName);
+                 END;
+
+    UsageCategory=ReportsAndAnalysis;
+  }
+  DATASET
+  {
+    { 8300;    ;DataItem;T Record            ;
+               DataItemTable=Table2000000026;
+               DataItemTableView=SORTING(Number);
+               MaxIteration=1;
+               OnAfterGetRecord=BEGIN
+                                  WriteTRec;
+                                END;
+                                 }
+
+    { 2737;    ;DataItem;A Record            ;
+               DataItemTable=Table2000000026;
+               DataItemTableView=SORTING(Number);
+               MaxIteration=3;
+               OnAfterGetRecord=VAR
+                                  VendorFiltered@1020000 : Record 23;
+                                BEGIN
+                                  // 1 iteration per 1099 type
+
+                                  CLEAR(PayeeNum);
+                                  FormType := FormType + 1;
+                                  InvoiceEntry.RESET;
+                                  CASE FormType OF
+                                    1:
+                                      BEGIN // MISC
+                                        InvoiceEntry.SETRANGE("IRS 1099 Code",'MISC-','MISC-99');
+                                        EndLine := LastMISCNo;
+                                        ReturnType := 'A ';
+                                      END;
+                                    2:
+                                      BEGIN // DIV
+                                        InvoiceEntry.SETRANGE("IRS 1099 Code",'DIV-','DIV-99');
+                                        EndLine := LastDIVNo;
+                                        ReturnType := '1 ';
+                                      END;
+                                    3:
+                                      BEGIN // INT
+                                        InvoiceEntry.SETRANGE("IRS 1099 Code",'INT-','INT-99');
+                                        EndLine := LastINTNo;
+                                        ReturnType := '6 ';
+                                      END;
+                                  END;
+
+                                  VendorFiltered.COPYFILTERS(Vendor);
+                                  IF VendorFiltered.FINDSET THEN
+                                    REPEAT
+                                      ProcessVendorInvoices(VendorFiltered."No.",PeriodDate);
+                                    UNTIL VendorFiltered.NEXT = 0;
+
+                                  AnyRecs[FormType] := MagMediaManagement.AnyAmount(FormType,EndLine);
+                                  MagMediaManagement.AmtCodes(CodeNos,FormType,EndLine);
+                                  // Following is a special case for 1099-MISC only
+                                  IF FormType = 1 THEN BEGIN
+                                    IsDirectSales :=
+                                      MagMediaManagement.DirectSalesCheck(
+                                        MagMediaManagement.UpdateLines(InvoiceEntry,FormType,EndLine,'MISC-09',0.0));
+                                    IF IsDirectSales THEN
+                                      CodeNos := '1';
+                                  END;
+                                  IF AnyRecs[FormType] THEN BEGIN
+                                    WriteARec;
+                                    ARecNum := ARecNum + 1;
+                                  END ELSE
+                                    CurrReport.SKIP;
+                                END;
+                                 }
+
+    { 3182;1   ;DataItem;                    ;
+               DataItemTable=Table23;
+               DataItemTableView=SORTING(No.);
+               ReqFilterHeadingML=ENU=Vendor Filter;
+               OnPreDataItem=BEGIN
+                               MagMediaManagement.ClearTotals;
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  MagMediaManagement.ClearAmts;
+                                  CLEAR(DirectSales);
+
+                                  // Check through all payments during calendar year
+                                  ProcessVendorInvoices("No.",PeriodDate);
+
+                                  WriteThis := MagMediaManagement.AnyAmount(FormType,EndLine);
+
+                                  IF NOT WriteThis THEN
+                                    CurrReport.SKIP;
+                                  PayeeNum := PayeeNum + 1;
+                                  PayeeTotal := PayeeTotal + 1;
+
+                                  "Post Code" := MagMediaManagement.StripNonNumerics("Post Code");
+
+                                  CASE FormType OF
+                                    1:
+                                      BEGIN // MISC
+                                        // Following is a special case for 1099-MISC only
+                                        IF IsDirectSales THEN
+                                          DirectSales := '1'
+                                        ELSE
+                                          DirectSales := ' ';
+                                        WriteMiscBRec;
+                                      END;
+                                    2:
+                                      // DIV
+                                      WriteDivBRec;
+                                    3:
+                                      // INT
+                                      WriteIntBRec;
+                                  END;
+                                END;
+
+               ReqFilterFields=No. }
+
+    { 1308;1   ;DataItem;C Record            ;
+               DataItemTable=Table2000000026;
+               DataItemTableView=SORTING(Number);
+               MaxIteration=1;
+               OnAfterGetRecord=BEGIN
+                                  IF NOT AnyRecs[FormType] THEN
+                                    CurrReport.SKIP;
+
+                                  CASE FormType OF
+                                    1:
+                                      // MISC
+                                      WriteMISCCRec;
+                                    2:
+                                      // DIV
+                                      WriteDIVCRec;
+                                    3:
+                                      // INT
+                                      WriteINTCRec;
+                                  END;
+                                END;
+                                 }
+
+    { 7115;    ;DataItem;F Record            ;
+               DataItemTable=Table2000000026;
+               DataItemTableView=SORTING(Number);
+               MaxIteration=1;
+               OnPreDataItem=BEGIN
+                               IF NOT AnyRecs[FormType] THEN
+                                 CurrReport.SKIP;
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  WriteFRec;
+                                END;
+
+               OnPostDataItem=BEGIN
+                                IRSData.SEEK(296);  // payee totals
+                                IRSData.TEXTMODE := FALSE;
+                                PayeeTotalStr := COPYSTR(MagMediaManagement.FormatAmount(PayeeTotal,7),1,MAXSTRLEN(PayeeTotalStr));
+
+                                FOR i := 1 TO STRLEN(PayeeTotalStr) DO BEGIN
+                                  BinaryWriteChr := PayeeTotalStr[i];
+                                  IRSData.WRITE(BinaryWriteChr);
+                                END;
+                              END;
+                               }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      SaveValues=Yes;
+      OnOpenPage=BEGIN
+                   Year := DATE2DMY(WORKDATE,3);   {default to current working year}
+                   CompanyInfo.GET;
+                   MagMediaManagement.EditCompanyInfo(CompanyInfo);
+                   TransmitterInfo := CompanyInfo;
+                   MagMediaManagement.EditCompanyInfo(CompanyInfo);
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=ENU=Options }
+
+      { 2   ;2   ;Field     ;
+                  Name=Year;
+                  CaptionML=ENU=Calendar Year;
+                  ToolTipML=ENU=Specifies the tax year for the 1099 forms that you want to print. The default is the work date year. The taxes may apply to the previous calendar year so you may want to change this date if nothing prints.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=Year;
+                  OnValidate=BEGIN
+                               IF (Year < 1980) OR (Year > 2060) THEN
+                                 ERROR(Text007);
+                             END;
+                              }
+
+      { 5   ;2   ;Field     ;
+                  Name=TransCode;
+                  CaptionML=ENU=Transmitter Control Code;
+                  ToolTipML=ENU=Specifies the control code of the transmitter that is used to electronically file 1099 forms.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=TransCode;
+                  OnValidate=BEGIN
+                               IF TransCode = '' THEN
+                                 ERROR(Text005);
+                             END;
+                              }
+
+      { 27  ;2   ;Group     ;
+                  CaptionML=ENU=Transmitter Information }
+
+      { 9   ;3   ;Field     ;
+                  CaptionML=ENU=Transmitter Name;
+                  ToolTipML=ENU=Specifies the name of the transmitter that is used to electronically file 1099 forms.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=TransmitterInfo.Name }
+
+      { 11  ;3   ;Field     ;
+                  CaptionML=ENU=Street Address;
+                  ToolTipML=ENU=Specifies the address of the vendor.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=TransmitterInfo.Address }
+
+      { 13  ;3   ;Field     ;
+                  CaptionML=ENU=City;
+                  ToolTipML=ENU=Specifies the city in the vendor's address.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=TransmitterInfo.City }
+
+      { 15  ;3   ;Field     ;
+                  CaptionML=ENU=State;
+                  ToolTipML=ENU=Specifies the state as a part of the address.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=TransmitterInfo.County }
+
+      { 16  ;3   ;Field     ;
+                  CaptionML=ENU=ZIP Code;
+                  ToolTipML=ENU=Specifies the vendor's ZIP code as a part of the address.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=TransmitterInfo."Post Code" }
+
+      { 18  ;3   ;Field     ;
+                  CaptionML=ENU=Employer ID;
+                  ToolTipML=ENU=Specifies the employer at the vendor.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=TransmitterInfo."Federal ID No." }
+
+      { 23  ;3   ;Field     ;
+                  Name=ContactName;
+                  CaptionML=ENU=Contact Name;
+                  ToolTipML=ENU=Specifies the name of the contact at the vendor.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=ContactName;
+                  OnValidate=BEGIN
+                               IF ContactName = '' THEN
+                                 ERROR(Text002);
+                             END;
+                              }
+
+      { 24  ;3   ;Field     ;
+                  Name=ContactPhoneNo;
+                  CaptionML=ENU=Contact Phone No.;
+                  ToolTipML=ENU=Specifies the phone number of the contact at the vendor.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=ContactPhoneNo;
+                  OnValidate=BEGIN
+                               IF ContactPhoneNo = '' THEN
+                                 ERROR(Text001);
+                             END;
+                              }
+
+      { 1020018;3;Field     ;
+                  CaptionML=ENU=Contact E-Mail;
+                  ToolTipML=ENU=Specifies the email address of the contact at the vendor.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=ContactEmail }
+
+      { 7   ;2   ;Field     ;
+                  CaptionML=ENU=Test File;
+                  ToolTipML=ENU=Specifies you want to print a test file of the information that will be filed electronically.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=bTestFile;
+                  OnValidate=BEGIN
+                               bTestFileOnAfterValidate;
+                             END;
+                              }
+
+      { 1020002;2;Group     ;
+                  CaptionML=ENU=Vendor Information }
+
+      { 1020015;3;Field     ;
+                  CaptionML=ENU=Vendor Indicator;
+                  ToolTipML=ENU=Specifies the type of vendor indicator that you want to use, including Vendor Software and In-House Software.;
+                  OptionCaptionML=ENU=Vendor Software,In-House Software;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=VendIndicator }
+
+      { 1020014;3;Field     ;
+                  Name=VendorInfoName;
+                  CaptionML=ENU=Vendor Name;
+                  ToolTipML=ENU=Specifies the vendor's name.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=VendorInfo.Name;
+                  OnValidate=BEGIN
+                               IF VendorInfo.Name = '' THEN
+                                 ERROR(Text006);
+                             END;
+                              }
+
+      { 1020012;3;Field     ;
+                  Name=VendorInfoAddress;
+                  CaptionML=ENU=Vendor Street Address;
+                  ToolTipML=ENU=Specifies the vendor's address.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=VendorInfo.Address;
+                  OnValidate=BEGIN
+                               IF VendorInfo.Address = '' THEN
+                                 ERROR(Text006);
+                             END;
+                              }
+
+      { 1020010;3;Field     ;
+                  Name=VendorInfoCity;
+                  CaptionML=ENU=Vendor City;
+                  ToolTipML=ENU=Specifies the vendors city as a part of the address.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=VendorInfo.City;
+                  OnValidate=BEGIN
+                               IF VendorInfo.City = '' THEN
+                                 ERROR(Text006);
+                             END;
+                              }
+
+      { 1020007;3;Field     ;
+                  Name=VendorInfoCounty;
+                  CaptionML=ENU=Vendor State;
+                  ToolTipML=ENU=Specifies the vendor's state as a part of the address.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=VendorInfo.County;
+                  OnValidate=BEGIN
+                               IF VendorInfo.County = '' THEN
+                                 ERROR(Text006);
+                             END;
+                              }
+
+      { 1020008;3;Field     ;
+                  Name=VendorInfoPostCode;
+                  CaptionML=ENU=Vendor ZIP Code;
+                  ToolTipML=ENU=Specifies the vendor's ZIP code as a part of the address.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=VendorInfo."Post Code";
+                  OnValidate=BEGIN
+                               IF VendorInfo."Post Code" = '' THEN
+                                 ERROR(Text006);
+                             END;
+                              }
+
+      { 1020001;3;Field     ;
+                  Name=VendContactName;
+                  CaptionML=ENU=Vendor Contact Name;
+                  ToolTipML=ENU=Specifies the name of the contact at the vendor.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=VendContactName;
+                  OnValidate=BEGIN
+                               IF VendContactName = '' THEN
+                                 ERROR(Text004);
+                             END;
+                              }
+
+      { 1020000;3;Field     ;
+                  Name=VendContactPhoneNo;
+                  CaptionML=ENU=Vendor Contact Phone No.;
+                  ToolTipML=ENU=Specifies the phone number of the contact at the vendor.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=VendContactPhoneNo;
+                  OnValidate=BEGIN
+                               IF VendContactPhoneNo = '' THEN
+                                 ERROR(Text003);
+                             END;
+                              }
+
+      { 1020017;3;Field     ;
+                  Name=VendorInfoEMail;
+                  CaptionML=ENU=Vendor E-Mail;
+                  ToolTipML=ENU=Specifies the vendor's email address.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=VendorInfo."E-Mail";
+                  OnValidate=BEGIN
+                               IF VendorInfo."E-Mail" = '' THEN
+                                 ERROR(Text006);
+                             END;
+                              }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      IRSData@1000 : File;
+      CompanyInfo@1001 : Record 79;
+      TransmitterInfo@1002 : Record 79;
+      VendorInfo@1020003 : TEMPORARY Record 79;
+      TempAppliedEntry@1480001 : TEMPORARY Record 25;
+      EntryAppMgt@1480000 : Codeunit 10202;
+      FileMgt@1020013 : Codeunit 419;
+      PeriodDate@1004 : ARRAY [2] OF Date;
+      Year@1005 : Integer;
+      DirectSales@1006 : Text[1];
+      ReturnType@1007 : Text[2];
+      CodeNos@1008 : Text[12];
+      WriteThis@1010 : Boolean;
+      AnyRecs@1011 : ARRAY [3] OF Boolean;
+      InvoiceEntry@1012 : Record 25;
+      LastINTNo@1015 : Integer;
+      LastMISCNo@1016 : Integer;
+      LastDIVNo@1017 : Integer;
+      EndLine@1018 : Integer;
+      Invoice1099Amount@1019 : Decimal;
+      i@1020 : Integer;
+      FormType@1021 : Integer;
+      ServerTempFileName@1024 : Text;
+      TestFile@1026 : Text[1];
+      PriorYear@1027 : Text[1];
+      TransCode@1028 : Code[5];
+      ContactName@1030 : Text[40];
+      ContactPhoneNo@1031 : Text[30];
+      ContactEmail@1020011 : Text[35];
+      VendContactName@1020000 : Text[40];
+      VendContactPhoneNo@1020001 : Text[30];
+      MagMediaManagement@1035 : Codeunit 10085;
+      PayeeNum@1036 : Integer;
+      PayeeTotal@1037 : Integer;
+      PayeeTotalStr@1038 : Text[8];
+      ARecNum@1039 : Integer;
+      bTestFile@1040 : Boolean;
+      Window@1041 : Dialog;
+      BinaryWriteChr@1042 : Char;
+      VendIndicator@1020004 : 'Vendor Software,In-House Software';
+      SequenceNo@1020012 : Integer;
+      Text001@1020005 : TextConst 'ENU=You must enter the phone number of the person to be contacted if IRS/MCC encounters problems with the file or transmission.';
+      Text002@1020006 : TextConst 'ENU=You must enter the name of the person to be contacted if IRS/MCC encounters problems with the file or transmission.';
+      Text003@1020007 : TextConst 'ENU=You must enter the phone number of the person to be contacted if IRS/MCC has any software questions.';
+      Text004@1020008 : TextConst 'ENU=You must enter the name of the person to be contacted if IRS/MCC has any software questions.';
+      Text005@1020009 : TextConst 'ENU=You must enter the Transmitter Control Code assigned to you by the IRS.';
+      Text006@1020010 : TextConst 'ENU=You must enter all software vendor address information.';
+      Text007@1020022 : TextConst 'ENU=You must enter a valid year, eg 1993.';
+      ClientFileNameTxt@1020014 : TextConst 'ENU=IRSTAX.txt';
+      FileName@1020002 : Text;
+      IsDirectSales@1020015 : Boolean;
+
+    [External]
+    PROCEDURE ProcessVendorInvoices@1020010(VendorNo@1000 : Code[20];PeriodDate@1020000 : ARRAY [2] OF Date);
+    BEGIN
+      // search for invoices paid off by this payment
+      EntryAppMgt.GetAppliedVendorEntries(TempAppliedEntry,VendorNo,PeriodDate,TRUE);
+      WITH TempAppliedEntry DO BEGIN
+        // search for invoices with 1099 amounts
+        SETFILTER("Document Type",'%1|%2',"Document Type"::Invoice,"Document Type"::"Credit Memo");
+        SETFILTER("IRS 1099 Amount",'<>0');
+        CASE FormType OF
+          1:
+            SETRANGE("IRS 1099 Code",'MISC-','MISC-99');
+          2:
+            SETRANGE("IRS 1099 Code",'DIV-','DIV-99');
+          3:
+            SETRANGE("IRS 1099 Code",'INT-','INT-99');
+        END;
+        IF FINDSET THEN
+          REPEAT
+            Calculate1099Amount(TempAppliedEntry,"Amount to Apply");
+          UNTIL NEXT = 0;
+      END;
+    END;
+
+    [External]
+    PROCEDURE Calculate1099Amount@2(InvoiceEntry@1000 : Record 25;AppliedAmount@1002 : Decimal);
+    BEGIN
+      InvoiceEntry.CALCFIELDS(Amount);
+      Invoice1099Amount := -AppliedAmount * InvoiceEntry."IRS 1099 Amount" / InvoiceEntry.Amount;
+      MagMediaManagement.UpdateLines(InvoiceEntry,FormType,EndLine,InvoiceEntry."IRS 1099 Code",Invoice1099Amount);
+    END;
+
+    [External]
+    PROCEDURE WriteTRec@109();
+    BEGIN
+      // T Record - 1 per transmission, 750 length
+      IncrementSequenceNo;
+      IRSData.WRITE(STRSUBSTNO('T') +
+        STRSUBSTNO('#1##',COPYSTR(FORMAT(Year),1,4)) +
+        STRSUBSTNO(PriorYear) + // Prior Year Indicator
+        STRSUBSTNO('#1#######',MagMediaManagement.StripNonNumerics(TransmitterInfo."Federal ID No.")) +
+        STRSUBSTNO('#1###',TransCode) + // Transmitter Control Code
+        STRSUBSTNO('  ') + // replacement character
+        STRSUBSTNO('     ') + // blank 5
+        STRSUBSTNO(TestFile) +
+        STRSUBSTNO(' ') + // Foreign Entity Code
+        STRSUBSTNO('#1##############################################################################',
+          TransmitterInfo.Name) +
+        STRSUBSTNO('#1################################################',CompanyInfo.Name) +
+        STRSUBSTNO('                              ') + // 2nd Payer Name
+        STRSUBSTNO('#1######################################',CompanyInfo.Address) +
+        STRSUBSTNO('#1######################################',CompanyInfo.City) +
+        STRSUBSTNO('#1',COPYSTR(CompanyInfo.County,1,2)) +
+        STRSUBSTNO('#1#######',MagMediaManagement.StripNonNumerics(CompanyInfo."Post Code")) +
+        STRSUBSTNO('               ') + // blank 15
+        STRSUBSTNO('#1######',MagMediaManagement.FormatAmount(PayeeTotal,8)) + // Payee total
+        STRSUBSTNO('#1######################################',ContactName) +
+        STRSUBSTNO('#1#############',ContactPhoneNo) +
+        STRSUBSTNO('#1################################################',ContactEmail) + // 359-408
+        STRSUBSTNO('  ') + // Tape file indicator
+        STRSUBSTNO('#1####','      ') + // place for media number (not required)
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                 ') +
+        STRSUBSTNO('#1######',MagMediaManagement.FormatAmount(SequenceNo,8)) + // sequence number for all rec types
+        STRSUBSTNO('          ') +
+        STRSUBSTNO('%1',COPYSTR(FORMAT(VendIndicator),1,1)) +
+        STRSUBSTNO('#1######################################',VendorInfo.Name) +
+        STRSUBSTNO('#1######################################',VendorInfo.Address) +
+        STRSUBSTNO('#1######################################',VendorInfo.City) +
+        STRSUBSTNO('#1',COPYSTR(VendorInfo.County,1,2)) +
+        STRSUBSTNO('#1#######',MagMediaManagement.StripNonNumerics(VendorInfo."Post Code")) +
+        STRSUBSTNO('#1######################################',VendContactName) +
+        STRSUBSTNO('#1#############',VendContactPhoneNo) +
+        STRSUBSTNO('#1##################',VendorInfo."E-Mail") + // 20 chars
+        STRSUBSTNO('                          '));
+    END;
+
+    [External]
+    PROCEDURE WriteARec@9();
+    BEGIN
+      // A Record - 1 per Payer per 1099 type, 750 length
+      IncrementSequenceNo;
+      IRSData.WRITE(STRSUBSTNO('A') +
+        STRSUBSTNO('#1##',COPYSTR(FORMAT(Year),1,4)) +
+        STRSUBSTNO('      ') + // 6 blanks
+        STRSUBSTNO('#1#######',MagMediaManagement.StripNonNumerics(CompanyInfo."Federal ID No.")) + // TIN
+        STRSUBSTNO('#1##','    ') + // Payer Name Control
+        STRSUBSTNO(' ') +
+        STRSUBSTNO(ReturnType) +
+        STRSUBSTNO('#1##############',CodeNos) + // Amount Codes  16
+        STRSUBSTNO('        ') + // 8 blanks
+        STRSUBSTNO(' ') + // Foreign Entity Code
+        STRSUBSTNO('#1######################################',CompanyInfo.Name) +
+        STRSUBSTNO('                                        ') + // 2nd Payer Name
+        STRSUBSTNO(' ') + // Transfer Agent Indicator
+        STRSUBSTNO('#1######################################',CompanyInfo.Address) +
+        STRSUBSTNO('#1######################################',CompanyInfo.City) +
+        STRSUBSTNO('#1',CompanyInfo.County) +
+        STRSUBSTNO('#1#######',MagMediaManagement.StripNonNumerics(CompanyInfo."Post Code")) +
+        STRSUBSTNO('#1#############',CompanyInfo."Phone No.") +
+        STRSUBSTNO('                                                  ') + // blank 50
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('          ') +
+        STRSUBSTNO('#1######',MagMediaManagement.FormatAmount(SequenceNo,8)) + // sequence number for all rec types
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                           '));
+    END;
+
+    [External]
+    PROCEDURE WriteMiscBRec@6();
+    BEGIN
+      IncrementSequenceNo;
+
+      IRSData.WRITE(STRSUBSTNO('B') +
+        STRSUBSTNO('#1##',COPYSTR(FORMAT(Year),1,4)) +
+        STRSUBSTNO(' ') + // correction indicator
+        STRSUBSTNO('    ') + // name control
+        STRSUBSTNO(' ') + // Type of TIN
+        STRSUBSTNO('#1#######',MagMediaManagement.StripNonNumerics(Vendor."Federal ID No.")) + // TIN
+        STRSUBSTNO('#1##################',Vendor."No.") + // Payer's Payee Account #
+        STRSUBSTNO('              ') + // Blank 14
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('MISC-01',FormType,EndLine),12)) + // Payment 1
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('MISC-02',FormType,EndLine),12)) +
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('MISC-03',FormType,EndLine),12)) +
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('MISC-04',FormType,EndLine),12)) +
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('MISC-05',FormType,EndLine),12)) +
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('MISC-06',FormType,EndLine),12)) +
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('MISC-07',FormType,EndLine),12)) +
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('MISC-08',FormType,EndLine),12)) +
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(0,12)) +
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('MISC-10',FormType,EndLine),12)) + // crop insurance  Payment A
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('MISC-13',FormType,EndLine),12)) + // golden parachute  Payment B
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('MISC-14',FormType,EndLine),12)) + // gross legal services Payment C
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('MISC-15-A',FormType,EndLine),12)) + // 409A deferral
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('MISC-15-B',FormType,EndLine),12)) + // 409A Income
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(0,12)) +
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(0,12)) +
+        STRSUBSTNO(' ') + // Foreign Country Indicator
+        STRSUBSTNO('#1######################################',Vendor.Name) +
+        STRSUBSTNO('#1######################################',Vendor."Name 2") +
+        STRSUBSTNO('                                        ') + // blank 40
+        STRSUBSTNO('#1######################################',Vendor.Address) +
+        STRSUBSTNO('                                        ') + // blank 40
+        STRSUBSTNO('#1######################################',Vendor.City) +
+        STRSUBSTNO('#1',Vendor.County) +
+        STRSUBSTNO('#1#######',Vendor."Post Code") +
+        STRSUBSTNO(' ') +
+        STRSUBSTNO('#1######',MagMediaManagement.FormatAmount(SequenceNo,8)) + // sequence number for all rec types
+        STRSUBSTNO('                                    ') +
+        STRSUBSTNO(' ') + // Second TIN Notice (Optional) (544)
+        STRSUBSTNO('  ') + // Blank (545-546)
+        STRSUBSTNO(DirectSales) + // Direct Sales Indicator (547)
+        STRSUBSTNO(FORMAT(Vendor."FATCA filing requirement",0,2)) + // FATCA Filing Requirement Indicator (548)
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('              ') + // Blank (549-662)
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('          ') + // Special Data Entries (663-722)
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('MISC-16',FormType,EndLine),12)) + // State Income Tax Withheld (723-734)
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(0,12)) + // Local Income Tax Withheld (735-746)
+        STRSUBSTNO('  ') + // Combined Federal/State Code (747-748)
+        STRSUBSTNO('  '));  // Blank (749-750)
+    END;
+
+    [External]
+    PROCEDURE WriteDivBRec@7();
+    BEGIN
+      IncrementSequenceNo;
+      IRSData.WRITE(STRSUBSTNO('B') + // Type (1)
+        STRSUBSTNO('#1##',COPYSTR(FORMAT(Year),1,4)) + // Payment Year (2-5)
+        STRSUBSTNO(' ') + // Corrected Return Indicator (6)
+        STRSUBSTNO('    ') + // Name Control (7-10)
+        STRSUBSTNO(' ') + // Type of TIN (11)
+        STRSUBSTNO('#1#######',MagMediaManagement.StripNonNumerics(Vendor."Federal ID No.")) + // Payee's TIN (12-20)
+        STRSUBSTNO('#1##################',Vendor."No.") + // Payer's Account Number for Payee (21-40)
+        STRSUBSTNO('              ') + // Payer's Office Code (41-44) and Blank (45-54)
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('DIV-01-A',FormType,EndLine) +
+            MagMediaManagement.GetAmt('DIV-01-B',FormType,EndLine) +
+            MagMediaManagement.GetAmt('DIV-05',FormType,EndLine),12)) + // ordinary dividends 1 (55-66)
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('DIV-01-B',FormType,EndLine),12)) + // 2 (67-78)
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('DIV-02-A',FormType,EndLine) +
+            MagMediaManagement.GetAmt('DIV-02-B',FormType,EndLine) +
+            MagMediaManagement.GetAmt('DIV-02-C',FormType,EndLine) +
+            MagMediaManagement.GetAmt('DIV-02-D',FormType,EndLine),12)) + // total capital gains 3 (79-90)
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('DIV-02-B',FormType,EndLine),12)) + // 4 (91-102)
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(0,12)) + // 5 (103-114)
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(0,12)) + // 6 (115-126)
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('DIV-02-C',FormType,EndLine),12)) + // 7 (127-138)
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('DIV-02-D',FormType,EndLine),12)) + // 8 (139-150)
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('DIV-03',FormType,EndLine),12)) + // non-taxable dist. 9 (151-162)
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('DIV-04',FormType,EndLine),12)) + // fed W/H A (163-174)
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('DIV-05',FormType,EndLine),12)) + // investment. expenses B (175-186)
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('DIV-06',FormType,EndLine),12)) + // Foreign Taxc Paid C (187-198)
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('DIV-08',FormType,EndLine),12)) + // cash liquidation D (199-210)
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('DIV-09',FormType,EndLine),12)) + // non-cash liquidation E (211-222)
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('DIV-10',FormType,EndLine),12)) + // Exempt-interest dividends F (223-234)
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('DIV-11',FormType,EndLine),12)) + // Specified private activity bond... G (235-246)
+        STRSUBSTNO(' ') + // Foreign Country Indicator (247)
+        STRSUBSTNO('#1######################################',Vendor.Name) +
+        STRSUBSTNO('#1######################################',Vendor."Name 2") +
+        STRSUBSTNO('                                        ') + // blank 40
+        STRSUBSTNO('#1######################################',Vendor.Address) +
+        STRSUBSTNO('                                        ') + // blank 40
+        STRSUBSTNO('#1######################################',Vendor.City) +
+        STRSUBSTNO('#1',Vendor.County) +
+        STRSUBSTNO('#1#######',Vendor."Post Code") +
+        STRSUBSTNO(' ') +
+        STRSUBSTNO('#1######',MagMediaManagement.FormatAmount(SequenceNo,8)) + // sequence number for all rec types
+        STRSUBSTNO('                                    ') +
+        STRSUBSTNO(' ') + // Second TIN Notice (Optional) (544)
+        STRSUBSTNO('  ') + // Blank (545-546)
+        STRSUBSTNO('                                        ') + // Foreign Country or U.S. Possession (547-586)
+        STRSUBSTNO(FORMAT(Vendor."FATCA filing requirement",0,2)) + // FATCA Filing Requirement Indicator (587)
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                         ') + // Blank (588-662)
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('          ') + // Special Data Entries (663-722)
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(0,12)) + // State Income Tax Withheld (723-734)
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(0,12)) + // Local Income Tax Withheld (735-746)
+        STRSUBSTNO('  ') + // Combined Federal/State Code (747-748)
+        STRSUBSTNO('  ')); // Blank (749-750)
+    END;
+
+    [External]
+    PROCEDURE WriteIntBRec@8();
+    BEGIN
+      IncrementSequenceNo;
+      IRSData.WRITE(STRSUBSTNO('B') +
+        STRSUBSTNO('#1##',COPYSTR(FORMAT(Year),1,4)) +
+        STRSUBSTNO(' ') + // correction indicator
+        STRSUBSTNO('    ') + // name control
+        STRSUBSTNO(' ') + // Type of TIN
+        STRSUBSTNO('#1#######',MagMediaManagement.StripNonNumerics(Vendor."Federal ID No.")) + // TIN
+        STRSUBSTNO('#1##################',Vendor."No.") + // Payer's Payee Account #
+        STRSUBSTNO('              ') + // Blank 14
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('INT-01',FormType,EndLine),12)) +
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('INT-02',FormType,EndLine),12)) +
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('INT-03',FormType,EndLine),12)) +
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('INT-04',FormType,EndLine),12)) +
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('INT-05',FormType,EndLine),12)) +
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('INT-06',FormType,EndLine),12)) +
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(0,12)) +
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('INT-08',FormType,EndLine) +
+            MagMediaManagement.GetAmt('INT-09',FormType,EndLine),12)) +
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('INT-09',FormType,EndLine),12)) +
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('INT-10',FormType,EndLine),12)) +
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('INT-11',FormType,EndLine),12)) +
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('INT-12',FormType,EndLine),12)) +
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetAmt('INT-13',FormType,EndLine),12)) +
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(0,12)) +
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(0,12)) +
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(0,12)) +
+        STRSUBSTNO(' ') + // Foreign Country Indicator
+        STRSUBSTNO('#1######################################',Vendor.Name) +
+        STRSUBSTNO('#1######################################',Vendor."Name 2") +
+        STRSUBSTNO('                                        ') + // blank 40
+        STRSUBSTNO('#1######################################',Vendor.Address) +
+        STRSUBSTNO('                                        ') + // blank 40
+        STRSUBSTNO('#1######################################',Vendor.City) +
+        STRSUBSTNO('#1',Vendor.County) +
+        STRSUBSTNO('#1#######',Vendor."Post Code") +
+        STRSUBSTNO(' ') +
+        STRSUBSTNO('#1######',MagMediaManagement.FormatAmount(SequenceNo,8)) + // sequence number for all rec types
+        STRSUBSTNO('                                    ') +
+        STRSUBSTNO(' ') + // Second TIN Notice (Optional) (544)
+        STRSUBSTNO('  ') + // Blank (545-546)
+        STRSUBSTNO('                                        ') + // Foreign Country or U.S. Possession (547-586)
+        STRSUBSTNO('             ') + // CUSIP Number (587-599)
+        STRSUBSTNO(FORMAT(Vendor."FATCA filing requirement",0,2)) + // FATCA Filing Requirement Indicator (600)
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('            ') + // Blank (601-662)
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('          ') + // Special Data Entries (663-722)
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(0,12)) + // State Income Tax Withheld (723-734)
+        STRSUBSTNO('#1##########',MagMediaManagement.FormatMoneyAmount(0,12)) + // Local Income Tax Withheld (735-746)
+        STRSUBSTNO('  ') + // Combined Federal/State Code (747-748)
+        STRSUBSTNO('  ')); // Blank (749-750)
+    END;
+
+    [External]
+    PROCEDURE WriteMISCCRec@4();
+    BEGIN
+      // C Record - 1 per Payer per 1099 type
+      IncrementSequenceNo;
+      IRSData.WRITE(STRSUBSTNO('C') +
+        STRSUBSTNO('#1######',MagMediaManagement.FormatAmount(PayeeNum,8)) +
+        STRSUBSTNO('      ') + // Blank 6
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('MISC-01',FormType,EndLine),18)) + // Payment 1
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('MISC-02',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('MISC-03',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('MISC-04',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('MISC-05',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('MISC-06',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('MISC-07',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('MISC-08',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(0,18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('MISC-10',FormType,EndLine),18)) + // crop insurance  Payment A
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('MISC-13',FormType,EndLine),18)) + // golden parachute  Payment B
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('MISC-14',FormType,EndLine),18)) + // gross legal services Payment C
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('MISC-15-A',FormType,EndLine),18)) + // 409A deferral
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('MISC-15-B',FormType,EndLine),18)) + // 409A Income
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(0,18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(0,18)) +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                              ') +
+        STRSUBSTNO('#1######',MagMediaManagement.FormatAmount(SequenceNo,8)) + // sequence number for all rec types
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                           '));
+    END;
+
+    [External]
+    PROCEDURE WriteDIVCRec@5();
+    BEGIN
+      // C Record - 1 per Payer per 1099 type
+      IncrementSequenceNo;
+      IRSData.WRITE(STRSUBSTNO('C') +
+        STRSUBSTNO('#1######',MagMediaManagement.FormatAmount(PayeeNum,8)) +
+        STRSUBSTNO('      ') + // Blank 6
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(// ordinary dividends
+            MagMediaManagement.GetTotal('DIV-01-A',FormType,EndLine) +
+            MagMediaManagement.GetTotal('DIV-01-B',FormType,EndLine) +
+            MagMediaManagement.GetTotal('DIV-05',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('DIV-01-B',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(// total capital gains
+            MagMediaManagement.GetTotal('DIV-02-A',FormType,EndLine) +
+            MagMediaManagement.GetTotal('DIV-02-B',FormType,EndLine) +
+            MagMediaManagement.GetTotal('DIV-02-C',FormType,EndLine) +
+            MagMediaManagement.GetTotal('DIV-02-D',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('DIV-02-B',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(0,18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(0,18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('DIV-02-C',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('DIV-02-D',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(// non-taxable dist. 6
+            MagMediaManagement.GetTotal('DIV-03',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(// fed W/H 7
+            MagMediaManagement.GetTotal('DIV-04',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(// investment. expenses 8
+            MagMediaManagement.GetTotal('DIV-05',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('DIV-06',FormType,EndLine),18)) + // Foreign Taxc Paid A
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('DIV-08',FormType,EndLine),18)) + // cash liquidation B
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('DIV-09',FormType,EndLine),18)) + // non-cash liquidation C
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('DIV-10',FormType,EndLine),18)) + // Exempt-interest dividends
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('DIV-11',FormType,EndLine),18)) + // Specified private activity bond interest dividends
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                              ') +
+        STRSUBSTNO('#1######',MagMediaManagement.FormatAmount(SequenceNo,8)) + // sequence number for all rec types
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                           '));
+    END;
+
+    [External]
+    PROCEDURE WriteINTCRec@10();
+    BEGIN
+      // C Record - 1 per Payer per 1099 type
+      IncrementSequenceNo;
+      IRSData.WRITE(STRSUBSTNO('C') +
+        STRSUBSTNO('#1######',MagMediaManagement.FormatAmount(PayeeNum,8)) +
+        STRSUBSTNO('      ') + // Blank 6
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('INT-01',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('INT-02',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('INT-03',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('INT-04',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('INT-05',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('INT-06',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(0,18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('INT-08',FormType,EndLine) +
+            MagMediaManagement.GetTotal('INT-09',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('INT-09',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('INT-10',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('INT-11',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('INT-12',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(
+            MagMediaManagement.GetTotal('INT-13',FormType,EndLine),18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(0,18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(0,18)) +
+        STRSUBSTNO('#1################',MagMediaManagement.FormatMoneyAmount(0,18)) +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                              ') +
+        STRSUBSTNO('#1######',MagMediaManagement.FormatAmount(SequenceNo,8)) + // sequence number for all rec types
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                           '));
+    END;
+
+    [External]
+    PROCEDURE WriteFRec@3();
+    BEGIN
+      // F Record - 1
+      IncrementSequenceNo;
+      IRSData.WRITE(STRSUBSTNO('F') +
+        STRSUBSTNO('#1######',MagMediaManagement.FormatAmount(ARecNum,8)) + // number of A recs.
+        STRSUBSTNO('#1########',MagMediaManagement.FormatAmount(0,10)) + // 21 zeros
+        STRSUBSTNO('#1#########',MagMediaManagement.FormatAmount(0,11)) +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                   ') +
+        STRSUBSTNO('#1######',MagMediaManagement.FormatAmount(SequenceNo,8)) + // sequence number for all rec types
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                                  ') +
+        STRSUBSTNO('                                           '));
+    END;
+
+    [External]
+    PROCEDURE IncrementSequenceNo@1020000();
+    BEGIN
+      SequenceNo := SequenceNo + 1;
+    END;
+
+    LOCAL PROCEDURE bTestFileOnAfterValidate@19011164();
+    BEGIN
+      IF bTestFile THEN
+        TestFile := 'T';
+    END;
+
+    [External]
+    PROCEDURE InitializeRequest@1020002(NewFileName@1020000 : Text);
+    BEGIN
+      FileName := NewFileName;
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

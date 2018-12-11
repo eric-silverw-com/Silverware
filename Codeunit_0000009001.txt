@@ -1,0 +1,264 @@
+OBJECT Codeunit 9001 Permission Pages Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:51 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      NoOfRecords@1001 : Integer;
+      NoOfColumns@1000 : Integer;
+      OffSet@1002 : Integer;
+      CannotManagePermissionsErr@1008 : TextConst 'ENU=Only users with the SUPER or the SECURITY permission set can create or edit permission sets.';
+      MSPermSetChangedTxt@1003 : TextConst 'ENU=Original System permission set changed';
+      MSPermSetChangedDescTxt@1004 : TextConst 'ENU=Show a notification if one or more original System permission sets that you have copied to create your own set changes.';
+      MSPermSetChangedMsg@1005 : TextConst 'ENU=One or more System permission sets that you have copied to create your own have changed. //You may want to review the changed permission set in case the changes are relevant for your user-defined permission sets.';
+      MSPermSetChangedShowDetailsTxt@1006 : TextConst 'ENU=Show more';
+      MSPermSetChangedNeverShowAgainTxt@1007 : TextConst 'ENU=Don''t show again';
+
+    [External]
+    PROCEDURE Init@2(NewNoOfRecords@1000 : Integer;NewNoOfColumns@1001 : Integer);
+    BEGIN
+      OffSet := 0;
+      NoOfRecords := NewNoOfRecords;
+      NoOfColumns := NewNoOfColumns;
+    END;
+
+    [External]
+    PROCEDURE GetOffset@3() : Integer;
+    BEGIN
+      EXIT(OffSet);
+    END;
+
+    [External]
+    PROCEDURE AllColumnsLeft@8();
+    BEGIN
+      OffSet -= NoOfColumns;
+      IF OffSet < 0 THEN
+        OffSet := 0;
+    END;
+
+    [External]
+    PROCEDURE ColumnLeft@9();
+    BEGIN
+      IF OffSet > 0 THEN
+        OffSet -= 1;
+    END;
+
+    [External]
+    PROCEDURE ColumnRight@10();
+    BEGIN
+      IF OffSet < NoOfRecords - NoOfColumns THEN
+        OffSet += 1;
+    END;
+
+    [External]
+    PROCEDURE AllColumnsRight@11();
+    BEGIN
+      OffSet += NoOfColumns;
+      IF OffSet > NoOfRecords - NoOfColumns THEN
+        OffSet := NoOfRecords - NoOfColumns;
+      IF OffSet < 0 THEN
+        OffSet := 0;
+    END;
+
+    [External]
+    PROCEDURE IsInColumnsRange@12(i@1000 : Integer) : Boolean;
+    BEGIN
+      EXIT((i > OffSet) AND (i <= OffSet + NoOfColumns));
+    END;
+
+    [External]
+    PROCEDURE IsPastColumnRange@6(i@1000 : Integer) : Boolean;
+    BEGIN
+      EXIT(i >= OffSet + NoOfColumns);
+    END;
+
+    PROCEDURE ShowPermissions@1(AggregatePermissionSetScope@1001 : Option;AppId@1007 : GUID;PermissionSetId@1006 : Code[20];RunAsModal@1008 : Boolean);
+    VAR
+      AggregatePermissionSet@1000 : Record 2000000167;
+      Permission@1002 : Record 2000000005;
+      TenantPermission@1003 : Record 2000000166;
+      PermissionManager@1009 : Codeunit 9002;
+      Permissions@1004 : Page 9803;
+      TenantPermissions@1005 : Page 9850;
+    BEGIN
+      CASE AggregatePermissionSetScope OF
+        AggregatePermissionSet.Scope::System:
+          BEGIN
+            Permission.SETRANGE("Role ID",PermissionSetId);
+            Permissions.SETRECORD(Permission);
+            Permissions.SETTABLEVIEW(Permission);
+            Permissions.EDITABLE := FALSE;
+            IF RunAsModal THEN
+              Permissions.RUNMODAL
+            ELSE
+              Permissions.RUN;
+          END;
+        AggregatePermissionSet.Scope::Tenant:
+          BEGIN
+            TenantPermission.SETRANGE("App ID",AppId);
+            TenantPermission.SETRANGE("Role ID",PermissionSetId);
+            TenantPermissions.SETRECORD(TenantPermission);
+            TenantPermissions.SETTABLEVIEW(TenantPermission);
+
+            IF IsPermissionsInGivenScopeAndAppIdEditable(AggregatePermissionSetScope,AppId) AND
+               PermissionManager.CanManageUsersOnTenant(USERSECURITYID)
+            THEN
+              TenantPermissions.SetControlsAsEditable
+            ELSE
+              TenantPermissions.SetControlsAsReadOnly;
+
+            IF RunAsModal THEN
+              TenantPermissions.RUNMODAL
+            ELSE
+              TenantPermissions.RUN;
+          END;
+      END;
+    END;
+
+    PROCEDURE IsPermissionSetEditable@4(AggregatePermissionSet@1000 : Record 2000000167) : Boolean;
+    BEGIN
+      EXIT(IsPermissionsInGivenScopeAndAppIdEditable(AggregatePermissionSet.Scope,AggregatePermissionSet."App ID"));
+    END;
+
+    LOCAL PROCEDURE IsPermissionsInGivenScopeAndAppIdEditable@57(AggregatePermissionSetScope@1001 : Option;AppId@1000 : GUID) : Boolean;
+    VAR
+      AggregatePermissionSet@1002 : Record 2000000167;
+    BEGIN
+      EXIT((AggregatePermissionSetScope = AggregatePermissionSet.Scope::Tenant) AND ISNULLGUID(AppId));
+    END;
+
+    PROCEDURE CheckAndRaiseNotificationIfAppDBPermissionSetsChanged@41();
+    VAR
+      PermissionSetLink@1000 : Record 9802;
+      PermissionManager@1005 : Codeunit 9002;
+      Notification@1003 : Notification;
+    BEGIN
+      IF NOT PermissionManager.CanManageUsersOnTenant(USERSECURITYID) THEN
+        EXIT;
+
+      IF NOT AppDbPermissionChangedNotificationEnabled THEN
+        EXIT;
+
+      IF NOT PermissionSetLink.SourceHashHasChanged THEN
+        EXIT;
+
+      Notification.ID(GetAppDbPermissionSetChangedNotificationId);
+      Notification.MESSAGE(MSPermSetChangedMsg);
+      Notification.SCOPE(NOTIFICATIONSCOPE::LocalScope);
+      Notification.ADDACTION(MSPermSetChangedShowDetailsTxt,CODEUNIT::"Permission Pages Mgt.",
+        'AppDbPermissionSetChangedShowDetails');
+      Notification.ADDACTION(MSPermSetChangedNeverShowAgainTxt,CODEUNIT::"Permission Pages Mgt.",
+        'AppDbPermissionSetChangedDisableNotification');
+      Notification.SEND;
+    END;
+
+    PROCEDURE IsTenantPermissionSetEditable@5(TenantPermissionSet@1000 : Record 2000000165) : Boolean;
+    VAR
+      AggregatePermissionSet@1001 : Record 2000000167;
+    BEGIN
+      IF AggregatePermissionSet.GET(AggregatePermissionSet.Scope::Tenant,TenantPermissionSet."App ID",TenantPermissionSet."Role ID")
+      THEN
+        EXIT(IsPermissionSetEditable(AggregatePermissionSet));
+    END;
+
+    PROCEDURE ShowSecurityFilterForPermission@13(VAR OutputSecurityFilter@1000 : Text;Permission@1001 : Record 2000000005) : Boolean;
+    BEGIN
+      Permission.CALCFIELDS("Object Name");
+
+      EXIT(ShowSecurityFilters(OutputSecurityFilter,
+          Permission."Object ID",Permission."Object Name",FORMAT(Permission."Security Filter"),
+          FALSE));
+    END;
+
+    PROCEDURE ShowSecurityFilterForTenantPermission@14(VAR OutputSecurityFilter@1001 : Text;TenantPermission@1000 : Record 2000000166;UserCanEditSecurityFilters@1002 : Boolean) : Boolean;
+    BEGIN
+      TenantPermission.CALCFIELDS("Object Name");
+
+      EXIT(ShowSecurityFilters(OutputSecurityFilter,
+          TenantPermission."Object ID",TenantPermission."Object Name",FORMAT(TenantPermission."Security Filter"),
+          UserCanEditSecurityFilters));
+    END;
+
+    LOCAL PROCEDURE ShowSecurityFilters@7(VAR OutputSecurityFilter@1005 : Text;InputObjectID@1002 : Integer;InputObjectName@1004 : Text;InputSecurityFilter@1003 : Text;UserCanEditSecurityFilters@1006 : Boolean) : Boolean;
+    VAR
+      TableFilter@1001 : Record 9805;
+      TableFilterPage@1000 : Page 9805;
+    BEGIN
+      TableFilter.FILTERGROUP(2);
+      TableFilter.SETRANGE("Table Number",InputObjectID);
+      TableFilter.FILTERGROUP(0);
+
+      TableFilterPage.SETTABLEVIEW(TableFilter);
+      TableFilterPage.SetSourceTable(InputSecurityFilter,InputObjectID,InputObjectName);
+      TableFilterPage.EDITABLE := UserCanEditSecurityFilters;
+
+      IF ACTION::OK = TableFilterPage.RUNMODAL THEN BEGIN
+        OutputSecurityFilter := TableFilterPage.CreateTextTableFilter(FALSE);
+        EXIT(TRUE);
+      END;
+    END;
+
+    PROCEDURE AppDbPermissionSetChangedShowDetails@16(Notification@1000 : Notification);
+    VAR
+      PermissionSetLink@1001 : Record 9802;
+    BEGIN
+      PermissionSetLink.MarkWithChangedSource;
+      PAGE.RUNMODAL(PAGE::"Changed Permission Set List",PermissionSetLink);
+      PermissionSetLink.UpdateSourceHashesOnAllLinks;
+    END;
+
+    PROCEDURE AppDbPermissionSetChangedDisableNotification@22(Notification@1000 : Notification);
+    VAR
+      MyNotifications@1001 : Record 1518;
+    BEGIN
+      MyNotifications.Disable(GetAppDbPermissionSetChangedNotificationId);
+    END;
+
+    [EventSubscriber(Page,1518,OnInitializingNotificationWithDefaultState)]
+    LOCAL PROCEDURE OnInitializingNotificationWithDefaultState@64();
+    VAR
+      MyNotifications@1000 : Record 1518;
+    BEGIN
+      MyNotifications.InsertDefault(GetAppDbPermissionSetChangedNotificationId,
+        MSPermSetChangedTxt,
+        MSPermSetChangedDescTxt,
+        TRUE);
+    END;
+
+    LOCAL PROCEDURE GetAppDbPermissionSetChangedNotificationId@15() : GUID;
+    BEGIN
+      EXIT('2712AD06-C48B-4C20-830E-347A60C9AE00');
+    END;
+
+    [External]
+    PROCEDURE AppDbPermissionChangedNotificationEnabled@51() : Boolean;
+    VAR
+      MyNotifications@1000 : Record 1518;
+    BEGIN
+      EXIT(MyNotifications.IsEnabled(GetAppDbPermissionSetChangedNotificationId));
+    END;
+
+    PROCEDURE DisallowEditingPermissionSetsForNonAdminUsers@17();
+    VAR
+      PermissionManager@1000 : Codeunit 9002;
+    BEGIN
+      IF NOT PermissionManager.CanManageUsersOnTenant(USERSECURITYID) THEN
+        ERROR(CannotManagePermissionsErr);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,1201 @@
+OBJECT Codeunit 365 Format Address
+{
+  OBJECT-PROPERTIES
+  {
+    Date=;
+    Time=;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      GLSetup@1000 : Record 98;
+      CompanyInfo@1002 : Record 79;
+      i@1001 : Integer;
+
+    [External]
+    PROCEDURE FormatAddr@1(VAR AddrArray@1000 : ARRAY [8] OF Text[90];Name@1001 : Text[90];Name2@1002 : Text[90];Contact@1003 : Text[90];Addr@1004 : Text[50];Addr2@1005 : Text[50];City@1006 : Text[50];PostCode@1007 : Code[20];County@1008 : Text[50];CountryCode@1009 : Code[10]);
+    VAR
+      Country@1010 : Record 9;
+      CustomAddressFormat@1022 : Record 725;
+      InsertText@1011 : Integer;
+      Index@1012 : Integer;
+      NameLineNo@1013 : Integer;
+      Name2LineNo@1014 : Integer;
+      AddrLineNo@1015 : Integer;
+      Addr2LineNo@1016 : Integer;
+      ContLineNo@1017 : Integer;
+      PostCodeCityLineNo@1018 : Integer;
+      CountyLineNo@1019 : Integer;
+      CountryLineNo@1020 : Integer;
+      Handled@1021 : Boolean;
+    BEGIN
+      CLEAR(AddrArray);
+
+      IF CountryCode = '' THEN BEGIN
+        GLSetup.GET;
+        CLEAR(Country);
+        Country."Address Format" := GLSetup."Local Address Format";
+        Country."Contact Address Format" := GLSetup."Local Cont. Addr. Format";
+      END ELSE
+        IF NOT Country.GET(CountryCode) THEN BEGIN
+          Country.INIT;
+          Country.Name := CountryCode;
+        END;
+
+      IF Country."Address Format" = Country."Address Format"::Custom THEN BEGIN
+        CustomAddressFormat.RESET;
+        CustomAddressFormat.SETCURRENTKEY("Country/Region Code","Line Position");
+        CustomAddressFormat.SETRANGE("Country/Region Code",CountryCode);
+        IF CustomAddressFormat.FINDSET THEN
+          REPEAT
+            CASE CustomAddressFormat."Field ID" OF
+              CompanyInfo.FIELDNO(Name):
+                AddrArray[CustomAddressFormat."Line Position" + 1] := Name;
+              CompanyInfo.FIELDNO("Name 2"):
+                AddrArray[CustomAddressFormat."Line Position" + 1] := Name2;
+              CompanyInfo.FIELDNO("Contact Person"):
+                AddrArray[CustomAddressFormat."Line Position" + 1] := Contact;
+              CompanyInfo.FIELDNO(Address):
+                AddrArray[CustomAddressFormat."Line Position" + 1] := Addr;
+              CompanyInfo.FIELDNO("Address 2"):
+                AddrArray[CustomAddressFormat."Line Position" + 1] := Addr2;
+              CompanyInfo.FIELDNO(City):
+                AddrArray[CustomAddressFormat."Line Position" + 1] := City;
+              CompanyInfo.FIELDNO("Post Code"):
+                AddrArray[CustomAddressFormat."Line Position" + 1] := PostCode;
+              CompanyInfo.FIELDNO(County):
+                AddrArray[CustomAddressFormat."Line Position" + 1] := County;
+              CompanyInfo.FIELDNO("Country/Region Code"):
+                AddrArray[CustomAddressFormat."Line Position" + 1] := Country.Name;
+              ELSE
+                GenerateCustomPostCodeCity(AddrArray[CustomAddressFormat."Line Position" + 1],City,PostCode,County,Country);
+            END;
+          UNTIL CustomAddressFormat.NEXT = 0;
+
+        COMPRESSARRAY(AddrArray);
+      END ELSE BEGIN
+        SetLineNos(Country,NameLineNo,Name2LineNo,AddrLineNo,Addr2LineNo,ContLineNo,PostCodeCityLineNo,CountyLineNo,CountryLineNo);
+
+        OnBeforeFormatAddress(
+          Country,AddrArray,Name,Name2,Contact,Addr,Addr2,City,PostCode,County,CountryCode,NameLineNo,Name2LineNo,
+          AddrLineNo,Addr2LineNo,ContLineNo,PostCodeCityLineNo,CountyLineNo,CountryLineNo,Handled);
+        IF Handled THEN
+          EXIT;
+
+        AddrArray[NameLineNo] := Name;
+        AddrArray[Name2LineNo] := Name2;
+        AddrArray[AddrLineNo] := Addr;
+        AddrArray[Addr2LineNo] := Addr2;
+
+        CASE Country."Address Format" OF
+          Country."Address Format"::"Post Code+City",
+          Country."Address Format"::"City+County+Post Code",
+          Country."Address Format"::"City+County+New Line+Post Code",
+          Country."Address Format"::"Post Code+City+County",
+          Country."Address Format"::"City+Post Code":
+            BEGIN
+              AddrArray[ContLineNo] := Contact;
+              GeneratePostCodeCity(AddrArray[PostCodeCityLineNo],AddrArray[CountyLineNo],City,PostCode,County,Country);
+              AddrArray[CountryLineNo] := Country.Name;
+              COMPRESSARRAY(AddrArray);
+            END;
+          Country."Address Format"::"Blank Line+Post Code+City":
+            BEGIN
+              IF ContLineNo < PostCodeCityLineNo THEN
+                AddrArray[ContLineNo] := Contact;
+              COMPRESSARRAY(AddrArray);
+
+              Index := 1;
+              InsertText := 1;
+              REPEAT
+                IF AddrArray[Index] = '' THEN BEGIN
+                  CASE InsertText OF
+                    2:
+                      GeneratePostCodeCity(AddrArray[Index],AddrArray[Index + 1],City,PostCode,County,Country);
+                    3:
+                      AddrArray[Index] := Country.Name;
+                    4:
+                      IF ContLineNo > PostCodeCityLineNo THEN
+                        AddrArray[Index] := Contact;
+                  END;
+                  InsertText := InsertText + 1;
+                END;
+                Index := Index + 1;
+              UNTIL Index = 9;
+            END;
+        END;
+      END;
+      OnAfterFormatAddress(AddrArray,Name,Name2,Contact,Addr,Addr2,City,PostCode,County,CountryCode);
+    END;
+
+    [External]
+    PROCEDURE FormatPostCodeCity@30(VAR PostCodeCityText@1000 : Text[90];VAR CountyText@1001 : Text[50];City@1002 : Text[50];PostCode@1003 : Code[20];County@1004 : Text[50];CountryCode@1005 : Code[10]);
+    VAR
+      Country@1006 : Record 9;
+    BEGIN
+      CLEAR(PostCodeCityText);
+      CLEAR(CountyText);
+
+      IF CountryCode = '' THEN BEGIN
+        GLSetup.GET;
+        CLEAR(Country);
+        Country."Address Format" := GLSetup."Local Address Format";
+        Country."Contact Address Format" := GLSetup."Local Cont. Addr. Format";
+      END ELSE
+        Country.GET(CountryCode);
+
+      IF Country."Address Format" = Country."Address Format"::Custom THEN
+        GenerateCustomPostCodeCity(PostCodeCityText,City,PostCode,County,Country)
+      ELSE
+        GeneratePostCodeCity(PostCodeCityText,CountyText,City,PostCode,County,Country);
+    END;
+
+    LOCAL PROCEDURE GeneratePostCodeCity@31(VAR PostCodeCityText@1000 : Text[90];VAR CountyText@1001 : Text[50];City@1002 : Text[50];PostCode@1003 : Code[20];County@1004 : Text[50];Country@1005 : Record 9);
+    VAR
+      DummyString@1007 : Text;
+      OverMaxStrLen@1006 : Integer;
+    BEGIN
+      DummyString := '';
+      OverMaxStrLen := MAXSTRLEN(PostCodeCityText);
+      IF OverMaxStrLen < MAXSTRLEN(DummyString) THEN
+        OverMaxStrLen += 1;
+
+      CASE Country."Address Format" OF
+        Country."Address Format"::"Post Code+City":
+          BEGIN
+            IF PostCode <> '' THEN
+              PostCodeCityText := DELSTR(PostCode + ' ' + City,OverMaxStrLen)
+            ELSE
+              PostCodeCityText := City;
+            CountyText := County;
+          END;
+        Country."Address Format"::"City+County+Post Code":
+          BEGIN
+            CountyText := '';
+            IF PostCode = '' THEN BEGIN
+              IF County = '' THEN
+                PostCodeCityText := City
+              ELSE
+                PostCodeCityText := DELSTR(City,MAXSTRLEN(PostCodeCityText) - STRLEN(County) - 2) + ', ' + County;
+            END ELSE
+              IF County = '' THEN
+                PostCodeCityText := DELSTR(City,MAXSTRLEN(PostCodeCityText) - STRLEN(PostCode) - 1) + ', ' + PostCode
+              ELSE
+                PostCodeCityText :=
+                  DELSTR(City,MAXSTRLEN(PostCodeCityText) - STRLEN(PostCode) - STRLEN(County) - 4) +
+                  ', ' + County + ' ' + PostCode;
+          END;
+        Country."Address Format"::"City+County+New Line+Post Code":
+          BEGIN
+            CountyText := PostCode;
+            IF County = '' THEN
+              PostCodeCityText := City
+            ELSE
+              PostCodeCityText := DELSTR(City,MAXSTRLEN(PostCodeCityText) - STRLEN(County) - 2) + ', ' + County;
+          END;
+        Country."Address Format"::"Post Code+City+County":
+          BEGIN
+            IF PostCode <> '' THEN
+              PostCodeCityText := DELSTR(PostCode + ' ' + City + ', ' + County,OverMaxStrLen)
+            ELSE
+              PostCodeCityText := DELSTR(City + ', ' + County,OverMaxStrLen);
+          END;
+        Country."Address Format"::"City+Post Code":
+          BEGIN
+            IF PostCode <> '' THEN
+              PostCodeCityText := DELSTR(City,MAXSTRLEN(PostCodeCityText) - STRLEN(PostCode) - 1) + ', ' + PostCode
+            ELSE
+              PostCodeCityText := City;
+            CountyText := County;
+          END;
+        Country."Address Format"::"Blank Line+Post Code+City":
+          BEGIN
+            IF PostCode <> '' THEN
+              PostCodeCityText := DELSTR(PostCode + ' ' + City,OverMaxStrLen)
+            ELSE
+              PostCodeCityText := City;
+            CountyText := County;
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE GenerateCustomPostCodeCity@93(VAR PostCodeCityText@1000 : Text[90];City@1002 : Text[50];PostCode@1003 : Code[20];County@1004 : Text[50];Country@1005 : Record 9);
+    VAR
+      CustomAddressFormat@1006 : Record 725;
+      CustomAddressFormatLine@1008 : Record 726;
+      PostCodeCityLine@1007 : Text;
+      CustomAddressFormatLineQty@1001 : Integer;
+      Counter@1009 : Integer;
+    BEGIN
+      PostCodeCityLine := '';
+
+      CustomAddressFormat.RESET;
+      CustomAddressFormat.SETRANGE("Country/Region Code",Country.Code);
+      CustomAddressFormat.SETRANGE("Field ID",0);
+      IF NOT CustomAddressFormat.FINDFIRST THEN
+        EXIT;
+
+      CustomAddressFormatLine.RESET;
+      CustomAddressFormatLine.SETCURRENTKEY("Country/Region Code","Line No.","Field Position");
+      CustomAddressFormatLine.SETRANGE("Country/Region Code",CustomAddressFormat."Country/Region Code");
+      CustomAddressFormatLine.SETRANGE("Line No.",CustomAddressFormat."Line No.");
+      CustomAddressFormatLineQty := CustomAddressFormatLine.COUNT;
+      IF CustomAddressFormatLine.FINDSET THEN
+        REPEAT
+          Counter += 1;
+          CASE CustomAddressFormatLine."Field ID" OF
+            CompanyInfo.FIELDNO(City):
+              PostCodeCityLine += City;
+            CompanyInfo.FIELDNO("Post Code"):
+              PostCodeCityLine += PostCode;
+            CompanyInfo.FIELDNO(County):
+              PostCodeCityLine += County;
+          END;
+          IF Counter < CustomAddressFormatLineQty THEN
+            IF CustomAddressFormatLine.Separator <> '' THEN
+              PostCodeCityLine += CustomAddressFormatLine.Separator
+            ELSE
+              PostCodeCityLine += ' ';
+        UNTIL CustomAddressFormatLine.NEXT = 0;
+
+      PostCodeCityText := DELSTR(PostCodeCityLine,MAXSTRLEN(PostCodeCityText));
+    END;
+
+    [External]
+    PROCEDURE GetCompanyAddr@66(RespCenterCode@1000 : Code[10];VAR ResponsibilityCenter@1001 : Record 5714;VAR CompanyInfo@1002 : Record 79;VAR CompanyAddr@1003 : ARRAY [8] OF Text[90]);
+    BEGIN
+      IF ResponsibilityCenter.GET(RespCenterCode) THEN BEGIN
+        RespCenter(CompanyAddr,ResponsibilityCenter);
+        CompanyInfo."Phone No." := ResponsibilityCenter."Phone No.";
+        CompanyInfo."Fax No." := ResponsibilityCenter."Fax No.";
+      END ELSE
+        Company(CompanyAddr,CompanyInfo);
+    END;
+
+    [External]
+    PROCEDURE Company@2(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR CompanyInfo@1001 : Record 79);
+    BEGIN
+      WITH CompanyInfo DO
+        FormatAddr(
+          AddrArray,Name,"Name 2",'',Address,"Address 2",
+          City,"Post Code",County,'');
+    END;
+
+    [External]
+    PROCEDURE Customer@3(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR Cust@1001 : Record 18);
+    VAR
+      Handled@1002 : Boolean;
+    BEGIN
+      OnBeforeCustomer(AddrArray,Cust,Handled);
+      IF Handled THEN
+        EXIT;
+
+      WITH Cust DO
+        FormatAddr(
+          AddrArray,Name,"Name 2",Contact,Address,"Address 2",
+          City,"Post Code",County,"Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE Vendor@4(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR Vend@1001 : Record 23);
+    VAR
+      Handled@1002 : Boolean;
+    BEGIN
+      OnBeforeVendor(AddrArray,Vend,Handled);
+      IF Handled THEN
+        EXIT;
+
+      WITH Vend DO
+        FormatAddr(
+          AddrArray,Name,"Name 2",Contact,Address,"Address 2",
+          City,"Post Code",County,"Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE BankAcc@5(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR BankAcc@1001 : Record 270);
+    BEGIN
+      WITH BankAcc DO
+        FormatAddr(
+          AddrArray,Name,"Name 2",Contact,Address,"Address 2",
+          City,"Post Code",County,"Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE SalesHeaderSellTo@6(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR SalesHeader@1001 : Record 36);
+    BEGIN
+      WITH SalesHeader DO
+        FormatAddr(
+          AddrArray,"Sell-to Customer Name","Sell-to Customer Name 2","Sell-to Contact","Sell-to Address","Sell-to Address 2",
+          "Sell-to City","Sell-to Post Code","Sell-to County","Sell-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE SalesHeaderBillTo@7(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR SalesHeader@1001 : Record 36);
+    VAR
+      Handled@1002 : Boolean;
+    BEGIN
+      OnBeforeSalesHeaderBillTo(AddrArray,SalesHeader,Handled);
+      IF Handled THEN
+        EXIT;
+
+      WITH SalesHeader DO
+        FormatAddr(
+          AddrArray,"Bill-to Name","Bill-to Name 2","Bill-to Contact","Bill-to Address","Bill-to Address 2",
+          "Bill-to City","Bill-to Post Code","Bill-to County","Bill-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE SalesHeaderShipTo@8(VAR AddrArray@1000 : ARRAY [8] OF Text[90];CustAddr@1002 : ARRAY [8] OF Text[90];VAR SalesHeader@1001 : Record 36) : Boolean;
+    VAR
+      CountryRegion@1003 : Record 9;
+      SellToCountry@1004 : Code[50];
+    BEGIN
+      WITH SalesHeader DO BEGIN
+        FormatAddr(
+          AddrArray,"Ship-to Name","Ship-to Name 2","Ship-to Contact","Ship-to Address","Ship-to Address 2",
+          "Ship-to City","Ship-to Post Code","Ship-to County","Ship-to Country/Region Code");
+        IF CountryRegion.GET("Sell-to Country/Region Code") THEN
+          SellToCountry := CountryRegion.Name;
+        IF "Sell-to Customer No." <> "Bill-to Customer No." THEN
+          EXIT(TRUE);
+        FOR i := 1 TO ARRAYLEN(AddrArray) DO
+          IF (AddrArray[i] <> CustAddr[i]) AND (AddrArray[i] <> '') AND (AddrArray[i] <> SellToCountry) THEN
+            EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+    END;
+
+    [External]
+    PROCEDURE PurchHeaderBuyFrom@9(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR PurchHeader@1001 : Record 38);
+    BEGIN
+      WITH PurchHeader DO
+        FormatAddr(
+          AddrArray,"Buy-from Vendor Name","Buy-from Vendor Name 2","Buy-from Contact","Buy-from Address","Buy-from Address 2",
+          "Buy-from City","Buy-from Post Code","Buy-from County","Buy-from Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE PurchHeaderPayTo@10(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR PurchHeader@1001 : Record 38);
+    BEGIN
+      WITH PurchHeader DO
+        FormatAddr(
+          AddrArray,"Pay-to Name","Pay-to Name 2","Pay-to Contact","Pay-to Address","Pay-to Address 2",
+          "Pay-to City","Pay-to Post Code","Pay-to County","Pay-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE PurchHeaderShipTo@11(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR PurchHeader@1001 : Record 38);
+    BEGIN
+      WITH PurchHeader DO
+        FormatAddr(
+          AddrArray,"Ship-to Name","Ship-to Name 2","Ship-to Contact","Ship-to Address","Ship-to Address 2",
+          "Ship-to City","Ship-to Post Code","Ship-to County","Ship-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE SalesShptSellTo@12(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR SalesShptHeader@1001 : Record 110);
+    BEGIN
+      WITH SalesShptHeader DO
+        FormatAddr(
+          AddrArray,"Sell-to Customer Name","Sell-to Customer Name 2","Sell-to Contact","Sell-to Address","Sell-to Address 2",
+          "Sell-to City","Sell-to Post Code","Sell-to County","Sell-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE SalesShptBillTo@13(VAR AddrArray@1000 : ARRAY [8] OF Text[90];ShipToAddr@1002 : ARRAY [8] OF Text[90];VAR SalesShptHeader@1001 : Record 110) : Boolean;
+    BEGIN
+      WITH SalesShptHeader DO BEGIN
+        FormatAddr(
+          AddrArray,"Bill-to Name","Bill-to Name 2","Bill-to Contact","Bill-to Address","Bill-to Address 2",
+          "Bill-to City","Bill-to Post Code","Bill-to County","Bill-to Country/Region Code");
+        IF "Bill-to Customer No." <> "Sell-to Customer No." THEN
+          EXIT(TRUE);
+        FOR i := 1 TO ARRAYLEN(AddrArray) DO
+          IF ShipToAddr[i] <> AddrArray[i] THEN
+            EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+    END;
+
+    [External]
+    PROCEDURE SalesShptShipTo@14(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR SalesShptHeader@1001 : Record 110);
+    BEGIN
+      WITH SalesShptHeader DO
+        FormatAddr(
+          AddrArray,"Ship-to Name","Ship-to Name 2","Ship-to Contact","Ship-to Address","Ship-to Address 2",
+          "Ship-to City","Ship-to Post Code","Ship-to County","Ship-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE SalesInvSellTo@15(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR SalesInvHeader@1001 : Record 112);
+    BEGIN
+      WITH SalesInvHeader DO
+        FormatAddr(
+          AddrArray,"Sell-to Customer Name","Sell-to Customer Name 2","Sell-to Contact","Sell-to Address","Sell-to Address 2",
+          "Sell-to City","Sell-to Post Code","Sell-to County","Sell-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE SalesInvBillTo@16(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR SalesInvHeader@1001 : Record 112);
+    VAR
+      Handled@1002 : Boolean;
+    BEGIN
+      OnBeforeSalesInvBillTo(AddrArray,SalesInvHeader,Handled);
+      IF Handled THEN
+        EXIT;
+
+      WITH SalesInvHeader DO
+        FormatAddr(
+          AddrArray,"Bill-to Name","Bill-to Name 2","Bill-to Contact","Bill-to Address","Bill-to Address 2",
+          "Bill-to City","Bill-to Post Code","Bill-to County","Bill-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE SalesInvShipTo@17(VAR AddrArray@1000 : ARRAY [8] OF Text[90];CustAddr@1002 : ARRAY [8] OF Text[90];VAR SalesInvHeader@1001 : Record 112) : Boolean;
+    BEGIN
+      WITH SalesInvHeader DO BEGIN
+        FormatAddr(
+          AddrArray,"Ship-to Name","Ship-to Name 2","Ship-to Contact","Ship-to Address","Ship-to Address 2",
+          "Ship-to City","Ship-to Post Code","Ship-to County","Ship-to Country/Region Code");
+        IF "Sell-to Customer No." <> "Bill-to Customer No." THEN
+          EXIT(TRUE);
+        FOR i := 1 TO ARRAYLEN(AddrArray) DO
+          IF AddrArray[i] <> CustAddr[i] THEN
+            EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+    END;
+
+    [External]
+    PROCEDURE SalesCrMemoSellTo@18(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR SalesCrMemoHeader@1001 : Record 114);
+    BEGIN
+      WITH SalesCrMemoHeader DO
+        FormatAddr(
+          AddrArray,"Sell-to Customer Name","Sell-to Customer Name 2","Sell-to Contact","Sell-to Address","Sell-to Address 2",
+          "Sell-to City","Sell-to Post Code","Sell-to County","Sell-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE SalesCrMemoBillTo@19(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR SalesCrMemoHeader@1001 : Record 114);
+    VAR
+      Handled@1002 : Boolean;
+    BEGIN
+      OnBeforeSalesCrMemoBillTo(AddrArray,SalesCrMemoHeader,Handled);
+      IF Handled THEN
+        EXIT;
+
+      WITH SalesCrMemoHeader DO
+        FormatAddr(
+          AddrArray,"Bill-to Name","Bill-to Name 2","Bill-to Contact","Bill-to Address","Bill-to Address 2",
+          "Bill-to City","Bill-to Post Code","Bill-to County","Bill-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE SalesCrMemoShipTo@20(VAR AddrArray@1000 : ARRAY [8] OF Text[90];CustAddr@1002 : ARRAY [8] OF Text[90];VAR SalesCrMemoHeader@1001 : Record 114) : Boolean;
+    BEGIN
+      WITH SalesCrMemoHeader DO BEGIN
+        FormatAddr(
+          AddrArray,"Ship-to Name","Ship-to Name 2","Ship-to Contact","Ship-to Address","Ship-to Address 2",
+          "Ship-to City","Ship-to Post Code","Ship-to County","Ship-to Country/Region Code");
+        IF "Sell-to Customer No." <> "Bill-to Customer No." THEN
+          EXIT(TRUE);
+        FOR i := 1 TO ARRAYLEN(AddrArray) DO
+          IF AddrArray[i] <> CustAddr[i] THEN
+            EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+    END;
+
+    [External]
+    PROCEDURE SalesRcptSellTo@5803(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR ReturnRcptHeader@1001 : Record 6660);
+    BEGIN
+      WITH ReturnRcptHeader DO
+        FormatAddr(
+          AddrArray,"Sell-to Customer Name","Sell-to Customer Name 2","Sell-to Contact","Sell-to Address","Sell-to Address 2",
+          "Sell-to City","Sell-to Post Code","Sell-to County","Sell-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE SalesRcptBillTo@5804(VAR AddrArray@1000 : ARRAY [8] OF Text[90];ShipToAddr@1002 : ARRAY [8] OF Text[90];VAR ReturnRcptHeader@1001 : Record 6660) : Boolean;
+    BEGIN
+      WITH ReturnRcptHeader DO BEGIN
+        FormatAddr(
+          AddrArray,"Bill-to Name","Bill-to Name 2","Bill-to Contact","Bill-to Address","Bill-to Address 2",
+          "Bill-to City","Bill-to Post Code","Bill-to County","Bill-to Country/Region Code");
+        IF "Bill-to Customer No." <> "Sell-to Customer No." THEN
+          EXIT(TRUE);
+        FOR i := 1 TO ARRAYLEN(AddrArray) DO
+          IF AddrArray[i] <> ShipToAddr[i] THEN
+            EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+    END;
+
+    [External]
+    PROCEDURE SalesRcptShipTo@5805(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR ReturnRcptHeader@1001 : Record 6660);
+    BEGIN
+      WITH ReturnRcptHeader DO
+        FormatAddr(
+          AddrArray,"Ship-to Name","Ship-to Name 2","Ship-to Contact","Ship-to Address","Ship-to Address 2",
+          "Ship-to City","Ship-to Post Code","Ship-to County","Ship-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE PurchRcptBuyFrom@21(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR PurchRcptHeader@1001 : Record 120);
+    BEGIN
+      WITH PurchRcptHeader DO
+        FormatAddr(
+          AddrArray,"Buy-from Vendor Name","Buy-from Vendor Name 2","Buy-from Contact","Buy-from Address","Buy-from Address 2",
+          "Buy-from City","Buy-from Post Code","Buy-from County","Buy-from Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE PurchRcptPayTo@22(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR PurchRcptHeader@1001 : Record 120);
+    BEGIN
+      WITH PurchRcptHeader DO
+        FormatAddr(
+          AddrArray,"Pay-to Name","Pay-to Name 2","Pay-to Contact","Pay-to Address","Pay-to Address 2",
+          "Pay-to City","Pay-to Post Code","Pay-to County","Pay-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE PurchRcptShipTo@23(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR PurchRcptHeader@1001 : Record 120);
+    BEGIN
+      WITH PurchRcptHeader DO
+        FormatAddr(
+          AddrArray,"Ship-to Name","Ship-to Name 2","Ship-to Contact","Ship-to Address","Ship-to Address 2",
+          "Ship-to City","Ship-to Post Code","Ship-to County","Ship-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE PurchInvBuyFrom@24(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR PurchInvHeader@1001 : Record 122);
+    BEGIN
+      WITH PurchInvHeader DO
+        FormatAddr(
+          AddrArray,"Buy-from Vendor Name","Buy-from Vendor Name 2","Buy-from Contact","Buy-from Address","Buy-from Address 2",
+          "Buy-from City","Buy-from Post Code","Buy-from County","Buy-from Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE PurchInvPayTo@25(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR PurchInvHeader@1001 : Record 122);
+    BEGIN
+      WITH PurchInvHeader DO
+        FormatAddr(
+          AddrArray,"Pay-to Name","Pay-to Name 2","Pay-to Contact","Pay-to Address","Pay-to Address 2",
+          "Pay-to City","Pay-to Post Code","Pay-to County","Pay-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE PurchInvShipTo@26(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR PurchInvHeader@1001 : Record 122);
+    BEGIN
+      WITH PurchInvHeader DO
+        FormatAddr(
+          AddrArray,"Ship-to Name","Ship-to Name 2","Ship-to Contact","Ship-to Address","Ship-to Address 2",
+          "Ship-to City","Ship-to Post Code","Ship-to County","Ship-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE PurchCrMemoBuyFrom@27(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR PurchCrMemoHeader@1001 : Record 124);
+    BEGIN
+      WITH PurchCrMemoHeader DO
+        FormatAddr(
+          AddrArray,"Buy-from Vendor Name","Buy-from Vendor Name 2","Buy-from Contact","Buy-from Address","Buy-from Address 2",
+          "Buy-from City","Buy-from Post Code","Buy-from County","Buy-from Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE PurchCrMemoPayTo@28(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR PurchCrMemoHeader@1001 : Record 124);
+    BEGIN
+      WITH PurchCrMemoHeader DO
+        FormatAddr(
+          AddrArray,"Pay-to Name","Pay-to Name 2","Pay-to Contact","Pay-to Address","Pay-to Address 2",
+          "Pay-to City","Pay-to Post Code","Pay-to County","Pay-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE PurchCrMemoShipTo@29(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR PurchCrMemoHeader@1001 : Record 124);
+    BEGIN
+      WITH PurchCrMemoHeader DO
+        FormatAddr(
+          AddrArray,"Ship-to Name","Ship-to Name 2","Ship-to Contact","Ship-to Address","Ship-to Address 2",
+          "Ship-to City","Ship-to Post Code","Ship-to County","Ship-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE PurchShptBuyFrom@5800(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR ReturnShptHeader@1001 : Record 6650);
+    BEGIN
+      WITH ReturnShptHeader DO
+        FormatAddr(
+          AddrArray,"Buy-from Vendor Name","Buy-from Vendor Name 2","Buy-from Contact","Buy-from Address","Buy-from Address 2",
+          "Buy-from City","Buy-from Post Code","Buy-from County","Buy-from Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE PurchShptPayTo@5801(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR ReturnShptHeader@1001 : Record 6650);
+    BEGIN
+      WITH ReturnShptHeader DO
+        FormatAddr(
+          AddrArray,"Pay-to Name","Pay-to Name 2","Pay-to Contact","Pay-to Address","Pay-to Address 2",
+          "Pay-to City","Pay-to Post Code","Pay-to County","Pay-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE PurchShptShipTo@5802(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR ReturnShptHeader@1001 : Record 6650);
+    BEGIN
+      WITH ReturnShptHeader DO
+        FormatAddr(
+          AddrArray,"Ship-to Name","Ship-to Name 2","Ship-to Contact","Ship-to Address","Ship-to Address 2",
+          "Ship-to City","Ship-to Post Code","Ship-to County","Ship-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE AltAddr@34(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR Employee@1001 : Record 5200;VAR AlternativeAddr@1002 : Record 5201);
+    BEGIN
+      WITH AlternativeAddr DO
+        FormatAddr(
+          AddrArray,COPYSTR(Employee.FullName,1,50),'','',Address,
+          "Address 2",City,"Post Code",County,"Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE Employee@33(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR Employee@1001 : Record 5200);
+    BEGIN
+      WITH Employee DO
+        FormatAddr(
+          AddrArray,COPYSTR(FullName,1,50),'','',Address,"Address 2",
+          City,"Post Code",County,"Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE EmployeeAltAddr@32(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR Employee@1001 : Record 5200);
+    VAR
+      AlternativeAddr@1002 : Record 5201;
+    BEGIN
+      AlternativeAddr.GET(Employee."No.",Employee."Alt. Address Code");
+      WITH AlternativeAddr DO
+        FormatAddr(
+          AddrArray,COPYSTR(Employee.FullName,1,50),'','',Address,
+          "Address 2",City,"Post Code",County,"Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE VendBankAcc@37(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR VendBankAcc@1001 : Record 288);
+    BEGIN
+      WITH VendBankAcc DO
+        FormatAddr(
+          AddrArray,Name,"Name 2",Contact,Address,"Address 2",
+          City,"Post Code",County,"Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE CustBankAcc@38(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR CustBankAcc@1001 : Record 287);
+    BEGIN
+      WITH CustBankAcc DO
+        FormatAddr(
+          AddrArray,Name,"Name 2",Contact,Address,"Address 2",
+          City,"Post Code",County,"Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE RespCenter@40(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR RespCenter@1001 : Record 5714);
+    BEGIN
+      WITH RespCenter DO
+        FormatAddr(
+          AddrArray,Name,"Name 2",Contact,Address,"Address 2",
+          City,"Post Code",County,"Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE TransferShptTransferFrom@35(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR TransShptHeader@1001 : Record 5744);
+    BEGIN
+      WITH TransShptHeader DO
+        FormatAddr(
+          AddrArray,
+          "Transfer-from Name","Transfer-from Name 2","Transfer-from Contact","Transfer-from Address","Transfer-from Address 2",
+          "Transfer-from City","Transfer-from Post Code","Transfer-from County","Trsf.-from Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE TransferShptTransferTo@36(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR TransShptHeader@1001 : Record 5744);
+    BEGIN
+      WITH TransShptHeader DO
+        FormatAddr(
+          AddrArray,"Transfer-to Name","Transfer-to Name 2","Transfer-to Contact","Transfer-to Address","Transfer-to Address 2",
+          "Transfer-to City","Transfer-to Post Code","Transfer-to County","Trsf.-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE TransferRcptTransferFrom@41(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR TransRcptHeader@1001 : Record 5746);
+    BEGIN
+      WITH TransRcptHeader DO
+        FormatAddr(
+          AddrArray,
+          "Transfer-from Name","Transfer-from Name 2","Transfer-from Contact","Transfer-from Address","Transfer-from Address 2",
+          "Transfer-from City","Transfer-from Post Code","Transfer-from County","Trsf.-from Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE TransferRcptTransferTo@39(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR TransRcptHeader@1001 : Record 5746);
+    BEGIN
+      WITH TransRcptHeader DO
+        FormatAddr(
+          AddrArray,"Transfer-to Name","Transfer-to Name 2","Transfer-to Contact","Transfer-to Address","Transfer-to Address 2",
+          "Transfer-to City","Transfer-to Post Code","Transfer-to County","Trsf.-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE TransferHeaderTransferFrom@43(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR TransHeader@1001 : Record 5740);
+    BEGIN
+      WITH TransHeader DO
+        FormatAddr(
+          AddrArray,
+          "Transfer-from Name","Transfer-from Name 2","Transfer-from Contact","Transfer-from Address","Transfer-from Address 2",
+          "Transfer-from City","Transfer-from Post Code","Transfer-from County","Trsf.-from Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE TransferHeaderTransferTo@42(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR TransHeader@1001 : Record 5740);
+    BEGIN
+      WITH TransHeader DO
+        FormatAddr(
+          AddrArray,"Transfer-to Name","Transfer-to Name 2","Transfer-to Contact","Transfer-to Address","Transfer-to Address 2",
+          "Transfer-to City","Transfer-to Post Code","Transfer-to County","Trsf.-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE ContactAddr@45(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR Cont@1001 : Record 5050);
+    BEGIN
+      ContactAddrAlt(AddrArray,Cont,Cont.ActiveAltAddress(WORKDATE),WORKDATE)
+    END;
+
+    [External]
+    PROCEDURE ContactAddrAlt@44(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR Cont@1001 : Record 5050;AltAddressCode@1002 : Code[10];ActiveDate@1003 : Date);
+    VAR
+      RMSetup@1004 : Record 5079;
+      ContCompany@1005 : Record 5050;
+      ContAltAddr@1006 : Record 5051;
+      CompanyAltAddressCode@1007 : Code[10];
+      ContIdenticalAddress@1008 : Boolean;
+      Handled@1009 : Boolean;
+    BEGIN
+      OnBeforeContactAddrAlt(AddrArray,Cont,AltAddressCode,ActiveDate,Handled);
+      IF Handled THEN
+        EXIT;
+
+      RMSetup.GET;
+
+      IF (Cont.Type = Cont.Type::Person) AND (Cont."Company No." <> '') THEN BEGIN
+        ContCompany.GET(Cont."Company No.");
+        CompanyAltAddressCode := ContCompany.ActiveAltAddress(ActiveDate);
+        ContIdenticalAddress := Cont.IdenticalAddress(ContCompany);
+      END;
+
+      CASE TRUE OF
+        AltAddressCode <> '':
+          WITH ContAltAddr DO BEGIN
+            GET(Cont."No.",AltAddressCode);
+            FormatAddr(
+              AddrArray,"Company Name","Company Name 2",Cont.Name,Address,"Address 2",
+              City,"Post Code",County,"Country/Region Code");
+          END;
+        (Cont.Type = Cont.Type::Person) AND
+        (Cont."Company No." <> '') AND
+        (CompanyAltAddressCode <> '') AND
+        RMSetup."Inherit Address Details" AND
+        ContIdenticalAddress:
+          WITH ContAltAddr DO BEGIN
+            GET(Cont."Company No.",CompanyAltAddressCode);
+            FormatAddr(
+              AddrArray,"Company Name","Company Name 2",Cont.Name,Address,"Address 2",
+              City,"Post Code",County,"Country/Region Code");
+          END;
+        (Cont.Type = Cont.Type::Person) AND
+        (Cont."Company No." <> ''):
+          WITH Cont DO
+            FormatAddr(
+              AddrArray,ContCompany.Name,ContCompany."Name 2",Name,Address,"Address 2",
+              City,"Post Code",County,"Country/Region Code")
+        ELSE
+          WITH Cont DO
+            FormatAddr(
+              AddrArray,Name,"Name 2",'',Address,"Address 2",
+              City,"Post Code",County,"Country/Region Code")
+      END;
+    END;
+
+    [External]
+    PROCEDURE ServiceOrderSellto@47(VAR AddrArray@1000 : ARRAY [8] OF Text[90];ServHeader@1001 : Record 5900);
+    BEGIN
+      WITH ServHeader DO
+        FormatAddr(
+          AddrArray,Name,"Name 2","Contact Name",Address,"Address 2",
+          City,"Post Code",County,"Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE ServiceOrderShipto@53(VAR AddrArray@1000 : ARRAY [8] OF Text[90];ServHeader@1001 : Record 5900);
+    BEGIN
+      WITH ServHeader DO
+        FormatAddr(
+          AddrArray,"Ship-to Name","Ship-to Name 2","Ship-to Contact","Ship-to Address","Ship-to Address 2",
+          "Ship-to City","Ship-to Post Code","Ship-to County","Ship-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE ServContractSellto@50(VAR AddrArray@1000 : ARRAY [8] OF Text[90];ServContract@1001 : Record 5965);
+    BEGIN
+      WITH ServContract DO BEGIN
+        CALCFIELDS(Name,"Name 2",Address,"Address 2","Post Code",City,County,"Country/Region Code");
+        FormatAddr(
+          AddrArray,Name,"Name 2","Contact Name",Address,"Address 2",
+          City,"Post Code",County,"Country/Region Code");
+      END;
+    END;
+
+    [External]
+    PROCEDURE ServContractShipto@52(VAR AddrArray@1000 : ARRAY [8] OF Text[90];ServContract@1001 : Record 5965);
+    BEGIN
+      WITH ServContract DO BEGIN
+        CALCFIELDS(
+          "Ship-to Name","Ship-to Name 2","Ship-to Address","Ship-to Address 2",
+          "Ship-to Post Code","Ship-to City","Ship-to County","Ship-to Country/Region Code");
+        FormatAddr(
+          AddrArray,"Ship-to Name","Ship-to Name 2","Contact Name","Ship-to Address","Ship-to Address 2",
+          "Ship-to City","Ship-to Post Code","Ship-to County","Ship-to Country/Region Code");
+      END;
+    END;
+
+    [External]
+    PROCEDURE ServiceInvBillTo@49(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR ServiceInvHeader@1001 : Record 5992);
+    BEGIN
+      WITH ServiceInvHeader DO
+        FormatAddr(
+          AddrArray,"Bill-to Name","Bill-to Name 2","Bill-to Contact","Bill-to Address","Bill-to Address 2",
+          "Bill-to City","Bill-to Post Code","Bill-to County","Bill-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE ServiceInvShipTo@51(VAR AddrArray@1000 : ARRAY [8] OF Text[90];CustAddr@1002 : ARRAY [8] OF Text[90];VAR ServiceInvHeader@1001 : Record 5992) : Boolean;
+    BEGIN
+      WITH ServiceInvHeader DO BEGIN
+        FormatAddr(
+          AddrArray,"Ship-to Name","Ship-to Name 2","Ship-to Contact","Ship-to Address","Ship-to Address 2",
+          "Ship-to City","Ship-to Post Code","Ship-to County","Ship-to Country/Region Code");
+        IF "Customer No." <> "Bill-to Customer No." THEN
+          EXIT(TRUE);
+        FOR i := 1 TO ARRAYLEN(AddrArray) DO
+          IF AddrArray[i] <> CustAddr[i] THEN
+            EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+    END;
+
+    [External]
+    PROCEDURE ServiceShptShipTo@54(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR ServiceShptHeader@1001 : Record 5990);
+    BEGIN
+      WITH ServiceShptHeader DO
+        FormatAddr(
+          AddrArray,"Ship-to Name","Ship-to Name 2","Ship-to Contact","Ship-to Address","Ship-to Address 2",
+          "Ship-to City","Ship-to Post Code","Ship-to County","Ship-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE ServiceShptSellTo@56(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR ServiceShptHeader@1001 : Record 5990);
+    BEGIN
+      WITH ServiceShptHeader DO
+        FormatAddr(
+          AddrArray,Name,"Name 2","Contact Name",Address,"Address 2",
+          City,"Post Code",County,"Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE ServiceShptBillTo@55(VAR AddrArray@1000 : ARRAY [8] OF Text[90];ShipToAddr@1002 : ARRAY [8] OF Text[90];VAR ServiceShptHeader@1001 : Record 5990) : Boolean;
+    BEGIN
+      WITH ServiceShptHeader DO BEGIN
+        FormatAddr(
+          AddrArray,"Bill-to Name","Bill-to Name 2","Bill-to Contact","Bill-to Address","Bill-to Address 2",
+          "Bill-to City","Bill-to Post Code","Bill-to County","Bill-to Country/Region Code");
+        IF "Bill-to Customer No." <> "Customer No." THEN
+          EXIT(TRUE);
+        FOR i := 1 TO ARRAYLEN(AddrArray) DO
+          IF ShipToAddr[i] <> AddrArray[i] THEN
+            EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+    END;
+
+    [External]
+    PROCEDURE ServiceCrMemoBillTo@58(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR ServiceCrMemoHeader@1001 : Record 5994);
+    BEGIN
+      WITH ServiceCrMemoHeader DO
+        FormatAddr(
+          AddrArray,"Bill-to Name","Bill-to Name 2","Bill-to Contact","Bill-to Address","Bill-to Address 2",
+          "Bill-to City","Bill-to Post Code","Bill-to County","Bill-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE ServiceCrMemoShipTo@57(VAR AddrArray@1000 : ARRAY [8] OF Text[90];CustAddr@1002 : ARRAY [8] OF Text[90];VAR ServiceCrMemoHeader@1001 : Record 5994) : Boolean;
+    BEGIN
+      WITH ServiceCrMemoHeader DO BEGIN
+        FormatAddr(
+          AddrArray,"Ship-to Name","Ship-to Name 2","Ship-to Contact","Ship-to Address","Ship-to Address 2",
+          "Ship-to City","Ship-to Post Code","Ship-to County","Ship-to Country/Region Code");
+        IF "Customer No." <> "Bill-to Customer No." THEN
+          EXIT(TRUE);
+        FOR i := 1 TO ARRAYLEN(AddrArray) DO
+          IF AddrArray[i] <> CustAddr[i] THEN
+            EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+    END;
+
+    [External]
+    PROCEDURE ServiceHeaderSellTo@61(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR ServiceHeader@1001 : Record 5900);
+    BEGIN
+      WITH ServiceHeader DO
+        FormatAddr(
+          AddrArray,Name,"Name 2","Contact No.",Address,"Address 2",
+          City,"Post Code",County,"Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE ServiceHeaderBillTo@60(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR ServiceHeader@1001 : Record 5900);
+    BEGIN
+      WITH ServiceHeader DO
+        FormatAddr(
+          AddrArray,"Bill-to Name","Bill-to Name 2","Bill-to Contact","Bill-to Address","Bill-to Address 2",
+          "Bill-to City","Bill-to Post Code","Bill-to County","Bill-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE ServiceHeaderShipTo@59(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR ServiceHeader@1001 : Record 5900);
+    BEGIN
+      WITH ServiceHeader DO
+        FormatAddr(
+          AddrArray,"Ship-to Name","Ship-to Name 2","Ship-to Contact","Ship-to Address","Ship-to Address 2",
+          "Ship-to City","Ship-to Post Code","Ship-to County","Ship-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE PostalBarCode@65(AddressType@1000 : Option) : Text[100];
+    BEGIN
+      IF AddressType = AddressType THEN
+        EXIT('');
+      EXIT('');
+    END;
+
+    [External]
+    PROCEDURE SalesHeaderArchBillTo@46(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR SalesHeaderArch@1001 : Record 5107);
+    BEGIN
+      WITH SalesHeaderArch DO
+        FormatAddr(
+          AddrArray,"Bill-to Name","Bill-to Name 2","Bill-to Contact","Bill-to Address","Bill-to Address 2",
+          "Bill-to City","Bill-to Post Code","Bill-to County","Bill-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE SalesHeaderArchShipTo@48(VAR AddrArray@1000 : ARRAY [8] OF Text[90];CustAddr@1002 : ARRAY [8] OF Text[90];VAR SalesHeaderArch@1001 : Record 5107) : Boolean;
+    VAR
+      CountryRegion@1003 : Record 9;
+      SellToCountry@1004 : Code[50];
+    BEGIN
+      WITH SalesHeaderArch DO BEGIN
+        FormatAddr(
+          AddrArray,"Ship-to Name","Ship-to Name 2","Ship-to Contact","Ship-to Address","Ship-to Address 2",
+          "Ship-to City","Ship-to Post Code","Ship-to County","Ship-to Country/Region Code");
+        IF "Sell-to Customer No." <> "Bill-to Customer No." THEN
+          EXIT(TRUE);
+        IF CountryRegion.GET("Sell-to Country/Region Code") THEN
+          SellToCountry := CountryRegion.Name;
+        FOR i := 1 TO ARRAYLEN(AddrArray) DO
+          IF (AddrArray[i] <> CustAddr[i]) AND (AddrArray[i] <> '') AND (AddrArray[i] <> SellToCountry) THEN
+            EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+    END;
+
+    [External]
+    PROCEDURE PurchHeaderBuyFromArch@62(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR PurchHeaderArch@1001 : Record 5109);
+    BEGIN
+      WITH PurchHeaderArch DO
+        FormatAddr(
+          AddrArray,"Buy-from Vendor Name","Buy-from Vendor Name 2","Buy-from Contact","Buy-from Address","Buy-from Address 2",
+          "Buy-from City","Buy-from Post Code","Buy-from County","Buy-from Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE PurchHeaderPayToArch@64(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR PurchHeaderArch@1001 : Record 5109);
+    BEGIN
+      WITH PurchHeaderArch DO
+        FormatAddr(
+          AddrArray,"Pay-to Name","Pay-to Name 2","Pay-to Contact","Pay-to Address","Pay-to Address 2",
+          "Pay-to City","Pay-to Post Code","Pay-to County","Pay-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE PurchHeaderShipToArch@63(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR PurchHeaderArch@1001 : Record 5109);
+    BEGIN
+      WITH PurchHeaderArch DO
+        FormatAddr(
+          AddrArray,"Ship-to Name","Ship-to Name 2","Ship-to Contact","Ship-to Address","Ship-to Address 2",
+          "Ship-to City","Ship-to Post Code","Ship-to County","Ship-to Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE Reminder@67(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR ReminderHeader@1001 : Record 295);
+    BEGIN
+      WITH ReminderHeader DO
+        FormatAddr(
+          AddrArray,Name,"Name 2",Contact,Address,"Address 2",City,"Post Code",County,"Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE IssuedReminder@69(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR IssuedReminderHeader@1001 : Record 297);
+    BEGIN
+      WITH IssuedReminderHeader DO
+        FormatAddr(
+          AddrArray,Name,"Name 2",Contact,Address,"Address 2",City,"Post Code",County,"Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE FinanceChargeMemo@71(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR FinanceChargeMemoHeader@1001 : Record 302);
+    BEGIN
+      WITH FinanceChargeMemoHeader DO
+        FormatAddr(
+          AddrArray,Name,"Name 2",Contact,Address,"Address 2",City,"Post Code",County,"Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE IssuedFinanceChargeMemo@72(VAR AddrArray@1000 : ARRAY [8] OF Text[90];VAR IssuedFinChargeMemoHeader@1001 : Record 304);
+    BEGIN
+      WITH IssuedFinChargeMemoHeader DO
+        FormatAddr(
+          AddrArray,Name,"Name 2",Contact,Address,"Address 2",City,"Post Code",County,"Country/Region Code");
+    END;
+
+    [External]
+    PROCEDURE UseCounty@77(CountryCode@1000 : Code[10]) : Boolean;
+    VAR
+      CountryRegion@1001 : Record 9;
+      CustomAddressFormat@1002 : Record 725;
+    BEGIN
+      IF CountryCode = '' THEN BEGIN
+        GLSetup.GET;
+        CASE TRUE OF
+          GLSetup."Local Address Format" = GLSetup."Local Address Format"::"City+County+Post Code":
+            EXIT(TRUE);
+          GLSetup."Local Address Format" = GLSetup."Local Address Format"::"City+County+New Line+Post Code":
+            EXIT(TRUE);
+          GLSetup."Local Address Format" = GLSetup."Local Address Format"::"Post Code+City+County":
+            EXIT(TRUE);
+          CustomAddressFormat.UseCounty(''):
+            EXIT(TRUE);
+        END;
+      END;
+
+      IF CountryRegion.GET(CountryCode) THEN
+        CASE TRUE OF
+          CountryRegion."Address Format" = CountryRegion."Address Format"::"City+County+Post Code":
+            EXIT(TRUE);
+          CountryRegion."Address Format" = CountryRegion."Address Format"::"City+County+New Line+Post Code":
+            EXIT(TRUE);
+          CountryRegion."Address Format" = CountryRegion."Address Format"::"Post Code+City+County":
+            EXIT(TRUE);
+          CustomAddressFormat.UseCounty(CountryCode):
+            EXIT(TRUE);
+        END;
+
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE SetLineNos@79(Country@1000 : Record 9;VAR NameLineNo@1008 : Integer;VAR Name2LineNo@1007 : Integer;VAR AddrLineNo@1006 : Integer;VAR Addr2LineNo@1005 : Integer;VAR ContLineNo@1004 : Integer;VAR PostCodeCityLineNo@1003 : Integer;VAR CountyLineNo@1002 : Integer;VAR CountryLineNo@1001 : Integer);
+    BEGIN
+      CASE Country."Contact Address Format" OF
+        Country."Contact Address Format"::First:
+          BEGIN
+            NameLineNo := 2;
+            Name2LineNo := 3;
+            ContLineNo := 1;
+            AddrLineNo := 4;
+            Addr2LineNo := 5;
+            PostCodeCityLineNo := 6;
+            CountyLineNo := 7;
+            CountryLineNo := 8;
+          END;
+        Country."Contact Address Format"::"After Company Name":
+          BEGIN
+            NameLineNo := 1;
+            Name2LineNo := 2;
+            ContLineNo := 3;
+            AddrLineNo := 4;
+            Addr2LineNo := 5;
+            PostCodeCityLineNo := 6;
+            CountyLineNo := 7;
+            CountryLineNo := 8;
+          END;
+        Country."Contact Address Format"::Last:
+          BEGIN
+            NameLineNo := 1;
+            Name2LineNo := 2;
+            ContLineNo := 8;
+            AddrLineNo := 3;
+            Addr2LineNo := 4;
+            PostCodeCityLineNo := 5;
+            CountyLineNo := 6;
+            CountryLineNo := 7;
+          END;
+      END;
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterFormatAddress@80(VAR AddrArray@1009 : ARRAY [8] OF Text[90];VAR Name@1008 : Text[90];VAR Name2@1007 : Text[90];VAR Contact@1006 : Text[90];VAR Addr@1005 : Text[50];VAR Addr2@1004 : Text[50];VAR City@1003 : Text[50];VAR PostCode@1002 : Code[20];VAR County@1001 : Text[50];VAR CountryCode@1000 : Code[10]);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeContactAddrAlt@68(VAR AddrArray@1003 : ARRAY [8] OF Text[90];VAR Cont@1002 : Record 5050;AltAddressCode@1001 : Code[10];ActiveDate@1000 : Date;VAR Handled@1004 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeCustomer@70(VAR AddrArray@1001 : ARRAY [8] OF Text[90];VAR Cust@1000 : Record 18;VAR Handled@1002 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeFormatAddress@73(Country@1010 : Record 9;VAR AddrArray@1009 : ARRAY [8] OF Text[90];VAR Name@1008 : Text[90];VAR Name2@1007 : Text[90];VAR Contact@1006 : Text[90];VAR Addr@1005 : Text[50];VAR Addr2@1004 : Text[50];VAR City@1003 : Text[50];VAR PostCode@1002 : Code[20];VAR County@1001 : Text[50];VAR CountryCode@1000 : Code[10];NameLineNo@1014 : Integer;Name2LineNo@1013 : Integer;AddrLineNo@1012 : Integer;Addr2LineNo@1011 : Integer;ContLineNo@1019 : Integer;PostCodeCityLineNo@1018 : Integer;CountyLineNo@1017 : Integer;CountryLineNo@1016 : Integer;VAR Handled@1015 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeSalesHeaderBillTo@75(VAR AddrArray@1002 : ARRAY [8] OF Text[90];VAR SalesHeader@1001 : Record 36;VAR Handled@1000 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeSalesInvBillTo@76(VAR AddrArray@1002 : ARRAY [8] OF Text[90];VAR SalesInvHeader@1001 : Record 112;VAR Handled@1000 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeSalesCrMemoBillTo@78(VAR AddrArray@1002 : ARRAY [8] OF Text[90];VAR SalesCrMemoHeader@1001 : Record 114;VAR Handled@1000 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeVendor@74(VAR AddrArray@1001 : ARRAY [8] OF Text[90];VAR Vendor@1000 : Record 23;VAR Handled@1002 : Boolean);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

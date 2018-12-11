@@ -1,0 +1,241 @@
+OBJECT Table 1173 Document Attachment
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:14:27 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnInsert=BEGIN
+               IF IncomingFileName <> '' THEN BEGIN
+                 VALIDATE("File Extension",FileManagement.GetExtension(IncomingFileName));
+                 VALIDATE("File Name",COPYSTR(FileManagement.GetFileNameWithoutExtension(IncomingFileName),1,MAXSTRLEN("File Name")));
+               END;
+
+               IF NOT "Document Reference ID".HASVALUE THEN
+                 ERROR(NoDocumentAttachedErr);
+
+               VALIDATE("Attached Date",CURRENTDATETIME);
+               "Attached By" := USERSECURITYID;
+             END;
+
+    CaptionML=ENU=Document Attachment;
+  }
+  FIELDS
+  {
+    { 1   ;   ;ID                  ;Integer       ;AutoIncrement=Yes;
+                                                   CaptionML=ENU=ID;
+                                                   Editable=No }
+    { 2   ;   ;Table ID            ;Integer       ;TableRelation=AllObjWithCaption."Object ID" WHERE (Object Type=CONST(Table));
+                                                   CaptionML=ENU=Table ID;
+                                                   NotBlank=Yes }
+    { 3   ;   ;No.                 ;Code20        ;CaptionML=ENU=No.;
+                                                   NotBlank=Yes }
+    { 4   ;   ;Attached Date       ;DateTime      ;CaptionML=ENU=Attached Date }
+    { 5   ;   ;File Name           ;Text250       ;OnValidate=VAR
+                                                                DocumentAttachmentMgmt@1000 : Codeunit 1173;
+                                                              BEGIN
+                                                                IF "File Name" = '' THEN
+                                                                  ERROR(EmptyFileNameErr);
+
+                                                                IF DocumentAttachmentMgmt.IsDuplicateFile("Table ID","No.","Document Type","Line No.","File Name","File Extension") = TRUE THEN
+                                                                  ERROR(DuplicateErr);
+                                                              END;
+
+                                                   CaptionML=ENU=Attachment;
+                                                   NotBlank=Yes }
+    { 6   ;   ;File Type           ;Option        ;CaptionML=ENU=File Type;
+                                                   OptionCaptionML=ENU=" ,Image,PDF,Word,Excel,PowerPoint,Email,XML,Other";
+                                                   OptionString=[ ,Image,PDF,Word,Excel,PowerPoint,Email,XML,Other] }
+    { 7   ;   ;File Extension      ;Text30        ;OnValidate=BEGIN
+                                                                CASE LOWERCASE("File Extension") OF
+                                                                  'jpg','jpeg','bmp','png','tiff','tif','gif':
+                                                                    "File Type" := "File Type"::Image;
+                                                                  'pdf':
+                                                                    "File Type" := "File Type"::PDF;
+                                                                  'docx','doc':
+                                                                    "File Type" := "File Type"::Word;
+                                                                  'xlsx','xls':
+                                                                    "File Type" := "File Type"::Excel;
+                                                                  'pptx','ppt':
+                                                                    "File Type" := "File Type"::PowerPoint;
+                                                                  'msg':
+                                                                    "File Type" := "File Type"::Email;
+                                                                  'xml':
+                                                                    "File Type" := "File Type"::XML;
+                                                                  ELSE
+                                                                    "File Type" := "File Type"::Other;
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ENU=File Extension }
+    { 8   ;   ;Document Reference ID;Media        ;CaptionML=ENU=Document Reference ID }
+    { 9   ;   ;Attached By         ;GUID          ;TableRelation=User."User Security ID" WHERE (License Type=CONST(Full User));
+                                                   CaptionML=ENU=Attached By;
+                                                   Editable=No }
+    { 10  ;   ;User                ;Code50        ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(User."User Name" WHERE (User Security ID=FIELD(Attached By),
+                                                                                              License Type=CONST(Full User)));
+                                                   CaptionML=ENU=User;
+                                                   Editable=No }
+    { 11  ;   ;Document Flow Purchase;Boolean     ;OnValidate=BEGIN
+                                                                IF NOT "Document Reference ID".HASVALUE THEN
+                                                                  ERROR(NoDocumentAttachedErr);
+                                                              END;
+
+                                                   CaptionML=ENU=Flow to Purch. Trx }
+    { 12  ;   ;Document Flow Sales ;Boolean       ;OnValidate=BEGIN
+                                                                IF NOT "Document Reference ID".HASVALUE THEN
+                                                                  ERROR(NoDocumentAttachedErr);
+                                                              END;
+
+                                                   CaptionML=ENU=Flow to Sales Trx }
+    { 13  ;   ;Document Type       ;Option        ;CaptionML=ENU=Document Type;
+                                                   OptionCaptionML=ENU=Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order;
+                                                   OptionString=Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order }
+    { 14  ;   ;Line No.            ;Integer       ;CaptionML=ENU=Line No. }
+  }
+  KEYS
+  {
+    {    ;Table ID,No.,Document Type,Line No.,ID  ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+    { 1   ;Brick               ;No.,File Name,File Extension,File Type   }
+  }
+  CODE
+  {
+    VAR
+      NoDocumentAttachedErr@1000 : TextConst 'ENU=Please attach a document first.';
+      EmptyFileNameErr@1006 : TextConst 'ENU=Please choose a file to attach.';
+      NoContentErr@1007 : TextConst 'ENU=The selected file has no content. Please choose another file.';
+      FileManagement@1001 : Codeunit 419;
+      IncomingFileName@1003 : Text;
+      DuplicateErr@1002 : TextConst 'ENU=This file is already attached to the document. Please choose another file.';
+
+    PROCEDURE Export@3(ShowFileDialog@1002 : Boolean) : Text;
+    VAR
+      TempBlob@1001 : Record 99008535;
+      FileManagement@1000 : Codeunit 419;
+      DocumentStream@1004 : OutStream;
+      FullFileName@1006 : Text;
+    BEGIN
+      IF ID = 0 THEN
+        EXIT;
+      // Ensure document has value in DB
+      IF NOT "Document Reference ID".HASVALUE THEN
+        EXIT;
+
+      FullFileName := "File Name" + '.' + "File Extension";
+      TempBlob.Blob.CREATEOUTSTREAM(DocumentStream);
+      "Document Reference ID".EXPORTSTREAM(DocumentStream);
+      EXIT(FileManagement.BLOBExport(TempBlob,FullFileName,ShowFileDialog));
+    END;
+
+    PROCEDURE SaveAttachment@1(RecRef@1001 : RecordRef;FileName@1000 : Text;TempBlob@1003 : Record 99008535);
+    VAR
+      FieldRef@1007 : FieldRef;
+      DocStream@1004 : InStream;
+      RecNo@1006 : Code[20];
+      DocType@1005 : 'Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order';
+      LineNo@1002 : Integer;
+    BEGIN
+      IF FileName = '' THEN
+        ERROR(EmptyFileNameErr);
+      // Validate file/media is not empty
+      IF NOT TempBlob.Blob.HASVALUE THEN
+        ERROR(NoContentErr);
+
+      IncomingFileName := FileName;
+
+      VALIDATE("File Extension",FileManagement.GetExtension(IncomingFileName));
+      VALIDATE("File Name",COPYSTR(FileManagement.GetFileNameWithoutExtension(IncomingFileName),1,MAXSTRLEN("File Name")));
+
+      TempBlob.Blob.CREATEINSTREAM(DocStream);
+      // IMPORTSTREAM(stream,description, mime-type,filename)
+      // description and mime-type are set empty and will be automatically set by platform code from the stream
+      "Document Reference ID".IMPORTSTREAM(DocStream,'','',IncomingFileName);
+      IF NOT "Document Reference ID".HASVALUE THEN
+        ERROR(NoDocumentAttachedErr);
+
+      VALIDATE("Table ID",RecRef.NUMBER);
+
+      CASE RecRef.NUMBER OF
+        DATABASE::Customer,
+        DATABASE::Vendor,
+        DATABASE::Item,
+        DATABASE::Employee,
+        DATABASE::"Fixed Asset",
+        DATABASE::Resource,
+        DATABASE::Job:
+          BEGIN
+            FieldRef := RecRef.FIELD(1);
+            RecNo := FieldRef.VALUE;
+            VALIDATE("No.",RecNo);
+          END;
+      END;
+
+      CASE RecRef.NUMBER OF
+        DATABASE::"Sales Header",
+        DATABASE::"Purchase Header",
+        DATABASE::"Sales Line",
+        DATABASE::"Purchase Line":
+          BEGIN
+            FieldRef := RecRef.FIELD(1);
+            DocType := FieldRef.VALUE;
+            VALIDATE("Document Type",DocType);
+
+            FieldRef := RecRef.FIELD(3);
+            RecNo := FieldRef.VALUE;
+            VALIDATE("No.",RecNo);
+          END;
+      END;
+
+      CASE RecRef.NUMBER OF
+        DATABASE::"Sales Line",
+        DATABASE::"Purchase Line":
+          BEGIN
+            FieldRef := RecRef.FIELD(4);
+            LineNo := FieldRef.VALUE;
+            VALIDATE("Line No.",LineNo);
+          END;
+      END;
+
+      CASE RecRef.NUMBER OF
+        DATABASE::"Sales Invoice Header",
+        DATABASE::"Sales Cr.Memo Header",
+        DATABASE::"Purch. Inv. Header",
+        DATABASE::"Purch. Cr. Memo Hdr.":
+          BEGIN
+            FieldRef := RecRef.FIELD(3);
+            RecNo := FieldRef.VALUE;
+            VALIDATE("No.",RecNo);
+          END;
+      END;
+
+      CASE RecRef.NUMBER OF
+        DATABASE::"Sales Invoice Line",
+        DATABASE::"Sales Cr.Memo Line",
+        DATABASE::"Purch. Inv. Line",
+        DATABASE::"Purch. Cr. Memo Line":
+          BEGIN
+            FieldRef := RecRef.FIELD(3);
+            RecNo := FieldRef.VALUE;
+            VALIDATE("No.",RecNo);
+
+            FieldRef := RecRef.FIELD(4);
+            LineNo := FieldRef.VALUE;
+            VALIDATE("Line No.",LineNo);
+          END;
+      END;
+
+      INSERT(TRUE);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

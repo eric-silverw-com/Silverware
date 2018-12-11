@@ -1,0 +1,209 @@
+OBJECT Codeunit 360 Accounting Period Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=;
+    Time=;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    [External]
+    PROCEDURE GetPeriodStartingDate@1() : Date;
+    VAR
+      AccountingPeriod@1000 : Record 50;
+    BEGIN
+      AccountingPeriod.SETCURRENTKEY(Closed);
+      AccountingPeriod.SETRANGE(Closed,FALSE);
+      IF AccountingPeriod.FINDFIRST THEN
+        EXIT(AccountingPeriod."Starting Date");
+      EXIT(CALCDATE('<-CY>',WORKDATE));
+    END;
+
+    [External]
+    PROCEDURE CheckPostingDateInFiscalYear@2(PostingDate@1000 : Date);
+    VAR
+      AccountingPeriod@1001 : Record 50;
+    BEGIN
+      IF AccountingPeriod.ISEMPTY THEN
+        EXIT;
+      AccountingPeriod.GET(NORMALDATE(PostingDate) + 1);
+      AccountingPeriod.TESTFIELD("New Fiscal Year",TRUE);
+      AccountingPeriod.TESTFIELD("Date Locked",TRUE);
+    END;
+
+    [External]
+    PROCEDURE FindFiscalYear@10(BalanceDate@1000 : Date) : Date;
+    VAR
+      AccountingPeriod@1001 : Record 50;
+    BEGIN
+      IF AccountingPeriod.ISEMPTY THEN BEGIN
+        IF BalanceDate = 0D THEN
+          EXIT(CALCDATE('<-CY>',WORKDATE));
+        EXIT(CALCDATE('<-CY>',BalanceDate));
+      END;
+      AccountingPeriod.SETRANGE("New Fiscal Year",TRUE);
+      AccountingPeriod.SETRANGE("Starting Date",0D,BalanceDate);
+      IF AccountingPeriod.FINDLAST THEN
+        EXIT(AccountingPeriod."Starting Date");
+      AccountingPeriod.RESET;
+      AccountingPeriod.FINDFIRST;
+      EXIT(AccountingPeriod."Starting Date");
+    END;
+
+    [External]
+    PROCEDURE FindEndOfFiscalYear@27(BalanceDate@1000 : Date) : Date;
+    VAR
+      AccountingPeriod@1001 : Record 50;
+    BEGIN
+      IF AccountingPeriod.ISEMPTY THEN BEGIN
+        IF BalanceDate = 0D THEN
+          EXIT(CALCDATE('<CY>',WORKDATE));
+        EXIT(CALCDATE('<CY>',BalanceDate));
+      END;
+      AccountingPeriod.SETRANGE("New Fiscal Year",TRUE);
+      AccountingPeriod.SETFILTER("Starting Date",'>%1',FindFiscalYear(BalanceDate));
+      IF AccountingPeriod.FINDFIRST THEN
+        EXIT(CALCDATE('<-1D>',AccountingPeriod."Starting Date"));
+      EXIT(DMY2DATE(31,12,9999));
+    END;
+
+    [External]
+    PROCEDURE AccPeriodStartEnd@26(Date@1000 : Date;VAR StartDate@1013 : Date;VAR EndDate@1014 : Date;VAR PeriodError@1006 : Boolean;Steps@1002 : Integer;Type@1004 : ' ,Period,Fiscal Year';RangeFromType@1010 : 'Int,CP,LP';RangeToType@1009 : 'Int,CP,LP';RangeFromInt@1008 : Integer;RangeToInt@1005 : Integer);
+    VAR
+      AccountingPeriod@1001 : Record 50;
+      AccountingPeriodFY@1007 : Record 50;
+      CurrentPeriodNo@1003 : Integer;
+    BEGIN
+      AccountingPeriod.SETFILTER("Starting Date",'<=%1',Date);
+      IF NOT AccountingPeriod.FINDLAST THEN BEGIN
+        AccountingPeriod.RESET;
+        IF Steps < 0 THEN
+          AccountingPeriod.FINDFIRST
+        ELSE
+          AccountingPeriod.FINDLAST
+      END;
+      AccountingPeriod.RESET;
+
+      CASE Type OF
+        Type::Period:
+          BEGIN
+            IF AccountingPeriod.NEXT(Steps) <> Steps THEN
+              PeriodError := TRUE;
+            StartDate := AccountingPeriod."Starting Date";
+            EndDate := AccPeriodEndDate(StartDate);
+          END;
+        Type::"Fiscal Year":
+          BEGIN
+            AccountingPeriodFY := AccountingPeriod;
+            WHILE NOT AccountingPeriodFY."New Fiscal Year" DO
+              IF AccountingPeriodFY.FIND('<') THEN
+                CurrentPeriodNo += 1
+              ELSE
+                AccountingPeriodFY."New Fiscal Year" := TRUE;
+            AccountingPeriodFY.SETRANGE("New Fiscal Year",TRUE);
+            AccountingPeriodFY.NEXT(Steps);
+
+            AccPeriodStartOrEnd(AccountingPeriodFY,CurrentPeriodNo,RangeFromType,RangeFromInt,FALSE,StartDate);
+            AccPeriodStartOrEnd(AccountingPeriodFY,CurrentPeriodNo,RangeToType,RangeToInt,TRUE,EndDate);
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE AccPeriodEndDate@29(StartDate@1000 : Date) : Date;
+    VAR
+      AccountingPeriod@1001 : Record 50;
+    BEGIN
+      IF AccountingPeriod.ISEMPTY THEN
+        EXIT(CALCDATE('<CY>',StartDate));
+      AccountingPeriod."Starting Date" := StartDate;
+      IF AccountingPeriod.FIND('>') THEN
+        EXIT(AccountingPeriod."Starting Date" - 1);
+      EXIT(DMY2DATE(31,12,9999));
+    END;
+
+    LOCAL PROCEDURE AccPeriodStartOrEnd@30(AccountingPeriod@1000 : Record 50;CurrentPeriodNo@1007 : Integer;RangeType@1006 : 'Int,CP,LP';RangeInt@1009 : Integer;EndDate@1003 : Boolean;VAR Date@1002 : Date);
+    BEGIN
+      CASE RangeType OF
+        RangeType::CP:
+          AccPeriodGetPeriod(AccountingPeriod,CurrentPeriodNo);
+        RangeType::LP:
+          AccPeriodGetPeriod(AccountingPeriod,-1);
+        RangeType::Int:
+          AccPeriodGetPeriod(AccountingPeriod,RangeInt - 1);
+      END;
+      IF EndDate THEN
+        Date := AccPeriodEndDate(AccountingPeriod."Starting Date")
+      ELSE
+        Date := AccountingPeriod."Starting Date";
+    END;
+
+    LOCAL PROCEDURE AccPeriodGetPeriod@35(VAR AccountingPeriod@1001 : Record 50;AccPeriodNo@1000 : Integer);
+    BEGIN
+      CASE TRUE OF
+        AccPeriodNo > 0:
+          BEGIN
+            AccountingPeriod.NEXT(AccPeriodNo);
+            EXIT;
+          END;
+        AccPeriodNo = 0:
+          EXIT;
+        AccPeriodNo < 0:
+          BEGIN
+            AccountingPeriod.SETRANGE("New Fiscal Year",TRUE);
+            IF NOT AccountingPeriod.FIND('>') THEN BEGIN
+              AccountingPeriod.RESET;
+              AccountingPeriod.FIND('+');
+              EXIT;
+            END;
+            AccountingPeriod.RESET;
+            AccountingPeriod.FIND('<');
+            EXIT;
+          END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE InitStartYearAccountingPeriod@4(VAR AccountingPeriod@1000 : Record 50;PostingDate@1001 : Date);
+    BEGIN
+      InitAccountingPeriod(AccountingPeriod,CALCDATE('<-CY>',PostingDate),TRUE);
+    END;
+
+    [External]
+    PROCEDURE InitDefaultAccountingPeriod@3(VAR AccountingPeriod@1000 : Record 50;PostingDate@1001 : Date);
+    BEGIN
+      InitAccountingPeriod(AccountingPeriod,CALCDATE('<-CM>',PostingDate),FALSE);
+    END;
+
+    LOCAL PROCEDURE InitAccountingPeriod@8(VAR AccountingPeriod@1000 : Record 50;StartingDate@1001 : Date;NewFiscalYear@1002 : Boolean);
+    VAR
+      InventorySetup@1003 : Record 313;
+    BEGIN
+      AccountingPeriod.INIT;
+      AccountingPeriod."Starting Date" := CALCDATE('<-CM>',StartingDate);
+      AccountingPeriod.Name := FORMAT(AccountingPeriod."Starting Date",0,'<Month Text>');
+      AccountingPeriod."New Fiscal Year" := NewFiscalYear;
+      IF NewFiscalYear THEN BEGIN
+        InventorySetup.GET;
+        AccountingPeriod."Average Cost Calc. Type" := InventorySetup."Average Cost Calc. Type";
+        AccountingPeriod."Average Cost Period" := InventorySetup."Average Cost Period";
+      END;
+    END;
+
+    PROCEDURE GetDefaultPeriodEndingDate@5(PostingDate@1000 : Date) : Date;
+    BEGIN
+      EXIT(CALCDATE('<CM>',PostingDate));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

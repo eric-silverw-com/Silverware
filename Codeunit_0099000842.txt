@@ -1,0 +1,522 @@
+OBJECT Codeunit 99000842 Service Line-Reserve
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:09:39 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 337=rimd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=Codeunit is not initialized correctly.';
+      Text001@1001 : TextConst 'ENU=Reserved quantity cannot be greater than %1';
+      Text002@1002 : TextConst 'ENU=must be filled in when a quantity is reserved';
+      Text003@1003 : TextConst 'ENU=must not be changed when a quantity is reserved';
+      CreateReservEntry@1004 : Codeunit 99000830;
+      ReservEngineMgt@1005 : Codeunit 99000831;
+      ReservMgt@1006 : Codeunit 99000845;
+      ItemTrackingMgt@1023 : Codeunit 6500;
+      SetFromType@1008 : ' ,Sales,Requisition Line,Purchase,Item Journal,BOM Journal,Item Ledger Entry,Service,Job';
+      SetFromSubtype@1009 : Integer;
+      SetFromID@1010 : Code[20];
+      SetFromBatchName@1011 : Code[10];
+      SetFromProdOrderLine@1012 : Integer;
+      SetFromRefNo@1013 : Integer;
+      SetFromVariantCode@1014 : Code[10];
+      SetFromLocationCode@1015 : Code[10];
+      SetFromSerialNo@1017 : Code[50];
+      SetFromLotNo@1018 : Code[50];
+      SetFromQtyPerUOM@1019 : Decimal;
+      DeleteItemTracking@1016 : Boolean;
+      Text004@1007 : TextConst 'ENU=must not be filled in when a quantity is reserved';
+
+    [External]
+    PROCEDURE CreateReservation@1(ServiceLine@1000 : Record 5902;Description@1001 : Text[50];ExpectedReceiptDate@1002 : Date;Quantity@1006 : Decimal;QuantityBase@1003 : Decimal;ForSerialNo@1005 : Code[50];ForLotNo@1004 : Code[50]);
+    VAR
+      ShipmentDate@1007 : Date;
+    BEGIN
+      IF SetFromType = 0 THEN
+        ERROR(Text000);
+
+      ServiceLine.TESTFIELD(Type,ServiceLine.Type::Item);
+      ServiceLine.TESTFIELD("No.");
+      ServiceLine.TESTFIELD("Needed by Date");
+      ServiceLine.CALCFIELDS("Reserved Qty. (Base)");
+      IF ABS(ServiceLine."Outstanding Qty. (Base)") < ABS(ServiceLine."Reserved Qty. (Base)") + QuantityBase THEN
+        ERROR(
+          Text001,
+          ABS(ServiceLine."Outstanding Qty. (Base)") - ABS(ServiceLine."Reserved Qty. (Base)"));
+
+      ServiceLine.TESTFIELD("Variant Code",SetFromVariantCode);
+      ServiceLine.TESTFIELD("Location Code",SetFromLocationCode);
+
+      IF QuantityBase > 0 THEN
+        ShipmentDate := ServiceLine."Needed by Date"
+      ELSE BEGIN
+        ShipmentDate := ExpectedReceiptDate;
+        ExpectedReceiptDate := ServiceLine."Needed by Date";
+      END;
+
+      CreateReservEntry.CreateReservEntryFor(
+        DATABASE::"Service Line",ServiceLine."Document Type",
+        ServiceLine."Document No.",'',0,ServiceLine."Line No.",
+        ServiceLine."Qty. per Unit of Measure",Quantity,QuantityBase,ForSerialNo,ForLotNo);
+      CreateReservEntry.CreateReservEntryFrom(
+        SetFromType,SetFromSubtype,SetFromID,SetFromBatchName,SetFromProdOrderLine,SetFromRefNo,
+        SetFromQtyPerUOM,SetFromSerialNo,SetFromLotNo);
+      CreateReservEntry.CreateReservEntry(
+        ServiceLine."No.",ServiceLine."Variant Code",ServiceLine."Location Code",
+        Description,ExpectedReceiptDate,ShipmentDate);
+
+      SetFromType := 0;
+    END;
+
+    LOCAL PROCEDURE CreateBindingReservation@15(ServiceLine@1000 : Record 5902;Description@1001 : Text[50];ExpectedReceiptDate@1002 : Date;Quantity@1006 : Decimal;QuantityBase@1003 : Decimal);
+    BEGIN
+      CreateReservation(ServiceLine,Description,ExpectedReceiptDate,Quantity,QuantityBase,'','');
+    END;
+
+    [External]
+    PROCEDURE CreateReservationSetFrom@7(TrackingSpecificationFrom@1000 : Record 336);
+    BEGIN
+      WITH TrackingSpecificationFrom DO BEGIN
+        SetFromType := "Source Type";
+        SetFromSubtype := "Source Subtype";
+        SetFromID := "Source ID";
+        SetFromBatchName := "Source Batch Name";
+        SetFromProdOrderLine := "Source Prod. Order Line";
+        SetFromRefNo := "Source Ref. No.";
+        SetFromVariantCode := "Variant Code";
+        SetFromLocationCode := "Location Code";
+        SetFromSerialNo := "Serial No.";
+        SetFromLotNo := "Lot No.";
+        SetFromQtyPerUOM := "Qty. per Unit of Measure";
+      END;
+    END;
+
+    [External]
+    PROCEDURE SetBinding@13(Binding@1000 : ' ,Order-to-Order');
+    BEGIN
+      CreateReservEntry.SetBinding(Binding);
+    END;
+
+    [External]
+    PROCEDURE FilterReservFor@12(VAR FilterReservEntry@1000 : Record 337;ServiceLine@1001 : Record 5902);
+    BEGIN
+      FilterReservEntry.SetSourceFilter(
+        DATABASE::"Service Line",ServiceLine."Document Type",ServiceLine."Document No.",ServiceLine."Line No.",FALSE);
+      FilterReservEntry.SetSourceFilter2('',0);
+    END;
+
+    [External]
+    PROCEDURE Caption@30(ServiceLine@1001 : Record 5902) CaptionText@1000 : Text[80];
+    BEGIN
+      CaptionText :=
+        STRSUBSTNO('%1 %2 %3',ServiceLine."Document Type",ServiceLine."Document No.",ServiceLine."No.");
+    END;
+
+    [External]
+    PROCEDURE FindReservEntry@4(ServiceLine@1000 : Record 5902;VAR ReservEntry@1001 : Record 337) : Boolean;
+    BEGIN
+      ReservEngineMgt.InitFilterAndSortingLookupFor(ReservEntry,FALSE);
+      FilterReservFor(ReservEntry,ServiceLine);
+      EXIT(ReservEntry.FINDLAST);
+    END;
+
+    LOCAL PROCEDURE ReservEntryExist@17(ServLine@1000 : Record 5902) : Boolean;
+    VAR
+      ReservEntry@1001 : Record 337;
+    BEGIN
+      ReservEngineMgt.InitFilterAndSortingLookupFor(ReservEntry,FALSE);
+      FilterReservFor(ReservEntry,ServLine);
+      EXIT(NOT ReservEntry.ISEMPTY);
+    END;
+
+    [External]
+    PROCEDURE ReservQuantity@21(ServLine@1001 : Record 5902;VAR QtyToReserve@1000 : Decimal;VAR QtyToReserveBase@1002 : Decimal);
+    BEGIN
+      CASE ServLine."Document Type" OF
+        ServLine."Document Type"::Quote,
+        ServLine."Document Type"::Order,
+        ServLine."Document Type"::Invoice:
+          BEGIN
+            QtyToReserve := ServLine."Outstanding Quantity";
+            QtyToReserveBase := ServLine."Outstanding Qty. (Base)";
+          END;
+        ServLine."Document Type"::"Credit Memo":
+          BEGIN
+            QtyToReserve := -ServLine."Outstanding Quantity";
+            QtyToReserveBase := -ServLine."Outstanding Qty. (Base)"
+          END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE VerifyChange@59(VAR NewServiceLine@1000 : Record 5902;VAR OldServiceLine@1001 : Record 5902);
+    VAR
+      ServiceLine@1005 : Record 5902;
+      TempReservEntry@1002 : Record 337;
+      ShowError@1003 : Boolean;
+      HasError@1004 : Boolean;
+    BEGIN
+      IF (NewServiceLine.Type <> NewServiceLine.Type::Item) AND (OldServiceLine.Type <> OldServiceLine.Type::Item) THEN
+        EXIT;
+
+      IF NewServiceLine."Line No." = 0 THEN
+        IF NOT ServiceLine.GET(NewServiceLine."Document Type",NewServiceLine."Document No.",NewServiceLine."Line No.") THEN
+          EXIT;
+
+      NewServiceLine.CALCFIELDS("Reserved Qty. (Base)");
+      ShowError := NewServiceLine."Reserved Qty. (Base)" <> 0;
+
+      IF NewServiceLine.Type <> OldServiceLine.Type THEN
+        IF ShowError THEN
+          NewServiceLine.FIELDERROR(Type,Text003)
+        ELSE
+          HasError := TRUE;
+
+      IF NewServiceLine."No." <> OldServiceLine."No." THEN
+        IF ShowError THEN
+          NewServiceLine.FIELDERROR("No.",Text003)
+        ELSE
+          HasError := TRUE;
+
+      IF (NewServiceLine."Needed by Date" = 0D) AND (OldServiceLine."Needed by Date" <> 0D) THEN
+        IF ShowError THEN
+          NewServiceLine.FIELDERROR("Needed by Date",Text002)
+        ELSE
+          HasError := TRUE;
+
+      IF NewServiceLine."Variant Code" <> OldServiceLine."Variant Code" THEN
+        IF ShowError THEN
+          NewServiceLine.FIELDERROR("Variant Code",Text003)
+        ELSE
+          HasError := TRUE;
+
+      IF NewServiceLine."Location Code" <> OldServiceLine."Location Code" THEN
+        IF ShowError THEN
+          NewServiceLine.FIELDERROR("Location Code",Text003)
+        ELSE
+          HasError := TRUE;
+
+      IF (NewServiceLine.Type = NewServiceLine.Type::Item) AND (OldServiceLine.Type = OldServiceLine.Type::Item) THEN
+        IF (NewServiceLine."Bin Code" <> OldServiceLine."Bin Code") AND
+           (NOT ReservMgt.CalcIsAvailTrackedQtyInBin(
+              NewServiceLine."No.",NewServiceLine."Bin Code",
+              NewServiceLine."Location Code",NewServiceLine."Variant Code",
+              DATABASE::"Service Line",NewServiceLine."Document Type",
+              NewServiceLine."Document No.",'',0,NewServiceLine."Line No."))
+        THEN BEGIN
+          IF ShowError THEN
+            NewServiceLine.FIELDERROR("Bin Code",Text004);
+          HasError := TRUE;
+        END;
+
+      IF NewServiceLine."Line No." <> OldServiceLine."Line No." THEN
+        HasError := TRUE;
+
+      OnVerifyChangeOnBeforeHasError(NewServiceLine,OldServiceLine,HasError,ShowError);
+
+      IF HasError THEN
+        IF (NewServiceLine."No." <> OldServiceLine."No.") OR
+           FindReservEntry(NewServiceLine,TempReservEntry)
+        THEN BEGIN
+          IF NewServiceLine."No." <> OldServiceLine."No." THEN BEGIN
+            ReservMgt.SetServLine(OldServiceLine);
+            ReservMgt.DeleteReservEntries(TRUE,0);
+            ReservMgt.SetServLine(NewServiceLine);
+          END ELSE BEGIN
+            ReservMgt.SetServLine(NewServiceLine);
+            ReservMgt.DeleteReservEntries(TRUE,0);
+          END;
+          ReservMgt.AutoTrack(NewServiceLine."Outstanding Qty. (Base)");
+        END;
+
+      IF HasError OR (NewServiceLine."Needed by Date" <> OldServiceLine."Needed by Date")
+      THEN BEGIN
+        AssignForPlanning(NewServiceLine);
+        IF (NewServiceLine."No." <> OldServiceLine."No.") OR
+           (NewServiceLine."Variant Code" <> OldServiceLine."Variant Code") OR
+           (NewServiceLine."Location Code" <> OldServiceLine."Location Code")
+        THEN
+          AssignForPlanning(OldServiceLine);
+      END;
+    END;
+
+    [External]
+    PROCEDURE VerifyQuantity@2(VAR NewServiceLine@1000 : Record 5902;VAR OldServiceLine@1001 : Record 5902);
+    VAR
+      ServiceLine@1002 : Record 5902;
+    BEGIN
+      WITH NewServiceLine DO BEGIN
+        IF NOT ("Document Type" IN
+                ["Document Type"::Quote,"Document Type"::Order])
+        THEN
+          IF "Shipment No." = '' THEN
+            EXIT;
+
+        IF Type <> Type::Item THEN
+          EXIT;
+        IF "Line No." = OldServiceLine."Line No." THEN
+          IF "Quantity (Base)" = OldServiceLine."Quantity (Base)" THEN
+            EXIT;
+        IF "Line No." = 0 THEN
+          IF NOT ServiceLine.GET("Document Type","Document No.","Line No.") THEN
+            EXIT;
+        ReservMgt.SetServLine(NewServiceLine);
+        IF "Qty. per Unit of Measure" <> OldServiceLine."Qty. per Unit of Measure" THEN
+          ReservMgt.ModifyUnitOfMeasure;
+        IF "Outstanding Qty. (Base)" * OldServiceLine."Outstanding Qty. (Base)" < 0 THEN
+          ReservMgt.DeleteReservEntries(FALSE,0)
+        ELSE
+          ReservMgt.DeleteReservEntries(FALSE,"Outstanding Qty. (Base)");
+        ReservMgt.ClearSurplus;
+        ReservMgt.AutoTrack("Outstanding Qty. (Base)");
+        AssignForPlanning(NewServiceLine);
+      END;
+    END;
+
+    LOCAL PROCEDURE AssignForPlanning@5(VAR ServiceLine@1000 : Record 5902);
+    VAR
+      PlanningAssignment@1001 : Record 99000850;
+    BEGIN
+      WITH ServiceLine DO BEGIN
+        IF "Document Type" <> "Document Type"::Order THEN
+          EXIT;
+        IF Type <> Type::Item THEN
+          EXIT;
+        IF "No." <> '' THEN
+          PlanningAssignment.ChkAssignOne("No.","Variant Code","Location Code","Needed by Date");
+      END;
+    END;
+
+    [External]
+    PROCEDURE DeleteLineConfirm@20(VAR ServLine@1000 : Record 5902) : Boolean;
+    BEGIN
+      WITH ServLine DO BEGIN
+        IF NOT ReservEntryExist(ServLine) THEN
+          EXIT(TRUE);
+
+        ReservMgt.SetServLine(ServLine);
+        IF ReservMgt.DeleteItemTrackingConfirm THEN
+          DeleteItemTracking := TRUE;
+      END;
+
+      EXIT(DeleteItemTracking);
+    END;
+
+    [External]
+    PROCEDURE DeleteLine@3(VAR ServLine@1000 : Record 5902);
+    BEGIN
+      WITH ServLine DO BEGIN
+        ReservMgt.SetServLine(ServLine);
+        IF DeleteItemTracking THEN
+          ReservMgt.SetItemTrackingHandling(1); // Allow Deletion
+        ReservMgt.DeleteReservEntries(TRUE,0);
+        DeleteInvoiceSpecFromLine(ServLine);
+        CALCFIELDS("Reserved Qty. (Base)");
+      END;
+    END;
+
+    [External]
+    PROCEDURE CallItemTracking@6(VAR ServiceLine@1003 : Record 5902);
+    VAR
+      TrackingSpecification@1001 : Record 336;
+      ItemTrackingLines@1002 : Page 6510;
+    BEGIN
+      TrackingSpecification.InitFromServLine(ServiceLine,FALSE);
+      IF ((ServiceLine."Document Type" = ServiceLine."Document Type"::Invoice) AND
+          (ServiceLine."Shipment No." <> ''))
+      THEN
+        ItemTrackingLines.SetFormRunMode(2); // Combined shipment/receipt
+      ItemTrackingLines.SetSourceSpec(TrackingSpecification,ServiceLine."Needed by Date");
+      ItemTrackingLines.SetInbound(ServiceLine.IsInbound);
+      ItemTrackingLines.RUNMODAL;
+    END;
+
+    [External]
+    PROCEDURE TransServLineToServLine@31(VAR OldServLine@1000 : Record 5902;VAR NewServLine@1001 : Record 5902;TransferQty@1002 : Decimal);
+    VAR
+      OldReservEntry@1003 : Record 337;
+      Status@1004 : 'Reservation,Tracking,Surplus,Prospect';
+    BEGIN
+      IF NOT FindReservEntry(OldServLine,OldReservEntry) THEN
+        EXIT;
+
+      OldReservEntry.Lock;
+
+      NewServLine.TestItemFields(OldServLine."No.",OldServLine."Variant Code",OldServLine."Location Code");
+
+      FOR Status := Status::Reservation TO Status::Prospect DO BEGIN
+        IF TransferQty = 0 THEN
+          EXIT;
+        OldReservEntry.SETRANGE("Reservation Status",Status);
+        IF OldReservEntry.FINDSET THEN
+          REPEAT
+            OldReservEntry.TestItemFields(OldServLine."No.",OldServLine."Variant Code",OldServLine."Location Code");
+
+            TransferQty := CreateReservEntry.TransferReservEntry(DATABASE::"Service Line",
+                NewServLine."Document Type",NewServLine."Document No.",'',0,
+                NewServLine."Line No.",NewServLine."Qty. per Unit of Measure",OldReservEntry,TransferQty);
+
+          UNTIL (OldReservEntry.NEXT = 0) OR (TransferQty = 0);
+      END;
+    END;
+
+    [External]
+    PROCEDURE RetrieveInvoiceSpecification@9(VAR ServLine@1002 : Record 5902;VAR TempInvoicingSpecification@1001 : TEMPORARY Record 336;Consume@1004 : Boolean) OK@1003 : Boolean;
+    VAR
+      SourceSpecification@1000 : Record 336;
+    BEGIN
+      CLEAR(TempInvoicingSpecification);
+      IF ServLine.Type <> ServLine.Type::Item THEN
+        EXIT;
+      IF ((ServLine."Document Type" = ServLine."Document Type"::Invoice) AND
+          (ServLine."Shipment No." <> ''))
+      THEN
+        OK := RetrieveInvoiceSpecification2(ServLine,TempInvoicingSpecification)
+      ELSE BEGIN
+        SourceSpecification.InitFromServLine(ServLine,Consume);
+        OK := ItemTrackingMgt.RetrieveInvoiceSpecWithService(SourceSpecification,TempInvoicingSpecification,Consume);
+      END;
+    END;
+
+    LOCAL PROCEDURE RetrieveInvoiceSpecification2@1013(VAR ServLine@1002 : Record 5902;VAR TempInvoicingSpecification@1001 : TEMPORARY Record 336) OK@1003 : Boolean;
+    VAR
+      TrackingSpecification@1000 : Record 336;
+      ReservEntry@1004 : Record 337;
+    BEGIN
+      // Used for combined shipment:
+      IF ServLine.Type <> ServLine.Type::Item THEN
+        EXIT;
+      IF NOT FindReservEntry(ServLine,ReservEntry) THEN
+        EXIT;
+      ReservEntry.FINDSET;
+      REPEAT
+        ReservEntry.TESTFIELD("Reservation Status",ReservEntry."Reservation Status"::Prospect);
+        ReservEntry.TESTFIELD("Item Ledger Entry No.");
+        TrackingSpecification.GET(ReservEntry."Item Ledger Entry No.");
+        TempInvoicingSpecification := TrackingSpecification;
+        TempInvoicingSpecification."Qty. to Invoice (Base)" :=
+          ReservEntry."Qty. to Invoice (Base)";
+        TempInvoicingSpecification."Qty. to Invoice" :=
+          ROUND(ReservEntry."Qty. to Invoice (Base)" / ReservEntry."Qty. per Unit of Measure",0.00001);
+        TempInvoicingSpecification."Buffer Status" := TempInvoicingSpecification."Buffer Status"::MODIFY;
+        TempInvoicingSpecification.INSERT;
+        ReservEntry.DELETE;
+      UNTIL ReservEntry.NEXT = 0;
+
+      OK := TempInvoicingSpecification.FINDFIRST;
+    END;
+
+    [External]
+    PROCEDURE DeleteInvoiceSpecFromHeader@14(ServHeader@1002 : Record 5900);
+    BEGIN
+      ItemTrackingMgt.DeleteInvoiceSpecFromHeader(
+        DATABASE::"Service Line",ServHeader."Document Type",ServHeader."No.");
+    END;
+
+    LOCAL PROCEDURE DeleteInvoiceSpecFromLine@19(ServLine@1002 : Record 5902);
+    BEGIN
+      ItemTrackingMgt.DeleteInvoiceSpecFromLine(
+        DATABASE::"Service Line",ServLine."Document Type",ServLine."Document No.",ServLine."Line No.");
+    END;
+
+    [External]
+    PROCEDURE TransServLineToItemJnlLine@35(VAR ServLine@1000 : Record 5902;VAR ItemJnlLine@1001 : Record 83;TransferQty@1004 : Decimal;VAR CheckApplFromItemEntry@1002 : Boolean) : Decimal;
+    VAR
+      OldReservEntry@1003 : Record 337;
+    BEGIN
+      IF NOT FindReservEntry(ServLine,OldReservEntry) THEN
+        EXIT(TransferQty);
+
+      OldReservEntry.Lock;
+
+      ItemJnlLine.TestItemFields(ServLine."No.",ServLine."Variant Code",ServLine."Location Code");
+
+      IF TransferQty = 0 THEN
+        EXIT;
+
+      IF ItemJnlLine."Invoiced Quantity" <> 0 THEN
+        CreateReservEntry.SetUseQtyToInvoice(TRUE);
+
+      IF ReservEngineMgt.InitRecordSet(OldReservEntry) THEN BEGIN
+        REPEAT
+          OldReservEntry.TestItemFields(ServLine."No.",ServLine."Variant Code",ServLine."Location Code");
+
+          IF CheckApplFromItemEntry THEN BEGIN
+            OldReservEntry.TESTFIELD("Appl.-from Item Entry");
+            CreateReservEntry.SetApplyFromEntryNo(OldReservEntry."Appl.-from Item Entry");
+          END;
+
+          TransferQty := CreateReservEntry.TransferReservEntry(DATABASE::"Item Journal Line",
+              ItemJnlLine."Entry Type",ItemJnlLine."Journal Template Name",
+              ItemJnlLine."Journal Batch Name",0,ItemJnlLine."Line No.",
+              ItemJnlLine."Qty. per Unit of Measure",OldReservEntry,TransferQty);
+
+        UNTIL (ReservEngineMgt.NEXTRecord(OldReservEntry) = 0) OR (TransferQty = 0);
+        CheckApplFromItemEntry := FALSE;
+      END;
+      EXIT(TransferQty);
+    END;
+
+    [External]
+    PROCEDURE UpdateItemTrackingAfterPosting@11(ServHeader@1000 : Record 5900);
+    VAR
+      ReservEntry@1003 : Record 337;
+      CreateReservEntry@1001 : Codeunit 99000830;
+    BEGIN
+      // Used for updating Quantity to Handle and Quantity to Invoice after posting
+      ReservEntry.SetSourceFilter(DATABASE::"Service Line",ServHeader."Document Type",ServHeader."No.",-1,TRUE);
+      ReservEntry.SetSourceFilter2('',0);
+      CreateReservEntry.UpdateItemTrackingAfterPosting(ReservEntry);
+    END;
+
+    [External]
+    PROCEDURE BindToPurchase@8(ServiceLine@1002 : Record 5902;PurchLine@1003 : Record 39;ReservQty@1004 : Decimal;ReservQtyBase@1005 : Decimal);
+    VAR
+      TrackingSpecification@1000 : Record 336;
+      ReservationEntry@1001 : Record 337;
+    BEGIN
+      SetBinding(ReservationEntry.Binding::"Order-to-Order");
+      TrackingSpecification.InitTrackingSpecification2(
+        DATABASE::"Purchase Line",
+        PurchLine."Document Type",PurchLine."Document No.",'',0,PurchLine."Line No.",
+        PurchLine."Variant Code",PurchLine."Location Code",PurchLine."Qty. per Unit of Measure");
+      CreateReservationSetFrom(TrackingSpecification);
+      CreateBindingReservation(ServiceLine,PurchLine.Description,PurchLine."Expected Receipt Date",ReservQty,ReservQtyBase);
+    END;
+
+    [External]
+    PROCEDURE BindToRequisition@10(ServiceLine@1003 : Record 5902;ReqLine@1002 : Record 246;ReservQty@1001 : Decimal;ReservQtyBase@1000 : Decimal);
+    VAR
+      TrackingSpecification@1005 : Record 336;
+      ReservationEntry@1004 : Record 337;
+    BEGIN
+      SetBinding(ReservationEntry.Binding::"Order-to-Order");
+      TrackingSpecification.InitTrackingSpecification2(
+        DATABASE::"Requisition Line",
+        0,ReqLine."Worksheet Template Name",ReqLine."Journal Batch Name",0,ReqLine."Line No.",
+        ReqLine."Variant Code",ReqLine."Location Code",ReqLine."Qty. per Unit of Measure");
+      CreateReservationSetFrom(TrackingSpecification);
+      CreateBindingReservation(ServiceLine,ReqLine.Description,ReqLine."Due Date",ReservQty,ReservQtyBase);
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnVerifyChangeOnBeforeHasError@16(NewServiceLine@1000 : Record 5902;OldServiceLine@1001 : Record 5902;VAR HasError@1002 : Boolean;VAR ShowError@1003 : Boolean);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

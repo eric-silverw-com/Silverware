@@ -1,0 +1,161 @@
+OBJECT Codeunit 2831 Native - Payments
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:17 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      AppliesToInvoiceIDFilterNotSpecifiedErr@1003 : TextConst '@@@={Locked};ENU=You must set the "appliesToInvoiceId" filter to get the payments.';
+      AppliesToInvoiceIDFilterDoesNotMatchInvoiceErr@1002 : TextConst '@@@={Locked};ENU=The "appliesToInvoiceId" filter does not match to a posted sales invoice.';
+      NoDetailedCustomerLedgerEntryForPaymentErr@1000 : TextConst 'ENU=No Detailed Customer Ledger Entry could be found for the payment of the invoice.';
+
+    PROCEDURE InsertJournalLine@2(NativePayment@1001 : Record 2831;VAR GenJournalLine@1000 : Record 81);
+    VAR
+      PaymentRegistrationSetup@1006 : Record 980;
+      GenJnlBatch@1004 : Record 232;
+      GenJnlTemplate@1003 : Record 80;
+      NoSeriesMgt@1002 : Codeunit 396;
+    BEGIN
+      PaymentRegistrationSetup.GET(USERID);
+      PaymentRegistrationSetup.ValidateMandatoryFields(TRUE);
+      GenJnlTemplate.GET(PaymentRegistrationSetup."Journal Template Name");
+      GenJnlBatch.GET(PaymentRegistrationSetup."Journal Template Name",PaymentRegistrationSetup."Journal Batch Name");
+
+      GenJournalLine.SETRANGE("Journal Template Name",PaymentRegistrationSetup."Journal Template Name");
+      GenJournalLine.SETRANGE("Journal Batch Name",PaymentRegistrationSetup."Journal Batch Name");
+      IF GenJournalLine.FINDLAST THEN
+        GenJournalLine.SETFILTER("Line No.",'>%1',GenJournalLine."Line No.");
+
+      GenJournalLine.INIT;
+      GenJournalLine."Journal Template Name" := PaymentRegistrationSetup."Journal Template Name";
+      GenJournalLine."Journal Batch Name" := PaymentRegistrationSetup."Journal Batch Name";
+      GenJournalLine."Line No." += 10000;
+
+      GenJournalLine."Document Type" := GenJournalLine."Document Type"::Payment;
+      GenJournalLine."Account Type" := GenJournalLine."Account Type"::Customer;
+      GenJournalLine."Applies-to Doc. Type" := GenJournalLine."Applies-to Doc. Type"::Invoice;
+
+      GenJournalLine.VALIDATE("Posting Date",NativePayment."Payment Date");
+      GenJournalLine."Document No." := NoSeriesMgt.GetNextNo(GenJnlBatch."No. Series",GenJournalLine."Posting Date",FALSE);
+      GenJournalLine.VALIDATE("Bal. Account Type",PaymentRegistrationSetup.GetGLBalAccountType);
+      GenJournalLine.VALIDATE("Account No.",NativePayment."Customer No.");
+      GenJournalLine.VALIDATE(Amount,NativePayment.Amount);
+      GenJournalLine.VALIDATE("Bal. Account No.",PaymentRegistrationSetup."Bal. Account No.");
+      GenJournalLine.VALIDATE("Payment Method Code",NativePayment."Payment Method Code");
+      GenJournalLine.VALIDATE("Applies-to Doc. No.",NativePayment."Applies-to Invoice No.");
+
+      GenJournalLine.INSERT(TRUE);
+    END;
+
+    PROCEDURE PostJournal@3(GenJournalLine@1001 : Record 81);
+    BEGIN
+      CODEUNIT.RUN(CODEUNIT::"Gen. Jnl.-Post Batch",GenJournalLine);
+    END;
+
+    PROCEDURE LoadAllPayments@1(VAR NativePayment@1000 : Record 2831);
+    VAR
+      SalesInvoiceHeader@1001 : Record 112;
+    BEGIN
+      IF SalesInvoiceHeader.FINDSET THEN BEGIN
+        REPEAT
+          LoadPayments(NativePayment,SalesInvoiceHeader.Id);
+        UNTIL SalesInvoiceHeader.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE LoadPayments@7(VAR NativePayment@1001 : Record 2831;AppliesToInvoiceIdFilter@1000 : Text);
+    VAR
+      SalesInvoiceHeader@1002 : Record 112;
+      InvoiceCustLedgerEntry@1004 : Record 21;
+      PaymentCustLedgerEntry@1003 : Record 21;
+      PaymentNo@1005 : Integer;
+    BEGIN
+      IF AppliesToInvoiceIdFilter = '' THEN
+        ERROR(AppliesToInvoiceIDFilterNotSpecifiedErr);
+
+      SalesInvoiceHeader.RESET;
+      SalesInvoiceHeader.SETRANGE(Id,AppliesToInvoiceIdFilter);
+      IF NOT SalesInvoiceHeader.FINDFIRST THEN
+        ERROR(AppliesToInvoiceIDFilterDoesNotMatchInvoiceErr);
+
+      InvoiceCustLedgerEntry.SETRANGE("Document Type",InvoiceCustLedgerEntry."Document Type"::Invoice);
+      InvoiceCustLedgerEntry.SETRANGE("Document No.",SalesInvoiceHeader."No.");
+      IF NOT InvoiceCustLedgerEntry.FINDFIRST THEN
+        EXIT;
+
+      PaymentCustLedgerEntry.SETCURRENTKEY("Closed by Entry No.");
+      PaymentCustLedgerEntry.SETRANGE("Closed by Entry No.",InvoiceCustLedgerEntry."Entry No.");
+      IF PaymentCustLedgerEntry.FINDSET THEN BEGIN
+        REPEAT
+          PaymentNo += 10000;
+          CLEAR(NativePayment);
+          NativePayment."Payment No." := PaymentNo;
+          NativePayment."Applies-to Invoice Id" := AppliesToInvoiceIdFilter;
+          SetValuesFromCustomerLedgerEntry(NativePayment,PaymentCustLedgerEntry);
+          NativePayment.INSERT;
+        UNTIL PaymentCustLedgerEntry.NEXT = 0;
+      END;
+
+      IF PaymentCustLedgerEntry.GET(InvoiceCustLedgerEntry."Closed by Entry No.") THEN BEGIN
+        PaymentNo += 10000;
+        CLEAR(NativePayment);
+        NativePayment."Payment No." := PaymentNo;
+        NativePayment."Applies-to Invoice Id" := AppliesToInvoiceIdFilter;
+        SetValuesFromCustomerLedgerEntry(NativePayment,PaymentCustLedgerEntry);
+        NativePayment.INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE SetValuesFromCustomerLedgerEntry@14(VAR NativePayment@1002 : Record 2831;CustLedgerEntry@1000 : Record 21);
+    BEGIN
+      CustLedgerEntry.CALCFIELDS("Amount (LCY)");
+      WITH NativePayment DO BEGIN
+        VALIDATE("Customer No.",CustLedgerEntry."Customer No.");
+        "Payment Date" := CustLedgerEntry."Posting Date";
+        Amount := -CustLedgerEntry."Amount (LCY)";
+        VALIDATE("Applies-to Invoice No.",CustLedgerEntry."Applies-to Doc. No.");
+        VALIDATE("Payment Method Code",CustLedgerEntry."Payment Method Code");
+        VALIDATE("Ledger Entry No.",CustLedgerEntry."Entry No.");
+      END;
+    END;
+
+    PROCEDURE CancelCustLedgerEntry@15(CustomerLedgerEntry@1004 : Integer);
+    VAR
+      PaymentCustLedgerEntry@1003 : Record 21;
+      ReversalEntry@1002 : Record 179;
+      DetailedCustLedgEntry@1001 : Record 379;
+      CustEntryApplyPostedEntries@1000 : Codeunit 226;
+    BEGIN
+      IF NOT PaymentCustLedgerEntry.GET(CustomerLedgerEntry) THEN
+        EXIT;
+
+      // Get detailed ledger entry for the payment, making sure it's a payment
+      DetailedCustLedgEntry.SETRANGE("Document Type",DetailedCustLedgEntry."Document Type"::Payment);
+      DetailedCustLedgEntry.SETRANGE("Document No.",PaymentCustLedgerEntry."Document No.");
+      DetailedCustLedgEntry.SETRANGE("Cust. Ledger Entry No.",CustomerLedgerEntry);
+      DetailedCustLedgEntry.SETRANGE(Unapplied,FALSE);
+      IF NOT DetailedCustLedgEntry.FINDLAST THEN
+        ERROR(NoDetailedCustomerLedgerEntryForPaymentErr);
+
+      CustEntryApplyPostedEntries.PostUnApplyCustomerCommit(
+        DetailedCustLedgEntry,DetailedCustLedgEntry."Document No.",DetailedCustLedgEntry."Posting Date",FALSE);
+
+      ReversalEntry.SetHideWarningDialogs;
+      ReversalEntry.ReverseTransaction(PaymentCustLedgerEntry."Transaction No.");
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

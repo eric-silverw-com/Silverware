@@ -1,0 +1,344 @@
+OBJECT Table 10120 Bank Rec. Header
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:15:50 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 270=rm;
+    OnInsert=BEGIN
+               IF "Statement Date" = 0D THEN
+                 "Statement Date" := WORKDATE;
+
+               IF "Statement No." = '' THEN
+                 VALIDATE("Statement No.",GetStatementNo);
+
+               "Date Created" := WORKDATE;
+               "Time Created" := TIME;
+               "Created By" := USERID;
+             END;
+
+    OnDelete=BEGIN
+               BankRecLine.SETRANGE("Bank Account No.","Bank Account No.");
+               BankRecLine.SETRANGE("Statement No.","Statement No.");
+               BankRecLine.DELETEALL(TRUE);
+
+               BankRecCommentLine.SETRANGE("Table Name",BankRecCommentLine."Table Name"::"Bank Rec.");
+               BankRecCommentLine.SETRANGE("Bank Account No.","Bank Account No.");
+               BankRecCommentLine.SETRANGE("No.","Statement No.");
+               BankRecCommentLine.DELETEALL;
+             END;
+
+    OnRename=BEGIN
+               ERROR(Text003,TABLECAPTION);
+             END;
+
+    CaptionML=ENU=Bank Rec. Header;
+    LookupPageID=Page10124;
+    DrillDownPageID=Page10124;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Bank Account No.    ;Code20        ;TableRelation="Bank Account";
+                                                   OnValidate=BEGIN
+                                                                BankAccount.GET("Bank Account No.");
+                                                                BankAcctPostingGrp.GET(BankAccount."Bank Acc. Posting Group");
+                                                                "G/L Bank Account No." := BankAcctPostingGrp."G/L Bank Account No.";
+                                                                VALIDATE("Currency Code",BankAccount."Currency Code");
+                                                              END;
+
+                                                   CaptionML=ENU=Bank Account No.;
+                                                   NotBlank=Yes }
+    { 2   ;   ;Statement No.       ;Code20        ;OnValidate=BEGIN
+                                                                CalculateBalance;
+                                                              END;
+
+                                                   CaptionML=ENU=Statement No. }
+    { 3   ;   ;Statement Date      ;Date          ;OnValidate=BEGIN
+                                                                VALIDATE("Currency Code");
+                                                                CalculateBalance;
+                                                              END;
+
+                                                   CaptionML=ENU=Statement Date }
+    { 4   ;   ;Statement Balance   ;Decimal       ;CaptionML=ENU=Statement Balance }
+    { 5   ;   ;G/L Balance (LCY)   ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("G/L Entry".Amount WHERE (G/L Account No.=FIELD(G/L Bank Account No.),
+                                                                                             Posting Date=FIELD(UPPERLIMIT(Date Filter))));
+                                                   CaptionML=ENU=G/L Balance ($);
+                                                   Editable=No;
+                                                   AutoFormatType=1 }
+    { 6   ;   ;Positive Adjustments;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Bank Rec. Line".Amount WHERE (Bank Account No.=FIELD(Bank Account No.),
+                                                                                                  Statement No.=FIELD(Statement No.),
+                                                                                                  Record Type=CONST(Adjustment),
+                                                                                                  Positive=CONST(Yes),
+                                                                                                  Account Type=CONST(Bank Account),
+                                                                                                  Account No.=FIELD(Bank Account No.)));
+                                                   CaptionML=ENU=Positive Adjustments }
+    { 7   ;   ;Negative Adjustments;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Bank Rec. Line".Amount WHERE (Bank Account No.=FIELD(Bank Account No.),
+                                                                                                  Statement No.=FIELD(Statement No.),
+                                                                                                  Record Type=CONST(Adjustment),
+                                                                                                  Positive=CONST(No),
+                                                                                                  Account Type=CONST(Bank Account),
+                                                                                                  Account No.=FIELD(Bank Account No.)));
+                                                   CaptionML=ENU=Negative Adjustments }
+    { 8   ;   ;Outstanding Deposits;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Bank Rec. Line".Amount WHERE (Bank Account No.=FIELD(Bank Account No.),
+                                                                                                  Statement No.=FIELD(Statement No.),
+                                                                                                  Record Type=CONST(Deposit),
+                                                                                                  Cleared=CONST(No)));
+                                                   CaptionML=ENU=Outstanding Deposits }
+    { 9   ;   ;Outstanding Checks  ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Bank Rec. Line".Amount WHERE (Bank Account No.=FIELD(Bank Account No.),
+                                                                                                  Statement No.=FIELD(Statement No.),
+                                                                                                  Record Type=CONST(Check),
+                                                                                                  Cleared=CONST(No)));
+                                                   CaptionML=ENU=Outstanding Checks }
+    { 10  ;   ;Date Created        ;Date          ;CaptionML=ENU=Date Created }
+    { 11  ;   ;Time Created        ;Time          ;CaptionML=ENU=Time Created }
+    { 12  ;   ;Created By          ;Code50        ;DataClassification=EndUserIdentifiableInformation;
+                                                   CaptionML=ENU=Created By }
+    { 13  ;   ;Currency Code       ;Code10        ;TableRelation=Currency;
+                                                   OnValidate=BEGIN
+                                                                IF "Currency Code" <> '' THEN BEGIN
+                                                                  Currency.GET("Currency Code");
+                                                                  IF "Statement Date" = 0D THEN
+                                                                    "Statement Date" := WORKDATE;
+                                                                  "Currency Factor" := CurrExchRate.ExchangeRate("Statement Date","Currency Code");
+                                                                END ELSE
+                                                                  "Currency Factor" := 0;
+                                                                VALIDATE("Currency Factor");
+                                                              END;
+
+                                                   CaptionML=ENU=Currency Code;
+                                                   Editable=No }
+    { 14  ;   ;Currency Factor     ;Decimal       ;OnValidate=BEGIN
+                                                                IF ("Currency Code" = '') AND ("Currency Factor" <> 0) THEN
+                                                                  FIELDERROR("Currency Factor",STRSUBSTNO(Text002,FIELDCAPTION("Currency Code")));
+                                                              END;
+
+                                                   CaptionML=ENU=Currency Factor }
+    { 16  ;   ;Cleared With./Chks. Per Stmnt.;Decimal;
+                                                   CaptionML=ENU=Cleared With./Chks. Per Stmnt. }
+    { 17  ;   ;Cleared Inc./Dpsts. Per Stmnt.;Decimal;
+                                                   CaptionML=ENU=Cleared Inc./Dpsts. Per Stmnt. }
+    { 19  ;   ;Total Cleared Checks;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Bank Rec. Line"."Cleared Amount" WHERE (Bank Account No.=FIELD(Bank Account No.),
+                                                                                                            Statement No.=FIELD(Statement No.),
+                                                                                                            Record Type=CONST(Check),
+                                                                                                            Cleared=CONST(Yes)));
+                                                   CaptionML=ENU=Total Cleared Checks }
+    { 20  ;   ;Total Cleared Deposits;Decimal     ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Bank Rec. Line"."Cleared Amount" WHERE (Bank Account No.=FIELD(Bank Account No.),
+                                                                                                            Statement No.=FIELD(Statement No.),
+                                                                                                            Record Type=CONST(Deposit),
+                                                                                                            Cleared=CONST(Yes)));
+                                                   CaptionML=ENU=Total Cleared Deposits }
+    { 21  ;   ;Total Adjustments   ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Bank Rec. Line".Amount WHERE (Bank Account No.=FIELD(Bank Account No.),
+                                                                                                  Statement No.=FIELD(Statement No.),
+                                                                                                  Record Type=CONST(Adjustment)));
+                                                   CaptionML=ENU=Total Adjustments }
+    { 22  ;   ;G/L Bank Account No.;Code20        ;TableRelation="G/L Account";
+                                                   CaptionML=ENU=G/L Bank Account No.;
+                                                   Editable=No }
+    { 23  ;   ;Date Filter         ;Date          ;FieldClass=FlowFilter;
+                                                   CaptionML=ENU=Date Filter }
+    { 24  ;   ;Comment             ;Boolean       ;FieldClass=FlowField;
+                                                   CalcFormula=Exist("Bank Comment Line" WHERE (Table Name=CONST(Bank Rec.),
+                                                                                                Bank Account No.=FIELD(Bank Account No.),
+                                                                                                No.=FIELD(Statement No.)));
+                                                   CaptionML=ENU=Comment;
+                                                   Editable=No }
+    { 25  ;   ;Posting Date        ;Date          ;CaptionML=ENU=Posting Date }
+    { 26  ;   ;No. Printed         ;Integer       ;CaptionML=ENU=No. Printed;
+                                                   Editable=No }
+    { 27  ;   ;G/L Balance         ;Decimal       ;CaptionML=ENU=G/L Balance;
+                                                   Editable=No;
+                                                   AutoFormatType=1 }
+    { 28  ;   ;Total Balanced Adjustments;Decimal ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Bank Rec. Line".Amount WHERE (Bank Account No.=FIELD(Bank Account No.),
+                                                                                                  Statement No.=FIELD(Statement No.),
+                                                                                                  Record Type=CONST(Adjustment),
+                                                                                                  Bal. Account No.=FILTER(<>'')));
+                                                   CaptionML=ENU=Total Balanced Adjustments }
+    { 29  ;   ;Positive Bal. Adjustments;Decimal  ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Bank Rec. Line".Amount WHERE (Bank Account No.=FIELD(Bank Account No.),
+                                                                                                  Statement No.=FIELD(Statement No.),
+                                                                                                  Record Type=CONST(Adjustment),
+                                                                                                  Positive=CONST(Yes),
+                                                                                                  Bal. Account No.=FIELD(Bank Account No.),
+                                                                                                  Bal. Account Type=CONST(Bank Account)));
+                                                   CaptionML=ENU=Positive Bal. Adjustments }
+    { 30  ;   ;Negative Bal. Adjustments;Decimal  ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Bank Rec. Line".Amount WHERE (Bank Account No.=FIELD(Bank Account No.),
+                                                                                                  Statement No.=FIELD(Statement No.),
+                                                                                                  Record Type=CONST(Adjustment),
+                                                                                                  Positive=CONST(No),
+                                                                                                  Bal. Account No.=FIELD(Bank Account No.),
+                                                                                                  Bal. Account Type=CONST(Bank Account)));
+                                                   CaptionML=ENU=Negative Bal. Adjustments }
+    { 480 ;   ;Dimension Set ID    ;Integer       ;TableRelation="Dimension Set Entry";
+                                                   OnLookup=BEGIN
+                                                              ShowDocDim;
+                                                            END;
+
+                                                   CaptionML=ENU=Dimension Set ID;
+                                                   Editable=No }
+  }
+  KEYS
+  {
+    {    ;Bank Account No.,Statement No.          ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      BankRecLine@1020004 : Record 10121;
+      BankRecCommentLine@1020005 : Record 10122;
+      BankAccount@1020001 : Record 270;
+      BankAcctPostingGrp@1020002 : Record 277;
+      Currency@1020008 : Record 4;
+      Text002@1020007 : TextConst 'ENU=cannot be specified without %1';
+      CurrExchRate@1020009 : Record 330;
+      Text003@1480000 : TextConst 'ENU=You cannot rename a %1.';
+      Text004@1020006 : TextConst 'ENU=You may have changed a dimension.\\Do you want to update the lines?';
+      DimMgt@1020010 : Codeunit 408;
+
+    [External]
+    PROCEDURE GetStatementNo@1020000() : Code[20];
+    BEGIN
+      BankAccount.GET("Bank Account No.");
+      BankAccount.TESTFIELD("Last Statement No.");
+      BankAccount."Last Statement No." := INCSTR(BankAccount."Last Statement No.");
+      BankAccount.MODIFY(TRUE);
+      EXIT(BankAccount."Last Statement No.");
+    END;
+
+    [External]
+    PROCEDURE CalculateBalance@1020001();
+    VAR
+      GLEntry@1020000 : Record 17;
+      BankAccLedgEntry@1020001 : Record 271;
+    BEGIN
+      SETFILTER("Date Filter",'%1..%2',0D,"Statement Date");
+      CALCFIELDS("G/L Balance (LCY)");
+      IF "Currency Code" = '' THEN
+        "G/L Balance" := "G/L Balance (LCY)"
+      ELSE
+        IF "G/L Balance (LCY)" = 0 THEN
+          "G/L Balance" := 0
+        ELSE BEGIN
+          "G/L Balance" := 0;
+          GLEntry.RESET;
+          GLEntry.SETFILTER("G/L Account No.","G/L Bank Account No.");
+          GLEntry.SETFILTER("Posting Date",'%1..%2',0D,"Statement Date");
+          IF GLEntry.FINDSET THEN BEGIN
+            Currency.GET("Currency Code");
+            REPEAT
+              IF BankAccLedgEntry.GET(GLEntry."Entry No.") THEN BEGIN
+                IF "Currency Code" <> BankAccLedgEntry."Currency Code" THEN BEGIN
+                  IF BankAccLedgEntry."Currency Code" <> '' THEN
+                    "G/L Balance" += ROUND(CurrExchRate.ExchangeAmtFCYToFCY("Statement Date",
+                          BankAccLedgEntry."Currency Code",
+                          "Currency Code",
+                          BankAccLedgEntry.Amount),
+                        Currency."Amount Rounding Precision")
+                  ELSE
+                    "G/L Balance" += ROUND(CurrExchRate.ExchangeAmtLCYToFCY("Statement Date",
+                          "Currency Code",
+                          BankAccLedgEntry.Amount,
+                          "Currency Factor"),
+                        Currency."Amount Rounding Precision");
+                END ELSE
+                  "G/L Balance" += BankAccLedgEntry.Amount;
+              END ELSE
+                "G/L Balance" += ROUND(CurrExchRate.ExchangeAmtLCYToFCY("Statement Date",
+                      "Currency Code",
+                      GLEntry.Amount,
+                      "Currency Factor"),
+                    Currency."Amount Rounding Precision");
+
+            UNTIL GLEntry.NEXT = 0;
+          END;
+        END;
+    END;
+
+    [External]
+    PROCEDURE ShowDocDim@1020002();
+    VAR
+      OldDimSetID@1020000 : Integer;
+    BEGIN
+      OldDimSetID := "Dimension Set ID";
+      "Dimension Set ID" :=
+        DimMgt.EditDimensionSet(
+          "Dimension Set ID",STRSUBSTNO('%1 %2',"Bank Account No.","Statement No."));
+      IF OldDimSetID <> "Dimension Set ID" THEN BEGIN
+        MODIFY;
+        IF BankRecLineExist THEN
+          UpdateAllLineDim("Dimension Set ID",OldDimSetID);
+      END;
+    END;
+
+    [External]
+    PROCEDURE BankRecLineExist@1020003() : Boolean;
+    BEGIN
+      BankRecLine.RESET;
+      BankRecLine.SETRANGE("Bank Account No.","Bank Account No.");
+      BankRecLine.SETRANGE("Statement No.","Statement No.");
+      EXIT(BankRecLine.FINDFIRST);
+    END;
+
+    LOCAL PROCEDURE UpdateAllLineDim@34(NewParentDimSetID@1000 : Integer;OldParentDimSetID@1001 : Integer);
+    VAR
+      NewDimSetID@1002 : Integer;
+    BEGIN
+      // Update all lines with changed dimensions.
+
+      IF NewParentDimSetID = OldParentDimSetID THEN
+        EXIT;
+      IF NOT CONFIRM(Text004) THEN
+        EXIT;
+
+      BankRecLine.RESET;
+      BankRecLine.SETRANGE("Bank Account No.","Bank Account No.");
+      BankRecLine.SETRANGE("Statement No.","Statement No.");
+      BankRecLine.LOCKTABLE;
+      IF BankRecLine.FIND('-') THEN
+        REPEAT
+          NewDimSetID := DimMgt.GetDeltaDimSetID(BankRecLine."Dimension Set ID",NewParentDimSetID,OldParentDimSetID);
+          IF BankRecLine."Dimension Set ID" <> NewDimSetID THEN BEGIN
+            BankRecLine."Dimension Set ID" := NewDimSetID;
+            DimMgt.UpdateGlobalDimFromDimSetID(
+              BankRecLine."Dimension Set ID",BankRecLine."Shortcut Dimension 1 Code",BankRecLine."Shortcut Dimension 2 Code");
+            BankRecLine.MODIFY;
+          END;
+        UNTIL BankRecLine.NEXT = 0;
+    END;
+
+    [External]
+    PROCEDURE InsertRec@1020004(BankAccountNo@1020000 : Code[20]);
+    BEGIN
+      INIT;
+      VALIDATE("Bank Account No.",BankAccountNo);
+      INSERT(TRUE);
+    END;
+
+    [External]
+    PROCEDURE CalculateEndingBalance@1020005() : Decimal;
+    BEGIN
+      CALCFIELDS("Outstanding Deposits","Outstanding Checks");
+      EXIT(("Statement Balance" + "Outstanding Deposits") - "Outstanding Checks");
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

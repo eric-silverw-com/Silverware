@@ -1,0 +1,530 @@
+OBJECT Report 11380 Export Electronic Payment File
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:13:43 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Export Electronic Payment File;
+    ProcessingOnly=Yes;
+    OnPreReport=BEGIN
+                  CompanyInformation.GET;
+                  GenJournalTemplate.GET("Gen. Journal Line".GETFILTER("Journal Template Name"));
+
+                  WITH BankAccount DO BEGIN
+                    LOCKTABLE;
+                    GET("No.");
+                    TESTFIELD(Blocked,FALSE);
+                    TESTFIELD("Currency Code",'');  // local currency only
+                    TESTFIELD("Export Format");
+                    TESTFIELD("Last Remittance Advice No.");
+                  END;
+
+                  GenJournalTemplate.GET("Gen. Journal Line".GETFILTER("Journal Template Name"));
+                  IF NOT GenJournalTemplate."Force Doc. Balance" THEN
+                    IF NOT CONFIRM(CannotVoidQst,TRUE) THEN
+                      ERROR(UserCancelledErr);
+                END;
+
+    UseRequestPage=No;
+  }
+  DATASET
+  {
+    { 7024;    ;DataItem;                    ;
+               DataItemTable=Table81;
+               DataItemTableView=SORTING(Journal Template Name,Journal Batch Name,Line No.)
+                                 WHERE(Check Exported=CONST(No),
+                                       Check Printed=CONST(No),
+                                       Bank Payment Type=FILTER(Electronic Payment|Electronic Payment-IAT),
+                                       Document Type=FILTER(Payment|Refund));
+               OnPreDataItem=BEGIN
+                               ACHFileCreated := FALSE;
+                               IATFileCreated := FALSE;
+                               IATBatchOpen := FALSE;
+                               CLEAR(LastProcessedGenJournalLine);
+                               IF PostingDateOption = PostingDateOption::"Skip Lines Which Do Not Match" THEN
+                                 SETRANGE("Posting Date",SettleDate);
+                             END;
+
+               OnAfterGetRecord=VAR
+                                  TraceNumber@1020000 : Code[30];
+                                BEGIN
+                                  IF "Account Type" = "Account Type"::"Bank Account" THEN BEGIN
+                                    BankAccountIs := BankAccountIs::Acnt;
+                                    IF "Account No." <> BankAccount."No." THEN
+                                      CurrReport.SKIP;
+                                  END ELSE
+                                    IF "Bal. Account Type" = "Bal. Account Type"::"Bank Account" THEN BEGIN
+                                      BankAccountIs := BankAccountIs::BalAcnt;
+                                      IF "Bal. Account No." <> BankAccount."No." THEN
+                                        CurrReport.SKIP;
+                                    END ELSE
+                                      CurrReport.SKIP;
+
+                                  CheckAndStartExport("Gen. Journal Line");
+
+                                  IF IATFileCreated AND ("Bank Payment Type" = "Bank Payment Type"::"Electronic Payment-IAT") THEN BEGIN
+                                    IF IATBatchOpen THEN
+                                      IF (LastProcessedGenJournalLine."Account Type" <> "Account Type") OR
+                                         (LastProcessedGenJournalLine."Account No." <> "Account No.") OR
+                                         (LastProcessedGenJournalLine."Foreign Exchange Indicator" <> "Foreign Exchange Indicator") OR
+                                         (LastProcessedGenJournalLine."Foreign Exchange Ref.Indicator" <> "Foreign Exchange Ref.Indicator") OR
+                                         (LastProcessedGenJournalLine."Foreign Exchange Reference" <> "Foreign Exchange Reference") OR
+                                         (LastProcessedGenJournalLine."Source Code" <> "Source Code")
+                                      THEN BEGIN
+                                        ExportPaymentsIAT.EndExportBatch('220');
+                                        IATBatchOpen := FALSE;
+                                      END;
+                                    IF NOT IATBatchOpen THEN BEGIN
+                                      ExportPaymentsIAT.StartExportBatch("Gen. Journal Line",'220',SettleDate);
+                                      IATBatchOpen := TRUE;
+                                    END;
+                                  END;
+
+                                  SetPayeeType("Gen. Journal Line");
+
+                                  AmountPaid := 0;
+                                  TotalAmountPaid := 0;
+                                  IF PayeeType = PayeeType::Vendor THEN
+                                    ProcessVendor("Gen. Journal Line")
+                                  ELSE
+                                    ProcessCustomer("Gen. Journal Line");
+
+                                  TotalAmountPaid := AmountPaid;
+
+                                  TraceNumber := GetTraceNumber("Gen. Journal Line");
+
+                                  IF TraceNumber <> '' THEN BEGIN
+                                    "Posting Date" := SettleDate;
+                                    "Check Printed" := TRUE;
+                                    "Check Exported" := TRUE;
+                                    "Export File Name" := BankAccount."Last E-Pay Export File Name";
+                                    "Exported to Payment File" := TRUE;
+                                    BankAccount."Last Remittance Advice No." := INCSTR(BankAccount."Last Remittance Advice No.");
+                                    "Document No." := BankAccount."Last Remittance Advice No.";
+                                    MODIFY;
+                                    InsertIntoCheckLedger(TraceNumber,-ExportAmount,RECORDID);
+                                  END;
+                                  LastProcessedGenJournalLine := "Gen. Journal Line";
+                                END;
+
+               OnPostDataItem=BEGIN
+                                IF ACHFileCreated THEN BEGIN
+                                  BankAccount.MODIFY;
+                                  CASE BankAccount."Export Format" OF
+                                    BankAccount."Export Format"::US:
+                                      BEGIN
+                                        ExportPaymentsACH.EndExportBatch('220');
+                                        IF NOT ExportPaymentsACH.EndExportFile THEN
+                                          ERROR(UserCancelledErr);
+                                      END;
+                                    BankAccount."Export Format"::CA:
+                                      ExportPaymentsRB.EndExportFile;
+                                    BankAccount."Export Format"::MX:
+                                      BEGIN
+                                        ExportPaymentsCecoban.EndExportBatch;
+                                        ExportPaymentsCecoban.EndExportFile;
+                                      END;
+                                  END;
+                                END;
+                                IF IATFileCreated THEN BEGIN
+                                  BankAccount.MODIFY;
+                                  IF IATBatchOpen THEN BEGIN
+                                    ExportPaymentsIAT.EndExportBatch('220');
+                                    IATBatchOpen := FALSE;
+                                  END;
+
+                                  IF NOT ExportPaymentsIAT.EndExportFile THEN
+                                    ERROR(UserCancelledErr);
+                                END;
+                              END;
+
+               ReqFilterFields=Journal Template Name,Journal Batch Name }
+
+    { 8503;1   ;DataItem;                    ;
+               DataItemTable=Table21;
+               DataItemTableView=SORTING(Customer No.,Open,Positive,Due Date,Currency Code)
+                                 ORDER(Descending)
+                                 WHERE(Open=CONST(Yes));
+               OnPreDataItem=BEGIN
+                               IF "Gen. Journal Line"."Applies-to ID" = '' THEN
+                                 CurrReport.BREAK;
+
+                               IF BankAccountIs = BankAccountIs::Acnt THEN BEGIN
+                                 IF "Gen. Journal Line"."Bal. Account Type" <> "Gen. Journal Line"."Bal. Account Type"::Customer THEN
+                                   CurrReport.BREAK;
+                                 SETRANGE("Customer No.","Gen. Journal Line"."Bal. Account No.");
+                               END ELSE BEGIN
+                                 IF "Gen. Journal Line"."Account Type" <> "Gen. Journal Line"."Account Type"::Customer THEN
+                                   CurrReport.BREAK;
+                                 SETRANGE("Customer No.","Gen. Journal Line"."Account No.");
+                               END;
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  CALCFIELDS("Remaining Amt. (LCY)");
+                                  IF ("Pmt. Discount Date" >= SettleDate) AND
+                                     ("Remaining Pmt. Disc. Possible" <> 0) AND
+                                     ((-ExportAmount - TotalAmountPaid) - "Remaining Pmt. Disc. Possible" >= -"Amount to Apply")
+                                  THEN
+                                    AmountPaid := -("Amount to Apply" - "Remaining Pmt. Disc. Possible")
+                                  ELSE
+                                    IF (-ExportAmount - TotalAmountPaid) > -"Amount to Apply" THEN
+                                      AmountPaid := -"Amount to Apply"
+                                    ELSE
+                                      AmountPaid := -ExportAmount - TotalAmountPaid;
+
+                                  TotalAmountPaid := TotalAmountPaid + AmountPaid;
+                                END;
+
+               DataItemLinkReference=Gen. Journal Line;
+               DataItemLink=Applies-to ID=FIELD(Applies-to ID) }
+
+    { 4114;1   ;DataItem;                    ;
+               DataItemTable=Table25;
+               DataItemTableView=SORTING(Vendor No.,Open,Positive,Due Date,Currency Code)
+                                 ORDER(Descending)
+                                 WHERE(Open=CONST(Yes));
+               OnPreDataItem=BEGIN
+                               IF "Gen. Journal Line"."Applies-to ID" = '' THEN
+                                 CurrReport.BREAK;
+
+                               IF BankAccountIs = BankAccountIs::Acnt THEN BEGIN
+                                 IF "Gen. Journal Line"."Bal. Account Type" <> "Gen. Journal Line"."Bal. Account Type"::Vendor THEN
+                                   CurrReport.BREAK;
+                                 SETRANGE("Vendor No.","Gen. Journal Line"."Bal. Account No.");
+                               END ELSE BEGIN
+                                 IF "Gen. Journal Line"."Account Type" <> "Gen. Journal Line"."Account Type"::Vendor THEN
+                                   CurrReport.BREAK;
+                                 SETRANGE("Vendor No.","Gen. Journal Line"."Account No.");
+                               END;
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  CALCFIELDS("Remaining Amt. (LCY)");
+                                  IF ("Pmt. Discount Date" >= SettleDate) AND
+                                     ("Remaining Pmt. Disc. Possible" <> 0) AND
+                                     ((-ExportAmount - TotalAmountPaid) - "Remaining Pmt. Disc. Possible" >= -"Amount to Apply")
+                                  THEN
+                                    AmountPaid := -("Amount to Apply" - "Remaining Pmt. Disc. Possible")
+                                  ELSE
+                                    IF (-ExportAmount - TotalAmountPaid) > -"Amount to Apply" THEN
+                                      AmountPaid := -"Amount to Apply"
+                                    ELSE
+                                      AmountPaid := -ExportAmount - TotalAmountPaid;
+
+                                  TotalAmountPaid := TotalAmountPaid + AmountPaid;
+                                END;
+
+               DataItemLinkReference=Gen. Journal Line;
+               DataItemLink=Applies-to ID=FIELD(Applies-to ID) }
+
+    { 6150;1   ;DataItem;Unapplied           ;
+               DataItemTable=Table2000000026;
+               DataItemTableView=SORTING(Number)
+                                 WHERE(Number=CONST(1));
+               OnPreDataItem=BEGIN
+                               IF TotalAmountPaid >= -ExportAmount THEN
+                                 CurrReport.BREAK;
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  AmountPaid := -ExportAmount - TotalAmountPaid;
+                                END;
+                                 }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      SaveValues=Yes;
+    }
+    CONTROLS
+    {
+      { 1020011;0;Container ;
+                  ContainerType=ContentArea }
+
+      { 1020010;1;Group     ;
+                  CaptionML=ENU=Options }
+
+      { 1020009;2;Field     ;
+                  Name=BankAccountNo;
+                  CaptionML=ENU=Bank Account No.;
+                  ToolTipML=ENU=Specifies the bank account that the payment is transmitted to.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=BankAccount."No.";
+                  TableRelation="Bank Account" }
+
+      { 1020008;2;Field     ;
+                  Name=SettleDate;
+                  CaptionML=ENU=Settle Date;
+                  ToolTipML=ENU=Specifies the settle date that will be transmitted to the bank. This date will become the posting date for the exported payment journal entries. Transmission should occur two or three banking days before the settle date. Ask your bank for the exact number of days.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=SettleDate }
+
+      { 1020007;2;Field     ;
+                  CaptionML=ENU=If Posting Date does not match Settle Date:;
+                  ToolTipML=ENU=Specifies what will occur if the posting date does not match the settle date. The options are to change the posting date to match the entered settle date, or to skip any payment journal lines where the entered posting date does not match the settle date.;
+                  OptionCaptionML=ENU=Change Posting Date To Match,Skip Lines Which Do Not Match;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=PostingDateOption }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      CompanyInformation@1020040 : Record 79;
+      GenJournalTemplate@1020039 : Record 80;
+      BankAccount@1020038 : Record 270;
+      Customer@1020037 : Record 18;
+      CustBankAccount@1020036 : Record 287;
+      CustLedgEntry@1020035 : Record 21;
+      Vendor@1020034 : Record 23;
+      VendBankAccount@1020033 : Record 288;
+      VendLedgEntry@1020032 : Record 25;
+      LastProcessedGenJournalLine@1020031 : Record 81;
+      ExportPaymentsACH@1020030 : Codeunit 10090;
+      ExportPaymentsIAT@1020029 : Codeunit 10093;
+      ExportPaymentsRB@1020028 : Codeunit 10091;
+      ExportPaymentsCecoban@1020027 : Codeunit 10092;
+      CheckManagement@1020026 : Codeunit 367;
+      FormatAddress@1020025 : Codeunit 365;
+      ACHFileCreated@1020024 : Boolean;
+      IATFileCreated@1020023 : Boolean;
+      IATBatchOpen@1020022 : Boolean;
+      ExportAmount@1020021 : Decimal;
+      BankAccountIs@1020019 : 'Acnt,BalAcnt';
+      SettleDate@1020018 : Date;
+      PostingDateOption@1020017 : 'Change Posting Date To Match,Skip Lines Which Do Not Match';
+      PayeeAddress@1020012 : ARRAY [8] OF Text[50];
+      PayeeType@1020011 : 'Vendor,Customer';
+      AmountPaid@1020007 : Decimal;
+      TotalAmountPaid@1020006 : Decimal;
+      InvalidExportFormatErr@1020060 : TextConst '@@@="%1=Bank account export format,%2=Bank account export format field caption,%3=Bank account table caption,%4=Bank account number";ENU=%1 is not a valid %2 in %3 %4.';
+      AccountTypeErr@1020059 : TextConst '@@@="%1=Balance account type,%2=Customer table caption,%3=Vendor table caption";ENU=For Electronic Payments, the %1 must be %2 or %3.';
+      BankAcctElecPaymentErr@1020058 : TextConst '@@@="%1=Bank account table caption,%2=Bank account field caption - use for electronic payments,%3=Vendor/Customer table caption,%4=Vendor/Customer number";ENU=You must have exactly one %1 with %2 checked for %3 %4.';
+      CannotVoidQst@1020055 : TextConst 'ENU=Warning:  Transactions cannot be financially voided when Force Doc. Balance is set to No in the Journal Template.  Do you want to continue anyway?';
+      UserCancelledErr@1020054 : TextConst 'ENU=Process canceled at user request.';
+
+    LOCAL PROCEDURE InsertIntoCheckLedger@2(Trace@1000 : Code[30];Amt@1001 : Decimal;RecordIdToPrint@1020000 : RecordID);
+    VAR
+      CheckLedgerEntry@1002 : Record 272;
+    BEGIN
+      WITH CheckLedgerEntry DO BEGIN
+        INIT;
+        "Bank Account No." := BankAccount."No.";
+        "Posting Date" := SettleDate;
+        "Document Type" := "Gen. Journal Line"."Document Type";
+        "Document No." := "Gen. Journal Line"."Document No.";
+        Description := "Gen. Journal Line".Description;
+        "Bank Payment Type" := "Bank Payment Type"::"Electronic Payment";
+        "Entry Status" := "Entry Status"::Exported;
+        "Check Date" := SettleDate;
+        "Check No." := "Gen. Journal Line"."Document No.";
+        IF BankAccountIs = BankAccountIs::Acnt THEN BEGIN
+          "Bal. Account Type" := "Gen. Journal Line"."Bal. Account Type";
+          "Bal. Account No." := "Gen. Journal Line"."Bal. Account No.";
+        END ELSE BEGIN
+          "Bal. Account Type" := "Gen. Journal Line"."Account Type";
+          "Bal. Account No." := "Gen. Journal Line"."Account No.";
+        END;
+        "Trace No." := Trace;
+        "Transmission File Name" := "Gen. Journal Line"."Export File Name";
+        Amount := Amt;
+      END;
+      CheckManagement.InsertCheck(CheckLedgerEntry,RecordIdToPrint);
+    END;
+
+    LOCAL PROCEDURE StartExportBasedOnFormat@1020009(VAR BankAccount@1020000 : Record 270;VAR GenJnlLine@1020002 : Record 81;SettleDate@1020001 : Date) : Boolean;
+    VAR
+      FileCreated@1020004 : Boolean;
+    BEGIN
+      FileCreated := FALSE;
+      CASE BankAccount."Export Format" OF
+        BankAccount."Export Format"::US:
+          BEGIN
+            ExportPaymentsACH.StartExportFile(BankAccount."No.",'');
+            ExportPaymentsACH.StartExportBatch('220','CTX',GenJnlLine."Source Code",SettleDate);
+            FileCreated := TRUE;
+          END;
+        BankAccount."Export Format"::CA:
+          BEGIN
+            ExportPaymentsRB.StartExportFile(BankAccount."No.","Gen. Journal Line");
+            FileCreated := TRUE;
+          END;
+        BankAccount."Export Format"::MX:
+          BEGIN
+            ExportPaymentsCecoban.StartExportFile(BankAccount."No.",'');
+            ExportPaymentsCecoban.StartExportBatch(30,GenJnlLine."Source Code",SettleDate);
+            FileCreated := TRUE;
+          END;
+        ELSE
+          ERROR(InvalidExportFormatErr,
+            BankAccount."Export Format",
+            BankAccount.FIELDCAPTION("Export Format"),
+            BankAccount.TABLECAPTION,
+            BankAccount."No.");
+      END;
+      BankAccount.FIND;  // re-read, since StartExportFile changed it.
+      EXIT(FileCreated);
+    END;
+
+    LOCAL PROCEDURE ProcessVendor@1020005(VAR GenJnlLine@1020000 : Record 81);
+    BEGIN
+      FormatAddress.Vendor(PayeeAddress,Vendor);
+      VendBankAccount.SETRANGE("Vendor No.",Vendor."No.");
+      VendBankAccount.SETRANGE("Use for Electronic Payments",TRUE);
+      IF VendBankAccount.COUNT <> 1 THEN
+        ERROR(BankAcctElecPaymentErr,
+          VendBankAccount.TABLECAPTION,VendBankAccount.FIELDCAPTION("Use for Electronic Payments"),
+          Vendor.TABLECAPTION,Vendor."No.");
+      VendBankAccount.FINDFIRST;
+      IF GenJnlLine."Applies-to Doc. No." <> '' THEN BEGIN
+        VendLedgEntry.RESET;
+        VendLedgEntry.SETCURRENTKEY("Document No.","Document Type","Vendor No.");
+        VendLedgEntry.SETRANGE("Document Type",GenJnlLine."Applies-to Doc. Type");
+        VendLedgEntry.SETRANGE("Document No.",GenJnlLine."Applies-to Doc. No.");
+        VendLedgEntry.SETRANGE("Vendor No.",Vendor."No.");
+        VendLedgEntry.SETRANGE(Open,TRUE);
+        VendLedgEntry.FINDFIRST;
+        VendLedgEntry.CALCFIELDS("Remaining Amt. (LCY)");
+        IF (VendLedgEntry."Pmt. Discount Date" >= SettleDate) AND
+           (VendLedgEntry."Remaining Pmt. Disc. Possible" <> 0) AND
+           (-(ExportAmount + VendLedgEntry."Remaining Pmt. Disc. Possible") >= -VendLedgEntry."Amount to Apply")
+        THEN
+          AmountPaid := -(VendLedgEntry."Amount to Apply" - VendLedgEntry."Remaining Pmt. Disc. Possible")
+        ELSE
+          IF -ExportAmount > -VendLedgEntry."Amount to Apply" THEN
+            AmountPaid := -VendLedgEntry."Amount to Apply"
+          ELSE
+            AmountPaid := -ExportAmount;
+      END;
+    END;
+
+    LOCAL PROCEDURE ProcessCustomer@1020006(VAR GenJnlLine@1020000 : Record 81);
+    BEGIN
+      FormatAddress.Customer(PayeeAddress,Customer);
+      CustBankAccount.SETRANGE("Customer No.",Customer."No.");
+      CustBankAccount.SETRANGE("Use for Electronic Payments",TRUE);
+      IF CustBankAccount.COUNT <> 1 THEN
+        ERROR(BankAcctElecPaymentErr,
+          CustBankAccount.TABLECAPTION,CustBankAccount.FIELDCAPTION("Use for Electronic Payments"),
+          Customer.TABLECAPTION,Customer."No.");
+      CustBankAccount.FINDFIRST;
+      IF GenJnlLine."Applies-to Doc. No." <> '' THEN BEGIN
+        CustLedgEntry.RESET;
+        CustLedgEntry.SETCURRENTKEY("Document No.","Document Type","Customer No.");
+        CustLedgEntry.SETRANGE("Document Type",GenJnlLine."Applies-to Doc. Type");
+        CustLedgEntry.SETRANGE("Document No.",GenJnlLine."Applies-to Doc. No.");
+        CustLedgEntry.SETRANGE("Customer No.",Customer."No.");
+        CustLedgEntry.SETRANGE(Open,TRUE);
+        CustLedgEntry.FINDFIRST;
+        CustLedgEntry.CALCFIELDS("Remaining Amt. (LCY)");
+        IF (CustLedgEntry."Pmt. Discount Date" >= SettleDate) AND
+           (CustLedgEntry."Remaining Pmt. Disc. Possible" <> 0) AND
+           (-(ExportAmount - CustLedgEntry."Remaining Pmt. Disc. Possible") >= -CustLedgEntry."Amount to Apply")
+        THEN
+          AmountPaid := -(CustLedgEntry."Amount to Apply" - CustLedgEntry."Remaining Pmt. Disc. Possible")
+        ELSE
+          IF -ExportAmount > -CustLedgEntry."Amount to Apply" THEN
+            AmountPaid := -CustLedgEntry."Amount to Apply"
+          ELSE
+            AmountPaid := -ExportAmount;
+      END;
+    END;
+
+    [External]
+    PROCEDURE SetOptions@1020001(BankAccountNo@1020000 : Code[20];ExportSettleDate@1020001 : Date;SelectedPostingDateOption@1020002 : 'Change Posting Date To Match,Skip Lines Which Do Not Match');
+    BEGIN
+      // Set up parameters to allow for this report to run programmatically without a request page
+      BankAccount.GET(BankAccountNo);
+      SettleDate := ExportSettleDate;
+      PostingDateOption := SelectedPostingDateOption;
+    END;
+
+    LOCAL PROCEDURE CheckAndStartExport@1020003(VAR GenJournalLine@1020000 : Record 81);
+    BEGIN
+      IF NOT ACHFileCreated AND
+         (GenJournalLine."Bank Payment Type" = GenJournalLine."Bank Payment Type"::"Electronic Payment")
+      THEN BEGIN
+        ACHFileCreated := StartExportBasedOnFormat(BankAccount,"Gen. Journal Line",SettleDate);
+        BankAccount.FIND;
+      END;
+      IF NOT IATFileCreated AND
+         (GenJournalLine."Bank Payment Type" = GenJournalLine."Bank Payment Type"::"Electronic Payment-IAT")
+      THEN BEGIN
+        IF BankAccount."Export Format" = BankAccount."Export Format"::US THEN BEGIN
+          ExportPaymentsIAT.StartExportFile(BankAccount."No.",'');
+          BankAccount.FIND;
+          IATFileCreated := TRUE;
+        END ELSE
+          ERROR(InvalidExportFormatErr,
+            BankAccount."Export Format",
+            BankAccount.FIELDCAPTION("Export Format"),
+            BankAccount.TABLECAPTION,
+            BankAccount."No.");
+      END;
+    END;
+
+    LOCAL PROCEDURE SetPayeeType@1020007(VAR GenJournalLine@1020000 : Record 81);
+    BEGIN
+      IF BankAccountIs = BankAccountIs::Acnt THEN BEGIN
+        ExportAmount := GenJournalLine."Amount (LCY)";
+        IF GenJournalLine."Bal. Account Type" = GenJournalLine."Bal. Account Type"::Vendor THEN BEGIN
+          PayeeType := PayeeType::Vendor;
+          Vendor.GET(GenJournalLine."Bal. Account No.");
+        END ELSE
+          IF GenJournalLine."Bal. Account Type" = GenJournalLine."Bal. Account Type"::Customer THEN BEGIN
+            PayeeType := PayeeType::Customer;
+            Customer.GET(GenJournalLine."Bal. Account No.");
+          END ELSE
+            ERROR(AccountTypeErr,
+              GenJournalLine.FIELDCAPTION("Bal. Account Type"),Customer.TABLECAPTION,Vendor.TABLECAPTION);
+      END ELSE BEGIN
+        ExportAmount := -GenJournalLine."Amount (LCY)";
+        IF GenJournalLine."Account Type" = GenJournalLine."Account Type"::Vendor THEN BEGIN
+          PayeeType := PayeeType::Vendor;
+          Vendor.GET(GenJournalLine."Account No.");
+        END ELSE
+          IF GenJournalLine."Account Type" = GenJournalLine."Account Type"::Customer THEN BEGIN
+            PayeeType := PayeeType::Customer;
+            Customer.GET(GenJournalLine."Account No.");
+          END ELSE
+            ERROR(AccountTypeErr,
+              GenJournalLine.FIELDCAPTION("Account Type"),Customer.TABLECAPTION,Vendor.TABLECAPTION);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetTraceNumber@1020010(VAR GenJournalLine@1020000 : Record 81) : Code[30];
+    BEGIN
+      CASE BankAccount."Export Format" OF
+        BankAccount."Export Format"::US:
+          BEGIN
+            IF GenJournalLine."Bank Payment Type" = GenJournalLine."Bank Payment Type"::"Electronic Payment" THEN
+              EXIT(ExportPaymentsACH.ExportElectronicPayment(GenJournalLine,ExportAmount));
+
+            EXIT(ExportPaymentsIAT.ExportElectronicPayment(GenJournalLine,ExportAmount));
+          END;
+        BankAccount."Export Format"::CA:
+          EXIT(ExportPaymentsRB.ExportElectronicPayment(GenJournalLine,ExportAmount,SettleDate));
+        BankAccount."Export Format"::MX:
+          EXIT(ExportPaymentsCecoban.ExportElectronicPayment(GenJournalLine,ExportAmount,SettleDate));
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

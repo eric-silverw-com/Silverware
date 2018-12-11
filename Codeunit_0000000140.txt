@@ -1,0 +1,148 @@
+OBJECT Codeunit 140 EC Sales List Suggest Lines
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:07:51 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    TableNo=740;
+    OnRun=VAR
+            ECSLVATReportLine@1040 : Record 362;
+          BEGIN
+            ErrorMessage.SetContext(Rec);
+            ErrorMessage.ClearLog;
+
+            IF NOT IsPeriodValid THEN BEGIN
+              ErrorMessage.LogMessage(Rec,FIELDNO("No."),ErrorMessage."Message Type"::Error,InvalidPeriodErr);
+              EXIT;
+            END;
+
+            VATReportHeader := Rec;
+            ECSLVATReportLine.ClearLines(Rec);
+            PopulateVatEntryLines;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      VATReportHeader@1000 : Record 740;
+      ErrorMessage@1040 : Record 700;
+      InvalidPeriodErr@1041 : TextConst 'ENU=The period is not valid.';
+
+    LOCAL PROCEDURE PopulateVatEntryLines@1();
+    VAR
+      CompanyInformation@1001 : Record 79;
+      EUVATEntries@1000 : Query 141;
+    BEGIN
+      CompanyInformation.GET;
+      EUVATEntries.SETRANGE(PostingDate,VATReportHeader."Start Date",VATReportHeader."End Date");
+      EUVATEntries.SETFILTER(CountryCode,'<>%1',CompanyInformation."Country/Region Code");
+
+      EUVATEntries.OPEN;
+      WHILE EUVATEntries.READ DO
+        AddOrUpdateECLLine(EUVATEntries);
+      RowsTotalCorrection;
+      DeleteZeroAmountLines;
+    END;
+
+    LOCAL PROCEDURE GetECLLine@2(VAR ECSLVATReportLine@1001 : Record 362;EUVATEntries@1000 : Query 141);
+    VAR
+      LastId@1002 : Integer;
+      TrnIndicator@1003 : Integer;
+    BEGIN
+      ECSLVATReportLine.SETRANGE("Report No.",VATReportHeader."No.");
+      ECSLVATReportLine.SETRANGE("Country Code",EUVATEntries.CountryCode);
+      ECSLVATReportLine.SETRANGE("Customer VAT Reg. No.",EUVATEntries.VAT_Registration_No);
+      TrnIndicator := GetIndicatorCode(EUVATEntries.EU_3_Party_Trade,EUVATEntries.EU_Service);
+      ECSLVATReportLine.SETRANGE("Transaction Indicator",TrnIndicator);
+
+      IF NOT ECSLVATReportLine.FINDFIRST THEN BEGIN
+        ECSLVATReportLine.RESET;
+        ECSLVATReportLine.SETRANGE("Report No.",VATReportHeader."No.");
+        IF ECSLVATReportLine.FINDLAST THEN
+          LastId := ECSLVATReportLine."Line No.";
+
+        ECSLVATReportLine.INIT;
+        ECSLVATReportLine."Line No." := LastId + 1;
+        ECSLVATReportLine.VALIDATE("Report No.",VATReportHeader."No.");
+        ECSLVATReportLine.VALIDATE("Country Code",EUVATEntries.CountryCode);
+        ECSLVATReportLine.VALIDATE("Customer VAT Reg. No.",EUVATEntries.VAT_Registration_No);
+        ECSLVATReportLine.VALIDATE("Transaction Indicator",TrnIndicator);
+        ECSLVATReportLine.INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE AddOrUpdateECLLine@7(EUVATEntries@1000 : Query 141);
+    VAR
+      ECSLVATReportLine@1001 : Record 362;
+    BEGIN
+      GetECLLine(ECSLVATReportLine,EUVATEntries);
+      ECSLVATReportLine."Total Value Of Supplies" += EUVATEntries.Base;
+      AddToRepLineRelation(EUVATEntries,ECSLVATReportLine);
+      ECSLVATReportLine.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE GetIndicatorCode@89(EU3rdPartyTrade@1000 : Boolean;EUService@1002 : Boolean) : Integer;
+    BEGIN
+      IF EUService THEN
+        EXIT(3);
+
+      IF EU3rdPartyTrade THEN
+        EXIT(2);
+
+      EXIT(0);
+    END;
+
+    LOCAL PROCEDURE AddToRepLineRelation@6(EUVATEntries@1000 : Query 141;ECSLVATReportLine@1002 : Record 362);
+    VAR
+      ECSLVATReportLineRelation@1001 : Record 143;
+    BEGIN
+      ECSLVATReportLineRelation.VALIDATE("ECSL Report No.",VATReportHeader."No.");
+      ECSLVATReportLineRelation.VALIDATE("ECSL Line No.",ECSLVATReportLine."Line No.");
+      ECSLVATReportLineRelation.VALIDATE("VAT Entry No.",EUVATEntries.Entry_No);
+      ECSLVATReportLineRelation.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE RowsTotalCorrection@90();
+    VAR
+      ECSLVATReportLine@1010 : Record 362;
+    BEGIN
+      ECSLVATReportLine.SETRANGE("Report No.",VATReportHeader."No.");
+
+      IF NOT ECSLVATReportLine.FINDSET THEN
+        EXIT;
+      REPEAT
+        ECSLVATReportLine."Total Value Of Supplies" := -ROUND(ECSLVATReportLine."Total Value Of Supplies",1);
+        ECSLVATReportLine.MODIFY(TRUE);
+      UNTIL ECSLVATReportLine.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE DeleteZeroAmountLines@4();
+    VAR
+      ECSLVATReportLine@1000 : Record 362;
+      ECSLVATReportLineRelation@1001 : Record 143;
+    BEGIN
+      ECSLVATReportLineRelation.SETRANGE("ECSL Report No.",ECSLVATReportLine."Report No.");
+
+      ECSLVATReportLine.SETRANGE("Report No.",VATReportHeader."No.");
+      ECSLVATReportLine.SETRANGE("Total Value Of Supplies",0);
+      IF NOT ECSLVATReportLine.FINDSET THEN
+        EXIT;
+
+      REPEAT
+        ECSLVATReportLineRelation.SETRANGE("ECSL Line No.",ECSLVATReportLine."Line No.");
+        ECSLVATReportLineRelation.DELETEALL;
+      UNTIL ECSLVATReportLine.NEXT = 0;
+
+      ECSLVATReportLine.DELETEALL;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

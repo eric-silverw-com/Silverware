@@ -1,0 +1,978 @@
+OBJECT Codeunit 353 Item Availability Forms Mgt
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:07:53 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text012@1000 : TextConst '@@@="%1=FieldCaption, %2=OldDate, %3=NewDate";ENU=Do you want to change %1 from %2 to %3?';
+      ItemAvailByBOMLevel@1003 : Page 5871;
+      ForecastName@1001 : Code[10];
+      AvailabilityType@1002 : 'Date,Variant,Location,Bin,Event,BOM';
+
+    LOCAL PROCEDURE CalcItemPlanningFields@13(VAR Item@1000 : Record 27;CalculateTransferQuantities@1002 : Boolean);
+    VAR
+      JobPlanningLine@1001 : Record 1003;
+    BEGIN
+      WITH Item DO BEGIN
+        INIT;
+        CALCFIELDS(
+          "Qty. on Purch. Order",
+          "Qty. on Sales Order",
+          "Qty. on Service Order",
+          Inventory,
+          "Net Change",
+          "Scheduled Receipt (Qty.)",
+          "Scheduled Need (Qty.)",
+          "Planned Order Receipt (Qty.)",
+          "FP Order Receipt (Qty.)",
+          "Rel. Order Receipt (Qty.)",
+          "Planned Order Release (Qty.)",
+          "Purch. Req. Receipt (Qty.)",
+          "Planning Issues (Qty.)",
+          "Purch. Req. Release (Qty.)");
+
+        IF JobPlanningLine.READPERMISSION THEN
+          CALCFIELDS("Qty. on Job Order");
+        CALCFIELDS(
+          "Qty. on Assembly Order",
+          "Qty. on Asm. Component",
+          "Qty. on Purch. Return",
+          "Qty. on Sales Return");
+        IF CalculateTransferQuantities THEN
+          CALCFIELDS(
+            "Trans. Ord. Shipment (Qty.)",
+            "Qty. in Transit",
+            "Trans. Ord. Receipt (Qty.)");
+
+        OnAfterCalcItemPlanningFields(Item);
+      END;
+    END;
+
+    [External]
+    PROCEDURE CalculateNeed@5(VAR Item@1004 : Record 27;VAR GrossRequirement@1003 : Decimal;VAR PlannedOrderReceipt@1002 : Decimal;VAR ScheduledReceipt@1001 : Decimal;VAR PlannedOrderReleases@1000 : Decimal);
+    VAR
+      TransOrdShipmentQty@1005 : Decimal;
+      QtyinTransit@1006 : Decimal;
+      TransOrdReceiptQty@1007 : Decimal;
+    BEGIN
+      CalcItemPlanningFields(Item,TRUE);
+
+      WITH Item DO BEGIN
+        IF GETFILTER("Location Filter") = '' THEN BEGIN
+          TransOrdShipmentQty := 0;
+          QtyinTransit := 0;
+          TransOrdReceiptQty := 0;
+        END ELSE BEGIN
+          TransOrdShipmentQty := "Trans. Ord. Shipment (Qty.)";
+          QtyinTransit := "Qty. in Transit";
+          TransOrdReceiptQty := "Trans. Ord. Receipt (Qty.)";
+        END;
+        GrossRequirement :=
+          "Qty. on Sales Order" +
+          "Qty. on Service Order" +
+          "Qty. on Job Order" +
+          "Scheduled Need (Qty.)" +
+          TransOrdShipmentQty +
+          "Planning Issues (Qty.)" +
+          "Qty. on Asm. Component" +
+          "Qty. on Purch. Return";
+        PlannedOrderReceipt :=
+          "Planned Order Receipt (Qty.)" +
+          "Purch. Req. Receipt (Qty.)";
+        ScheduledReceipt :=
+          "FP Order Receipt (Qty.)" +
+          "Rel. Order Receipt (Qty.)" +
+          "Qty. on Purch. Order" +
+          QtyinTransit +
+          TransOrdReceiptQty +
+          "Qty. on Assembly Order" +
+          "Qty. on Sales Return";
+        PlannedOrderReleases :=
+          "Planned Order Release (Qty.)" +
+          "Purch. Req. Release (Qty.)";
+      END;
+      OnAfterCalculateNeed(Item,GrossRequirement,PlannedOrderReceipt,ScheduledReceipt,PlannedOrderReleases);
+    END;
+
+    LOCAL PROCEDURE CalcProjAvailableBalance@1(VAR Item@1000 : Record 27) : Decimal;
+    VAR
+      Item2@1005 : Record 27;
+      GrossRequirement@1004 : Decimal;
+      PlannedOrderReceipt@1003 : Decimal;
+      ScheduledReceipt@1002 : Decimal;
+      PlannedOrderReleases@1001 : Decimal;
+    BEGIN
+      Item2.COPY(Item);
+      Item2.SETRANGE("Date Filter",0D,Item.GETRANGEMAX("Date Filter"));
+      CalculateNeed(Item2,GrossRequirement,PlannedOrderReceipt,ScheduledReceipt,PlannedOrderReleases);
+      EXIT(Item2.Inventory + PlannedOrderReceipt + ScheduledReceipt - GrossRequirement);
+    END;
+
+    LOCAL PROCEDURE CalcProjAvailableBalance2@4(Inventory@1008 : Decimal;GrossRequirement@1007 : Decimal;PlannedOrderReceipt@1006 : Decimal;ScheduledReceipt@1005 : Decimal) : Decimal;
+    BEGIN
+      EXIT(Inventory + PlannedOrderReceipt + ScheduledReceipt - GrossRequirement);
+    END;
+
+    [External]
+    PROCEDURE CalcAvailQuantities@14(VAR Item@1001 : Record 27;IsBalanceAtDate@1009 : Boolean;VAR GrossRequirement@1002 : Decimal;VAR PlannedOrderRcpt@1003 : Decimal;VAR ScheduledRcpt@1004 : Decimal;VAR PlannedOrderReleases@1005 : Decimal;VAR ProjAvailableBalance@1006 : Decimal;VAR ExpectedInventory@1007 : Decimal;VAR QtyAvailable@1008 : Decimal);
+    VAR
+      AvailableMgt@1000 : Codeunit 5400;
+    BEGIN
+      CalculateNeed(Item,GrossRequirement,PlannedOrderRcpt,ScheduledRcpt,PlannedOrderReleases);
+      IF IsBalanceAtDate THEN
+        ProjAvailableBalance :=
+          CalcProjAvailableBalance2(Item.Inventory,GrossRequirement,PlannedOrderRcpt,ScheduledRcpt)
+      ELSE
+        ProjAvailableBalance := CalcProjAvailableBalance(Item);
+
+      OnAfterCalculateProjAvailableBalance(Item,ProjAvailableBalance);
+
+      ExpectedInventory := AvailableMgt.ExpectedQtyOnHand(Item,TRUE,0,QtyAvailable,DMY2DATE(31,12,9999));
+    END;
+
+    [External]
+    PROCEDURE ShowItemLedgerEntries@10(VAR Item@1002 : Record 27;NetChange@1001 : Boolean);
+    VAR
+      ItemLedgEntry@1000 : Record 32;
+    BEGIN
+      ItemLedgEntry.FindLinesWithItemToPlan(Item,NetChange);
+      PAGE.RUN(0,ItemLedgEntry);
+    END;
+
+    [External]
+    PROCEDURE ShowSalesLines@2(VAR Item@1001 : Record 27);
+    VAR
+      SalesLine@1000 : Record 37;
+    BEGIN
+      SalesLine.FindLinesWithItemToPlan(Item,SalesLine."Document Type"::Order);
+      PAGE.RUN(0,SalesLine);
+    END;
+
+    [External]
+    PROCEDURE ShowServLines@9(VAR Item@1001 : Record 27);
+    VAR
+      ServLine@1000 : Record 5902;
+    BEGIN
+      ServLine.FindLinesWithItemToPlan(Item);
+      PAGE.RUN(0,ServLine);
+    END;
+
+    [External]
+    PROCEDURE ShowJobPlanningLines@12(VAR Item@1001 : Record 27);
+    VAR
+      JobPlanningLine@1000 : Record 1003;
+    BEGIN
+      JobPlanningLine.FindLinesWithItemToPlan(Item);
+      PAGE.RUN(0,JobPlanningLine);
+    END;
+
+    [External]
+    PROCEDURE ShowPurchLines@3(VAR Item@1001 : Record 27);
+    VAR
+      PurchLine@1000 : Record 39;
+    BEGIN
+      PurchLine.FindLinesWithItemToPlan(Item,PurchLine."Document Type"::Order);
+      PAGE.RUN(0,PurchLine);
+    END;
+
+    [External]
+    PROCEDURE ShowSchedReceipt@7(VAR Item@1001 : Record 27);
+    VAR
+      ProdOrderLine@1000 : Record 5406;
+    BEGIN
+      ProdOrderLine.FindLinesWithItemToPlan(Item,TRUE);
+      PAGE.RUN(0,ProdOrderLine);
+    END;
+
+    [External]
+    PROCEDURE ShowSchedNeed@8(VAR Item@1001 : Record 27);
+    VAR
+      ProdOrderComp@1000 : Record 5407;
+    BEGIN
+      ProdOrderComp.FindLinesWithItemToPlan(Item,TRUE);
+      PAGE.RUN(0,ProdOrderComp);
+    END;
+
+    [External]
+    PROCEDURE ShowTransLines@6(VAR Item@1002 : Record 27;What@1000 : Integer);
+    VAR
+      TransLine@1001 : Record 5741;
+    BEGIN
+      CASE What OF
+        Item.FIELDNO("Trans. Ord. Shipment (Qty.)"):
+          TransLine.FindLinesWithItemToPlan(Item,FALSE,FALSE);
+        Item.FIELDNO("Qty. in Transit"),
+        Item.FIELDNO("Trans. Ord. Receipt (Qty.)"):
+          TransLine.FindLinesWithItemToPlan(Item,TRUE,FALSE);
+      END;
+      PAGE.RUN(0,TransLine);
+    END;
+
+    [External]
+    PROCEDURE ShowAsmOrders@16(VAR Item@1001 : Record 27);
+    VAR
+      AssemblyHeader@1000 : Record 900;
+    BEGIN
+      AssemblyHeader.FindLinesWithItemToPlan(Item,AssemblyHeader."Document Type"::Order);
+      PAGE.RUN(0,AssemblyHeader);
+    END;
+
+    [External]
+    PROCEDURE ShowAsmCompLines@15(VAR Item@1001 : Record 27);
+    VAR
+      AssemblyLine@1000 : Record 901;
+    BEGIN
+      AssemblyLine.FindLinesWithItemToPlan(Item,AssemblyLine."Document Type"::Order);
+      PAGE.RUN(0,AssemblyLine);
+    END;
+
+    [External]
+    PROCEDURE ShowItemAvailLineList@11(VAR Item@1002 : Record 27;What@1000 : Integer);
+    VAR
+      ItemCopy@1003 : Record 27;
+      ItemAvailLineList@1001 : Page 99000902;
+    BEGIN
+      ItemCopy.COPY(Item);
+      CalcItemPlanningFields(ItemCopy,ItemCopy.GETFILTER("Location Filter") <> '');
+      ItemAvailLineList.Init(What,ItemCopy);
+      ItemAvailLineList.RUNMODAL;
+    END;
+
+    [External]
+    PROCEDURE ShowItemAvailFromItem@42(VAR Item@1004 : Record 27;AvailabilityType@1000 : 'Date,Variant,Location,Bin,Event,BOM');
+    VAR
+      NewDate@1006 : Date;
+      NewVariantCode@1002 : Code[10];
+      NewLocationCode@1001 : Code[10];
+    BEGIN
+      WITH Item DO BEGIN
+        TESTFIELD("No.");
+
+        OnBeforeShowItemAvailFromItem(Item);
+        CASE AvailabilityType OF
+          AvailabilityType::Date:
+            ShowItemAvailByDate(Item,'',NewDate,NewDate);
+          AvailabilityType::Variant:
+            ShowItemAvailVariant(Item,'',NewVariantCode,NewVariantCode);
+          AvailabilityType::Location:
+            ShowItemAvailByLoc(Item,'',NewLocationCode,NewLocationCode);
+          AvailabilityType::"Event":
+            ShowItemAvailByEvent(Item,'',NewDate,NewDate,FALSE);
+          AvailabilityType::BOM:
+            ShowItemAvailByBOMLevel(Item,'',NewDate,NewDate);
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE ShowItemAvailFromSalesLine@17(VAR SalesLine@1004 : Record 37;AvailabilityType@1000 : 'Date,Variant,Location,Bin,Event,BOM');
+    VAR
+      Item@1005 : Record 27;
+      AsmHeader@1003 : Record 900;
+      NewDate@1006 : Date;
+      NewVariantCode@1002 : Code[10];
+      NewLocationCode@1001 : Code[10];
+    BEGIN
+      WITH SalesLine DO BEGIN
+        TESTFIELD(Type,Type::Item);
+        TESTFIELD("No.");
+        Item.RESET;
+        Item.GET("No.");
+        FilterItem(Item,"Location Code","Variant Code","Shipment Date");
+
+        OnBeforeShowItemAvailFromSalesLine(Item,SalesLine);
+        CASE AvailabilityType OF
+          AvailabilityType::Date:
+            IF ShowItemAvailByDate(Item,FIELDCAPTION("Shipment Date"),"Shipment Date",NewDate) THEN
+              VALIDATE("Shipment Date",NewDate);
+          AvailabilityType::Variant:
+            IF ShowItemAvailVariant(Item,FIELDCAPTION("Variant Code"),"Variant Code",NewVariantCode) THEN
+              VALIDATE("Variant Code",NewVariantCode);
+          AvailabilityType::Location:
+            IF ShowItemAvailByLoc(Item,FIELDCAPTION("Location Code"),"Location Code",NewLocationCode) THEN
+              VALIDATE("Location Code",NewLocationCode);
+          AvailabilityType::"Event":
+            IF ShowItemAvailByEvent(Item,FIELDCAPTION("Shipment Date"),"Shipment Date",NewDate,FALSE) THEN
+              VALIDATE("Shipment Date",NewDate);
+          AvailabilityType::BOM:
+            IF AsmToOrderExists(AsmHeader) THEN
+              ShowItemAvailFromAsmHeader(AsmHeader,AvailabilityType)
+            ELSE
+              IF ShowItemAvailByBOMLevel(Item,FIELDCAPTION("Shipment Date"),"Shipment Date",NewDate) THEN
+                VALIDATE("Shipment Date",NewDate);
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE ShowItemAvailFromPurchLine@22(VAR PurchLine@1004 : Record 39;AvailabilityType@1000 : 'Date,Variant,Location,Bin,Event,BOM');
+    VAR
+      Item@1005 : Record 27;
+      NewDate@1010 : Date;
+      NewVariantCode@1007 : Code[10];
+      NewLocationCode@1006 : Code[10];
+    BEGIN
+      WITH PurchLine DO BEGIN
+        TESTFIELD(Type,Type::Item);
+        TESTFIELD("No.");
+        Item.RESET;
+        Item.GET("No.");
+        FilterItem(Item,"Location Code","Variant Code","Expected Receipt Date");
+
+        OnBeforeShowItemAvailFromPurchLine(Item,PurchLine);
+        CASE AvailabilityType OF
+          AvailabilityType::Date:
+            IF ShowItemAvailByDate(Item,FIELDCAPTION("Expected Receipt Date"),"Expected Receipt Date",NewDate) THEN
+              VALIDATE("Expected Receipt Date",NewDate);
+          AvailabilityType::Variant:
+            IF ShowItemAvailVariant(Item,FIELDCAPTION("Variant Code"),"Variant Code",NewVariantCode) THEN
+              VALIDATE("Variant Code",NewVariantCode);
+          AvailabilityType::Location:
+            IF ShowItemAvailByLoc(Item,FIELDCAPTION("Location Code"),"Location Code",NewLocationCode) THEN
+              VALIDATE("Location Code",NewLocationCode);
+          AvailabilityType::"Event":
+            IF ShowItemAvailByEvent(Item,FIELDCAPTION("Expected Receipt Date"),"Expected Receipt Date",NewDate,FALSE) THEN
+              VALIDATE("Expected Receipt Date",NewDate);
+          AvailabilityType::BOM:
+            IF ShowItemAvailByBOMLevel(Item,FIELDCAPTION("Expected Receipt Date"),"Expected Receipt Date",NewDate) THEN
+              VALIDATE("Expected Receipt Date",NewDate);
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE ShowItemAvailFromReqLine@18(VAR ReqLine@1007 : Record 246;AvailabilityType@1005 : 'Date,Variant,Location,Bin,Event,BOM');
+    VAR
+      Item@1008 : Record 27;
+      NewDate@1003 : Date;
+      NewVariantCode@1001 : Code[10];
+      NewLocationCode@1000 : Code[10];
+    BEGIN
+      WITH ReqLine DO BEGIN
+        TESTFIELD(Type,Type::Item);
+        TESTFIELD("No.");
+        Item.RESET;
+        Item.GET("No.");
+        FilterItem(Item,"Location Code","Variant Code","Due Date");
+
+        OnBeforeShowItemAvailFromReqLine(Item,ReqLine);
+        CASE AvailabilityType OF
+          AvailabilityType::Date:
+            IF ShowItemAvailByDate(Item,FIELDCAPTION("Due Date"),"Due Date",NewDate) THEN
+              VALIDATE("Due Date",NewDate);
+          AvailabilityType::Variant:
+            IF ShowItemAvailVariant(Item,FIELDCAPTION("Variant Code"),"Variant Code",NewVariantCode) THEN
+              VALIDATE("Variant Code",NewVariantCode);
+          AvailabilityType::Location:
+            IF ShowItemAvailByLoc(Item,FIELDCAPTION("Location Code"),"Location Code",NewLocationCode) THEN
+              VALIDATE("Location Code",NewLocationCode);
+          AvailabilityType::"Event":
+            BEGIN
+              Item.SETRANGE("Date Filter");
+
+              ForecastName := '';
+              FindCurrForecastName(ForecastName);
+
+              IF ShowItemAvailByEvent(Item,FIELDCAPTION("Due Date"),"Due Date",NewDate,TRUE) THEN
+                VALIDATE("Due Date",NewDate);
+            END;
+          AvailabilityType::BOM:
+            IF ShowItemAvailByBOMLevel(Item,FIELDCAPTION("Due Date"),"Due Date",NewDate) THEN
+              VALIDATE("Due Date",NewDate);
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE ShowItemAvailFromProdOrderLine@19(VAR ProdOrderLine@1005 : Record 5406;AvailabilityType@1003 : 'Date,Variant,Location,Bin,Event,BOM');
+    VAR
+      Item@1007 : Record 27;
+      NewDate@1006 : Date;
+      NewVariantCode@1002 : Code[10];
+      NewLocationCode@1001 : Code[10];
+    BEGIN
+      WITH ProdOrderLine DO BEGIN
+        TESTFIELD("Item No.");
+        Item.RESET;
+        Item.GET("Item No.");
+        FilterItem(Item,"Location Code","Variant Code","Due Date");
+
+        OnBeforeShowItemAvailFromProdOrderLine(Item,ProdOrderLine);
+        CASE AvailabilityType OF
+          AvailabilityType::Date:
+            IF ShowItemAvailByDate(Item,FIELDCAPTION("Due Date"),"Due Date",NewDate) THEN
+              VALIDATE("Due Date",NewDate);
+          AvailabilityType::Variant:
+            IF ShowItemAvailVariant(Item,FIELDCAPTION("Variant Code"),"Variant Code",NewVariantCode) THEN
+              VALIDATE("Variant Code",NewVariantCode);
+          AvailabilityType::Location:
+            IF ShowItemAvailByLoc(Item,FIELDCAPTION("Location Code"),"Location Code",NewLocationCode) THEN
+              VALIDATE("Location Code",NewLocationCode);
+          AvailabilityType::"Event":
+            IF ShowItemAvailByEvent(Item,FIELDCAPTION("Due Date"),"Due Date",NewDate,FALSE) THEN
+              VALIDATE("Due Date",NewDate);
+          AvailabilityType::BOM:
+            IF ShowCustomProdItemAvailByBOMLevel(ProdOrderLine,FIELDCAPTION("Due Date"),"Due Date",NewDate) THEN
+              VALIDATE("Due Date",NewDate);
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE ShowItemAvailFromProdOrderComp@26(VAR ProdOrderComp@1005 : Record 5407;AvailabilityType@1003 : 'Date,Variant,Location,Bin,Event,BOM');
+    VAR
+      Item@1007 : Record 27;
+      NewDate@1006 : Date;
+      NewVariantCode@1002 : Code[10];
+      NewLocationCode@1001 : Code[10];
+    BEGIN
+      WITH ProdOrderComp DO BEGIN
+        TESTFIELD("Item No.");
+        Item.RESET;
+        Item.GET("Item No.");
+        FilterItem(Item,"Location Code","Variant Code","Due Date");
+
+        OnBeforeShowItemAvailFromProdOrderComp(Item,ProdOrderComp);
+        CASE AvailabilityType OF
+          AvailabilityType::Date:
+            IF ShowItemAvailByDate(Item,FIELDCAPTION("Due Date"),"Due Date",NewDate) THEN
+              VALIDATE("Due Date",NewDate);
+          AvailabilityType::Variant:
+            IF ShowItemAvailVariant(Item,FIELDCAPTION("Variant Code"),"Variant Code",NewVariantCode) THEN
+              VALIDATE("Variant Code",NewVariantCode);
+          AvailabilityType::Location:
+            IF ShowItemAvailByLoc(Item,FIELDCAPTION("Location Code"),"Location Code",NewLocationCode) THEN
+              VALIDATE("Location Code",NewLocationCode);
+          AvailabilityType::"Event":
+            IF ShowItemAvailByEvent(Item,FIELDCAPTION("Due Date"),"Due Date",NewDate,FALSE) THEN
+              VALIDATE("Due Date",NewDate);
+          AvailabilityType::BOM:
+            IF ShowItemAvailByBOMLevel(Item,FIELDCAPTION("Due Date"),"Due Date",NewDate) THEN
+              VALIDATE("Due Date",NewDate);
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE ShowItemAvailFromTransLine@27(VAR TransLine@1008 : Record 5741;AvailabilityType@1006 : 'Date,Variant,Location,Bin,Event,BOM');
+    VAR
+      Item@1004 : Record 27;
+      NewDate@1003 : Date;
+      NewVariantCode@1002 : Code[10];
+      NewLocationCode@1001 : Code[10];
+    BEGIN
+      WITH TransLine DO BEGIN
+        TESTFIELD("Item No.");
+        Item.RESET;
+        Item.GET("Item No.");
+        FilterItem(Item,"Transfer-from Code","Variant Code","Shipment Date");
+
+        OnBeforeShowItemAvailFromTransLine(Item,TransLine);
+        CASE AvailabilityType OF
+          AvailabilityType::Date:
+            IF ShowItemAvailByDate(Item,FIELDCAPTION("Shipment Date"),"Shipment Date",NewDate) THEN
+              VALIDATE("Shipment Date",NewDate);
+          AvailabilityType::Variant:
+            IF ShowItemAvailVariant(Item,FIELDCAPTION("Variant Code"),"Variant Code",NewVariantCode) THEN
+              VALIDATE("Variant Code",NewVariantCode);
+          AvailabilityType::Location:
+            IF ShowItemAvailByLoc(Item,FIELDCAPTION("Transfer-from Code"),"Transfer-from Code",NewLocationCode) THEN
+              VALIDATE("Transfer-from Code",NewLocationCode);
+          AvailabilityType::"Event":
+            IF ShowItemAvailByEvent(Item,FIELDCAPTION("Shipment Date"),"Shipment Date",NewDate,FALSE) THEN
+              VALIDATE("Shipment Date",NewDate);
+          AvailabilityType::BOM:
+            IF ShowItemAvailByBOMLevel(Item,FIELDCAPTION("Shipment Date"),"Shipment Date",NewDate) THEN
+              VALIDATE("Shipment Date",NewDate);
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE ShowItemAvailFromWhseActivLine@28(VAR WhseActivLine@1005 : Record 5767;AvailabilityType@1003 : 'Date,Variant,Location,Bin,Event,BOM');
+    VAR
+      Item@1007 : Record 27;
+      NewDate@1006 : Date;
+      NewVariantCode@1002 : Code[10];
+      NewLocationCode@1001 : Code[10];
+    BEGIN
+      WITH WhseActivLine DO BEGIN
+        TESTFIELD("Item No.");
+        Item.RESET;
+        Item.GET("Item No.");
+        FilterItem(Item,"Location Code","Variant Code","Due Date");
+
+        OnBeforeShowItemAvailFromWhseActivLine(Item,WhseActivLine);
+        CASE AvailabilityType OF
+          AvailabilityType::Date:
+            ShowItemAvailByDate(Item,FIELDCAPTION("Due Date"),"Due Date",NewDate);
+          AvailabilityType::Variant:
+            ShowItemAvailVariant(Item,FIELDCAPTION("Variant Code"),"Variant Code",NewVariantCode);
+          AvailabilityType::Location:
+            ShowItemAvailByLoc(Item,FIELDCAPTION("Location Code"),"Location Code",NewLocationCode);
+          AvailabilityType::"Event":
+            ShowItemAvailByEvent(Item,FIELDCAPTION("Due Date"),"Due Date",NewDate,FALSE);
+          AvailabilityType::BOM:
+            ShowItemAvailByBOMLevel(Item,FIELDCAPTION("Due Date"),"Due Date",NewDate);
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE ShowItemAvailFromServLine@31(VAR ServLine@1005 : Record 5902;AvailabilityType@1003 : 'Date,Variant,Location,Bin,Event,BOM');
+    VAR
+      ServHeader@1007 : Record 5900;
+      Item@1008 : Record 27;
+      NewDate@1006 : Date;
+      NewVariantCode@1002 : Code[10];
+      NewLocationCode@1001 : Code[10];
+    BEGIN
+      WITH ServLine DO BEGIN
+        ServHeader.GET("Document Type","Document No.");
+        TESTFIELD(Type,Type::Item);
+        TESTFIELD("No.");
+        Item.RESET;
+        Item.GET("No.");
+        FilterItem(Item,"Location Code","Variant Code",ServHeader."Response Date");
+
+        OnBeforeShowItemAvailFromServLine(Item,ServLine);
+        CASE AvailabilityType OF
+          AvailabilityType::Date:
+            ShowItemAvailByDate(Item,ServHeader.FIELDCAPTION("Response Date"),ServHeader."Response Date",NewDate);
+          AvailabilityType::Variant:
+            IF ShowItemAvailVariant(Item,FIELDCAPTION("Variant Code"),"Variant Code",NewVariantCode) THEN
+              VALIDATE("Variant Code",NewVariantCode);
+          AvailabilityType::Location:
+            IF ShowItemAvailByLoc(Item,FIELDCAPTION("Location Code"),"Location Code",NewLocationCode) THEN
+              VALIDATE("Location Code",NewLocationCode);
+          AvailabilityType::"Event":
+            ShowItemAvailByEvent(Item,ServHeader.FIELDCAPTION("Response Date"),ServHeader."Response Date",NewDate,FALSE);
+          AvailabilityType::BOM:
+            ShowItemAvailByBOMLevel(Item,ServHeader.FIELDCAPTION("Response Date"),ServHeader."Response Date",NewDate);
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE ShowItemAvailFromWhseRcptLine@29(VAR WhseRcptLine@1008 : Record 7317;AvailabilityType@1006 : 'Date,Variant,Location,Bin,Event,BOM');
+    VAR
+      Item@1004 : Record 27;
+      NewDate@1003 : Date;
+      NewVariantCode@1002 : Code[10];
+      NewLocationCode@1001 : Code[10];
+    BEGIN
+      WITH WhseRcptLine DO BEGIN
+        TESTFIELD("Item No.");
+        Item.RESET;
+        Item.GET("Item No.");
+        FilterItem(Item,"Location Code","Variant Code","Due Date");
+
+        OnBeforeShowItemAvailFromWhseRcptLine(Item,WhseRcptLine);
+        CASE AvailabilityType OF
+          AvailabilityType::Date:
+            ShowItemAvailByDate(Item,FIELDCAPTION("Due Date"),"Due Date",NewDate);
+          AvailabilityType::Variant:
+            ShowItemAvailVariant(Item,FIELDCAPTION("Variant Code"),"Variant Code",NewVariantCode);
+          AvailabilityType::Location:
+            ShowItemAvailByLoc(Item,FIELDCAPTION("Location Code"),"Location Code",NewLocationCode);
+          AvailabilityType::"Event":
+            ShowItemAvailByEvent(Item,FIELDCAPTION("Due Date"),"Due Date",NewDate,FALSE);
+          AvailabilityType::BOM:
+            ShowItemAvailByBOMLevel(Item,FIELDCAPTION("Due Date"),"Due Date",NewDate);
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE ShowItemAvailFromItemJnlLine@30(VAR ItemJnlLine@1004 : Record 83;AvailabilityType@1000 : 'Date,Variant,Location,Bin,Event,BOM');
+    VAR
+      Item@1006 : Record 27;
+      NewDate@1005 : Date;
+      NewVariantCode@1002 : Code[10];
+      NewLocationCode@1001 : Code[10];
+    BEGIN
+      WITH ItemJnlLine DO BEGIN
+        TESTFIELD("Item No.");
+        Item.RESET;
+        Item.GET("Item No.");
+        FilterItem(Item,"Location Code","Variant Code","Posting Date");
+
+        OnBeforeShowItemAvailFromItemJnlLine(Item,ItemJnlLine);
+        CASE AvailabilityType OF
+          AvailabilityType::Date:
+            IF ShowItemAvailByDate(Item,FIELDCAPTION("Posting Date"),"Posting Date",NewDate) THEN
+              VALIDATE("Posting Date",NewDate);
+          AvailabilityType::Variant:
+            IF ShowItemAvailVariant(Item,FIELDCAPTION("Variant Code"),"Variant Code",NewVariantCode) THEN
+              VALIDATE("Variant Code",NewVariantCode);
+          AvailabilityType::Location:
+            IF ShowItemAvailByLoc(Item,FIELDCAPTION("Location Code"),"Location Code",NewLocationCode) THEN
+              VALIDATE("Location Code",NewLocationCode);
+          AvailabilityType::"Event":
+            IF ShowItemAvailByEvent(Item,FIELDCAPTION("Posting Date"),"Posting Date",NewDate,FALSE) THEN
+              VALIDATE("Posting Date",NewDate);
+          AvailabilityType::BOM:
+            IF ShowItemAvailByBOMLevel(Item,FIELDCAPTION("Posting Date"),"Posting Date",NewDate) THEN
+              VALIDATE("Posting Date",NewDate);
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE ShowItemAvailFromAsmHeader@33(VAR AsmHeader@1010 : Record 900;AvailabilityType@1008 : 'Date,Variant,Location,Bin,Event,BOM');
+    VAR
+      Item@1004 : Record 27;
+      NewDate@1003 : Date;
+      NewVariantCode@1002 : Code[10];
+      NewLocationCode@1001 : Code[10];
+    BEGIN
+      WITH AsmHeader DO BEGIN
+        TESTFIELD("Item No.");
+        Item.RESET;
+        Item.GET("Item No.");
+        FilterItem(Item,"Location Code","Variant Code","Due Date");
+
+        OnBeforeShowItemAvailFromAsmHeader(Item,AsmHeader);
+        CASE AvailabilityType OF
+          AvailabilityType::Date:
+            IF ShowItemAvailByDate(Item,FIELDCAPTION("Due Date"),"Due Date",NewDate) THEN
+              VALIDATE("Due Date",NewDate);
+          AvailabilityType::Variant:
+            IF ShowItemAvailVariant(Item,FIELDCAPTION("Variant Code"),"Variant Code",NewVariantCode) THEN
+              VALIDATE("Variant Code",NewVariantCode);
+          AvailabilityType::Location:
+            IF ShowItemAvailByLoc(Item,FIELDCAPTION("Location Code"),"Location Code",NewLocationCode) THEN
+              VALIDATE("Location Code",NewLocationCode);
+          AvailabilityType::"Event":
+            IF ShowItemAvailByEvent(Item,FIELDCAPTION("Due Date"),"Due Date",NewDate,FALSE) THEN
+              VALIDATE("Due Date",NewDate);
+          AvailabilityType::BOM:
+            IF ShowCustomAsmItemAvailByBOMLevel(AsmHeader,FIELDCAPTION("Due Date"),"Due Date",NewDate) THEN
+              VALIDATE("Due Date",NewDate);
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE ShowItemAvailFromAsmLine@34(VAR AsmLine@1010 : Record 901;AvailabilityType@1008 : 'Date,Variant,Location,Bin,Event,BOM');
+    VAR
+      Item@1004 : Record 27;
+      NewDate@1003 : Date;
+      NewVariantCode@1002 : Code[10];
+      NewLocationCode@1001 : Code[10];
+    BEGIN
+      WITH AsmLine DO BEGIN
+        TESTFIELD(Type,Type::Item);
+        TESTFIELD("No.");
+        Item.RESET;
+        Item.GET("No.");
+        FilterItem(Item,"Location Code","Variant Code","Due Date");
+
+        OnBeforeShowItemAvailFromAsmLine(Item,AsmLine);
+        CASE AvailabilityType OF
+          AvailabilityType::Date:
+            IF ShowItemAvailByDate(Item,FIELDCAPTION("Due Date"),"Due Date",NewDate) THEN
+              VALIDATE("Due Date",NewDate);
+          AvailabilityType::Variant:
+            IF ShowItemAvailVariant(Item,FIELDCAPTION("Variant Code"),"Variant Code",NewVariantCode) THEN
+              VALIDATE("Variant Code",NewVariantCode);
+          AvailabilityType::Location:
+            IF ShowItemAvailByLoc(Item,FIELDCAPTION("Location Code"),"Location Code",NewLocationCode) THEN
+              VALIDATE("Location Code",NewLocationCode);
+          AvailabilityType::"Event":
+            IF ShowItemAvailByEvent(Item,FIELDCAPTION("Due Date"),"Due Date",NewDate,FALSE) THEN
+              VALIDATE("Due Date",NewDate);
+          AvailabilityType::BOM:
+            IF ShowItemAvailByBOMLevel(Item,FIELDCAPTION("Due Date"),"Due Date",NewDate) THEN
+              VALIDATE("Due Date",NewDate);
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE ShowItemAvailFromPlanningComp@35(VAR PlanningComp@1005 : Record 99000829;AvailabilityType@1000 : 'Date,Variant,Location,Bin,Event,BOM');
+    VAR
+      Item@1007 : Record 27;
+      NewDate@1006 : Date;
+      NewVariantCode@1003 : Code[10];
+      NewLocationCode@1001 : Code[10];
+    BEGIN
+      WITH PlanningComp DO BEGIN
+        TESTFIELD("Item No.");
+        Item.RESET;
+        Item.GET("Item No.");
+        FilterItem(Item,"Location Code","Variant Code","Due Date");
+
+        OnBeforeShowItemAvailFromPlanningComp(Item,PlanningComp);
+        CASE AvailabilityType OF
+          AvailabilityType::Date:
+            IF ShowItemAvailByDate(Item,FIELDCAPTION("Due Date"),"Due Date",NewDate) THEN
+              VALIDATE("Due Date",NewDate);
+          AvailabilityType::Variant:
+            IF ShowItemAvailVariant(Item,FIELDCAPTION("Variant Code"),"Variant Code",NewVariantCode) THEN
+              VALIDATE("Variant Code",NewVariantCode);
+          AvailabilityType::Location:
+            IF ShowItemAvailByLoc(Item,FIELDCAPTION("Location Code"),"Location Code",NewLocationCode) THEN
+              VALIDATE("Location Code",NewLocationCode);
+          AvailabilityType::"Event":
+            BEGIN
+              ForecastName := '';
+              FindCurrForecastName(ForecastName);
+
+              IF ShowItemAvailByEvent(Item,FIELDCAPTION("Due Date"),"Due Date",NewDate,TRUE) THEN
+                VALIDATE("Due Date",NewDate);
+            END;
+          AvailabilityType::BOM:
+            IF ShowItemAvailByBOMLevel(Item,FIELDCAPTION("Due Date"),"Due Date",NewDate) THEN
+              VALIDATE("Due Date",NewDate);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE ShowItemAvailByEvent@20(VAR Item@1003 : Record 27;FieldCaption@1002 : Text[80];OldDate@1001 : Date;VAR NewDate@1000 : Date;IncludeForecast@1005 : Boolean) : Boolean;
+    VAR
+      ItemAvailByEvent@1004 : Page 5530;
+    BEGIN
+      IF FieldCaption <> '' THEN
+        ItemAvailByEvent.LOOKUPMODE(TRUE);
+      ItemAvailByEvent.SetItem(Item);
+      IF IncludeForecast THEN BEGIN
+        ItemAvailByEvent.SetIncludePlan(TRUE);
+        IF ForecastName <> '' THEN
+          ItemAvailByEvent.SetForecastName(ForecastName);
+      END;
+      IF ItemAvailByEvent.RUNMODAL = ACTION::LookupOK THEN BEGIN
+        NewDate := ItemAvailByEvent.GetSelectedDate;
+        IF (NewDate <> 0D) AND (NewDate <> OldDate) THEN
+          IF CONFIRM(Text012,TRUE,FieldCaption,OldDate,NewDate) THEN
+            EXIT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE ShowItemAvailByLoc@21(VAR Item@1003 : Record 27;FieldCaption@1002 : Text[80];OldLocationCode@1001 : Code[20];VAR NewLocationCode@1000 : Code[20]) : Boolean;
+    VAR
+      ItemAvailByLoc@1004 : Page 492;
+    BEGIN
+      Item.SETRANGE("Location Filter");
+      IF FieldCaption <> '' THEN
+        ItemAvailByLoc.LOOKUPMODE(TRUE);
+      ItemAvailByLoc.SETRECORD(Item);
+      ItemAvailByLoc.SETTABLEVIEW(Item);
+      IF ItemAvailByLoc.RUNMODAL = ACTION::LookupOK THEN BEGIN
+        NewLocationCode := ItemAvailByLoc.GetLastLocation;
+        IF OldLocationCode <> NewLocationCode THEN
+          IF CONFIRM(Text012,TRUE,FieldCaption,OldLocationCode,NewLocationCode) THEN
+            EXIT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE ShowItemAvailByDate@23(VAR Item@1000 : Record 27;FieldCaption@1003 : Text[80];OldDate@1001 : Date;VAR NewDate@1002 : Date) : Boolean;
+    VAR
+      ItemAvailByPeriods@1004 : Page 157;
+    BEGIN
+      Item.SETRANGE("Date Filter");
+      IF FieldCaption <> '' THEN
+        ItemAvailByPeriods.LOOKUPMODE(TRUE);
+      ItemAvailByPeriods.SETRECORD(Item);
+      ItemAvailByPeriods.SETTABLEVIEW(Item);
+      IF ItemAvailByPeriods.RUNMODAL = ACTION::LookupOK THEN BEGIN
+        NewDate := ItemAvailByPeriods.GetLastDate;
+        IF OldDate <> NewDate THEN
+          IF CONFIRM(Text012,TRUE,FieldCaption,OldDate,NewDate) THEN
+            EXIT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE ShowItemAvailVariant@24(VAR Item@1000 : Record 27;FieldCaption@1003 : Text[80];OldVariant@1002 : Code[20];VAR NewVariant@1001 : Code[20]) : Boolean;
+    VAR
+      ItemAvailByVariant@1004 : Page 5414;
+    BEGIN
+      Item.SETRANGE("Variant Filter");
+      IF FieldCaption <> '' THEN
+        ItemAvailByVariant.LOOKUPMODE(TRUE);
+      ItemAvailByVariant.SETRECORD(Item);
+      ItemAvailByVariant.SETTABLEVIEW(Item);
+      IF ItemAvailByVariant.RUNMODAL = ACTION::LookupOK THEN BEGIN
+        NewVariant := ItemAvailByVariant.GetLastVariant;
+        IF OldVariant <> NewVariant THEN
+          IF CONFIRM(Text012,TRUE,FieldCaption,OldVariant,NewVariant) THEN
+            EXIT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE ShowItemAvailByBOMLevel@25(VAR Item@1003 : Record 27;FieldCaption@1002 : Text[80];OldDate@1001 : Date;VAR NewDate@1000 : Date) : Boolean;
+    BEGIN
+      CLEAR(ItemAvailByBOMLevel);
+      Item.SETRANGE("Date Filter");
+      ItemAvailByBOMLevel.InitItem(Item);
+      ItemAvailByBOMLevel.InitDate(OldDate);
+      EXIT(ShowBOMLevelAbleToMake(FieldCaption,OldDate,NewDate));
+    END;
+
+    LOCAL PROCEDURE ShowCustomAsmItemAvailByBOMLevel@43(VAR AsmHeader@1003 : Record 900;FieldCaption@1002 : Text[80];OldDate@1001 : Date;VAR NewDate@1000 : Date) : Boolean;
+    BEGIN
+      CLEAR(ItemAvailByBOMLevel);
+      ItemAvailByBOMLevel.InitAsmOrder(AsmHeader);
+      ItemAvailByBOMLevel.InitDate(OldDate);
+      EXIT(ShowBOMLevelAbleToMake(FieldCaption,OldDate,NewDate));
+    END;
+
+    LOCAL PROCEDURE ShowCustomProdItemAvailByBOMLevel@49(VAR ProdOrderLine@1003 : Record 5406;FieldCaption@1002 : Text[80];OldDate@1001 : Date;VAR NewDate@1000 : Date) : Boolean;
+    BEGIN
+      CLEAR(ItemAvailByBOMLevel);
+      ItemAvailByBOMLevel.InitProdOrder(ProdOrderLine);
+      ItemAvailByBOMLevel.InitDate(OldDate);
+      EXIT(ShowBOMLevelAbleToMake(FieldCaption,OldDate,NewDate));
+    END;
+
+    LOCAL PROCEDURE ShowBOMLevelAbleToMake@46(FieldCaption@1002 : Text[80];OldDate@1001 : Date;VAR NewDate@1000 : Date) : Boolean;
+    BEGIN
+      IF FieldCaption <> '' THEN
+        ItemAvailByBOMLevel.LOOKUPMODE(TRUE);
+      IF ItemAvailByBOMLevel.RUNMODAL = ACTION::LookupOK THEN BEGIN
+        NewDate := ItemAvailByBOMLevel.GetSelectedDate;
+        IF OldDate <> NewDate THEN
+          IF CONFIRM(Text012,TRUE,FieldCaption,OldDate,NewDate) THEN
+            EXIT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE FilterItem@38(VAR Item@1000 : Record 27;LocationCode@1001 : Code[20];VariantCode@1002 : Code[20];Date@1003 : Date);
+    BEGIN
+      Item.SETRANGE("No.",Item."No.");
+      Item.SETRANGE("Date Filter",0D,Date);
+      Item.SETRANGE("Variant Filter",VariantCode);
+      Item.SETRANGE("Location Filter",LocationCode);
+    END;
+
+    [External]
+    PROCEDURE ByEvent@36() : Integer;
+    BEGIN
+      EXIT(AvailabilityType::"Event");
+    END;
+
+    [External]
+    PROCEDURE ByLocation@37() : Integer;
+    BEGIN
+      EXIT(AvailabilityType::Location);
+    END;
+
+    [External]
+    PROCEDURE ByVariant@39() : Integer;
+    BEGIN
+      EXIT(AvailabilityType::Variant);
+    END;
+
+    [External]
+    PROCEDURE ByPeriod@40() : Integer;
+    BEGIN
+      EXIT(AvailabilityType::Date);
+    END;
+
+    [External]
+    PROCEDURE ByBOM@41() : Integer;
+    BEGIN
+      EXIT(AvailabilityType::BOM);
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterCalcItemPlanningFields@44(VAR Item@1000 : Record 27);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterCalculateNeed@45(VAR Item@1000 : Record 27;VAR GrossRequirement@1001 : Decimal;VAR PlannedOrderReceipt@1002 : Decimal;VAR ScheduledReceipt@1003 : Decimal;VAR PlannedOrderReleases@1004 : Decimal);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterCalculateProjAvailableBalance@61(VAR Item@1000 : Record 27;VAR ProjAvailableBalance@1001 : Decimal);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeShowItemAvailFromItem@32(VAR Item@1000 : Record 27);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeShowItemAvailFromItemJnlLine@57(VAR Item@1000 : Record 27;VAR ItemJnlLine@1001 : Record 83);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeShowItemAvailFromSalesLine@47(VAR Item@1000 : Record 27;VAR SalesLine@1001 : Record 37);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeShowItemAvailFromPurchLine@48(VAR Item@1000 : Record 27;VAR PurchLine@1001 : Record 39);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeShowItemAvailFromServLine@55(VAR Item@1000 : Record 27;VAR ServLine@1001 : Record 5902);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeShowItemAvailFromReqLine@50(VAR Item@1000 : Record 27;VAR ReqLine@1001 : Record 246);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeShowItemAvailFromProdOrderLine@51(VAR Item@1000 : Record 27;VAR ProdOrderLine@1001 : Record 5406);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeShowItemAvailFromProdOrderComp@52(VAR Item@1000 : Record 27;VAR ProdOrderComp@1001 : Record 5407);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeShowItemAvailFromTransLine@53(VAR Item@1000 : Record 27;VAR TransLine@1001 : Record 5741);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeShowItemAvailFromWhseActivLine@54(VAR Item@1000 : Record 27;VAR WhseActivLine@1001 : Record 5767);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeShowItemAvailFromWhseRcptLine@56(VAR Item@1001 : Record 27;VAR WhseRcptLine@1000 : Record 7317);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeShowItemAvailFromAsmHeader@58(VAR Item@1000 : Record 27;VAR AssemblyHeader@1001 : Record 900);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeShowItemAvailFromAsmLine@59(VAR Item@1000 : Record 27;VAR AssemblyLine@1001 : Record 901);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeShowItemAvailFromPlanningComp@60(VAR Item@1000 : Record 27;VAR PlanningComp@1001 : Record 99000829);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

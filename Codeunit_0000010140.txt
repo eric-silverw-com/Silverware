@@ -1,0 +1,357 @@
+OBJECT Codeunit 10140 Deposit-Post
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:55 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    TableNo=10140;
+    Permissions=TableData 21=r,
+                TableData 25=r,
+                TableData 271=r,
+                TableData 10143=rim,
+                TableData 10144=rim;
+    OnRun=VAR
+            GLEntry@1020001 : Record 17;
+            GenJnlLine@1020011 : Record 81;
+            GenJnlTemplate@1020013 : Record 80;
+            GenJnlBatch@1020012 : Record 232;
+            CustLedgEntry@1020004 : Record 21;
+            VendLedgEntry@1020003 : Record 25;
+            BankAccount@1020009 : Record 270;
+            BankAccountLedgerEntry@1020002 : Record 271;
+            GenJnlCheckLine@1020006 : Codeunit 11;
+            UpdateAnalysisView@1020005 : Codeunit 410;
+            TotalAmountLCY@1020010 : Decimal;
+            NextLineNo@1020007 : Integer;
+            CurrLineNo@1020008 : Integer;
+          BEGIN
+            OnBeforeDepositPost(Rec);
+
+            // Check deposit
+            TESTFIELD("Posting Date");
+            TESTFIELD("Total Deposit Amount");
+            TESTFIELD("Document Date");
+            TESTFIELD("Bank Account No.");
+            BankAccount.GET("Bank Account No.");
+            BankAccount.TESTFIELD(Blocked,FALSE);
+            CALCFIELDS("Total Deposit Lines");
+            IF "Total Deposit Lines" <> "Total Deposit Amount" THEN
+              ERROR(Text000,FIELDCAPTION("Total Deposit Amount"),FIELDCAPTION("Total Deposit Lines"));
+
+            OnAfterCheckDeposit(Rec);
+
+            IF "Currency Code" = '' THEN
+              Currency.InitRoundingPrecision
+            ELSE BEGIN
+              Currency.GET("Currency Code");
+              Currency.TESTFIELD("Amount Rounding Precision");
+            END;
+
+            SourceCodeSetup.GET;
+            GenJnlTemplate.GET("Journal Template Name");
+
+            NextLineNo := 0;
+            TotalAmountLCY := 0;
+            CurrLineNo := 0;
+            Window.OPEN(
+              STRSUBSTNO(Text001,"No.") +
+              Text004 +
+              Text002 +
+              Text003);
+
+            Window.UPDATE(4,Text005);
+
+            PostedDepositHeader.LOCKTABLE;
+            PostedDepositLine.LOCKTABLE;
+            LOCKTABLE;
+            GenJnlLine.LOCKTABLE;
+
+            InsertPostedDepositHeader(Rec);
+
+            GenJnlLine.RESET;
+            GenJnlLine.SETRANGE("Journal Template Name","Journal Template Name");
+            GenJnlLine.SETRANGE("Journal Batch Name","Journal Batch Name");
+            IF GenJnlLine.FIND('-') THEN
+              REPEAT
+                NextLineNo := NextLineNo + 1;
+                Window.UPDATE(2,NextLineNo);
+
+                InsertPostedDepositLine(Rec,GenJnlLine,NextLineNo);
+
+                IF GenJnlTemplate."Force Doc. Balance" THEN
+                  AddBalancingAccount(GenJnlLine,Rec)
+                ELSE
+                  GenJnlLine."Bal. Account No." := '';
+                GenJnlCheckLine.RunCheck(GenJnlLine);
+              UNTIL GenJnlLine.NEXT = 0;
+
+            CopyBankComments(Rec);
+
+            // Post to General, and other, Ledgers
+            Window.UPDATE(4,Text006);
+            GenJnlLine.RESET;
+            GenJnlLine.SETRANGE("Journal Template Name","Journal Template Name");
+            GenJnlLine.SETRANGE("Journal Batch Name","Journal Batch Name");
+            IF GenJnlLine.FIND('-') THEN
+              REPEAT
+                CurrLineNo := CurrLineNo + 1;
+                Window.UPDATE(2,CurrLineNo);
+                Window.UPDATE(3,ROUND(CurrLineNo / NextLineNo * 10000,1));
+                IF GenJnlTemplate."Force Doc. Balance" THEN
+                  AddBalancingAccount(GenJnlLine,Rec)
+                ELSE BEGIN
+                  TotalAmountLCY += GenJnlLine."Amount (LCY)";
+                  GenJnlLine."Bal. Account No." := '';
+                END;
+                GenJnlLine."Source Code" := SourceCodeSetup.Deposits;
+                GenJnlLine."Source Type" := GenJnlLine."Source Type"::"Bank Account";
+                GenJnlLine."Source No." := "Bank Account No.";
+                GenJnlLine."Source Currency Code" := "Currency Code";
+                GenJnlLine."Source Currency Amount" := GenJnlLine.Amount;
+                OnBeforePostGenJnlLine(GenJnlLine,Rec);
+                GenJnlPostLine.RunWithoutCheck(GenJnlLine);
+
+                PostedDepositLine.GET("No.",CurrLineNo);
+                CASE GenJnlLine."Account Type" OF
+                  GenJnlLine."Account Type"::"G/L Account",
+                  GenJnlLine."Account Type"::"Bank Account":
+                    BEGIN
+                      GLEntry.FINDLAST;
+                      PostedDepositLine."Entry No." := GLEntry."Entry No.";
+                      IF GenJnlTemplate."Force Doc. Balance" AND (GenJnlLine.Amount * GLEntry.Amount < 0) THEN
+                        PostedDepositLine."Entry No." := PostedDepositLine."Entry No." - 1;
+                    END;
+                  GenJnlLine."Account Type"::Customer:
+                    BEGIN
+                      CustLedgEntry.FINDLAST;
+                      PostedDepositLine."Entry No." := CustLedgEntry."Entry No.";
+                    END;
+                  GenJnlLine."Account Type"::Vendor:
+                    BEGIN
+                      VendLedgEntry.FINDLAST;
+                      PostedDepositLine."Entry No." := VendLedgEntry."Entry No.";
+                    END;
+                END;
+                IF GenJnlTemplate."Force Doc. Balance" THEN BEGIN
+                  BankAccountLedgerEntry.FINDLAST;
+                  PostedDepositLine."Bank Account Ledger Entry No." := BankAccountLedgerEntry."Entry No.";
+                  IF (GenJnlLine."Account Type" = GenJnlLine."Account Type"::"Bank Account") AND
+                     (GenJnlLine.Amount * BankAccountLedgerEntry.Amount > 0)
+                  THEN
+                    PostedDepositLine."Entry No." := PostedDepositLine."Entry No." - 1;
+                END;
+                OnBeforePostedDepositLineModify(PostedDepositLine,GenJnlLine);
+                PostedDepositLine.MODIFY;
+              UNTIL GenJnlLine.NEXT = 0;
+
+            Window.UPDATE(4,Text007);
+            IF NOT GenJnlTemplate."Force Doc. Balance" THEN BEGIN
+              PostBalancingEntry(Rec,TotalAmountLCY);
+
+              BankAccountLedgerEntry.FINDLAST;
+              PostedDepositLine.RESET;
+              PostedDepositLine.SETRANGE("Deposit No.","No.");
+              IF PostedDepositLine.FINDSET(TRUE) THEN
+                REPEAT
+                  PostedDepositLine."Bank Account Ledger Entry No." := BankAccountLedgerEntry."Entry No.";
+                  PostedDepositLine.MODIFY;
+                UNTIL PostedDepositLine.NEXT = 0;
+            END;
+
+            Window.UPDATE(4,Text008);
+            DeleteBankComments(Rec);
+
+            GenJnlLine.RESET;
+            GenJnlLine.SETRANGE("Journal Template Name","Journal Template Name");
+            GenJnlLine.SETRANGE("Journal Batch Name","Journal Batch Name");
+            GenJnlLine.DELETEALL;
+            GenJnlBatch.GET("Journal Template Name","Journal Batch Name");
+            IF INCSTR("Journal Batch Name") <> '' THEN BEGIN
+              GenJnlBatch.GET("Journal Template Name","Journal Batch Name");
+              GenJnlBatch.DELETE;
+              GenJnlBatch.Name := INCSTR("Journal Batch Name");
+              IF GenJnlBatch.INSERT THEN;
+            END;
+
+            DELETE;
+            COMMIT;
+
+            UpdateAnalysisView.UpdateAll(0,TRUE);
+
+            OnAfterDepositPost(Rec,PostedDepositHeader);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      PostedDepositHeader@1020000 : Record 10143;
+      PostedDepositLine@1020002 : Record 10144;
+      SourceCodeSetup@1020016 : Record 242;
+      Currency@1020036 : Record 4;
+      Window@1020006 : Dialog;
+      GenJnlPostLine@1020007 : Codeunit 12;
+      Text000@1020013 : TextConst 'ENU=The %1 must match the %2.';
+      Text001@1020020 : TextConst 'ENU=Posting Deposit No. %1...\\';
+      Text002@1020021 : TextConst 'ENU=Deposit Line  #2########\';
+      Text003@1020024 : TextConst 'ENU=@3@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@';
+      Text004@1020025 : TextConst 'ENU=Status        #4###################\';
+      Text005@1020026 : TextConst 'ENU=Moving Deposit to History';
+      Text006@1020027 : TextConst 'ENU=Posting Lines to Ledgers';
+      Text007@1020028 : TextConst 'ENU=Posting Bank Entry';
+      Text008@1020029 : TextConst 'ENU=Removing Deposit Entry';
+
+    LOCAL PROCEDURE AddBalancingAccount@1020001(VAR GenJnlLine@1020000 : Record 81;DepositHeader@1020001 : Record 10140);
+    BEGIN
+      WITH GenJnlLine DO BEGIN
+        "Bal. Account Type" := "Bal. Account Type"::"Bank Account";
+        "Bal. Account No." := DepositHeader."Bank Account No.";
+        "Balance (LCY)" := 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE CopyBankComments@1020019(DepositHeader@1020000 : Record 10140);
+    VAR
+      BankCommentLine@1020001 : Record 10122;
+      BankCommentLine2@1020002 : Record 10122;
+    BEGIN
+      BankCommentLine.RESET;
+      BankCommentLine.SETRANGE("Table Name",BankCommentLine."Table Name"::Deposit);
+      BankCommentLine.SETRANGE("Bank Account No.",DepositHeader."Bank Account No.");
+      BankCommentLine.SETRANGE("No.",DepositHeader."No.");
+      IF BankCommentLine.FINDSET THEN
+        REPEAT
+          BankCommentLine2 := BankCommentLine;
+          BankCommentLine2."Table Name" := BankCommentLine2."Table Name"::"Posted Deposit";
+          BankCommentLine2.INSERT;
+        UNTIL BankCommentLine.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE DeleteBankComments@1020020(DepositHeader@1020000 : Record 10140);
+    VAR
+      BankCommentLine@1020001 : Record 10122;
+    BEGIN
+      BankCommentLine.RESET;
+      BankCommentLine.SETRANGE("Table Name",BankCommentLine."Table Name"::Deposit);
+      BankCommentLine.SETRANGE("Bank Account No.",DepositHeader."Bank Account No.");
+      BankCommentLine.SETRANGE("No.",DepositHeader."No.");
+      BankCommentLine.DELETEALL;
+    END;
+
+    LOCAL PROCEDURE InsertPostedDepositHeader@1020013(VAR DepositHeader@1020000 : Record 10140);
+    VAR
+      RecordLinkManagement@1020002 : Codeunit 447;
+    BEGIN
+      PostedDepositHeader.RESET;
+      PostedDepositHeader.TRANSFERFIELDS(DepositHeader,TRUE);
+      PostedDepositHeader."No. Printed" := 0;
+      OnBeforePostedDepositHeaderInsert(PostedDepositHeader,DepositHeader);
+      PostedDepositHeader.INSERT;
+      RecordLinkManagement.CopyLinks(DepositHeader,PostedDepositHeader);
+    END;
+
+    LOCAL PROCEDURE InsertPostedDepositLine@1020014(DepositHeader@1020000 : Record 10140;GenJnlLine@1020002 : Record 81;LineNo@1020001 : Integer);
+    BEGIN
+      WITH PostedDepositLine DO BEGIN
+        "Deposit No." := DepositHeader."No.";
+        "Line No." := LineNo;
+        "Account Type" := GenJnlLine."Account Type";
+        "Account No." := GenJnlLine."Account No.";
+        "Document Date" := GenJnlLine."Document Date";
+        "Document Type" := GenJnlLine."Document Type";
+        "Document No." := GenJnlLine."Document No.";
+        Description := GenJnlLine.Description;
+        "Currency Code" := GenJnlLine."Currency Code";
+        Amount := -GenJnlLine.Amount;
+        "Posting Group" := GenJnlLine."Posting Group";
+        "Shortcut Dimension 1 Code" := GenJnlLine."Shortcut Dimension 1 Code";
+        "Shortcut Dimension 2 Code" := GenJnlLine."Shortcut Dimension 2 Code";
+        "Dimension Set ID" := GenJnlLine."Dimension Set ID";
+        "Posting Date" := DepositHeader."Posting Date";
+        OnBeforePostedDepositLineInsert(PostedDepositLine,GenJnlLine);
+        INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE PostBalancingEntry@1020012(DepositHeader@1020001 : Record 10140;TotalAmountLCY@1020002 : Decimal);
+    VAR
+      GenJnlLine@1020000 : Record 81;
+    BEGIN
+      WITH GenJnlLine DO BEGIN
+        INIT;
+        "Account Type" := "Account Type"::"Bank Account";
+        "Account No." := DepositHeader."Bank Account No.";
+        "Posting Date" := DepositHeader."Posting Date";
+        "Document No." := DepositHeader."No.";
+        "Currency Code" := DepositHeader."Currency Code";
+        "Currency Factor" := DepositHeader."Currency Factor";
+        "Posting Group" := DepositHeader."Bank Acc. Posting Group";
+        "Shortcut Dimension 1 Code" := DepositHeader."Shortcut Dimension 1 Code";
+        "Shortcut Dimension 2 Code" := DepositHeader."Shortcut Dimension 2 Code";
+        "Dimension Set ID" := DepositHeader."Dimension Set ID";
+        "Source Code" := SourceCodeSetup.Deposits;
+        "Reason Code" := DepositHeader."Reason Code";
+        "Document Date" := DepositHeader."Document Date";
+        "External Document No." := DepositHeader."No.";
+        "Source Type" := "Source Type"::"Bank Account";
+        "Source No." := DepositHeader."Bank Account No.";
+        "Source Currency Code" := DepositHeader."Currency Code";
+        Description := DepositHeader."Posting Description";
+        Amount := DepositHeader."Total Deposit Amount";
+        "Source Currency Amount" := DepositHeader."Total Deposit Amount";
+        VALIDATE(Amount);
+        "Amount (LCY)" := -TotalAmountLCY;
+        OnBeforePostBalancingEntry(GenJnlLine,DepositHeader);
+        GenJnlPostLine.RunWithCheck(GenJnlLine);
+      END;
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterCheckDeposit@1020003(DepositHeader@1020000 : Record 10140);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterDepositPost@1020007(DepositHeader@1020000 : Record 10140;VAR PostedDepositHeader@1020001 : Record 10143);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeDepositPost@1020002(VAR DepositHeader@1020000 : Record 10140);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforePostBalancingEntry@1020006(VAR GenJnlLine@1020000 : Record 81;DepositHeader@1020001 : Record 10140);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforePostGenJnlLine@1020004(VAR GenJnlLine@1020000 : Record 81;DepositHeader@1020001 : Record 10140);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforePostedDepositHeaderInsert@1020008(VAR PostedDepositHeader@1020000 : Record 10143;DepositHeader@1020001 : Record 10140);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforePostedDepositLineInsert@1020000(VAR PostedDepositLine@1020000 : Record 10144;GenJnlLine@1020001 : Record 81);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforePostedDepositLineModify@1020005(VAR PostedDepositLine@1020001 : Record 10144;GenJnlLine@1020000 : Record 81);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

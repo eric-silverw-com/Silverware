@@ -1,0 +1,203 @@
+OBJECT Report 188 Create Reminders
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:12:50 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Create Reminders;
+    ProcessingOnly=Yes;
+    OnInitReport=BEGIN
+                   OverdueEntriesOnly := TRUE;
+                 END;
+
+    OnPreReport=BEGIN
+                  CustLedgEntry.COPY(CustLedgEntry2);
+                  IF CustLedgEntryLineFeeOnFilters.GETFILTERS <> '' THEN
+                    CustLedgEntryLineFeeOn.COPYFILTERS(CustLedgEntryLineFeeOnFilters);
+                END;
+
+  }
+  DATASET
+  {
+    { 6836;    ;DataItem;                    ;
+               DataItemTable=Table18;
+               DataItemTableView=SORTING(No.);
+               OnPreDataItem=VAR
+                               SalesSetup@1000 : Record 311;
+                             BEGIN
+                               IF ReminderHeaderReq."Document Date" = 0D THEN
+                                 ERROR(Text000,ReminderHeaderReq.FIELDCAPTION("Document Date"));
+                               FILTERGROUP := 2;
+                               SETFILTER("Reminder Terms Code",'<>%1','');
+                               FILTERGROUP := 0;
+                               NoOfRecords := COUNT;
+                               SalesSetup.GET;
+                               SalesSetup.TESTFIELD("Reminder Nos.");
+                               IF NoOfRecords = 1 THEN
+                                 Window.OPEN(Text001)
+                               ELSE BEGIN
+                                 Window.OPEN(Text002);
+                                 OldDateTime := CURRENTDATETIME;
+                               END;
+                               ReminderHeaderReq."Use Header Level" := UseHeaderLevel;
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  RecordNo := RecordNo + 1;
+                                  CLEAR(MakeReminder);
+                                  MakeReminder.Set(Customer,CustLedgEntry,ReminderHeaderReq,OverdueEntriesOnly,IncludeEntriesOnHold,CustLedgEntryLineFeeOn);
+                                  IF NoOfRecords = 1 THEN BEGIN
+                                    MakeReminder.Code;
+                                    MARK := FALSE;
+                                  END ELSE BEGIN
+                                    NewDateTime := CURRENTDATETIME;
+                                    IF (NewDateTime - OldDateTime > 100) OR (NewDateTime < OldDateTime) THEN BEGIN
+                                      NewProgress := ROUND(RecordNo / NoOfRecords * 100,1);
+                                      IF NewProgress <> OldProgress THEN BEGIN
+                                        Window.UPDATE(1,NewProgress * 100);
+                                        OldProgress := NewProgress;
+                                      END;
+                                      OldDateTime := CURRENTDATETIME;
+                                    END;
+                                    MARK := NOT MakeReminder.Code;
+                                  END;
+                                END;
+
+               OnPostDataItem=BEGIN
+                                Window.CLOSE;
+                                MARKEDONLY := TRUE;
+                                COMMIT;
+                                IF FIND('-') THEN
+                                  IF CONFIRM(Text003,TRUE) THEN
+                                    PAGE.RUNMODAL(0,Customer);
+                              END;
+
+               ReqFilterFields=No. }
+
+    { 9065;    ;DataItem;CustLedgEntry2      ;
+               DataItemTable=Table21;
+               DataItemTableView=SORTING(Customer No.);
+               OnPreDataItem=BEGIN
+                               CurrReport.BREAK;
+                             END;
+
+               ReqFilterFields=Document Type }
+
+    { 1000;    ;DataItem;CustLedgEntryLineFeeOn;
+               DataItemTable=Table21;
+               DataItemTableView=SORTING(Entry No.)
+                                 ORDER(Ascending);
+               ReqFilterHeadingML=ENU=Apply Fee per Line On;
+               OnPreDataItem=BEGIN
+                               CurrReport.BREAK;
+                             END;
+
+               ReqFilterFields=Document Type }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      SaveValues=Yes;
+      OnOpenPage=BEGIN
+                   IF ReminderHeaderReq."Document Date" = 0D THEN BEGIN
+                     ReminderHeaderReq."Document Date" := WORKDATE;
+                     ReminderHeaderReq."Posting Date" := WORKDATE;
+                   END;
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=ENU=Options }
+
+      { 3   ;2   ;Field     ;
+                  CaptionML=ENU=Posting Date;
+                  ToolTipML=ENU=Specifies the date that will appear as the posting date on the header of the reminder that is created by the batch job.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=ReminderHeaderReq."Posting Date" }
+
+      { 1   ;2   ;Field     ;
+                  Name=DocumentDate;
+                  CaptionML=ENU=Document Date;
+                  ToolTipML=ENU=Specifies the date that will appear as the document date on the header of the reminder that is created by the batch job. This date is used for any interest calculations and to determine the due date of the reminder.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=ReminderHeaderReq."Document Date" }
+
+      { 5   ;2   ;Field     ;
+                  CaptionML=ENU=Only Entries with Overdue Amounts;
+                  ToolTipML=ENU=Specifies if the batch job will only insert open entries that are overdue, meaning they have a due date earlier than the document date on the reminder header.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=OverdueEntriesOnly;
+                  MultiLine=Yes }
+
+      { 1102601001;2;Field  ;
+                  CaptionML=ENU=Include Entries On Hold;
+                  ToolTipML=ENU=Specifies if you want to create reminders for entries that are on hold.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=IncludeEntriesOnHold }
+
+      { 7   ;2   ;Field     ;
+                  CaptionML=ENU=Use Header Level;
+                  ToolTipML=ENU=Specifies if the batch job will apply the condition of the reminder level to all the reminder lines.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=UseHeaderLevel }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=%1 must be specified.';
+      Text001@1001 : TextConst 'ENU=Making reminders...';
+      Text002@1002 : TextConst 'ENU=Making reminders @1@@@@@@@@@@@@@';
+      Text003@1003 : TextConst 'ENU=It was not possible to create reminders for some of the selected customers.\Do you want to see these customers?';
+      CustLedgEntry@1005 : Record 21;
+      ReminderHeaderReq@1006 : Record 295;
+      CustLedgEntryLineFeeOnFilters@1004 : Record 21;
+      MakeReminder@1007 : Codeunit 392;
+      Window@1008 : Dialog;
+      NoOfRecords@1009 : Integer;
+      RecordNo@1010 : Integer;
+      NewProgress@1011 : Integer;
+      OldProgress@1012 : Integer;
+      NewDateTime@1013 : DateTime;
+      OldDateTime@1014 : DateTime;
+      OverdueEntriesOnly@1015 : Boolean;
+      UseHeaderLevel@1016 : Boolean;
+      IncludeEntriesOnHold@1102601000 : Boolean;
+
+    PROCEDURE InitializeRequest@1(DocumentDate@1000 : Date;PostingDate@1001 : Date;OverdueEntries@1002 : Boolean;NewUseHeaderLevel@1003 : Boolean;IncludeEntries@1004 : Boolean);
+    BEGIN
+      ReminderHeaderReq."Document Date" := DocumentDate;
+      ReminderHeaderReq."Posting Date" := PostingDate;
+      OverdueEntriesOnly := OverdueEntries;
+      UseHeaderLevel := NewUseHeaderLevel;
+      IncludeEntriesOnHold := IncludeEntries;
+    END;
+
+    PROCEDURE SetApplyLineFeeOnFilters@1000(VAR CustLedgEntryLineFeeOn2@1000 : Record 21);
+    BEGIN
+      CustLedgEntryLineFeeOnFilters.COPYFILTERS(CustLedgEntryLineFeeOn2);
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

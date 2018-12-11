@@ -1,0 +1,312 @@
+OBJECT Codeunit 6300 Azure AD Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:38 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      AzureADAppSetup@1001 : Record 6300;
+      TypeHelper@1005 : Codeunit 10;
+      AzureADNotSetupErr@1006 : TextConst '@@@=%1 - product name;ENU=%1 is not registered in your Azure Active Directory tenant.';
+      AzureAdSetupTxt@1009 : TextConst 'ENU=Set Up Azure Active Directory Application';
+      AzureADAuthEndpointTxt@1003 : TextConst '@@@={Locked};ENU=https://login.windows.net/common/oauth2/authorize';
+      AzureADAuthEndpointPPETxt@1002 : TextConst '@@@={Locked};ENU=https://login.windows-ppe.net/common/oauth2/authorize';
+      O365ResourceTxt@1008 : TextConst '@@@={Locked};ENU=https://outlook.office365.com';
+      O365ResourcePPETxt@1000 : TextConst '@@@={Locked};ENU=https://edgesdf.outlook.com';
+      O365ResourceNameTxt@1010 : TextConst '@@@={Locked};ENU=Office 365 Services';
+      OAuthLandingPageTxt@1007 : TextConst '@@@={Locked};ENU=OAuthLanding.htm';
+
+    PROCEDURE GetAuthCodeUrl@1(ResourceName@1002 : Text) AuthCodeUrl : Text;
+    BEGIN
+      // Pass ResourceName as empty string if you want to authorize all azure resources.
+      AuthCodeUrl := GetAzureADAuthEndpoint;
+      AuthCodeUrl += '?response_type=code';
+      AuthCodeUrl += '&client_id=' + UrlEncode(GetClientId);
+      IF ResourceName <> '' THEN
+        AuthCodeUrl += '&resource=' + UrlEncode(ResourceName);
+      AuthCodeUrl += '&redirect_uri=' + UrlEncode(GetRedirectUrl);
+    END;
+
+    LOCAL PROCEDURE AcquireTokenByAuthorizationCode@2(AuthorizationCode@1000 : Text;ResourceUrl@1001 : Text) AccessToken : Text;
+    VAR
+      AzureADAuthFlow@1002 : Codeunit 6303;
+    BEGIN
+      // This will return access token and also cache it for future use.
+      AzureADAuthFlow.Initialize(GetRedirectUrl);
+
+      IF IsSaaS THEN
+        AccessToken := AzureADAuthFlow.AcquireTokenByAuthorizationCode(AuthorizationCode,ResourceUrl)
+      ELSE BEGIN
+        AzureADAppSetup.FINDFIRST;
+        AccessToken := AzureADAuthFlow.AcquireTokenByAuthorizationCodeWithCredentials(
+            AuthorizationCode,
+            GetClientId,
+            AzureADAppSetup.GetSecretKey,
+            ResourceUrl);
+      END;
+    END;
+
+    PROCEDURE GetAccessToken@5(ResourceUrl@1001 : Text;ResourceName@1004 : Text;ShowDialog@1003 : Boolean) AccessToken : Text;
+    VAR
+      AzureADAccessDialog@1005 : Page 6302;
+      AuthorizationCode@1000 : Text;
+    BEGIN
+      // Does everything required to retrieve an access token for the given service, including
+      // showing the Azure AD wizard and auth code retrieval form if necessary.
+      IF (NOT IsAzureADAppSetupDone ) AND ShowDialog THEN BEGIN
+        PAGE.RUNMODAL(PAGE::"Azure AD App Setup Wizard");
+        IF NOT IsAzureADAppSetupDone THEN
+          // Don't continue if user cancelled or errored out of the setup wizard.
+          EXIT('');
+      END;
+
+      IF AcquireToken(ResourceUrl,AccessToken) THEN BEGIN
+        IF AccessToken <> '' THEN
+          EXIT(AccessToken);
+      END;
+
+      IF ShowDialog THEN
+        AuthorizationCode := AzureADAccessDialog.GetAuthorizationCode(ResourceUrl,ResourceName);
+      IF AuthorizationCode <> '' THEN
+        AccessToken := AcquireTokenByAuthorizationCode(AuthorizationCode,ResourceUrl);
+    END;
+
+    PROCEDURE GetGuestAccessToken@13(ResourceUrl@1000 : Text;GuestTenantId@1002 : Text) AccessToken : Text;
+    BEGIN
+      // Gets an access token for a guest user on a different tenant
+      IF AcquireGuestToken(ResourceUrl,GuestTenantId,AccessToken) THEN BEGIN
+        IF AccessToken <> '' THEN
+          EXIT(AccessToken);
+      END;
+    END;
+
+    PROCEDURE GetOnBehalfAccessToken@12(ResourceUrl@1001 : Text) : Text;
+    VAR
+      AzureADAuthFlow@1002 : Codeunit 6303;
+    BEGIN
+      AzureADAuthFlow.Initialize(GetRedirectUrl);
+      EXIT(AzureADAuthFlow.AcquireOnBehalfOfToken(ResourceUrl));
+    END;
+
+    PROCEDURE GetOnBehalfAccessTokenAndRefreshToken@20(ResourceUrl@1001 : Text;VAR RefreshToken@1000 : Text) : Text;
+    VAR
+      AzureADAuthFlow@1002 : Codeunit 6303;
+    BEGIN
+      AzureADAuthFlow.Initialize(GetRedirectUrl);
+      EXIT(AzureADAuthFlow.AcquireOnBehalfOfTokenAndRefreshToken(ResourceUrl,RefreshToken));
+    END;
+
+    PROCEDURE GetTokenFromRefreshToken@21(RefreshToken@1001 : Text;VAR NewRefreshToken@1000 : Text) : Text;
+    VAR
+      AzureADAuthFlow@1002 : Codeunit 6303;
+    BEGIN
+      AzureADAuthFlow.Initialize(GetRedirectUrl);
+      EXIT(AzureADAuthFlow.AcquireTokenFromRefreshToken(RefreshToken,NewRefreshToken));
+    END;
+
+    LOCAL PROCEDURE UrlEncode@7(UrlComponent@1000 : Text) : Text;
+    VAR
+      HttpUtility@1001 : DotNet "'System.Web, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Web.HttpUtility";
+    BEGIN
+      EXIT(HttpUtility.UrlEncode(UrlComponent));
+    END;
+
+    [External]
+    PROCEDURE GetAzureADAuthEndpoint@3() : Text;
+    BEGIN
+      IF IsPPE THEN
+        EXIT(AzureADAuthEndpointPPETxt);
+
+      EXIT(AzureADAuthEndpointTxt);
+    END;
+
+    PROCEDURE GetDefaultRedirectUrl@18() : Text[150];
+    VAR
+      UriBuilder@1003 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.UriBuilder";
+      PathString@1002 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.String";
+    BEGIN
+      // Due to a bug in ADAL 2.9, it will not consider URI's to be equal if one URI specified the default port number (ex: 443 for HTTPS)
+      // and the other did not. UriBuilder(...).Uri.ToString() is a way to remove any protocol-default port numbers, such as 80 for HTTP
+      // and 443 for HTTPS. This bug appears to be fixed in ADAL 3.1+.
+      UriBuilder := UriBuilder.UriBuilder(GETURL(CLIENTTYPE::Web));
+
+      // Append a '/' character to the end of the path if one does not exist already.
+      PathString := UriBuilder.Path;
+      IF PathString.LastIndexOf('/') < (PathString.Length - 1) THEN
+        UriBuilder.Path := UriBuilder.Path + '/';
+
+      // Append the desired redirect page to the path.
+      UriBuilder.Path := UriBuilder.Path + OAuthLandingPageTxt;
+      UriBuilder.Query := '';
+
+      // Pull out the full URL by the URI and convert it to a string.
+      EXIT(UriBuilder.Uri.ToString);
+    END;
+
+    PROCEDURE GetRedirectUrl@4() : Text[150];
+    BEGIN
+      IF NOT IsSaaS AND NOT AzureADAppSetup.ISEMPTY THEN BEGIN
+        // Use existing redirect URL if already in table - necessary for Windows client which would otherwise
+        // generate a different URL for each computer and thus not match the company's Azure application.
+        AzureADAppSetup.FINDFIRST;
+        EXIT(AzureADAppSetup."Redirect URL");
+      END;
+
+      EXIT(GetDefaultRedirectUrl);
+    END;
+
+    [External]
+    PROCEDURE GetO365Resource@15() Resource : Text;
+    BEGIN
+      IF IsPPE THEN
+        Resource := O365ResourcePPETxt
+      ELSE
+        Resource := O365ResourceTxt;
+    END;
+
+    [External]
+    PROCEDURE GetO365ResourceName@17() : Text;
+    BEGIN
+      EXIT(O365ResourceNameTxt);
+    END;
+
+    [External]
+    PROCEDURE IsSaaS@6() : Boolean;
+    VAR
+      PermissionManager@1000 : Codeunit 9002;
+    BEGIN
+      EXIT(PermissionManager.SoftwareAsAService);
+    END;
+
+    LOCAL PROCEDURE GetClientId@11() ClientID : Text;
+    VAR
+      AzureADAuthFlow@1001 : Codeunit 6303;
+    BEGIN
+      IF IsSaaS THEN BEGIN
+        AzureADAuthFlow.Initialize(GetRedirectUrl);
+        ClientID := AzureADAuthFlow.GetSaasClientId;
+      END ELSE BEGIN
+        IF AzureADAppSetup.ISEMPTY THEN
+          ERROR(AzureADNotSetupErr,PRODUCTNAME.SHORT);
+
+        AzureADAppSetup.FINDFIRST;
+        ClientID := TypeHelper.GetGuidAsString(AzureADAppSetup."App ID");
+      END;
+    END;
+
+    PROCEDURE GetInitialTenantDomainName@22() InitialTenantDomainName : Text;
+    VAR
+      AzureADAuthFlow@1000 : Codeunit 6303;
+    BEGIN
+      IF IsSaaS THEN BEGIN
+        AzureADAuthFlow.Initialize(GetRedirectUrl);
+        InitialTenantDomainName := AzureADAuthFlow.GetInitialTenantDomainName;
+      END;
+    END;
+
+    [External]
+    PROCEDURE IsAzureADAppSetupDone@8() : Boolean;
+    BEGIN
+      IF (NOT IsSaaS) AND AzureADAppSetup.ISEMPTY THEN
+        EXIT(FALSE);
+
+      EXIT(TRUE);
+    END;
+
+    [EventSubscriber(Codeunit,2,OnCompanyInitialize)]
+    [External]
+    PROCEDURE CreateAssistedSetup@9();
+    VAR
+      AssistedSetup@1000 : Record 1803;
+      NewOrderNumber@1001 : Integer;
+    BEGIN
+      IF AssistedSetup.GET(PAGE::"Azure AD App Setup Wizard") THEN
+        EXIT;
+
+      AssistedSetup.LOCKTABLE;
+      AssistedSetup.SETCURRENTKEY(Order,Visible);
+      IF AssistedSetup.FINDLAST THEN
+        NewOrderNumber := AssistedSetup.Order + 1
+      ELSE
+        NewOrderNumber := 1;
+
+      CLEAR(AssistedSetup);
+      AssistedSetup.INIT;
+      AssistedSetup.VALIDATE("Page ID",PAGE::"Azure AD App Setup Wizard");
+      AssistedSetup.VALIDATE(Name,AzureAdSetupTxt);
+      AssistedSetup.VALIDATE(Order,NewOrderNumber);
+      IF IsAzureADAppSetupDone THEN
+        AssistedSetup.VALIDATE(Status,AssistedSetup.Status::Completed)
+      ELSE
+        AssistedSetup.VALIDATE(Status,AssistedSetup.Status::"Not Completed");
+      AssistedSetup.VALIDATE(Visible,NOT IsSaaS);
+      AssistedSetup.INSERT(TRUE);
+    END;
+
+    PROCEDURE CreateExchangeServiceWrapperWithToken@14(Token@1000 : Text;VAR Service@1002 : DotNet "'Microsoft.Dynamics.Nav.EwsWrapper, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.Exchange.ExchangeServiceWrapper");
+    VAR
+      AzureADAuthFlow@1001 : Codeunit 6303;
+    BEGIN
+      AzureADAuthFlow.CreateExchangeServiceWrapperWithToken(Token,Service);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE AcquireGuestToken@19(ResourceName@1000 : Text;GuestTenantId@1001 : Text;VAR AccessToken@1002 : Text);
+    VAR
+      AzureADAuthFlow@1003 : Codeunit 6303;
+    BEGIN
+      IF IsSaaS THEN BEGIN
+        // This is SaaS-only functionality at this point, so On-Prem/PaaS will not retrieve an access token
+        AzureADAuthFlow.Initialize(GetRedirectUrl);
+        AccessToken := AzureADAuthFlow.AcquireGuestToken(ResourceName,GuestTenantId);
+      END ELSE
+        AccessToken := '';
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE AcquireToken@16(ResourceName@1001 : Text;VAR AccessToken@1007 : Text);
+    VAR
+      AzureADAuthFlow@1000 : Codeunit 6303;
+    BEGIN
+      // This function will return access token for a resource
+      // Need to run the Azure AD Setup wizard before calling into this.
+      // Returns empty string if access token not available
+
+      AzureADAuthFlow.Initialize(GetRedirectUrl);
+
+      IF IsSaaS THEN
+        AccessToken := AzureADAuthFlow.AcquireTokenFromCache(ResourceName)
+      ELSE BEGIN
+        AzureADAppSetup.FINDFIRST;
+        AccessToken := AzureADAuthFlow.AcquireTokenFromCacheWithCredentials(
+            GetClientId,
+            AzureADAppSetup.GetSecretKey,
+            ResourceName);
+      END;
+    END;
+
+    LOCAL PROCEDURE IsPPE@10() : Boolean;
+    VAR
+      EnvironmentMgt@1000 : Codeunit 9005;
+    BEGIN
+      EXIT(EnvironmentMgt.IsPPE);
+    END;
+
+    BEGIN
+    {
+      // Provides functions to authorize NAV app to use Azure Active Directory resources on behalf of a user.
+    }
+    END.
+  }
+}
+

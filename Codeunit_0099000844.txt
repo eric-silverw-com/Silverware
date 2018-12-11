@@ -1,0 +1,263 @@
+OBJECT Codeunit 99000844 Job Jnl. Line-Reserve
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:09:39 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 337=rimd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text002@1001 : TextConst 'ENU=must be filled in when a quantity is reserved.';
+      Text004@1003 : TextConst 'ENU=must not be changed when a quantity is reserved.';
+      ReservMgt@1006 : Codeunit 99000845;
+      CreateReservEntry@1007 : Codeunit 99000830;
+      ReservEngineMgt@1008 : Codeunit 99000831;
+      DeleteItemTracking@1005 : Boolean;
+
+    LOCAL PROCEDURE FilterReservFor@9(VAR FilterReservEntry@1000 : Record 337;JobJnlLine@1001 : Record 210);
+    BEGIN
+      FilterReservEntry.SetSourceFilter(
+        DATABASE::"Job Journal Line",JobJnlLine."Entry Type",JobJnlLine."Journal Template Name",JobJnlLine."Line No.",FALSE);
+      FilterReservEntry.SetSourceFilter2(JobJnlLine."Journal Batch Name",0);
+    END;
+
+    LOCAL PROCEDURE FindReservEntry@1(JobJnlLine@1000 : Record 210;VAR ReservEntry@1001 : Record 337) : Boolean;
+    BEGIN
+      ReservEngineMgt.InitFilterAndSortingLookupFor(ReservEntry,FALSE);
+      FilterReservFor(ReservEntry,JobJnlLine);
+      EXIT(ReservEntry.FIND('+'));
+    END;
+
+    LOCAL PROCEDURE ReservEntryExist@11(JobJnlLine@1000 : Record 210) : Boolean;
+    VAR
+      ReservEntry@1001 : Record 337;
+    BEGIN
+      ReservEngineMgt.InitFilterAndSortingLookupFor(ReservEntry,FALSE);
+      FilterReservFor(ReservEntry,JobJnlLine);
+      ReservEntry.ClearTrackingFilter;
+      EXIT(NOT ReservEntry.ISEMPTY);
+    END;
+
+    [External]
+    PROCEDURE VerifyChange@62(VAR NewJobJnlLine@1000 : Record 210;VAR OldJobJnlLine@1001 : Record 210);
+    VAR
+      JobJnlLine@1005 : Record 210;
+      TempReservEntry@1002 : Record 337;
+      ShowError@1003 : Boolean;
+      HasError@1004 : Boolean;
+      PointerChanged@1009 : Boolean;
+    BEGIN
+      IF NewJobJnlLine."Line No." = 0 THEN
+        IF NOT JobJnlLine.GET(
+             NewJobJnlLine."Journal Template Name",
+             NewJobJnlLine."Journal Batch Name",
+             NewJobJnlLine."Line No.")
+        THEN
+          EXIT;
+
+      NewJobJnlLine.CALCFIELDS("Reserved Qty. (Base)");
+      ShowError := NewJobJnlLine."Reserved Qty. (Base)" <> 0;
+
+      IF NewJobJnlLine."Posting Date" = 0D THEN
+        IF NOT ShowError THEN
+          HasError := TRUE
+        ELSE
+          NewJobJnlLine.FIELDERROR("Posting Date",Text002);
+
+      IF NewJobJnlLine."Job No." <> OldJobJnlLine."Job No." THEN
+        IF NOT ShowError THEN
+          HasError := TRUE
+        ELSE
+          NewJobJnlLine.FIELDERROR("Job No.",Text004);
+
+      IF NewJobJnlLine."Entry Type" <> OldJobJnlLine."Entry Type" THEN
+        IF NOT ShowError THEN
+          HasError := TRUE
+        ELSE
+          NewJobJnlLine.FIELDERROR("Entry Type",Text004);
+
+      IF NewJobJnlLine."Location Code" <> OldJobJnlLine."Location Code" THEN
+        IF NOT ShowError THEN
+          HasError := TRUE
+        ELSE
+          NewJobJnlLine.FIELDERROR("Location Code",Text004);
+
+      IF (NewJobJnlLine.Type = NewJobJnlLine.Type::Item) AND (OldJobJnlLine.Type = OldJobJnlLine.Type::Item) THEN
+        IF (NewJobJnlLine."Bin Code" <> OldJobJnlLine."Bin Code") AND
+           (NOT ReservMgt.CalcIsAvailTrackedQtyInBin(
+              NewJobJnlLine."No.",NewJobJnlLine."Bin Code",
+              NewJobJnlLine."Location Code",NewJobJnlLine."Variant Code",
+              DATABASE::"Job Journal Line",NewJobJnlLine."Entry Type",
+              NewJobJnlLine."Journal Template Name",NewJobJnlLine."Journal Batch Name",0,NewJobJnlLine."Line No."))
+        THEN BEGIN
+          IF ShowError THEN
+            NewJobJnlLine.FIELDERROR("Bin Code",Text004);
+          HasError := TRUE;
+        END;
+
+      IF NewJobJnlLine."Variant Code" <> OldJobJnlLine."Variant Code" THEN
+        IF NOT ShowError THEN
+          HasError := TRUE
+        ELSE
+          NewJobJnlLine.FIELDERROR("Variant Code",Text004);
+
+      IF NewJobJnlLine."Line No." <> OldJobJnlLine."Line No." THEN
+        HasError := TRUE;
+
+      IF NewJobJnlLine."No." <> OldJobJnlLine."No." THEN
+        HasError := TRUE;
+
+      OnVerifyChangeOnBeforeHasError(NewJobJnlLine,OldJobJnlLine,HasError,ShowError);
+
+      IF HasError THEN BEGIN
+        FindReservEntry(NewJobJnlLine,TempReservEntry);
+        TempReservEntry.ClearTrackingFilter;
+
+        PointerChanged := (NewJobJnlLine."Job No." <> OldJobJnlLine."Job No.") OR
+          (NewJobJnlLine."Entry Type" <> OldJobJnlLine."Entry Type") OR
+          (NewJobJnlLine."No." <> OldJobJnlLine."No.");
+
+        IF PointerChanged OR
+           (NOT TempReservEntry.ISEMPTY)
+        THEN BEGIN
+          IF PointerChanged THEN BEGIN
+            ReservMgt.SetJobJnlLine(OldJobJnlLine);
+            ReservMgt.DeleteReservEntries(TRUE,0);
+            ReservMgt.SetJobJnlLine(NewJobJnlLine);
+          END ELSE BEGIN
+            ReservMgt.SetJobJnlLine(NewJobJnlLine);
+            ReservMgt.DeleteReservEntries(TRUE,0);
+          END;
+          ReservMgt.AutoTrack(NewJobJnlLine."Quantity (Base)");
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE VerifyQuantity@3(VAR NewJobJnlLine@1001 : Record 210;VAR OldJobJnlLine@1000 : Record 210);
+    VAR
+      JobJnlLine@1002 : Record 210;
+    BEGIN
+      WITH NewJobJnlLine DO BEGIN
+        IF "Line No." = OldJobJnlLine."Line No." THEN
+          IF "Quantity (Base)" = OldJobJnlLine."Quantity (Base)" THEN
+            EXIT;
+        IF "Line No." = 0 THEN
+          IF NOT JobJnlLine.GET("Journal Template Name","Journal Batch Name","Line No.") THEN
+            EXIT;
+        ReservMgt.SetJobJnlLine(NewJobJnlLine);
+        IF "Qty. per Unit of Measure" <> OldJobJnlLine."Qty. per Unit of Measure" THEN
+          ReservMgt.ModifyUnitOfMeasure;
+        IF "Quantity (Base)" * OldJobJnlLine."Quantity (Base)" < 0 THEN
+          ReservMgt.DeleteReservEntries(TRUE,0)
+        ELSE
+          ReservMgt.DeleteReservEntries(FALSE,"Quantity (Base)");
+      END;
+    END;
+
+    [External]
+    PROCEDURE RenameLine@10(VAR NewJobJnlLine@1000 : Record 210;VAR OldJobJnlLine@1001 : Record 210);
+    BEGIN
+      ReservEngineMgt.RenamePointer(DATABASE::"Job Journal Line",
+        OldJobJnlLine."Entry Type",
+        OldJobJnlLine."Journal Template Name",
+        OldJobJnlLine."Journal Batch Name",
+        0,
+        OldJobJnlLine."Line No.",
+        NewJobJnlLine."Entry Type",
+        NewJobJnlLine."Journal Template Name",
+        NewJobJnlLine."Journal Batch Name",
+        0,
+        NewJobJnlLine."Line No.");
+    END;
+
+    [External]
+    PROCEDURE DeleteLineConfirm@20(VAR JobJnlLine@1000 : Record 210) : Boolean;
+    BEGIN
+      WITH JobJnlLine DO BEGIN
+        IF NOT ReservEntryExist(JobJnlLine) THEN
+          EXIT(TRUE);
+
+        ReservMgt.SetJobJnlLine(JobJnlLine);
+        IF ReservMgt.DeleteItemTrackingConfirm THEN
+          DeleteItemTracking := TRUE;
+      END;
+
+      EXIT(DeleteItemTracking);
+    END;
+
+    [External]
+    PROCEDURE DeleteLine@2(VAR JobJnlLine@1000 : Record 210);
+    BEGIN
+      WITH JobJnlLine DO
+        IF Type = Type::Item THEN BEGIN
+          ReservMgt.SetJobJnlLine(JobJnlLine);
+          IF DeleteItemTracking THEN
+            ReservMgt.SetItemTrackingHandling(1); // Allow Deletion
+          ReservMgt.DeleteReservEntries(TRUE,0);
+        END;
+    END;
+
+    [External]
+    PROCEDURE CallItemTracking@14(VAR JobJnlLine@1000 : Record 210;IsReclass@1003 : Boolean);
+    VAR
+      TrackingSpecification@1001 : Record 336;
+      ItemTrackingLines@1002 : Page 6510;
+    BEGIN
+      TrackingSpecification.InitFromJobJnlLine(JobJnlLine);
+      IF IsReclass THEN
+        ItemTrackingLines.SetFormRunMode(1);
+      ItemTrackingLines.SetSourceSpec(TrackingSpecification,JobJnlLine."Posting Date");
+      ItemTrackingLines.SetInbound(JobJnlLine.IsInbound);
+      ItemTrackingLines.RUNMODAL;
+    END;
+
+    [External]
+    PROCEDURE TransJobJnlLineToItemJnlLine@35(VAR JobJnlLine@1000 : Record 210;VAR ItemJnlLine@1001 : Record 83;TransferQty@1002 : Decimal) : Decimal;
+    VAR
+      OldReservEntry@1003 : Record 337;
+    BEGIN
+      IF NOT FindReservEntry(JobJnlLine,OldReservEntry) THEN
+        EXIT(TransferQty);
+      OldReservEntry.Lock;
+      // Handle Item Tracking on drop shipment:
+      CLEAR(CreateReservEntry);
+
+      ItemJnlLine.TestItemFields(JobJnlLine."No.",JobJnlLine."Variant Code",JobJnlLine."Location Code");
+
+      IF TransferQty = 0 THEN
+        EXIT;
+
+      IF ReservEngineMgt.InitRecordSet(OldReservEntry) THEN
+        REPEAT
+          OldReservEntry.TestItemFields(JobJnlLine."No.",JobJnlLine."Variant Code",JobJnlLine."Location Code");
+
+          TransferQty := CreateReservEntry.TransferReservEntry(DATABASE::"Item Journal Line",
+              ItemJnlLine."Entry Type",ItemJnlLine."Journal Template Name",
+              ItemJnlLine."Journal Batch Name",0,ItemJnlLine."Line No.",
+              ItemJnlLine."Qty. per Unit of Measure",OldReservEntry,TransferQty);
+
+        UNTIL (ReservEngineMgt.NEXTRecord(OldReservEntry) = 0) OR (TransferQty = 0);
+
+      EXIT(TransferQty);
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnVerifyChangeOnBeforeHasError@16(NewJobJnlLine@1000 : Record 210;OldJobJnlLine@1001 : Record 210;VAR HasError@1002 : Boolean;VAR ShowError@1003 : Boolean);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

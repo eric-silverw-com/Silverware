@@ -1,0 +1,144 @@
+OBJECT Codeunit 91 Purch.-Post (Yes/No)
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:07:51 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    TableNo=38;
+    EventSubscriberInstance=Manual;
+    OnRun=VAR
+            PurchaseHeader@1000 : Record 38;
+          BEGIN
+            IF NOT FIND THEN
+              ERROR(NothingToPostErr);
+
+            PurchaseHeader.COPY(Rec);
+            Code(PurchaseHeader);
+            Rec := PurchaseHeader;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ReceiveInvoiceQst@1000 : TextConst 'ENU=&Receive,&Invoice,Receive &and Invoice';
+      PostConfirmQst@1001 : TextConst '@@@="%1 = Document Type";ENU=Do you want to post the %1?';
+      ShipInvoiceQst@1002 : TextConst 'ENU=&Ship,&Invoice,Ship &and Invoice';
+      NothingToPostErr@1007 : TextConst 'ENU=There is nothing to post.';
+
+    LOCAL PROCEDURE Code@1(VAR PurchaseHeader@1002 : Record 38);
+    VAR
+      PurchSetup@1000 : Record 312;
+      PurchPostViaJobQueue@1001 : Codeunit 98;
+      HideDialog@1003 : Boolean;
+      IsHandled@1004 : Boolean;
+    BEGIN
+      HideDialog := FALSE;
+      IsHandled := FALSE;
+      OnBeforeConfirmPost(PurchaseHeader,HideDialog,IsHandled);
+      IF  IsHandled THEN
+        EXIT;
+
+      IF NOT HideDialog THEN
+        IF NOT ConfirmPost(PurchaseHeader) THEN
+          EXIT;
+
+      OnAfterConfirmPost(PurchaseHeader);
+
+      PurchSetup.GET;
+      IF PurchSetup."Post with Job Queue" THEN
+        PurchPostViaJobQueue.EnqueuePurchDoc(PurchaseHeader)
+      ELSE BEGIN
+        OnBeforeRunPurchPost(PurchaseHeader);
+        CODEUNIT.RUN(CODEUNIT::"Purch.-Post",PurchaseHeader);
+      END;
+
+      OnAfterPost(PurchaseHeader);
+    END;
+
+    LOCAL PROCEDURE ConfirmPost@4(VAR PurchaseHeader@1001 : Record 38) : Boolean;
+    VAR
+      Selection@1000 : Integer;
+    BEGIN
+      WITH PurchaseHeader DO BEGIN
+        CASE "Document Type" OF
+          "Document Type"::Order:
+            BEGIN
+              Selection := STRMENU(ReceiveInvoiceQst,3);
+              IF Selection = 0 THEN
+                EXIT(FALSE);
+              Receive := Selection IN [1,3];
+              Invoice := Selection IN [2,3];
+            END;
+          "Document Type"::"Return Order":
+            BEGIN
+              Selection := STRMENU(ShipInvoiceQst,3);
+              IF Selection = 0 THEN
+                EXIT(FALSE);
+              Ship := Selection IN [1,3];
+              Invoice := Selection IN [2,3];
+            END
+          ELSE
+            IF NOT CONFIRM(PostConfirmQst,FALSE,LOWERCASE(FORMAT("Document Type"))) THEN
+              EXIT(FALSE);
+        END;
+        "Print Posted Documents" := FALSE;
+      END;
+      EXIT(TRUE);
+    END;
+
+    [External]
+    PROCEDURE Preview@2(VAR PurchaseHeader@1000 : Record 38);
+    VAR
+      GenJnlPostPreview@1002 : Codeunit 19;
+      PurchPostYesNo@1001 : Codeunit 91;
+    BEGIN
+      BINDSUBSCRIPTION(PurchPostYesNo);
+      GenJnlPostPreview.Preview(PurchPostYesNo,PurchaseHeader);
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterPost@5(VAR PurchaseHeader@1000 : Record 38);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterConfirmPost@7(PurchaseHeader@1000 : Record 38);
+    BEGIN
+    END;
+
+    [EventSubscriber(Codeunit,19,OnRunPreview)]
+    LOCAL PROCEDURE OnRunPreview@3(VAR Result@1000 : Boolean;Subscriber@1001 : Variant;RecVar@1002 : Variant);
+    VAR
+      PurchaseHeader@1003 : Record 38;
+      PurchPost@1004 : Codeunit 90;
+    BEGIN
+      WITH PurchaseHeader DO BEGIN
+        COPY(RecVar);
+        Ship := "Document Type" = "Document Type"::"Return Order";
+        Receive := "Document Type" = "Document Type"::Order;
+        Invoice := TRUE;
+      END;
+      PurchPost.SetPreviewMode(TRUE);
+      Result := PurchPost.RUN(PurchaseHeader);
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeConfirmPost@6(VAR PurchaseHeader@1000 : Record 38;VAR HideDialog@1001 : Boolean;VAR IsHandled@1002 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeRunPurchPost@8(VAR PurchaseHeader@1000 : Record 38);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

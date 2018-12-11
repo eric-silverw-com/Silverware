@@ -1,0 +1,133 @@
+OBJECT Page 2140 O365 Sync with Microsoft Apps
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:10:46 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Sync with Microsoft Apps;
+    OnInit=BEGIN
+             UsernameVisible := NOT ClientTypeManagement.IsPhoneClientType;
+           END;
+
+    OnOpenPage=VAR
+                 MarketingSetup@1000 : Record 5079;
+                 O365SalesInitialSetup@1001 : Record 2110;
+               BEGIN
+                 IF MarketingSetup.GET THEN
+                   EnableSync := MarketingSetup."Sync with Microsoft Graph";
+                 SetUserName;
+                 IF O365SalesInitialSetup.GET THEN
+                   SyncCoupons := O365SalesInitialSetup."Coupons Integration Enabled";
+               END;
+
+  }
+  CONTROLS
+  {
+    { 1   ;    ;Container ;
+                CaptionML=ENU=Microsoft Sync;
+                ContainerType=ContentArea }
+
+    { 7   ;1   ;Group     ;
+                GroupType=Group }
+
+    { 2   ;2   ;Field     ;
+                CaptionML=ENU=Enable Synchronization;
+                ToolTipML=ENU=Specifies whether Microsoft synchronization is enabled.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=EnableSync;
+                OnValidate=VAR
+                             O365SalesBackgroundSetup@1000 : Codeunit 2111;
+                           BEGIN
+                             IF NOT EnableSync THEN
+                               IF NOT CONFIRM(ConfirmDisablingSyncQst,FALSE) THEN
+                                 ERROR('');
+
+                             O365SalesBackgroundSetup.InitializeGraphSync(EnableSync,FALSE);
+
+                             SetUserName;
+
+                             // Coupons sync changes state along with graph sync
+                             SyncCoupons := EnableSync;
+                             StoreCouponsSync;
+                           END;
+                            }
+
+    { 3   ;2   ;Field     ;
+                Name=SyncCoupons;
+                CaptionML=ENU=Show coupons;
+                ToolTipML=ENU=Specifies if you want to see coupons when you create a new invoice or estimate.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=SyncCoupons;
+                OnValidate=BEGIN
+                             StoreCouponsSync;
+                           END;
+                            }
+
+    { 6   ;2   ;Field     ;
+                Name=SyncUser;
+                CaptionML=ENU=User;
+                ToolTipML=ENU=Specifies the user who owns the synchronization jobs.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=UserName;
+                Visible=UsernameVisible;
+                Editable=FALSE;
+                OnAssistEdit=VAR
+                               SelectedUser@1001 : Record 2000000120;
+                               MarketingSetup@1000 : Record 5079;
+                             BEGIN
+                               IF NOT EnableSync THEN
+                                 EXIT;
+
+                               SelectedUser.SETFILTER("License Type",'<> %1',SelectedUser."License Type"::"External User");
+                               IF NOT (PAGE.RUNMODAL(PAGE::Users,SelectedUser) = ACTION::LookupOK) THEN
+                                 EXIT;
+
+                               MarketingSetup.GET;
+                               IF MarketingSetup.TrySetWebhookSubscriptionUser(SelectedUser."User Security ID") THEN BEGIN
+                                 MarketingSetup.MODIFY(TRUE);
+                                 UserName := SelectedUser."User Name";
+                               END
+                             END;
+                              }
+
+  }
+  CODE
+  {
+    VAR
+      ClientTypeManagement@1005 : Codeunit 4;
+      EnableSync@1000 : Boolean;
+      UserName@1003 : Text;
+      UsernameVisible@1001 : Boolean;
+      SyncCoupons@1002 : Boolean;
+      ConfirmDisablingSyncQst@1004 : TextConst 'ENU=If you disable synchronization with other Microsoft apps, some of the functionality in the Invoicing app will not be available. Do you want to disable sync with Microsoft apps?';
+
+    LOCAL PROCEDURE SetUserName@15();
+    VAR
+      MarketingSetup@1002 : Record 5079;
+      User@1001 : Record 2000000120;
+    BEGIN
+      IF EnableSync THEN BEGIN
+        IF User.GET(MarketingSetup.GetWebhookSubscriptionUser) THEN
+          UserName := User."User Name";
+      END ELSE
+        UserName := '';
+    END;
+
+    LOCAL PROCEDURE StoreCouponsSync@4();
+    VAR
+      O365SalesInitialSetup@1000 : Record 2110;
+    BEGIN
+      O365SalesInitialSetup.GET;
+      O365SalesInitialSetup."Coupons Integration Enabled" := SyncCoupons;
+      O365SalesInitialSetup.MODIFY(TRUE);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

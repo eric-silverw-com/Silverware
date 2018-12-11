@@ -1,0 +1,467 @@
+OBJECT Codeunit 1804 Approval Workflow Setup Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:14 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      OneWeekDueDateFormulaTxt@1000 : TextConst '@@@={Locked};ENU=<1W>';
+      CustomerApprWorkflowDescTxt@1001 : TextConst 'ENU=Customer Approval Workflow';
+      ItemApprWorkflowDescTxt@1003 : TextConst 'ENU=Item Approval Workflow';
+      SalesMktCategoryTxt@1002 : TextConst '@@@={Locked};ENU=SALES';
+      ItemChangeApprWorkflowDescTxt@1004 : TextConst 'ENU=Item Change Approval Workflow';
+      CustomerChangeApprWorkflowDescTxt@1005 : TextConst 'ENU=Customer Change Approval Workflow';
+      GeneralJournalLineApprWorkflowDescTxt@1006 : TextConst 'ENU=General Journal Line Approval Workflow';
+      FinCategoryDescTxt@1007 : TextConst 'ENU=Finance';
+
+    PROCEDURE ApplyInitialWizardUserInput@6(TempApprovalWorkflowWizard@1000 : TEMPORARY Record 1804);
+    VAR
+      SalesHeader@1001 : Record 36;
+      PurchaseHeader@1002 : Record 38;
+    BEGIN
+      IF TempApprovalWorkflowWizard."Purch Invoice App. Workflow" THEN
+        CreatePurchaseDocumentApprovalWorkflow(PurchaseHeader."Document Type"::Invoice);
+
+      IF TempApprovalWorkflowWizard."Sales Invoice App. Workflow" THEN
+        CreateSalesDocumentApprovalWorkflow(SalesHeader."Document Type"::Invoice);
+
+      CreateApprovalSetup(TempApprovalWorkflowWizard);
+    END;
+
+    PROCEDURE ApplyCustomerWizardUserInput@5(TempApprovalWorkflowWizard@1000 : TEMPORARY Record 1804);
+    VAR
+      Workflow@1001 : Record 1501;
+      WorkflowSetup@1002 : Codeunit 1502;
+      WorkflowEventHandling@1005 : Codeunit 1520;
+      EventConditions@1004 : Text;
+    BEGIN
+      WITH TempApprovalWorkflowWizard DO
+        CASE "App. Trigger" OF
+          "App. Trigger"::"The user sends an approval requests manually":
+            BEGIN
+              EventConditions := WorkflowSetup.BuildCustomerTypeConditions;
+              CreateCustomerOrItemApprovalWorkflow(Workflow,TempApprovalWorkflowWizard,DATABASE::Customer,
+                WorkflowSetup.CustomerWorkflowCode,CustomerApprWorkflowDescTxt,EventConditions,
+                WorkflowEventHandling.RunWorkflowOnSendCustomerForApprovalCode,
+                WorkflowEventHandling.RunWorkflowOnCancelCustomerApprovalRequestCode);
+            END;
+          "App. Trigger"::"The user changes a specific field":
+            CreateCustomerOrItemChangeApprovalWorkflow(Workflow,TempApprovalWorkflowWizard,DATABASE::Customer,
+              WorkflowSetup.CustomerCreditLimitChangeApprovalWorkflowCode,CustomerChangeApprWorkflowDescTxt,
+              WorkflowEventHandling.RunWorkflowOnCustomerChangedCode);
+        END;
+
+      Workflow.VALIDATE(Enabled,TRUE);
+      Workflow.MODIFY(TRUE);
+    END;
+
+    PROCEDURE ApplyItemWizardUserInput@7(TempApprovalWorkflowWizard@1000 : TEMPORARY Record 1804);
+    VAR
+      Workflow@1007 : Record 1501;
+      WorkflowSetup@1005 : Codeunit 1502;
+      WorkflowEventHandling@1004 : Codeunit 1520;
+      EventConditions@1002 : Text;
+    BEGIN
+      WITH TempApprovalWorkflowWizard DO
+        CASE "App. Trigger" OF
+          "App. Trigger"::"The user sends an approval requests manually":
+            BEGIN
+              EventConditions := WorkflowSetup.BuildItemTypeConditions;
+              CreateCustomerOrItemApprovalWorkflow(Workflow,TempApprovalWorkflowWizard,DATABASE::Item,
+                WorkflowSetup.ItemWorkflowCode,ItemApprWorkflowDescTxt,EventConditions,
+                WorkflowEventHandling.RunWorkflowOnSendItemForApprovalCode,
+                WorkflowEventHandling.RunWorkflowOnCancelItemApprovalRequestCode);
+            END;
+          "App. Trigger"::"The user changes a specific field":
+            CreateCustomerOrItemChangeApprovalWorkflow(Workflow,TempApprovalWorkflowWizard,DATABASE::Item,
+              WorkflowSetup.ItemUnitPriceChangeApprovalWorkflowCode,ItemChangeApprWorkflowDescTxt,
+              WorkflowEventHandling.RunWorkflowOnItemChangedCode);
+        END;
+
+      Workflow.VALIDATE(Enabled,TRUE);
+      Workflow.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE CreateCustomerOrItemApprovalWorkflow@11(VAR Workflow@1002 : Record 1501;VAR TempApprovalWorkflowWizard@1004 : TEMPORARY Record 1804;TableNo@1010 : Integer;InitialWorkflowCode@1007 : Code[20];WorkflowDescription@1011 : Text[100];EventConditions@1009 : Text;StartEvent@1012 : Code[128];CancelEvent@1013 : Code[128]);
+    VAR
+      WorkflowStepArgument@1000 : Record 1523;
+      WorkflowResponseHandling@1003 : Codeunit 1521;
+      WorkflowSetup@1006 : Codeunit 1502;
+    BEGIN
+      DisableWorkflowWithEntryPointEventConditions(TableNo,
+        StartEvent,EventConditions);
+      InsertWorkflow(Workflow,GenerateWorkflowCode(InitialWorkflowCode),
+        WorkflowDescription,SalesMktCategoryTxt);
+      WorkflowSetup.InsertRecApprovalWorkflowSteps(Workflow,EventConditions,
+        StartEvent,WorkflowResponseHandling.CreateApprovalRequestsCode,
+        WorkflowResponseHandling.SendApprovalRequestForApprovalCode,
+        CancelEvent,WorkflowStepArgument,TRUE,TRUE);
+
+      ChangeWorkflowStepArgument(WorkflowStepArgument,Workflow.Code,TempApprovalWorkflowWizard."Approver ID");
+    END;
+
+    LOCAL PROCEDURE CreateCustomerOrItemChangeApprovalWorkflow@48(VAR Workflow@1002 : Record 1501;VAR TempApprovalWorkflowWizard@1004 : TEMPORARY Record 1804;TableNo@1010 : Integer;InitialWorkflowCode@1007 : Code[20];WorkflowDescription@1011 : Text[100];StartEvent@1012 : Code[128]);
+    VAR
+      WorkflowStepArgument@1000 : Record 1523;
+      WorkflowResponseHandling@1003 : Codeunit 1521;
+      WorkflowSetup@1006 : Codeunit 1502;
+    BEGIN
+      DisableWorkflowWithEntryPointRules(TableNo,StartEvent,TempApprovalWorkflowWizard.Field);
+      InsertWorkflow(Workflow,GenerateWorkflowCode(InitialWorkflowCode),
+        WorkflowDescription,SalesMktCategoryTxt);
+      WorkflowSetup.InsertRecChangedApprovalWorkflowSteps(Workflow,TempApprovalWorkflowWizard."Field Operator",
+        StartEvent,WorkflowResponseHandling.CreateApprovalRequestsCode,
+        WorkflowResponseHandling.SendApprovalRequestForApprovalCode,
+        WorkflowStepArgument,TableNo,TempApprovalWorkflowWizard.Field,TempApprovalWorkflowWizard."Custom Message");
+
+      ChangeWorkflowStepArgument(WorkflowStepArgument,Workflow.Code,TempApprovalWorkflowWizard."Approver ID");
+    END;
+
+    PROCEDURE ApplyPaymantJrnlWizardUserInput@8(TempApprovalWorkflowWizard@1000 : TEMPORARY Record 1804);
+    VAR
+      GenJournalLine@1002 : Record 81;
+    BEGIN
+      IF NOT TempApprovalWorkflowWizard."For All Batches" THEN
+        GenJournalLine.SETRANGE("Journal Batch Name",TempApprovalWorkflowWizard."Journal Batch Name");
+
+      GenJournalLine.SETRANGE("Journal Template Name",TempApprovalWorkflowWizard."Journal Template Name");
+      CreateGenJnlLineApprovalWorkflow(GenJournalLine,TempApprovalWorkflowWizard."Approver ID");
+    END;
+
+    [External]
+    PROCEDURE CreateApprovalSetup@1(TempApprovalWorkflowWizard@1000 : TEMPORARY Record 1804);
+    BEGIN
+      IF TempApprovalWorkflowWizard."Use Exist. Approval User Setup" THEN
+        EXIT;
+
+      // User setup for admin
+      CreateUnlimitedApprover(TempApprovalWorkflowWizard);
+
+      // User setup for all other users
+      CreateLimitedAmountApprovers(TempApprovalWorkflowWizard);
+    END;
+
+    PROCEDURE CreateGenJnlLineApprovalWorkflow@10(VAR GenJournalLine@1000 : Record 81;ApproverId@1008 : Code[50]) : Code[20];
+    VAR
+      Workflow@1001 : Record 1501;
+      WorkflowStepArgument@1003 : Record 1523;
+      WorkflowEventHandling@1004 : Codeunit 1520;
+      WorkflowSetup@1002 : Codeunit 1502;
+      WizardWorkflowCode@1012 : Code[20];
+      EventConditions@1005 : Text;
+      OneWeekDateFormula@1006 : DateFormula;
+    BEGIN
+      // Specific Workflow code is used: WZ-****
+      WizardWorkflowCode := WorkflowSetup.GetWorkflowWizardCode(WorkflowSetup.GeneralJournalLineApprovalWorkflowCode);
+      EventConditions := WorkflowSetup.BuildGeneralJournalLineTypeConditions(GenJournalLine);
+      DisableWorkflowWithEntryPointEventConditions(DATABASE::"Gen. Journal Batch",
+        WorkflowEventHandling.RunWorkflowOnSendGeneralJournalBatchForApprovalCode,EventConditions);
+      InsertWorkflow(Workflow,GenerateWorkflowCode(WizardWorkflowCode),
+        GeneralJournalLineApprWorkflowDescTxt,FinCategoryDescTxt);
+
+      EVALUATE(OneWeekDateFormula,OneWeekDueDateFormulaTxt);
+      WorkflowSetup.InsertGenJnlLineApprovalWorkflow(Workflow,EventConditions,WorkflowStepArgument."Approver Type"::Approver,
+        WorkflowStepArgument."Approver Limit Type"::"Specific Approver",'',ApproverId,OneWeekDateFormula);
+
+      // Enable workflow
+      Workflow.VALIDATE(Enabled,TRUE);
+      Workflow.MODIFY;
+
+      EXIT(WizardWorkflowCode);
+    END;
+
+    PROCEDURE CreateSalesDocumentApprovalWorkflow@2(DocumentType@1000 : Option) : Code[20];
+    VAR
+      SalesHeader@1007 : Record 36;
+      Workflow@1001 : Record 1501;
+      WorkflowStepArgument@1003 : Record 1523;
+      WorkflowEventHandling@1004 : Codeunit 1520;
+      WorkflowSetup@1002 : Codeunit 1502;
+      WizardWorkflowCode@1012 : Code[20];
+      EventConditions@1005 : Text;
+      BlankDateFormula@1006 : DateFormula;
+    BEGIN
+      // Specific Workflow code is used: WZ-SIAPW
+      WizardWorkflowCode := WorkflowSetup.GetWorkflowWizardCode(WorkflowSetup.SalesInvoiceApprovalWorkflowCode);
+      IF Workflow.GET(WizardWorkflowCode) THEN
+        UpdateWorkflow(Workflow,DATABASE::"Sales Header",BlankDateFormula)
+      ELSE BEGIN
+        EventConditions := WorkflowSetup.BuildSalesHeaderTypeConditions(DocumentType,SalesHeader.Status::Open);
+        DisableWorkflowWithEntryPointEventConditions(DATABASE::"Sales Header",
+          WorkflowEventHandling.RunWorkflowOnSendSalesDocForApprovalCode,EventConditions);
+
+        WorkflowSetup.InsertSalesDocumentApprovalWorkflow(Workflow,DocumentType,WorkflowStepArgument."Approver Type"::Approver,
+          WorkflowStepArgument."Approver Limit Type"::"First Qualified Approver",'',BlankDateFormula);
+
+        IF Workflow.RENAME(WizardWorkflowCode) THEN;
+      END;
+
+      // Enable workflow
+      Workflow.VALIDATE(Enabled,TRUE);
+      Workflow.MODIFY;
+
+      EXIT(WizardWorkflowCode);
+    END;
+
+    PROCEDURE CreatePurchaseDocumentApprovalWorkflow@3(DocumentType@1000 : Option) : Code[20];
+    VAR
+      PurchaseHeader@1007 : Record 38;
+      Workflow@1006 : Record 1501;
+      WorkflowStepArgument@1004 : Record 1523;
+      WorkflowSetup@1002 : Codeunit 1502;
+      WorkflowEventHandling@1010 : Codeunit 1520;
+      WizardWorkflowCode@1012 : Code[20];
+      EventConditions@1013 : Text;
+      BlankDateFormula@1001 : DateFormula;
+    BEGIN
+      // Specific Workflow code is used: WZ-PIAPW
+      WizardWorkflowCode := WorkflowSetup.GetWorkflowWizardCode(WorkflowSetup.PurchaseInvoiceApprovalWorkflowCode);
+      IF Workflow.GET(WizardWorkflowCode) THEN
+        UpdateWorkflow(Workflow,DATABASE::"Purchase Header",BlankDateFormula)
+      ELSE BEGIN
+        EventConditions := WorkflowSetup.BuildPurchHeaderTypeConditions(DocumentType,PurchaseHeader.Status::Open);
+        DisableWorkflowWithEntryPointEventConditions(DATABASE::"Purchase Header",
+          WorkflowEventHandling.RunWorkflowOnSendPurchaseDocForApprovalCode,EventConditions);
+
+        WorkflowSetup.InsertPurchaseDocumentApprovalWorkflow(Workflow,DocumentType,WorkflowStepArgument."Approver Type"::Approver,
+          WorkflowStepArgument."Approver Limit Type"::"First Qualified Approver",'',BlankDateFormula);
+
+        IF Workflow.RENAME(WizardWorkflowCode) THEN;
+      END;
+
+      // Enable workflow
+      Workflow.VALIDATE(Enabled,TRUE);
+      Workflow.MODIFY;
+
+      EXIT(WizardWorkflowCode);
+    END;
+
+    LOCAL PROCEDURE CreateUnlimitedApprover@40(TempApprovalWorkflowWizard@1000 : TEMPORARY Record 1804);
+    VAR
+      ApprovalUserSetup@1001 : Record 91;
+      User@1002 : Record 2000000120;
+    BEGIN
+      // Set admin as approval user
+      IF NOT ApprovalUserSetup.GET(TempApprovalWorkflowWizard."Approver ID") THEN BEGIN
+        ApprovalUserSetup.INIT;
+        ApprovalUserSetup.VALIDATE("User ID",TempApprovalWorkflowWizard."Approver ID");
+        ApprovalUserSetup.INSERT;
+      END;
+
+      User.SETRANGE("User Name",TempApprovalWorkflowWizard."Approver ID");
+      User.FINDFIRST;
+      IF TempApprovalWorkflowWizard."Sales Invoice App. Workflow" THEN
+        ApprovalUserSetup.VALIDATE("Unlimited Sales Approval",TempApprovalWorkflowWizard."Sales Invoice App. Workflow");
+      IF TempApprovalWorkflowWizard."Purch Invoice App. Workflow" THEN
+        ApprovalUserSetup.VALIDATE("Unlimited Purchase Approval",TempApprovalWorkflowWizard."Purch Invoice App. Workflow");
+      ApprovalUserSetup.VALIDATE("Approver ID",''); // Reset Approver ID
+      IF ApprovalUserSetup."E-Mail" = '' THEN
+        ApprovalUserSetup.VALIDATE("E-Mail",User."Contact Email");
+      ApprovalUserSetup.MODIFY;
+    END;
+
+    LOCAL PROCEDURE CreateLimitedAmountApprovers@41(TempApprovalWorkflowWizard@1002 : TEMPORARY Record 1804);
+    VAR
+      ApprovalUserSetup@1001 : Record 91;
+      User@1000 : Record 2000000120;
+    BEGIN
+      User.SETFILTER("User Name",'<>%1',TempApprovalWorkflowWizard."Approver ID");
+
+      IF User.FINDSET THEN
+        REPEAT
+          IF NOT ApprovalUserSetup.GET(User."User Name") THEN BEGIN
+            ApprovalUserSetup.INIT;
+            ApprovalUserSetup.VALIDATE("User ID",User."User Name");
+            ApprovalUserSetup.INSERT;
+          END;
+
+          ApprovalUserSetup.VALIDATE("Approver ID",TempApprovalWorkflowWizard."Approver ID");
+          IF ApprovalUserSetup."E-Mail" = '' THEN
+            ApprovalUserSetup.VALIDATE("E-Mail",User."Contact Email");
+          ApprovalUserSetup.VALIDATE("Unlimited Sales Approval",FALSE);
+          IF TempApprovalWorkflowWizard."Sales Invoice App. Workflow" THEN
+            ApprovalUserSetup.VALIDATE("Sales Amount Approval Limit",TempApprovalWorkflowWizard."Sales Amount Approval Limit");
+          ApprovalUserSetup.VALIDATE("Unlimited Purchase Approval",FALSE);
+          IF TempApprovalWorkflowWizard."Purch Invoice App. Workflow" THEN
+            ApprovalUserSetup.VALIDATE("Purchase Amount Approval Limit",TempApprovalWorkflowWizard."Purch Amount Approval Limit");
+          ApprovalUserSetup.MODIFY;
+        UNTIL User.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE PopulateSendApprovalWorkflowStepArgument@9(WorkflowCode@1000 : Code[20];ApproverType@1006 : Option;ApproverLimitType@1005 : Option;ApprovalEntriesPage@1004 : Integer;WorkflowUserGroupCode@1003 : Code[20];DueDateFormula@1002 : DateFormula;ShowConfirmationMessage@1001 : Boolean);
+    VAR
+      WorkflowStepArgument@1008 : Record 1523;
+      WorkflowResponseHandling@1009 : Codeunit 1521;
+    BEGIN
+      IF FindWorkflowStepArgument(WorkflowStepArgument,WorkflowCode,WorkflowResponseHandling.CreateApprovalRequestsCode) THEN BEGIN
+        // User input
+        WorkflowStepArgument."Approver Type" := ApproverType;
+        WorkflowStepArgument."Approver Limit Type" := ApproverLimitType;
+        WorkflowStepArgument."Workflow User Group Code" := WorkflowUserGroupCode;
+        WorkflowStepArgument."Due Date Formula" := DueDateFormula;
+        WorkflowStepArgument."Link Target Page" := ApprovalEntriesPage;
+        WorkflowStepArgument."Show Confirmation Message" := ShowConfirmationMessage;
+        WorkflowStepArgument.MODIFY;
+      END;
+    END;
+
+    [External]
+    PROCEDURE FindWorkflowStepArgument@4(VAR WorkflowStepArgument@1000 : Record 1523;WorkflowCode@1002 : Code[50];FunctionName@1001 : Code[128]) : Boolean;
+    VAR
+      WorkflowStep@1003 : Record 1502;
+    BEGIN
+      // Get the step
+      WorkflowStep.SETRANGE("Workflow Code",WorkflowCode);
+      WorkflowStep.SETRANGE(Type,WorkflowStep.Type::Response);
+      WorkflowStep.SETRANGE("Function Name",FunctionName);
+      IF WorkflowStep.FINDFIRST THEN
+        // Get the step arguments
+        EXIT(WorkflowStepArgument.GET(WorkflowStep.Argument));
+
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE WorkflowWithEntryPointEventConditionsExists@61(TableID@1005 : Integer;FunctionName@1000 : Code[128];EventFilters@1001 : Text;VAR Workflow@1002 : Record 1501) : Boolean;
+    VAR
+      WorkflowStepArgument@1004 : Record 1523;
+      WorkflowDefinition@1006 : Query 1502;
+    BEGIN
+      WorkflowDefinition.SETRANGE(Table_ID,TableID);
+      WorkflowDefinition.SETRANGE(Entry_Point,TRUE);
+      WorkflowDefinition.SETRANGE(Enabled,TRUE);
+      WorkflowDefinition.SETRANGE(Type,WorkflowDefinition.Type::"Event");
+      WorkflowDefinition.SETRANGE(Function_Name,FunctionName);
+      WorkflowDefinition.OPEN;
+      WHILE WorkflowDefinition.READ DO BEGIN
+        WorkflowStepArgument.GET(WorkflowDefinition.Argument);
+        IF WorkflowStepArgument.GetEventFilters = EventFilters THEN BEGIN
+          Workflow.GET(WorkflowDefinition.Code);
+          EXIT(TRUE);
+        END;
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE DisableWorkflowWithEntryPointEventConditions@33(TableID@1003 : Integer;FunctionName@1002 : Code[128];EventConditions@1001 : Text);
+    VAR
+      Workflow@1000 : Record 1501;
+    BEGIN
+      IF WorkflowWithEntryPointEventConditionsExists(TableID,FunctionName,EventConditions,Workflow) THEN BEGIN
+        Workflow.VALIDATE(Enabled,FALSE);
+        Workflow.MODIFY;
+      END;
+    END;
+
+    LOCAL PROCEDURE WorkflowWithEntryPointRulesExists@16(TableID@1005 : Integer;FunctionName@1000 : Code[128];FieldNo@1001 : Integer;VAR Workflow@1002 : Record 1501) : Boolean;
+    VAR
+      WorkflowRule@1003 : Record 1524;
+      WorkflowDefinition@1006 : Query 1502;
+    BEGIN
+      WorkflowDefinition.SETRANGE(Table_ID,TableID);
+      WorkflowDefinition.SETRANGE(Entry_Point,TRUE);
+      WorkflowDefinition.SETRANGE(Enabled,TRUE);
+      WorkflowDefinition.SETRANGE(Type,WorkflowDefinition.Type::"Event");
+      WorkflowDefinition.SETRANGE(Function_Name,FunctionName);
+      WorkflowDefinition.OPEN;
+      WHILE WorkflowDefinition.READ DO BEGIN
+        WorkflowRule.SETRANGE("Workflow Code",WorkflowDefinition.Code);
+        IF WorkflowRule.FINDFIRST THEN
+          IF WorkflowRule."Field No." = FieldNo THEN BEGIN
+            Workflow.GET(WorkflowDefinition.Code);
+            EXIT(TRUE);
+          END;
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE DisableWorkflowWithEntryPointRules@18(TableID@1003 : Integer;FunctionName@1002 : Code[128];FieldNo@1001 : Integer);
+    VAR
+      Workflow@1000 : Record 1501;
+    BEGIN
+      IF WorkflowWithEntryPointRulesExists(TableID,FunctionName,FieldNo,Workflow) THEN BEGIN
+        Workflow.VALIDATE(Enabled,FALSE);
+        Workflow.MODIFY;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateWorkflow@55(VAR Workflow@1000 : Record 1501;TableID@1001 : Integer;DueDateFormula@1002 : DateFormula);
+    VAR
+      WorkflowStep@1003 : Record 1502;
+      WorkflowStepArgument@1004 : Record 1523;
+      EventConditions@1005 : Text;
+    BEGIN
+      IF Workflow.Enabled THEN BEGIN
+        Workflow.VALIDATE(Enabled,FALSE);
+        Workflow.MODIFY;
+      END ELSE BEGIN
+        WorkflowStep.SETRANGE("Workflow Code",Workflow.Code);
+        WorkflowStep.SETRANGE("Previous Workflow Step ID",0);
+        WorkflowStep.FINDFIRST;
+        WorkflowStepArgument.GET(WorkflowStep.Argument);
+        EventConditions := WorkflowStepArgument.GetEventFilters;
+        DisableWorkflowWithEntryPointEventConditions(TableID,WorkflowStep."Function Name",EventConditions);
+      END;
+
+      PopulateSendApprovalWorkflowStepArgument(Workflow.Code,WorkflowStepArgument."Approver Type"::Approver,
+        WorkflowStepArgument."Approver Limit Type"::"First Qualified Approver",0,'',DueDateFormula,TRUE);
+    END;
+
+    LOCAL PROCEDURE InsertWorkflow@80(VAR Workflow@1003 : Record 1501;WorkflowCode@1001 : Code[20];WorkflowDescription@1002 : Text[100];CategoryCode@1000 : Code[20]);
+    BEGIN
+      Workflow.INIT;
+      Workflow.Code := WorkflowCode;
+      Workflow.Description := WorkflowDescription;
+      Workflow.Category := CategoryCode;
+      Workflow.Enabled := FALSE;
+      Workflow.INSERT;
+    END;
+
+    LOCAL PROCEDURE GenerateWorkflowCode@38(WorkflowCode@1000 : Code[20]) : Code[20];
+    VAR
+      Workflow@1001 : Record 1501;
+    BEGIN
+      IF INCSTR(WorkflowCode) = '' THEN
+        WorkflowCode := COPYSTR(WorkflowCode,1,MAXSTRLEN(WorkflowCode) - 3) + '-01';
+      WHILE Workflow.GET(WorkflowCode) DO
+        WorkflowCode := INCSTR(WorkflowCode);
+      EXIT(WorkflowCode);
+    END;
+
+    LOCAL PROCEDURE ChangeWorkflowStepArgument@13(VAR WorkflowStepArgument@1002 : Record 1523;WorkflowCode@1003 : Code[20];ApproverID@1004 : Code[50]);
+    VAR
+      WorkflowStep@1001 : Record 1502;
+      WorkflowResponseHandling@1000 : Codeunit 1521;
+    BEGIN
+      WorkflowStep.SETRANGE("Workflow Code",WorkflowCode);
+      WorkflowStep.SETRANGE("Function Name",WorkflowResponseHandling.CreateApprovalRequestsCode);
+      IF WorkflowStep.FINDFIRST THEN BEGIN
+        WorkflowStepArgument.GET(WorkflowStep.Argument);
+        WorkflowStepArgument."Approver Type" := WorkflowStepArgument."Approver Type"::Approver;
+        WorkflowStepArgument."Approver Limit Type" := WorkflowStepArgument."Approver Limit Type"::"Specific Approver";
+        WorkflowStepArgument."Approver User ID" := ApproverID;
+        EVALUATE(WorkflowStepArgument."Due Date Formula",OneWeekDueDateFormulaTxt);
+        WorkflowStepArgument.MODIFY(TRUE);
+      END;
+    END;
+
+    BEGIN
+    {
+      // This codeunit creates and edits purchase invoice and sales invoice approval workflows.
+      // In addition, user setup can be created for all users in the system based on the user input from wizard.
+    }
+    END.
+  }
+}
+

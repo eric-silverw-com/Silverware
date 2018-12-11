@@ -1,0 +1,191 @@
+OBJECT Table 1284 Outstanding Bank Transaction
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:14:29 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Outstanding Bank Transaction;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Entry No.           ;Integer       ;CaptionML=ENU=Entry No. }
+    { 2   ;   ;Posting Date        ;Date          ;CaptionML=ENU=Posting Date }
+    { 3   ;   ;Document Type       ;Option        ;CaptionML=ENU=Document Type;
+                                                   OptionCaptionML=ENU=" ,Payment,Invoice,Credit Memo,Finance Charge Memo,Reminder,Refund,,,,,,Deposit";
+                                                   OptionString=[ ,Payment,Invoice,Credit Memo,Finance Charge Memo,Reminder,Refund,,,,,,Deposit] }
+    { 4   ;   ;Document No.        ;Code20        ;CaptionML=ENU=Document No. }
+    { 5   ;   ;Bank Account No.    ;Code20        ;CaptionML=ENU=Bank Account No. }
+    { 6   ;   ;Description         ;Text50        ;CaptionML=ENU=Description }
+    { 7   ;   ;Amount              ;Decimal       ;CaptionML=ENU=Amount;
+                                                   AutoFormatExpr=GetCurrencyCode }
+    { 8   ;   ;Type                ;Option        ;CaptionML=ENU=Type;
+                                                   OptionCaptionML=ENU=Bank Account Ledger Entry,Check Ledger Entry;
+                                                   OptionString=Bank Account Ledger Entry,Check Ledger Entry }
+    { 9   ;   ;Applied             ;Boolean       ;CaptionML=ENU=Applied }
+    { 10  ;   ;Statement Type      ;Option        ;CaptionML=ENU=Statement Type;
+                                                   OptionCaptionML=ENU=Bank Reconciliation,Payment Application;
+                                                   OptionString=Bank Reconciliation,Payment Application }
+    { 11  ;   ;Statement No.       ;Code20        ;CaptionML=ENU=Statement No. }
+    { 10010;  ;Indentation         ;Integer       ;CaptionML=ENU=Indentation }
+    { 10011;  ;External Document No.;Code35       ;CaptionML=ENU=External Document No. }
+  }
+  KEYS
+  {
+    {    ;External Document No.,Entry No.         ;Clustered=Yes }
+    {    ;Type                                     }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+
+    [External]
+    PROCEDURE DrillDown@5(BankAccNo@1000 : Code[20];TransactionType@1001 : Option;StatementType@1003 : Integer;StatementNo@1004 : Code[20]);
+    VAR
+      TempOutstandingBankTransaction@1002 : TEMPORARY Record 1284;
+    BEGIN
+      CreateTempOutstandingBankTrxs(TempOutstandingBankTransaction,BankAccNo,StatementType,StatementNo);
+      SetOutstandingBankTrxFilter(TempOutstandingBankTransaction,TransactionType);
+      RunOustandingBankTrxsPage(TempOutstandingBankTransaction,TransactionType);
+    END;
+
+    [External]
+    PROCEDURE CreateTempOutstandingBankTrxs@19(VAR TempOutstandingBankTransaction@1001 : TEMPORARY Record 1284;BankAccNo@1002 : Code[20];StatementType@1005 : Integer;StatementNo@1004 : Code[20]);
+    VAR
+      BankAccountLedgerEntry@1000 : Record 271;
+      TempOutstandingBankTransactionCopy@1020000 : TEMPORARY Record 1284;
+      RemainingAmt@1003 : Decimal;
+    BEGIN
+      BankAccountLedgerEntry.SETRANGE("Bank Account No.",BankAccNo);
+      BankAccountLedgerEntry.SETRANGE(Open,TRUE);
+      TempOutstandingBankTransactionCopy.DELETEALL;
+      IF BankAccountLedgerEntry.FINDSET THEN BEGIN
+        REPEAT
+          RemainingAmt := BankAccountLedgerEntry.Amount - GetAppliedAmount(BankAccountLedgerEntry."Entry No.");
+          IF RemainingAmt <> 0 THEN BEGIN
+            TempOutstandingBankTransaction.INIT;
+            CreateTheDepositHeaderLine(TempOutstandingBankTransaction,TempOutstandingBankTransactionCopy,BankAccountLedgerEntry);
+            TempOutstandingBankTransaction."Posting Date" := BankAccountLedgerEntry."Posting Date";
+            TempOutstandingBankTransaction."Document Type" := BankAccountLedgerEntry."Document Type";
+            TempOutstandingBankTransaction."Document No." := BankAccountLedgerEntry."Document No.";
+            TempOutstandingBankTransaction."Bank Account No." := BankAccountLedgerEntry."Bank Account No.";
+            TempOutstandingBankTransaction.Description := BankAccountLedgerEntry.Description;
+            TempOutstandingBankTransaction.Amount := RemainingAmt;
+            TempOutstandingBankTransaction."Entry No." := BankAccountLedgerEntry."Entry No.";
+            TempOutstandingBankTransaction."Statement Type" := StatementType;
+            TempOutstandingBankTransaction."Statement No." := StatementNo;
+            BankAccountLedgerEntry.CALCFIELDS("Check Ledger Entries");
+            IF BankAccountLedgerEntry."Check Ledger Entries" > 0 THEN
+              TempOutstandingBankTransaction.Type := TempOutstandingBankTransaction.Type::"Check Ledger Entry"
+            ELSE
+              TempOutstandingBankTransaction.Type := TempOutstandingBankTransaction.Type::"Bank Account Ledger Entry";
+            TempOutstandingBankTransaction.INSERT;
+          END;
+        UNTIL BankAccountLedgerEntry.NEXT = 0;
+      END;
+    END;
+
+    [External]
+    PROCEDURE CreateTheDepositHeaderLine@1020000(VAR TempOutstandingBankTransaction@1020000 : TEMPORARY Record 1284;VAR TempOutstandingBankTransactionCopy@1020001 : TEMPORARY Record 1284;BankAccountLedgerEntry@1020002 : Record 271);
+    VAR
+      PostedDepositHeader@1020003 : Record 10143;
+      PostedDepositLine@1020004 : Record 10144;
+    BEGIN
+      PostedDepositLine.SETRANGE("Document Type",BankAccountLedgerEntry."Document Type");
+      PostedDepositLine.SETRANGE("Document No.",BankAccountLedgerEntry."Document No.");
+      IF PostedDepositLine.FINDFIRST THEN BEGIN
+        PostedDepositHeader.GET(PostedDepositLine."Deposit No.");
+        TempOutstandingBankTransaction.INIT;
+        TempOutstandingBankTransactionCopy.SETRANGE("External Document No.",BankAccountLedgerEntry."External Document No.");
+        IF NOT TempOutstandingBankTransactionCopy.FINDFIRST THEN BEGIN
+          TempOutstandingBankTransaction."Posting Date" := PostedDepositHeader."Posting Date";
+          TempOutstandingBankTransaction."Document No." := PostedDepositHeader."No.";
+          TempOutstandingBankTransaction."Document Type" := TempOutstandingBankTransaction."Document Type"::Deposit;
+          TempOutstandingBankTransaction."Bank Account No." := PostedDepositHeader."Bank Account No.";
+          TempOutstandingBankTransaction.Description := PostedDepositHeader."Posting Description";
+          TempOutstandingBankTransaction.Amount := PostedDepositHeader."Total Deposit Amount";
+          TempOutstandingBankTransaction.Indentation := 0;
+          TempOutstandingBankTransaction."Entry No." := 0;
+          TempOutstandingBankTransaction."External Document No." := BankAccountLedgerEntry."External Document No.";
+          TempOutstandingBankTransaction.INSERT;
+          TempOutstandingBankTransactionCopy.COPY(TempOutstandingBankTransaction);
+          TempOutstandingBankTransactionCopy.INSERT;
+        END;
+        TempOutstandingBankTransaction.Indentation := 1;
+      END ELSE
+        TempOutstandingBankTransaction.Indentation := 0;
+    END;
+
+    [External]
+    PROCEDURE GetCurrencyCode@1() : Code[10];
+    VAR
+      BankAcc@1000 : Record 270;
+    BEGIN
+      IF ("Bank Account No." = BankAcc."No.") OR BankAcc.GET("Bank Account No.") THEN
+        EXIT(BankAcc."Currency Code");
+
+      EXIT('');
+    END;
+
+    LOCAL PROCEDURE SetOutstandingBankTrxFilter@2(VAR TempOutstandingBankTransaction@1000 : TEMPORARY Record 1284;TransactionType@1001 : Option);
+    BEGIN
+      TempOutstandingBankTransaction.RESET;
+      TempOutstandingBankTransaction.FILTERGROUP := 2;
+      TempOutstandingBankTransaction.SETRANGE(Type,TransactionType);
+      TempOutstandingBankTransaction.SETRANGE(Applied,FALSE);
+      TempOutstandingBankTransaction.FILTERGROUP := 0;
+    END;
+
+    LOCAL PROCEDURE RunOustandingBankTrxsPage@3(VAR TempOutstandingBankTransaction@1001 : TEMPORARY Record 1284;TransactionType@1000 : Option);
+    VAR
+      OutstandingBankTransactions@1002 : Page 1284;
+    BEGIN
+      OutstandingBankTransactions.SetRecords(TempOutstandingBankTransaction);
+      OutstandingBankTransactions.SetPageCaption(TransactionType);
+      OutstandingBankTransactions.SETTABLEVIEW(TempOutstandingBankTransaction);
+      OutstandingBankTransactions.RUN;
+    END;
+
+    [External]
+    PROCEDURE CopyFromBankAccLedgerEntry@6(BankAccountLedgerEntry@1001 : Record 271;BankTransacType@1002 : Integer;StatementType@1005 : Integer;StatementNo@1004 : Code[20];RemainingAmt@1000 : Decimal;IndentationValue@1020000 : Integer);
+    BEGIN
+      INIT;
+      "Entry No." := BankAccountLedgerEntry."Entry No.";
+      "Posting Date" := BankAccountLedgerEntry."Posting Date";
+      "Document Type" := BankAccountLedgerEntry."Document Type";
+      "Document No." := BankAccountLedgerEntry."Document No.";
+      "Bank Account No." := BankAccountLedgerEntry."Bank Account No.";
+      Description := BankAccountLedgerEntry.Description;
+      Amount := RemainingAmt;
+      Type := BankTransacType;
+      "Statement Type" := StatementType;
+      "Statement No." := StatementNo;
+      Indentation := IndentationValue;
+      INSERT;
+    END;
+
+    [External]
+    PROCEDURE GetAppliedAmount@7(EntryNo@1001 : Integer) AppliedAmt : Decimal;
+    VAR
+      AppliedPaymentEntry@1000 : Record 1294;
+    BEGIN
+      AppliedPaymentEntry.SETRANGE("Applies-to Entry No.",EntryNo);
+      IF AppliedPaymentEntry.FINDSET THEN BEGIN
+        REPEAT
+          AppliedAmt += AppliedPaymentEntry."Applied Amount";
+        UNTIL AppliedPaymentEntry.NEXT = 0;
+      END;
+
+      EXIT(AppliedAmt);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

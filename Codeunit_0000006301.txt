@@ -1,0 +1,1185 @@
+OBJECT Codeunit 6301 Power BI Service Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:38 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      AzureAdMgt@1007 : Codeunit 6300;
+      PowerBiApiResourceUrlTxt@1003 : TextConst '@@@={Locked};ENU=https://analysis.windows.net/powerbi/api';
+      ConfPersonalizationMgt@1013 : Codeunit 9170;
+      PowerBISessionManager@1028 : Codeunit 6317;
+      JObject@1005 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";
+      DotNetString@1000 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.String";
+      PowerBiApiResourceUrlPPETxt@1008 : TextConst '@@@={Locked};ENU=https://analysis.windows-int.net/powerbi/api';
+      FinancialsResourceUrlTxt@1006 : TextConst '@@@=Link to the Financials API;ENU=https://api.financials.dynamics.com';
+      FinancialsResourceUrlPPETxt@1019 : TextConst '@@@=Link to the Financials API;ENU=https://api.financials.dynamics-servicestie.com';
+      ReportsUrlTxt@1017 : TextConst '@@@={Locked};ENU=https://api.powerbi.com/beta/myorg/reports';
+      ReportsUrlPPETxt@1016 : TextConst '@@@={Locked};ENU=https://biazure-int-edog-redirect.analysis-df.windows.net/beta/myorg/reports';
+      PowerBiApiUrlTxt@1018 : TextConst '@@@={Locked};ENU=https://api.powerbi.com';
+      PowerBiApiUrlPPETxt@1020 : TextConst '@@@={Locked};ENU="https://biazure-int-edog-redirect.analysis-df.windows.net "';
+      GenericErr@1015 : TextConst 'ENU=An error occurred while trying to get reports from the Power BI service. Please try again or contact your system administrator if the error persists.';
+      PowerBiResourceNameTxt@1014 : TextConst 'ENU=Power BI Services';
+      ReportPageSizeTxt@1012 : TextConst '@@@={Locked};ENU=16:9';
+      PowerBIurlErr@1011 : TextConst '@@@={Locked};ENU=https://powerbi.microsoft.com';
+      UnauthorizedErr@1010 : TextConst 'ENU=You do not have a Power BI account. You can get a Power BI account at the following location.';
+      NavAppSourceUrlTxt@1009 : TextConst '@@@={Locked};ENU="https://go.microsoft.com/fwlink/?linkid=862351"';
+      Dyn365AppSourceUrlTxt@1004 : TextConst '@@@={Locked};ENU="https://go.microsoft.com/fwlink/?linkid=862352"';
+      PowerBIMyOrgUrlTxt@1002 : TextConst '@@@={Locked};ENU="https://go.microsoft.com/fwlink/?linkid=862353"';
+      NullGuidTxt@1001 : TextConst 'ENU=00000000-0000-0000-0000-000000000000';
+      ItemTxt@1021 : TextConst '@@@={Locked};ENU=Items';
+      VendorTxt@1022 : TextConst '@@@={Locked};ENU=Vendors';
+      CustomerTxt@1023 : TextConst '@@@={Locked};ENU=Customers';
+      SalesTxt@1025 : TextConst '@@@={Locked};ENU=Sales Orders';
+      InvoicesTxt@1026 : TextConst '@@@={Locked};ENU=Purchase Invoices';
+      HackPowerBIGuidTxt@1027 : TextConst '@@@={Locked};ENU=06D251CE-A824-44B2-A5F9-318A0674C3FB';
+      UpdateEmbedCache@1029 : Boolean;
+
+    PROCEDURE GetReports@45(VAR TempPowerBIReportBuffer@1000 : TEMPORARY Record 6302;VAR ExceptionMessage@1018 : Text;VAR ExceptionDetails@1014 : Text;Context@1010 : Text[30]);
+    VAR
+      JObj@1017 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";
+      Url@1020 : Text;
+      ResponseText@1001 : Text;
+    BEGIN
+      // Gets a list of reports from the user's Power BI account and loads them into the given buffer.
+      // Reports are marked as Enabled if they've previously been selected for the given context (page ID).
+      IF NOT TempPowerBIReportBuffer.ISEMPTY THEN
+        EXIT;
+
+      IF NOT CanHandleServiceCalls THEN BEGIN
+        OnGetReports(TempPowerBIReportBuffer,ExceptionMessage,ExceptionDetails,Context);
+        EXIT;
+      END;
+
+      Url := GetReportsUrl;
+
+      ResponseText := GetData(ExceptionMessage,ExceptionDetails,Url);
+
+      JObj := JObject.Parse(ResponseText); // TODO: check versions
+
+      ParseReports(TempPowerBIReportBuffer,JObj,Context);
+    END;
+
+    PROCEDURE GetReportsForUserContext@6(VAR TempPowerBIReportBuffer@1000 : TEMPORARY Record 6302;VAR ExceptionMessage@1018 : Text;VAR ExceptionDetails@1014 : Text;Context@1010 : Text[30]);
+    VAR
+      PowerBIReportConfiguration@1007 : Record 6301;
+      JObj@1017 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";
+      Url@1020 : Text;
+      ResponseText@1001 : Text;
+    BEGIN
+      // Checks whether the user has any reports with blank URLs, for the current context (to be used by spinner/factbox).
+      // These would be Report Configuration (table 6301) rows created before the addition of the URL column, so they
+      // don't have a cached URL we can load. In that case we need to load reports the old fashioned way, from the PBI
+      // service with a GetReports call. (Empty URLs like this only get updated on running the Select Reports page.)
+      IF NOT TempPowerBIReportBuffer.ISEMPTY THEN
+        EXIT;
+
+      Url := GetReportsUrl;
+
+      PowerBIReportConfiguration.RESET;
+      PowerBIReportConfiguration.SETFILTER("User Security ID",USERSECURITYID);
+      PowerBIReportConfiguration.SETFILTER(Context,Context);
+
+      IF PowerBIReportConfiguration.FIND('-') THEN
+        REPEAT
+          IF PowerBIReportConfiguration.EmbedUrl <> '' THEN BEGIN
+            // get it from cache
+            TempPowerBIReportBuffer.ReportID := PowerBIReportConfiguration."Report ID";
+            TempPowerBIReportBuffer.EmbedUrl := PowerBIReportConfiguration.EmbedUrl;
+            TempPowerBIReportBuffer.Enabled := TRUE;
+            IF TempPowerBIReportBuffer.INSERT THEN;
+          END ELSE BEGIN
+            // get url from power bi
+            ResponseText := GetData(ExceptionMessage,ExceptionDetails,Url + '/' + FORMAT(PowerBIReportConfiguration."Report ID"));
+            JObj := JObject.Parse(ResponseText);
+            ParseReport(TempPowerBIReportBuffer,JObj,Context);
+          END;
+        UNTIL PowerBIReportConfiguration.NEXT = 0;
+    END;
+
+    PROCEDURE CheckForPowerBILicense@12(VAR ExceptionMessage@1004 : Text;VAR ExceptionDetails@1003 : Text);
+    VAR
+      PowerBIReportUploads@1000 : Record 6307;
+      Url@1002 : Text;
+    BEGIN
+      // Checks whether the user has power bi license/account or not
+
+      IF PowerBISessionManager.GetHasPowerBILicense THEN
+        EXIT;
+
+      PowerBIReportUploads.RESET;
+      PowerBIReportUploads.SETFILTER("User ID",USERSECURITYID);
+
+      // Record in this table indicates the power bi service is already called on behalf of this user.
+      IF NOT PowerBIReportUploads.ISEMPTY THEN
+        EXIT;
+
+      Url := GetReportsUrl;
+
+      Url := Url + '/' + NullGuidTxt;
+
+      // This will throw unauthorized error if any. It will swallow 404 not found error.
+      GetData(ExceptionMessage,ExceptionDetails,Url);
+    END;
+
+    PROCEDURE IsReportEnabled@52(ReportId@1000 : GUID;Context@1002 : Text) : Boolean;
+    VAR
+      PowerBIReportConfiguration@1003 : Record 6301;
+    BEGIN
+      EXIT(PowerBIReportConfiguration.GET(USERSECURITYID,ReportId,Context));
+    END;
+
+    PROCEDURE IsUserReadyForPowerBI@4() : Boolean;
+    BEGIN
+      IF NOT AzureAdMgt.IsAzureADAppSetupDone THEN
+        EXIT(FALSE);
+
+      EXIT(NOT DotNetString.IsNullOrWhiteSpace(AzureAdMgt.GetAccessToken(GetPowerBiResourceUrl,GetPowerBiResourceName,FALSE)));
+    END;
+
+    [External]
+    PROCEDURE GetPowerBiResourceUrl@3() : Text;
+    BEGIN
+      IF IsPPE THEN
+        EXIT(PowerBiApiResourceUrlPPETxt);
+
+      EXIT(PowerBiApiResourceUrlTxt);
+    END;
+
+    [External]
+    PROCEDURE GetPowerBiResourceName@5() : Text;
+    BEGIN
+      EXIT(PowerBiResourceNameTxt);
+    END;
+
+    [External]
+    PROCEDURE GetGenericError@2() : Text;
+    BEGIN
+      EXIT(GenericErr);
+    END;
+
+    LOCAL PROCEDURE IsPPE@1() : Boolean;
+    VAR
+      EnvironmentMgt@1000 : Codeunit 9005;
+    BEGIN
+      EXIT(EnvironmentMgt.IsPPE);
+    END;
+
+    [External]
+    PROCEDURE GetReportPageSize@7() : Text;
+    BEGIN
+      EXIT(ReportPageSizeTxt);
+    END;
+
+    [External]
+    PROCEDURE GetUnauthorizedErrorText@8() : Text;
+    BEGIN
+      EXIT(UnauthorizedErr);
+    END;
+
+    [External]
+    PROCEDURE GetPowerBIUrl@9() : Text;
+    BEGIN
+      EXIT(PowerBIurlErr);
+    END;
+
+    [External]
+    PROCEDURE GetContentPacksServicesUrl@14() : Text;
+    VAR
+      AzureADMgt@1000 : Codeunit 6300;
+    BEGIN
+      // Gets the URL for AppSource's list of content packs, like Power BI's Services button, filtered to Dynamics reports.
+      IF AzureADMgt.IsSaaS THEN
+        EXIT(Dyn365AppSourceUrlTxt);
+
+      EXIT(NavAppSourceUrlTxt);
+    END;
+
+    [External]
+    PROCEDURE GetContentPacksMyOrganizationUrl@15() : Text;
+    BEGIN
+      // Gets the URL for Power BI's embedded AppSource page listing reports shared by the user's organization.
+      EXIT(PowerBIMyOrgUrlTxt);
+    END;
+
+    PROCEDURE UploadDefaultReportsInBackground@25();
+    BEGIN
+      IF NOT CanHandleServiceCalls THEN BEGIN
+        UploadAllDefaultReports;
+        EXIT;
+      END;
+      // Schedules a background task to do default report deployment (codeunit 6311 which calls back into
+      // the UploadAllDefaultReports method in this codeunit).
+      SetIsDeployingReports(TRUE);
+      TASKSCHEDULER.CREATETASK(CODEUNIT::"PBI Start Uploads Task",CODEUNIT::"PBI Deployment Failure",TRUE);
+    END;
+
+    PROCEDURE UploadAllDefaultReports@13();
+    VAR
+      Continue@1000 : Boolean;
+    BEGIN
+      // Does a series of batches to deploy all default reports that the current user hasn't deployed yet.
+      // Prioritizes the active role center over other reports since the user will probably see those first.
+      // Ends early if anything failed, which makes it more likely we'll retry soon instead of having to wait
+      // for all lower priority reports to finish first (retries started by page 6303).
+      // Should only be called as part of a background session to reduce perf impact (see UploadDefaultReportsInBackground).
+      Continue := UploadDefaultReportBatch(ConfPersonalizationMgt.GetCurrentProfileIDNoError,FALSE);
+      IF Continue THEN
+        Continue := UploadDefaultReportBatch('',TRUE);
+
+      IF Continue THEN
+        Continue := UploadDefaultReportBatch('',FALSE);
+
+      SetIsDeployingReports(FALSE);
+    END;
+
+    LOCAL PROCEDURE UploadDefaultReportBatch@20(PriorityContext@1000 : Text[30];PrioritizeAnyContext@1012 : Boolean) WasSuccessful : Boolean;
+    VAR
+      PowerBIBlob@1002 : Record 2000000144;
+      PowerBIReportUploads@1003 : Record 6307;
+      PowerBICustomerReports@1013 : Record 6310;
+      IntelligentCloud@1014 : Record 2000000146;
+      PbiServiceWrapper@1011 : DotNet "'Microsoft.Dynamics.Nav.PowerBIEmbedded, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.PowerBIEmbedded.ServiceWrapper";
+      ApiRequest@1010 : DotNet "'Microsoft.Dynamics.Nav.PowerBIEmbedded, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.PowerBIEmbedded.Models.ImportReportRequest";
+      ApiRequestList@1009 : DotNet "'Microsoft.Dynamics.Nav.PowerBIEmbedded, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.PowerBIEmbedded.Models.ImportReportRequestList";
+      ApiResponseList@1008 : DotNet "'Microsoft.Dynamics.Nav.PowerBIEmbedded, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.PowerBIEmbedded.Models.ImportReportResponseList";
+      ApiResponse@1007 : DotNet "'Microsoft.Dynamics.Nav.PowerBIEmbedded, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.PowerBIEmbedded.Models.ImportReportResponse";
+      DotNetDateTime@1006 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.DateTime";
+      BlobStream@1005 : InStream;
+      AzureAccessToken@1004 : Text;
+      FinancialsAccessToken@1001 : Text;
+    BEGIN
+      // Uploads a batch of default reports based on the passed in priorities (see DoesDefaultReportMatchPriority).
+      // Returns true if all attempted uploads completely finished, otherwise false.
+      IF NOT IsPBIServiceAvailable THEN
+        EXIT(FALSE);
+      WasSuccessful := TRUE;
+      ApiRequestList := ApiRequestList.ImportReportRequestList();
+      PowerBIBlob.RESET;
+      IF PowerBIBlob.FIND('-') THEN
+        REPEAT
+          IF (DoesDefaultReportMatchPriority(PowerBIBlob.Id,PriorityContext,PrioritizeAnyContext) AND
+              CanUserAccessDefaultReport(PowerBIBlob.Id))
+          THEN BEGIN
+            PowerBIReportUploads.RESET;
+            PowerBIReportUploads.SETFILTER("User ID",USERSECURITYID);
+            PowerBIReportUploads.SETFILTER("PBIX BLOB ID",PowerBIBlob.Id);
+            IF (PowerBIReportUploads.ISEMPTY AND NOT IntelligentCloud.GET AND NOT PowerBIBlob."GP Enabled") OR
+               (PowerBIReportUploads.FINDFIRST AND (PowerBIReportUploads."Deployed Version" <> PowerBIBlob.Version) AND
+                NOT PowerBIReportUploads."Needs Deletion") OR (IntelligentCloud.GET AND PowerBIBlob."GP Enabled")
+            THEN BEGIN
+              PowerBIBlob.CALCFIELDS("Blob File"); // Calcfields necessary for accessing stored Blob bytes.
+              PowerBIBlob."Blob File".CREATEINSTREAM(BlobStream);
+              ApiRequest := ApiRequest.ImportReportRequest
+                (PowerBIBlob.Id,BlobStream,PowerBIBlob.Name,NOT PowerBIReportUploads.ISEMPTY);
+              ApiRequestList.Add(ApiRequest);
+            END;
+          END;
+        UNTIL PowerBIBlob.NEXT = 0;
+      IF NOT PowerBICustomerReports.ISEMPTY THEN BEGIN
+        PowerBICustomerReports.RESET;
+        IF PowerBICustomerReports.FIND('-') THEN
+          REPEAT
+            PowerBIReportUploads.RESET;
+            PowerBIReportUploads.SETFILTER("User ID",USERSECURITYID);
+            PowerBIReportUploads.SETFILTER("PBIX BLOB ID",PowerBICustomerReports.Id);
+            IF PowerBIReportUploads.ISEMPTY OR (PowerBIReportUploads.FINDFIRST AND
+                                                (PowerBIReportUploads."Deployed Version" <> PowerBICustomerReports.Version) AND
+                                                NOT PowerBIReportUploads."Needs Deletion")
+            THEN BEGIN
+              PowerBICustomerReports.CALCFIELDS("Blob File"); // Calcfields necessary for accessing stored Blob bytes.
+              PowerBICustomerReports."Blob File".CREATEINSTREAM(BlobStream);
+              ApiRequest := ApiRequest.ImportReportRequest
+                (PowerBICustomerReports.Id,BlobStream,PowerBICustomerReports.Name,NOT PowerBIReportUploads.ISEMPTY);
+              ApiRequestList.Add(ApiRequest);
+            END;
+          UNTIL PowerBICustomerReports.NEXT = 0;
+      END;
+      IF ApiRequestList.Count > 0 THEN BEGIN
+        IF CanHandleServiceCalls THEN BEGIN
+          AzureAccessToken := AzureAdMgt.GetAccessToken(GetPowerBiResourceUrl,GetPowerBiResourceName,FALSE);
+
+          IF IsPPE THEN BEGIN
+            PbiServiceWrapper := PbiServiceWrapper.ServiceWrapper(AzureAccessToken,PowerBiApiUrlPPETxt);
+            FinancialsAccessToken := AzureAdMgt.GetAccessToken(FinancialsResourceUrlPPETxt,'',FALSE)
+          END ELSE BEGIN
+            PbiServiceWrapper := PbiServiceWrapper.ServiceWrapper(AzureAccessToken,PowerBiApiUrlTxt);
+            FinancialsAccessToken := AzureAdMgt.GetAccessToken(FinancialsResourceUrlTxt,'',FALSE);
+          END;
+
+          ApiResponseList := PbiServiceWrapper.ImportReports(ApiRequestList,
+              COMPANYNAME,FinancialsAccessToken,GetServiceRetries);
+        END ELSE BEGIN
+          ApiResponseList := ApiResponseList.ImportReportResponseList();
+          OnUploadReports(ApiRequestList,ApiResponseList);
+        END;
+        FOREACH ApiResponse IN ApiResponseList DO
+          WasSuccessful := WasSuccessful AND HandleUploadResponse(ApiResponse.ImportId,ApiResponse.RequestReportId,
+              ApiResponse.ImportedReport,ApiResponse.ShouldRetry,ApiResponse.RetryAfter);
+
+        IF NOT ISNULL(ApiResponseList.RetryAfter) THEN BEGIN
+          WasSuccessful := FALSE;
+          DotNetDateTime := ApiResponseList.RetryAfter;
+          UpdatePBIServiceAvailability(DotNetDateTime);
+        END;
+      END;
+    END;
+
+    PROCEDURE RetryUnfinishedReportsInBackground@27();
+    BEGIN
+      IF NOT CanHandleServiceCalls THEN BEGIN
+        RetryAllPartialReportUploads;
+        EXIT;
+      END;
+      // Schedules a background task to do completion of partial uploads (codeunit 6312 which calls
+      // back into the RetryAllPartialReportUploads method in this codeunit).
+      SetIsRetryingUploads(TRUE);
+      TASKSCHEDULER.CREATETASK(CODEUNIT::"PBI Retry Uploads Task",CODEUNIT::"PBI Retry Failure",TRUE);
+    END;
+
+    PROCEDURE RetryAllPartialReportUploads@59();
+    BEGIN
+      // Starts a sequence of default report deployments for any reports that only partially finished.
+      // Prioritizes the active role center over other reports since the user will probably see those first.
+      // Unlike UploadAllDefaultReports, doesn't end early if anything failed - want to avoid getting stuck
+      // on a faulty report.
+      // Should only be called as part of a background session to reduce perf impact (see RetryUnfinishedReportsInBackground).
+      RetryPartialUploadBatch(ConfPersonalizationMgt.GetCurrentProfileIDNoError,FALSE);
+      RetryPartialUploadBatch('',FALSE);
+
+      SetIsRetryingUploads(FALSE);
+    END;
+
+    LOCAL PROCEDURE RetryPartialUploadBatch@24(PriorityContext@1004 : Text[30];PrioritizeAnyContext@1005 : Boolean) WasSuccessful : Boolean;
+    VAR
+      PowerBIReportUploads@1007 : Record 6307;
+      PbiServiceWrapper@1001 : DotNet "'Microsoft.Dynamics.Nav.PowerBIEmbedded, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.PowerBIEmbedded.ServiceWrapper";
+      ImportIdList@1006 : DotNet "'Microsoft.Dynamics.Nav.PowerBIEmbedded, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.PowerBIEmbedded.Models.ImportedReportRequestList";
+      ApiResponseList@1008 : DotNet "'Microsoft.Dynamics.Nav.PowerBIEmbedded, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.PowerBIEmbedded.Models.ImportedReportResponseList";
+      ApiResponse@1000 : DotNet "'Microsoft.Dynamics.Nav.PowerBIEmbedded, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.PowerBIEmbedded.Models.ImportedReportResponse";
+      DotNetDateTime@1009 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.DateTime";
+      AzureAccessToken@1002 : Text;
+      FinancialsAccessToken@1003 : Text;
+    BEGIN
+      // Retries a batch of default reports that have had their uploads started but not finished, based on
+      // the passed in priority (see DoesDefaultReportMatchPriority). This will attempt to have the PBI service
+      // retry the connection/refresh tasks to finish the upload process.
+      // Returns true if all attempted retries completely finished, otherwise false.
+      IF NOT IsPBIServiceAvailable THEN
+        EXIT(FALSE);
+
+      WasSuccessful := TRUE;
+      ImportIdList := ImportIdList.ImportedReportRequestList();
+
+      PowerBIReportUploads.RESET;
+      PowerBIReportUploads.SETFILTER("User ID",USERSECURITYID);
+      PowerBIReportUploads.SETFILTER("Uploaded Report ID",NullGuidTxt);
+      PowerBIReportUploads.SETFILTER("Should Retry",'%1',TRUE);
+      PowerBIReportUploads.SETFILTER("Retry After",'<%1',CURRENTDATETIME);
+      PowerBIReportUploads.SETFILTER("Needs Deletion",'%1',FALSE);
+      IF PowerBIReportUploads.FIND('-') THEN
+        REPEAT
+          IF DoesDefaultReportMatchPriority(PowerBIReportUploads."PBIX BLOB ID",PriorityContext,PrioritizeAnyContext) AND
+             CanUserAccessDefaultReport(PowerBIReportUploads."PBIX BLOB ID")
+          THEN
+            ImportIdList.Add(PowerBIReportUploads."Import ID");
+        UNTIL PowerBIReportUploads.NEXT = 0;
+
+      IF ImportIdList.Count > 0 THEN BEGIN
+        IF CanHandleServiceCalls THEN BEGIN
+          AzureAccessToken := AzureAdMgt.GetAccessToken(GetPowerBiResourceUrl,GetPowerBiResourceName,FALSE);
+
+          IF IsPPE THEN BEGIN
+            PbiServiceWrapper := PbiServiceWrapper.ServiceWrapper(AzureAccessToken,PowerBiApiUrlPPETxt);
+            FinancialsAccessToken := AzureAdMgt.GetAccessToken(FinancialsResourceUrlPPETxt,'',FALSE)
+          END ELSE BEGIN
+            PbiServiceWrapper := PbiServiceWrapper.ServiceWrapper(AzureAccessToken,PowerBiApiUrlTxt);
+            FinancialsAccessToken := AzureAdMgt.GetAccessToken(FinancialsResourceUrlTxt,'',FALSE);
+          END;
+
+          ApiResponseList := PbiServiceWrapper.GetImportedReports(ImportIdList,
+              COMPANYNAME,FinancialsAccessToken,GetServiceRetries);
+        END ELSE BEGIN
+          ApiResponseList := ApiResponseList.ImportedReportResponseList();
+          OnRetryUploads(ImportIdList,ApiResponseList);
+        END;
+        FOREACH ApiResponse IN ApiResponseList DO
+          WasSuccessful := WasSuccessful AND HandleUploadResponse(ApiResponse.ImportId,NullGuidTxt,ApiResponse.ImportedReport,
+              ApiResponse.ShouldRetry,ApiResponse.RetryAfter);
+
+        IF NOT ISNULL(ApiResponseList.RetryAfter) THEN BEGIN
+          WasSuccessful := FALSE;
+          DotNetDateTime := ApiResponseList.RetryAfter;
+          UpdatePBIServiceAvailability(DotNetDateTime);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE HandleUploadResponse@17(ImportId@1000 : Text;BlobId@1001 : GUID;ReturnedReport@1002 : DotNet "'Microsoft.Dynamics.Nav.PowerBIEmbedded, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.PowerBIEmbedded.Models.ImportedReport";ShouldRetry@1005 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Nullable`1";RetryAfter@1006 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Nullable`1") WasSuccessful : Boolean;
+    VAR
+      PowerBIBlob@1004 : Record 2000000144;
+      PowerBIReportUploads@1003 : Record 6307;
+      PowerBICustomerReports@1009 : Record 6310;
+      DotNetBoolean@1007 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Boolean";
+      DotNetDateTime@1008 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.DateTime";
+    BEGIN
+      // Deals with individual responses from the Power BI service for importing or finishing imports of
+      // default reports. This is what updates the tables so we know which reports are actually ready
+      // to be selected, versus still needing work, depending on the info sent back by the service.
+      // Returns true if the upload completely finished (i.e. got a report ID back), otherwise false.
+      IF ImportId <> '' THEN BEGIN
+        PowerBIReportUploads.RESET;
+        PowerBIReportUploads.SETFILTER("User ID",USERSECURITYID);
+
+        // Empty blob ID happens when we're finishing a partial upload (existing record in table 6307).
+        IF ISNULLGUID(BlobId) THEN
+          PowerBIReportUploads.SETFILTER("Import ID",ImportId)
+        ELSE
+          PowerBIReportUploads.SETFILTER("PBIX BLOB ID",BlobId);
+
+        IF PowerBIReportUploads.ISEMPTY THEN BEGIN
+          // First time this report has been uploaded.
+          PowerBIReportUploads.INIT;
+          PowerBIReportUploads."PBIX BLOB ID" := BlobId;
+          PowerBIReportUploads."User ID" := USERSECURITYID;
+          PowerBIReportUploads."Is Selection Done" := FALSE;
+        END ELSE
+          // Overwriting or finishing a previously uploaded report.
+          PowerBIReportUploads.FINDFIRST;
+
+        IF NOT ISNULL(ReturnedReport) THEN BEGIN
+          WasSuccessful := TRUE;
+          PowerBIReportUploads."Uploaded Report ID" := ReturnedReport.ReportId;
+          PowerBIReportUploads."Embed Url" := ReturnedReport.EmbedUrl;
+          PowerBIReportUploads."Import ID" := NullGuidTxt;
+          PowerBIReportUploads."Should Retry" := FALSE;
+          PowerBIReportUploads."Retry After" := 0DT;
+        END ELSE BEGIN
+          WasSuccessful := FALSE;
+          PowerBIReportUploads."Import ID" := ImportId;
+          PowerBIReportUploads."Uploaded Report ID" := NullGuidTxt;
+          IF NOT ISNULL(ShouldRetry) THEN BEGIN
+            DotNetBoolean := ShouldRetry;
+            PowerBIReportUploads."Should Retry" := DotNetBoolean.Equals(TRUE);
+          END;
+          IF NOT ISNULL(RetryAfter) THEN BEGIN
+            DotNetDateTime := RetryAfter;
+            PowerBIReportUploads."Retry After" := DotNetDateTime;
+          END;
+        END;
+
+        IF PowerBIBlob.GET(PowerBIReportUploads."PBIX BLOB ID") THEN BEGIN
+          PowerBIReportUploads."Deployed Version" := PowerBIBlob.Version;
+          PowerBIReportUploads.IsGP := PowerBIBlob."GP Enabled";
+        END ELSE
+          IF PowerBICustomerReports.GET(PowerBIReportUploads."PBIX BLOB ID") THEN
+            PowerBIReportUploads."Deployed Version" := PowerBICustomerReports.Version;
+
+        IF PowerBIReportUploads.ISEMPTY THEN
+          PowerBIReportUploads.INSERT
+        ELSE
+          PowerBIReportUploads.MODIFY;
+        COMMIT;
+      END;
+    END;
+
+    PROCEDURE SelectDefaultReports@22();
+    VAR
+      PowerBIDefaultSelection@1000 : Record 2000000145;
+      PowerBIReportConfiguration@1001 : Record 6301;
+      PowerBIUserConfiguration@1002 : Record 6304;
+      PowerBIReportUploads@1003 : Record 6307;
+      IntelligentCloud@1004 : Record 2000000146;
+      PowerBIBlob@1006 : Record 2000000144;
+    BEGIN
+      // Finds all recently uploaded default reports and enables/selects them on the appropriate pages
+      // per table 2000000145.
+      // (Note that each report only gets auto-selection done one time - if the user later deselects it
+      // we won't keep reselecting it.)
+
+      // If the GP flag is set in TAB2000000146, the report for the selected page/role center is removed
+      // and we select the GP report
+      CleanupSelection;
+      PowerBIReportUploads.RESET;
+      PowerBIReportUploads.SETFILTER("User ID",USERSECURITYID);
+      PowerBIReportUploads.SETFILTER("Uploaded Report ID",'<>%1',NullGuidTxt);
+      PowerBIReportUploads.SETFILTER("Is Selection Done",'%1',FALSE);
+      IF IntelligentCloud.GET THEN
+        PowerBIReportUploads.SETFILTER(IsGP,'%1',TRUE)
+      ELSE
+        PowerBIReportUploads.SETFILTER(IsGP,'%1',FALSE);
+      IF PowerBIReportUploads.FIND('-') THEN
+        REPEAT
+          PowerBIReportUploads."Is Selection Done" := TRUE;
+          PowerBIReportUploads.MODIFY;
+
+          PowerBIDefaultSelection.RESET;
+          PowerBIDefaultSelection.SETFILTER(Id,PowerBIReportUploads."PBIX BLOB ID");
+          IF PowerBIDefaultSelection.FIND('-') THEN
+            REPEAT
+              IF CanUserAccessPage(PowerBIDefaultSelection.Context) THEN BEGIN
+                PowerBIReportConfiguration.RESET;
+                PowerBIReportConfiguration.SETFILTER("User Security ID",USERSECURITYID);
+                PowerBIReportConfiguration.SETFILTER("Report ID",PowerBIReportUploads."Uploaded Report ID");
+                PowerBIReportConfiguration.SETFILTER(Context,PowerBIDefaultSelection.Context);
+                IF NOT PowerBIReportConfiguration.ISEMPTY THEN
+                  IF PowerBIReportConfiguration.DELETE THEN;
+                PowerBIReportConfiguration.INIT;
+                PowerBIReportConfiguration."User Security ID" := USERSECURITYID;
+                PowerBIReportConfiguration."Report ID" := PowerBIReportUploads."Uploaded Report ID";
+                PowerBIReportConfiguration.EmbedUrl := PowerBIReportUploads."Embed Url";
+                PowerBIReportConfiguration.Context := PowerBIDefaultSelection.Context;
+                IF PowerBIReportConfiguration.INSERT THEN;
+              END;
+
+              IF PowerBIDefaultSelection.Selected THEN BEGIN
+                PowerBIUserConfiguration.RESET;
+                PowerBIUserConfiguration.SETFILTER("User Security ID",USERSECURITYID);
+                PowerBIUserConfiguration.SETFILTER("Page ID",PowerBIDefaultSelection.Context);
+                PowerBIUserConfiguration.SETFILTER("Profile ID",ConfPersonalizationMgt.GetCurrentProfileIDNoError);
+
+                // Don't want to override user's existing selections (e.g. in upgrade scenarios).
+                IF PowerBIUserConfiguration.ISEMPTY THEN BEGIN
+                  PowerBIUserConfiguration.INIT;
+                  PowerBIUserConfiguration."User Security ID" := USERSECURITYID;
+                  PowerBIUserConfiguration."Page ID" := PowerBIDefaultSelection.Context;
+                  PowerBIUserConfiguration."Profile ID" := ConfPersonalizationMgt.GetCurrentProfileIDNoError;
+                  PowerBIUserConfiguration."Selected Report ID" := PowerBIReportUploads."Uploaded Report ID";
+                  PowerBIUserConfiguration."Report Visibility" := TRUE;
+                  PowerBIUserConfiguration.INSERT;
+                END ELSE BEGIN
+                  // Modify existing selection if entry exists but no report selected (e.g. active page created
+                  // empty configuration entry on page load before upload code even runs).
+                  PowerBIUserConfiguration.FINDFIRST;
+                  PowerBIBlob.RESET;
+                  PowerBIBlob.SETFILTER(Id,PowerBIUserConfiguration."Selected Report ID");
+                  IF (IntelligentCloud.GET AND NOT PowerBIBlob."GP Enabled") OR
+                     ISNULLGUID(PowerBIUserConfiguration."Selected Report ID")
+                  THEN BEGIN
+                    PowerBIUserConfiguration."Selected Report ID" := PowerBIReportUploads."Uploaded Report ID";
+                    PowerBIUserConfiguration.MODIFY;
+                  END;
+                END;
+              END;
+            UNTIL PowerBIDefaultSelection.NEXT = 0;
+        UNTIL PowerBIReportUploads.NEXT = 0;
+    END;
+
+    PROCEDURE DeleteDefaultReportsInBackground@42();
+    BEGIN
+      // Schedules a background task to do default report deletion (codeunit 6315 which calls back into
+      // the DeleteMarkedDefaultReports method in this codeunit).
+      SetIsDeletingReports(TRUE);
+      TASKSCHEDULER.CREATETASK(CODEUNIT::"PBI Start Deletions Task",CODEUNIT::"PBI Deletion Failure",TRUE);
+    END;
+
+    PROCEDURE DeleteMarkedDefaultReports@41();
+    VAR
+      PowerBIReportUploads@1000 : Record 6307;
+      PowerBICustomerReports@1001 : Record 6310;
+    BEGIN
+      // Deletes a batch of default reports that have been marked for deletion for the current user. Reports are
+      // deleted from the user's Power BI workspace first, and then removed from the uploads table if that was
+      // successful.
+      // Should only be called as part of a background session to reduce perf impact (see DeleteDefaultReportsInBackground).
+      IF NOT IsPBIServiceAvailable THEN
+        EXIT;
+
+      PowerBIReportUploads.RESET;
+      PowerBIReportUploads.SETFILTER("User ID",USERSECURITYID);
+      PowerBIReportUploads.SETFILTER("Needs Deletion",'%1',TRUE);
+
+      IF PowerBIReportUploads.FIND('-') THEN
+        REPEAT
+          PowerBICustomerReports.RESET;
+          PowerBICustomerReports.SETFILTER(Id,PowerBIReportUploads."PBIX BLOB ID");
+          REPEAT
+            IF PowerBICustomerReports.Id = PowerBIReportUploads."PBIX BLOB ID" THEN
+              PowerBICustomerReports.DELETE;
+          UNTIL PowerBICustomerReports.NEXT = 0;
+          PowerBIReportUploads.DELETE;
+        UNTIL PowerBIReportUploads.NEXT = 0;
+
+      // TODO: Delete from ReportConfiguration table and replace with null GUID in UserConfiguration table.
+      // TODO: ^^^ may confuse page 6303 depending on timing?
+      // TODO: Only do after API says it was deleted from workspace successfully (below)
+
+      // REPEAT
+      // IF NOT ISNULLGUID(PowerBIReportUploads."Uploaded Report ID") THEN BEGIN
+      // TODO: Add Uploaded Report ID to API request list
+      // END;
+
+      // IF NOT ISNULLGUID(PowerBIReportUploads."Import ID") THEN BEGIN
+      // TODO: Add Import ID to API request list
+      // END;
+      // UNTIL PowerBIReportUploads.NEXT = 0;
+
+      // TODO: Send list of IDs to PBI API to try deleting those reports.
+      // TODO: For each successfully delete report according to the API return, delete that row now.
+      // TODO: Set service availability depending on API's response.
+
+      SetIsDeletingReports(FALSE);
+    END;
+
+    PROCEDURE UserNeedsToDeployReports@19() : Boolean;
+    VAR
+      PowerBIBlob@1000 : Record 2000000144;
+      PowerBIReportUploads@1001 : Record 6307;
+      PowerBICustomerReports@1002 : Record 6310;
+      IntelligentCloud@1003 : Record 2000000146;
+    BEGIN
+      // Checks whether the user has any un-uploaded OOB reports, by checking for rows in table 2000000144
+      // without corresponding rows in table 6307 yet (or rows that are an old version).
+      PowerBIBlob.RESET;
+      IF PowerBIBlob.FIND('-') THEN
+        REPEAT
+          IF CanUserAccessDefaultReport(PowerBIBlob.Id) AND ((NOT PowerBIBlob."GP Enabled" AND NOT IntelligentCloud.GET) OR
+                                                             (PowerBIBlob."GP Enabled" AND IntelligentCloud.GET))
+          THEN BEGIN
+            PowerBIReportUploads.RESET;
+            PowerBIReportUploads.SETFILTER("User ID",USERSECURITYID);
+            PowerBIReportUploads.SETFILTER("PBIX BLOB ID",PowerBIBlob.Id);
+
+            IF PowerBIReportUploads.ISEMPTY THEN
+              EXIT(TRUE);
+
+            PowerBIReportUploads.FINDFIRST;
+            IF PowerBIReportUploads."Deployed Version" < PowerBIBlob.Version THEN
+              EXIT(TRUE);
+          END;
+        UNTIL PowerBIBlob.NEXT = 0;
+
+      PowerBICustomerReports.RESET;
+      IF PowerBICustomerReports.FIND('-') THEN
+        REPEAT
+          PowerBIReportUploads.RESET;
+          PowerBIReportUploads.SETFILTER("User ID",USERSECURITYID);
+          PowerBIReportUploads.SETFILTER("PBIX BLOB ID",PowerBICustomerReports.Id);
+
+          IF PowerBIReportUploads.ISEMPTY THEN
+            EXIT(TRUE);
+
+          PowerBIReportUploads.FINDFIRST;
+          IF PowerBIReportUploads."Deployed Version" < PowerBICustomerReports.Version THEN
+            EXIT(TRUE);
+
+        UNTIL PowerBICustomerReports.NEXT = 0;
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE UserNeedsToRetryUploads@28() : Boolean;
+    VAR
+      PowerBIReportUploads@1001 : Record 6307;
+    BEGIN
+      // Checks whether the user has any partially deployed OOB reports that we need to finish the upload
+      // process on (probably because it errored out partway through) i.e. rows in table 6307 that don't
+      // have a final report ID from the PBI website yet.
+      IF NOT IsPBIServiceAvailable OR IsUserRetryingUploads THEN
+        EXIT(FALSE);
+
+      PowerBIReportUploads.RESET;
+      PowerBIReportUploads.SETFILTER("User ID",USERSECURITYID);
+      PowerBIReportUploads.SETFILTER("Uploaded Report ID",NullGuidTxt);
+      PowerBIReportUploads.SETFILTER("Should Retry",'%1',TRUE);
+      PowerBIReportUploads.SETFILTER("Retry After",'<%1',CURRENTDATETIME);
+      EXIT(NOT PowerBIReportUploads.ISEMPTY);
+    END;
+
+    PROCEDURE UserNeedsToDeleteReports@43() : Boolean;
+    VAR
+      PowerBIReportUploads@1000 : Record 6307;
+    BEGIN
+      // Checks whether the user has any uploaded OOB reports (including partially uploaded but not successfully
+      // refreshed) by checking for rows in table 6307 with Needs Deletion set to TRUE.
+      IF NOT IsPBIServiceAvailable OR IsUserDeletingReports THEN
+        EXIT(FALSE);
+
+      PowerBIReportUploads.RESET;
+      PowerBIReportUploads.SETFILTER("User ID",USERSECURITYID);
+      PowerBIReportUploads.SETFILTER("Needs Deletion",'%1',TRUE);
+      EXIT(NOT PowerBIReportUploads.ISEMPTY);
+    END;
+
+    LOCAL PROCEDURE GetPageNumberFromContext@32(Context@1000 : Text[30]) : Integer;
+    VAR
+      PageNumber@1002 : Integer;
+    BEGIN
+      // Pulls the page ID from the given context value if it's in an appropriate format,
+      // or 0 if it couldn't tell. (Expect the values given to us by the pages' runtime code
+      // to be e.g. "Page 22" for typical pages, vs. e.g. "ORDER PROCESSOR" for role centers.)
+      IF STRPOS(Context,'Page') = 1 THEN
+        IF EVALUATE(PageNumber,COPYSTR(Context,6)) THEN
+          EXIT(PageNumber);
+
+      EXIT(0);
+    END;
+
+    LOCAL PROCEDURE CanUserAccessPage@33(Context@1000 : Text[30]) : Boolean;
+    VAR
+      PageMetadata@1001 : Record 2000000138;
+      RecordRef@1002 : RecordRef;
+      PageNumber@1003 : Integer;
+    BEGIN
+      // Checks if the user has permission to view a given page, based on its source table,
+      // so we know whether or not to deploy reports to that page. Pages are identified by
+      // the Context value like we use for the PBI selection tables.
+      // Automatically returns True if the page has no source table, or if the context isn't
+      // in a format where we can find page ID (e.g. role center names), since we don't have
+      // a good way to actually check those permissions in those cases. Page IDs that can't be
+      // found in the page metadata table return False because they don't appear to exist.
+      PageNumber := GetPageNumberFromContext(Context);
+      IF PageNumber = 0 THEN
+        EXIT(TRUE);
+
+      PageMetadata.SETRANGE(ID,PageNumber);
+      IF PageMetadata.FINDFIRST THEN BEGIN
+        IF PageMetadata.SourceTable = 0 THEN
+          EXIT(TRUE);
+
+        RecordRef.OPEN(PageMetadata.SourceTable);
+        EXIT(RecordRef.READPERMISSION);
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE CanUserAccessDefaultReport@86(ReportBlobID@1000 : GUID) : Boolean;
+    VAR
+      PowerBIDefaultSelection@1001 : Record 2000000145;
+    BEGIN
+      // Checks if the user should be able to deploy and access the given default report. The
+      // user has permissions to the report if they have permissions to at least one page that
+      // the report will be initially visible on, or if the report just won't be on any pages.
+      PowerBIDefaultSelection.RESET;
+      PowerBIDefaultSelection.SETFILTER(Id,ReportBlobID);
+      IF PowerBIDefaultSelection.FIND('-') THEN BEGIN
+        REPEAT
+          IF CanUserAccessPage(PowerBIDefaultSelection.Context) THEN
+            EXIT(TRUE);
+        UNTIL PowerBIDefaultSelection.NEXT = 0;
+
+        EXIT(FALSE);
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE DoesDefaultReportMatchPriority@34(ReportBlobId@1000 : GUID;Context@1001 : Text[30];PrioritizeAnyContext@1002 : Boolean) : Boolean;
+    VAR
+      PowerBIDefaultSelection@1003 : Record 2000000145;
+    BEGIN
+      // Checks if the given default report should be deployed in the current batch, based on the
+      // given priority. Returns true if Context is non-empty and the report matches that page,
+      // or if PrioritizeAnyContext is true and the report matches at least one page, or if no
+      // contexts are being prioritized at all (i.e. deploying all reports).
+      PowerBIDefaultSelection.RESET;
+      PowerBIDefaultSelection.SETFILTER(Id,ReportBlobId);
+
+      IF Context <> '' THEN BEGIN
+        PowerBIDefaultSelection.SETFILTER(Context,Context);
+        EXIT(NOT PowerBIDefaultSelection.ISEMPTY);
+      END;
+
+      IF PrioritizeAnyContext THEN
+        EXIT(NOT PowerBIDefaultSelection.ISEMPTY);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE IsUserDeployingReports@21() : Boolean;
+    VAR
+      PowerBIOngoingDeployments@1000 : Record 6308;
+    BEGIN
+      // Checks whether any background sessions are running (or waiting to run) for doing PBI default
+      // report uploads, based on the values in table 6308.
+      PowerBIOngoingDeployments.RESET;
+      PowerBIOngoingDeployments.SETFILTER("User Security ID",USERSECURITYID);
+      EXIT(PowerBIOngoingDeployments.FINDFIRST AND PowerBIOngoingDeployments."Is Deploying Reports");
+    END;
+
+    PROCEDURE IsUserRetryingUploads@23() : Boolean;
+    VAR
+      PowerBIOngoingDeployments@1000 : Record 6308;
+    BEGIN
+      // Checks whether any background sessions are running (or waiting to run) for finishing partial
+      // uploads of PBI default reports, based on the values in table 6308.
+      PowerBIOngoingDeployments.RESET;
+      PowerBIOngoingDeployments.SETFILTER("User Security ID",USERSECURITYID);
+      EXIT(PowerBIOngoingDeployments.FINDFIRST AND PowerBIOngoingDeployments."Is Retrying Uploads");
+    END;
+
+    PROCEDURE IsUserDeletingReports@49() : Boolean;
+    VAR
+      PowerBIOngoingDeployments@1000 : Record 6308;
+    BEGIN
+      // Checks whether any background sessions are running (or waiting to run) for deleting any
+      // uploaded PBI default reports, based on the values in table 6308.
+      PowerBIOngoingDeployments.RESET;
+      PowerBIOngoingDeployments.SETFILTER("User Security ID",USERSECURITYID);
+      EXIT(PowerBIOngoingDeployments.FINDFIRST AND PowerBIOngoingDeployments."Is Deleting Reports");
+    END;
+
+    PROCEDURE SetIsDeployingReports@29(IsDeploying@1000 : Boolean);
+    VAR
+      PowerBIOngoingDeployments@1001 : Record 6308;
+    BEGIN
+      // Sets values in table 6308 to indicate a report deployment session is currently running or
+      // waiting to run. This lets us make sure we don't schedule any simulatenous sessions that would
+      // accidentally deploy a report multiple times or something.
+      PowerBIOngoingDeployments.RESET;
+      PowerBIOngoingDeployments.SETFILTER("User Security ID",USERSECURITYID);
+
+      IF PowerBIOngoingDeployments.FINDFIRST THEN BEGIN
+        PowerBIOngoingDeployments."Is Deploying Reports" := IsDeploying;
+        PowerBIOngoingDeployments.MODIFY;
+      END ELSE BEGIN
+        PowerBIOngoingDeployments.INIT;
+        PowerBIOngoingDeployments."User Security ID" := USERSECURITYID;
+        PowerBIOngoingDeployments."Is Deploying Reports" := IsDeploying;
+        PowerBIOngoingDeployments.INSERT;
+      END;
+    END;
+
+    PROCEDURE SetIsRetryingUploads@30(IsRetrying@1000 : Boolean);
+    VAR
+      PowerBIOngoingDeployments@1001 : Record 6308;
+    BEGIN
+      // Sets values in table 6308 to indicate a deployment retry session is currently running or
+      // waiting to run. This lets us make sure we don't schedule any simulatenous sessions that would
+      // accidentally retry an upload multiple times or something.
+      PowerBIOngoingDeployments.RESET;
+      PowerBIOngoingDeployments.SETFILTER("User Security ID",USERSECURITYID);
+
+      IF PowerBIOngoingDeployments.FINDFIRST THEN BEGIN
+        PowerBIOngoingDeployments."Is Retrying Uploads" := IsRetrying;
+        PowerBIOngoingDeployments.MODIFY;
+      END ELSE BEGIN
+        PowerBIOngoingDeployments.INIT;
+        PowerBIOngoingDeployments."User Security ID" := USERSECURITYID;
+        PowerBIOngoingDeployments."Is Retrying Uploads" := IsRetrying;
+        PowerBIOngoingDeployments.INSERT;
+      END;
+    END;
+
+    PROCEDURE SetIsDeletingReports@44(IsDeleting@1000 : Boolean);
+    VAR
+      PowerBIOngoingDeployments@1001 : Record 6308;
+    BEGIN
+      // Sets values in table 6308 to indicate a report deletion session is currently running or
+      // waiting to run. This lets us make sure we don't schedule any simultaneous sessions that would
+      // accidentally delete a report that is already trying to delete or something.
+      PowerBIOngoingDeployments.RESET;
+      PowerBIOngoingDeployments.SETFILTER("User Security ID",USERSECURITYID);
+
+      IF PowerBIOngoingDeployments.FINDFIRST THEN BEGIN
+        PowerBIOngoingDeployments."Is Deleting Reports" := IsDeleting;
+        PowerBIOngoingDeployments.MODIFY;
+      END ELSE BEGIN
+        PowerBIOngoingDeployments.INIT;
+        PowerBIOngoingDeployments."User Security ID" := USERSECURITYID;
+        PowerBIOngoingDeployments."Is Deleting Reports" := IsDeleting;
+        PowerBIOngoingDeployments.INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetServiceRetries@26() : Integer;
+    BEGIN
+      // Const - number of attempts for deployment API calls.
+      EXIT(25);
+    END;
+
+    PROCEDURE IsPBIServiceAvailable@31() : Boolean;
+    VAR
+      PowerBIServiceStatusSetup@1000 : Record 6309;
+    BEGIN
+      // Checks whether the Power BI service is available for deploying default reports, based on
+      // whether previous deployments have failed with a retry date/time that we haven't reached yet.
+      PowerBIServiceStatusSetup.RESET;
+      IF PowerBIServiceStatusSetup.FINDFIRST THEN
+        EXIT(PowerBIServiceStatusSetup."Retry After" <= CURRENTDATETIME);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE UpdatePBIServiceAvailability@35(RetryAfter@1001 : DateTime);
+    VAR
+      PowerBIServiceStatusSetup@1000 : Record 6309;
+    BEGIN
+      // Sets the cross-company variable that tracks when the Power BI service is available for
+      // deployment calls - service failures will return the date/time which we shouldn't attempt
+      // new calls before.
+      PowerBIServiceStatusSetup.RESET;
+      IF PowerBIServiceStatusSetup.FINDFIRST THEN BEGIN
+        PowerBIServiceStatusSetup."Retry After" := RetryAfter;
+        PowerBIServiceStatusSetup.MODIFY;
+      END ELSE BEGIN
+        PowerBIServiceStatusSetup.INIT;
+        PowerBIServiceStatusSetup."Retry After" := RetryAfter;
+        PowerBIServiceStatusSetup.INSERT;
+      END;
+    END;
+
+    PROCEDURE LogException@10(VAR ExceptionMessage@1000 : Text;VAR ExceptionDetails@1001 : Text);
+    VAR
+      AzureADAppSetup@1004 : Record 6300;
+      ActivityLog@1003 : Record 710;
+      Company@1002 : Record 2000000006;
+    BEGIN
+      IF ExceptionMessage <> '' THEN BEGIN
+        IF NOT AzureADAppSetup.ISEMPTY THEN BEGIN
+          AzureADAppSetup.FINDFIRST;
+          ActivityLog.LogActivityForUser(
+            AzureADAppSetup.RECORDID,ActivityLog.Status::Failed,'Power BI Non-SaaS',ExceptionMessage,ExceptionDetails,USERID);
+        END ELSE BEGIN
+          Company.GET(COMPANYNAME); // Dummy record to attach to activity log
+          ActivityLog.LogActivityForUser(
+            Company.RECORDID,ActivityLog.Status::Failed,'Power BI SaaS',ExceptionMessage,ExceptionDetails,USERID);
+        END;
+        ExceptionMessage := '';
+        ExceptionDetails := '';
+      END;
+    END;
+
+    [External]
+    PROCEDURE CanHandleServiceCalls@11() : Boolean;
+    VAR
+      AzureADMgtSetup@1000 : Record 6303;
+    BEGIN
+      // Checks if the current codeunit is allowed to handle Power BI service requests rather than a mock.
+      IF AzureADMgtSetup.GET THEN
+        EXIT(AzureADMgtSetup."PBI Service Mgt. Codeunit ID" = CODEUNIT::"Power BI Service Mgt.");
+
+      EXIT(FALSE);
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnGetReports@18(VAR TempPowerBIReportBuffer@1003 : TEMPORARY Record 6302;VAR ExceptionMessage@1002 : Text;VAR ExceptionDetails@1001 : Text;Context@1000 : Text[30]);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnUploadReports@36(VAR ApiRequestList@1000 : DotNet "'Microsoft.Dynamics.Nav.PowerBIEmbedded, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.PowerBIEmbedded.Models.ImportReportRequestList";VAR ApiResponseList@1001 : DotNet "'Microsoft.Dynamics.Nav.PowerBIEmbedded, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.PowerBIEmbedded.Models.ImportReportResponseList");
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnRetryUploads@37(VAR ImportIdList@1000 : DotNet "'Microsoft.Dynamics.Nav.PowerBIEmbedded, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.PowerBIEmbedded.Models.ImportedReportRequestList";VAR ApiResponseList@1001 : DotNet "'Microsoft.Dynamics.Nav.PowerBIEmbedded, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.PowerBIEmbedded.Models.ImportedReportResponseList");
+    BEGIN
+    END;
+
+    [Internal]
+    PROCEDURE HasUploads@38() : Boolean;
+    VAR
+      PowerBIReportUploads@1000 : Record 6307;
+    BEGIN
+      EXIT(NOT PowerBIReportUploads.ISEMPTY);
+    END;
+
+    LOCAL PROCEDURE CleanupSelection@39();
+    VAR
+      PowerBIReportUploads@1000 : Record 6307;
+      PowerBIReportConfiguration@1001 : Record 6301;
+      IntelligentCloud@1003 : Record 2000000146;
+    BEGIN
+      // This will clean up report configuration when switching between GP to BC and vice versa
+      PowerBIReportUploads.RESET;
+      PowerBIReportUploads.SETFILTER("User ID",USERSECURITYID);
+      PowerBIReportUploads.SETFILTER("Uploaded Report ID",'<>%1',NullGuidTxt);
+      PowerBIReportUploads.SETFILTER("Is Selection Done",'%1',TRUE);
+      IF IntelligentCloud.GET THEN
+        PowerBIReportUploads.SETFILTER(IsGP,'%1',FALSE)
+      ELSE
+        PowerBIReportUploads.SETFILTER(IsGP,'%1',TRUE);
+
+      IF PowerBIReportUploads.FIND('-') THEN
+        REPEAT
+          // Setting "Is Selection Done" to false will trigger selection again next time we switch between GP to BC and vice versa
+          PowerBIReportUploads."Is Selection Done" := FALSE;
+          PowerBIReportUploads.MODIFY;
+
+          PowerBIReportConfiguration.RESET;
+          PowerBIReportConfiguration.SETFILTER("User Security ID",USERSECURITYID);
+          PowerBIReportConfiguration.SETFILTER("Report ID",PowerBIReportUploads."Uploaded Report ID");
+          // Currently we are assuming that we want to delete all reports irrespective of context.
+          // If we decide to delete reports based on context (or atleast blank context) we will have to
+          // write logic here
+          IF NOT PowerBIReportConfiguration.ISEMPTY THEN
+            PowerBIReportConfiguration.DELETEALL;
+        UNTIL PowerBIReportUploads.NEXT = 0;
+    END;
+
+    PROCEDURE GetFactboxFilterFromID@40(Context@1000 : Text) : Text;
+    BEGIN
+      // Checks the Page ID of the calling page and supplies an English filter term for the Report Selection
+      IF Context = 'Page 22' THEN
+        EXIT(CustomerTxt);
+      IF Context = 'Page 27' THEN
+        EXIT(VendorTxt);
+      IF Context = 'Page 31' THEN
+        EXIT(ItemTxt);
+      IF Context = 'Page 9305' THEN
+        EXIT(SalesTxt);
+      IF Context = 'Page 9308' THEN
+        EXIT(InvoicesTxt);
+    END;
+
+    PROCEDURE GetData@47(VAR ExceptionMessage@1018 : Text;VAR ExceptionDetails@1014 : Text;Url@1007 : Text) : Text;
+    VAR
+      DotNetExceptionHandler@1077 : Codeunit 1291;
+      WebRequestHelper@1006 : Codeunit 1299;
+      HttpWebResponse@1004 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebResponse";
+      WebException@1003 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.WebException";
+      HttpStatusCode@1002 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpStatusCode";
+      Exception@1005 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Exception";
+      ResponseText@1000 : Text;
+    BEGIN
+      IF NOT WebRequestHelper.GetResponseText(
+           'GET',Url,AzureAdMgt.GetAccessToken(GetPowerBiResourceUrl,GetPowerBiResourceName,FALSE),ResponseText)
+      THEN BEGIN
+        Exception := GETLASTERROROBJECT;
+        ExceptionMessage := Exception.Message;
+        ExceptionDetails := Exception.ToString;
+
+        DotNetExceptionHandler.Collect;
+        IF DotNetExceptionHandler.CastToType(WebException,GETDOTNETTYPE(WebException)) THEN BEGIN
+          HttpWebResponse := WebException.Response;
+          HttpStatusCode := HttpWebResponse.StatusCode;
+
+          IF HttpWebResponse.StatusCode = 401 THEN BEGIN
+            PowerBISessionManager.SetHasPowerBILicense(FALSE);
+            ERROR(UnauthorizedErr);
+          END;
+        END ELSE
+          ERROR(GenericErr);
+      END;
+
+      PowerBISessionManager.SetHasPowerBILicense(TRUE);
+
+      EXIT(ResponseText);
+    END;
+
+    LOCAL PROCEDURE ParseReport@50(VAR TempPowerBIReportBuffer@1002 : TEMPORARY Record 6302;JObj@1003 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";Context@1001 : Text[30]);
+    VAR
+      PowerBIReportConfiguration@1000 : Record 6301;
+      JToken@1004 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JToken";
+    BEGIN
+      TempPowerBIReportBuffer.INIT;
+
+      // report GUID identifier
+      JToken := JObj.SelectToken('id');
+      EVALUATE(TempPowerBIReportBuffer.ReportID,JToken.ToString);
+
+      // report name
+      JToken := JObj.SelectToken('name');
+      TempPowerBIReportBuffer.ReportName := JToken.ToString;
+
+      // report embedding url
+      JToken := JObj.SelectToken('embedUrl');
+      TempPowerBIReportBuffer.EmbedUrl := JToken.ToString;
+
+      PowerBIReportConfiguration.RESET;
+      IF PowerBIReportConfiguration.GET(USERSECURITYID,TempPowerBIReportBuffer.ReportID,Context) THEN BEGIN
+        // report enabled
+        TempPowerBIReportBuffer.Enabled := TRUE;
+
+        IF PowerBIReportConfiguration.EmbedUrl = '' THEN
+          UpdateEmbedCache := TRUE;
+      END;
+
+      TempPowerBIReportBuffer.INSERT;
+    END;
+
+    LOCAL PROCEDURE ParseReports@53(VAR TempPowerBIReportBuffer@1002 : TEMPORARY Record 6302;JObj@1003 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";Context@1001 : Text[30]);
+    VAR
+      ObjectEnumerator@1007 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.IEnumerator";
+      Current@1006 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.KeyValuePair`2";
+      JArray@1005 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JArray";
+      ArrayEnumerator@1000 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.IEnumerator";
+      Key@1008 : Text;
+    BEGIN
+      ObjectEnumerator := JObj.GetEnumerator;
+
+      WHILE ObjectEnumerator.MoveNext DO BEGIN
+        Current := ObjectEnumerator.Current;
+        Key := Current.Key;
+
+        IF Key = 'value' THEN BEGIN
+          JArray := Current.Value;
+          ArrayEnumerator := JArray.GetEnumerator;
+
+          WHILE ArrayEnumerator.MoveNext DO BEGIN
+            JObj := ArrayEnumerator.Current;
+            ParseReport(TempPowerBIReportBuffer,JObj,Context);
+          END;
+        END
+      END;
+    END;
+
+    LOCAL PROCEDURE GetReportsUrl@65() : Text;
+    BEGIN
+      IF IsPPE THEN
+        EXIT(ReportsUrlPPETxt);
+
+      EXIT(ReportsUrlTxt);
+    END;
+
+    PROCEDURE IsPowerBIDeploymentEnabled@16() : Boolean;
+    VAR
+      PowerBIBlob@1000 : Record 2000000144;
+      PowerBIOngoingDeployments@1001 : Record 6308;
+    BEGIN
+      // First check for application service
+      IF PowerBIBlob.GET(HackPowerBIGuidTxt) THEN
+        EXIT(FALSE);
+
+      // Now check for current tenant
+      IF PowerBIOngoingDeployments.GET(HackPowerBIGuidTxt) THEN
+        EXIT(FALSE);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GetIsDeployingReports@46() : Boolean;
+    BEGIN
+      EXIT(IsPowerBIDeploymentEnabled AND (IsUserDeployingReports OR IsUserRetryingUploads OR
+                                           IsUserDeletingReports));
+    END;
+
+    PROCEDURE UpdateEmbedUrlCache@54(VAR TempPowerBIReportBuffer@1000 : TEMPORARY Record 6302;Context@1002 : Text);
+    VAR
+      PowerBIReportConfiguration@1001 : Record 6301;
+    BEGIN
+      IF UpdateEmbedCache THEN BEGIN
+        TempPowerBIReportBuffer.RESET;
+        IF TempPowerBIReportBuffer.FIND('-') THEN
+          REPEAT
+            IF TempPowerBIReportBuffer.EmbedUrl <> '' THEN
+              IF PowerBIReportConfiguration.GET(USERSECURITYID,TempPowerBIReportBuffer.ReportID,Context) THEN BEGIN
+                PowerBIReportConfiguration.EmbedUrl := TempPowerBIReportBuffer.EmbedUrl;
+                IF PowerBIReportConfiguration.MODIFY THEN;
+              END;
+          UNTIL TempPowerBIReportBuffer.NEXT = 0;
+
+        UpdateEmbedCache := FALSE;
+      END;
+    END;
+
+    BEGIN
+    {
+      // Manages access to the Power BI service API's (aka powerbi.com)
+    }
+    END.
+  }
+}
+

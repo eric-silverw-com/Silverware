@@ -1,0 +1,321 @@
+OBJECT Table 1251 Text-to-Account Mapping
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:14:29 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    DataCaptionFields=Mapping Text;
+    OnInsert=BEGIN
+               CheckMappingText;
+             END;
+
+    OnModify=BEGIN
+               CheckMappingText;
+             END;
+
+    CaptionML=ENU=Text-to-Account Mapping;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Line No.            ;Integer       ;CaptionML=ENU=Line No. }
+    { 2   ;   ;Mapping Text        ;Text250       ;OnValidate=BEGIN
+                                                                "Mapping Text" := COPYSTR(RecordMatchMgt.Trim("Mapping Text"),1,250);
+                                                              END;
+
+                                                   CaptionML=ENU=Mapping Text;
+                                                   NotBlank=Yes }
+    { 3   ;   ;Debit Acc. No.      ;Code20        ;TableRelation="G/L Account" WHERE (Account Type=CONST(Posting),
+                                                                                      Blocked=CONST(No),
+                                                                                      Direct Posting=CONST(Yes));
+                                                   CaptionML=ENU=Debit Acc. No. }
+    { 4   ;   ;Credit Acc. No.     ;Code20        ;TableRelation="G/L Account" WHERE (Account Type=CONST(Posting),
+                                                                                      Blocked=CONST(No),
+                                                                                      Direct Posting=CONST(Yes));
+                                                   CaptionML=ENU=Credit Acc. No. }
+    { 5   ;   ;Bal. Source Type    ;Option        ;OnValidate=BEGIN
+                                                                VALIDATE("Bal. Source No.",'');
+                                                              END;
+
+                                                   CaptionML=ENU=Bal. Source Type;
+                                                   OptionCaptionML=ENU=G/L Account,Customer,Vendor,Bank Account;
+                                                   OptionString=G/L Account,Customer,Vendor,Bank Account }
+    { 6   ;   ;Bal. Source No.     ;Code20        ;TableRelation=IF (Bal. Source Type=CONST(G/L Account)) "G/L Account" WHERE (Account Type=CONST(Posting),
+                                                                                                                               Blocked=CONST(No))
+                                                                                                                               ELSE IF (Bal. Source Type=CONST(Customer)) Customer
+                                                                                                                               ELSE IF (Bal. Source Type=CONST(Vendor)) Vendor
+                                                                                                                               ELSE IF (Bal. Source Type=CONST(Bank Account)) "Bank Account";
+                                                   CaptionML=ENU=Bal. Source No. }
+    { 7   ;   ;Vendor No.          ;Code20        ;TableRelation=Vendor;
+                                                   CaptionML=ENU=Vendor No. }
+  }
+  KEYS
+  {
+    {    ;Line No.                                ;Clustered=Yes }
+    { No ;Mapping Text,Vendor No.                  }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      RecordMatchMgt@1000 : Codeunit 1251;
+      AlreadyExistErr@1001 : TextConst '@@@=%1 is the value currently inserted.;ENU="Entry with Mapping Text=''%1'' already exists."';
+      BalAccountNoQst@1002 : TextConst '@@@=%1 is option: Vendor or Customer and %2 is the record value in this field.;ENU=The Bal. Account No. field must have a value if the Bal. Source Type field contains %1.\\Affected Mapping Text: %2. Do you want to quit without saving the data?';
+      GLAccountNoQst@1003 : TextConst '@@@=%1 is option: G/L Account and %2 is the record value in this field.;ENU=The Debit Acc. No. field or the Credit Acc. No. field must have a value if the Bal. Source Type field contains %1.\\Affected Mapping Text: %2. Do you want to quit without saving the data?';
+      FilterInvalidCharTxt@1004 : TextConst '@@@={Locked};ENU=(&)';
+
+    [External]
+    PROCEDURE InsertRec@1(GenJnlLine@1000 : Record 81);
+    VAR
+      TextToAccMapping@1001 : Record 1251;
+      LastLineNo@1002 : Integer;
+    BEGIN
+      IF RecordMatchMgt.Trim(GenJnlLine.Description) <> '' THEN BEGIN
+        TextToAccMapping.SETFILTER("Mapping Text",'%1','@' + RecordMatchMgt.Trim(GenJnlLine.Description));
+        IF TextToAccMapping.FINDFIRST THEN
+          COPY(TextToAccMapping)
+        ELSE BEGIN
+          TextToAccMapping.RESET;
+          IF TextToAccMapping.FINDLAST THEN
+            LastLineNo := TextToAccMapping."Line No.";
+
+          INIT;
+          "Line No." := LastLineNo + 10000;
+          VALIDATE("Mapping Text",GenJnlLine.Description);
+          SetBalSourceType(GenJnlLine);
+          IF "Bal. Source Type" <> "Bal. Source Type"::"G/L Account" THEN
+            "Bal. Source No." := GenJnlLine."Account No."
+          ELSE BEGIN
+            "Debit Acc. No." := GenJnlLine."Account No.";
+            "Credit Acc. No." := GenJnlLine."Account No.";
+          END;
+
+          IF "Mapping Text" <> '' THEN
+            INSERT;
+        END;
+
+        RESET;
+      END;
+
+      PAGE.RUN(PAGE::"Text-to-Account Mapping",Rec);
+    END;
+
+    [External]
+    PROCEDURE InsertRecFromBankAccReconciliationLine@7(BankAccReconciliationLine@1000 : Record 274);
+    VAR
+      TextToAccMapping@1001 : Record 1251;
+      LastLineNo@1002 : Integer;
+    BEGIN
+      IF RecordMatchMgt.Trim(BankAccReconciliationLine."Transaction Text") <> '' THEN BEGIN
+        TextToAccMapping.SETFILTER("Mapping Text",'%1','@' + RecordMatchMgt.Trim(BankAccReconciliationLine."Transaction Text"));
+        IF TextToAccMapping.FINDFIRST THEN
+          COPY(TextToAccMapping)
+        ELSE BEGIN
+          TextToAccMapping.RESET;
+          IF TextToAccMapping.FINDLAST THEN
+            LastLineNo := TextToAccMapping."Line No.";
+
+          INIT;
+          "Line No." := LastLineNo + 10000;
+          VALIDATE("Mapping Text",BankAccReconciliationLine."Transaction Text");
+
+          SetSourceTypeFromReconcLine(BankAccReconciliationLine);
+          IF "Bal. Source Type" <> "Bal. Source Type"::"G/L Account" THEN
+            "Bal. Source No." := BankAccReconciliationLine."Account No."
+          ELSE BEGIN
+            "Debit Acc. No." := BankAccReconciliationLine."Account No.";
+            "Credit Acc. No." := BankAccReconciliationLine."Account No.";
+          END;
+
+          IF "Mapping Text" <> '' THEN
+            INSERT;
+        END;
+
+        RESET;
+
+        COMMIT;
+      END;
+
+      PAGE.RUNMODAL(PAGE::"Text-to-Account Mapping",Rec);
+    END;
+
+    [External]
+    PROCEDURE GetAccountNo@2(Amount@1000 : Decimal) : Code[20];
+    BEGIN
+      IF Amount >= 0 THEN
+        EXIT("Debit Acc. No.");
+
+      EXIT("Credit Acc. No.");
+    END;
+
+    [External]
+    PROCEDURE GetPaymentDocType@5(VAR PaymentDocType@1002 : Option;ActualSourceType@1005 : Option;Amount@1000 : Decimal);
+    VAR
+      GenJournalLine@1004 : Record 81;
+      ExpectedSourceType@1001 : Option;
+    BEGIN
+      IF Amount >= 0 THEN
+        ExpectedSourceType := "Bal. Source Type"::Vendor
+      ELSE
+        ExpectedSourceType := "Bal. Source Type"::Customer;
+
+      IF ExpectedSourceType = ActualSourceType THEN
+        PaymentDocType := GenJournalLine."Document Type"::Payment
+      ELSE
+        PaymentDocType := GenJournalLine."Document Type"::Refund;
+    END;
+
+    [External]
+    PROCEDURE GetDocTypeForPmt@4(VAR DocType@1000 : Option;PaymentDocType@1002 : Option);
+    VAR
+      GenJournalLine@1004 : Record 81;
+    BEGIN
+      CASE PaymentDocType OF
+        GenJournalLine."Document Type"::Payment:
+          DocType := GenJournalLine."Document Type"::Invoice;
+        GenJournalLine."Document Type"::Refund:
+          DocType := GenJournalLine."Document Type"::"Credit Memo";
+      END;
+    END;
+
+    LOCAL PROCEDURE SetBalSourceType@3(GenJournalLine@1000 : Record 81);
+    BEGIN
+      CASE GenJournalLine."Account Type" OF
+        GenJournalLine."Account Type"::Customer:
+          "Bal. Source Type" := "Bal. Source Type"::Customer;
+        GenJournalLine."Account Type"::Vendor:
+          "Bal. Source Type" := "Bal. Source Type"::Vendor;
+      END;
+    END;
+
+    LOCAL PROCEDURE SetSourceTypeFromReconcLine@9(BankAccReconciliationLine@1001 : Record 274);
+    BEGIN
+      CASE BankAccReconciliationLine."Account Type" OF
+        BankAccReconciliationLine."Account Type"::Customer:
+          "Bal. Source Type" := "Bal. Source Type"::Customer;
+        BankAccReconciliationLine."Account Type"::Vendor:
+          "Bal. Source Type" := "Bal. Source Type"::Vendor;
+      END;
+    END;
+
+    [External]
+    PROCEDURE IsBalSourceNoEnabled@6() : Boolean;
+    BEGIN
+      EXIT(NOT ("Bal. Source Type" IN ["Bal. Source Type"::"G/L Account","Bal. Source Type"::"Bank Account"]));
+    END;
+
+    LOCAL PROCEDURE CheckMappingText@8();
+    VAR
+      TextToAccMapping@1000 : Record 1251;
+    BEGIN
+      TextToAccMapping.SETFILTER("Mapping Text",'%1','@' + "Mapping Text");
+      TextToAccMapping.SETRANGE("Vendor No.","Vendor No.");
+      TextToAccMapping.SETFILTER("Line No.",'<>%1',"Line No.");
+      IF NOT TextToAccMapping.ISEMPTY THEN
+        ERROR(AlreadyExistErr,"Mapping Text");
+    END;
+
+    [External]
+    PROCEDURE CheckEntriesAreConsistent@10() : Boolean;
+    VAR
+      TextToAccMapping@1000 : Record 1251;
+    BEGIN
+      WITH TextToAccMapping DO BEGIN
+        SETFILTER("Bal. Source Type",'%1|%2',"Bal. Source Type"::Vendor,"Bal. Source Type"::Customer);
+        SETRANGE("Bal. Source No.",'');
+        IF FINDFIRST THEN BEGIN
+          IF DIALOG.CONFIRM(BalAccountNoQst,TRUE,"Bal. Source Type","Mapping Text")
+          THEN BEGIN
+            DELETEALL(TRUE);
+            EXIT(TRUE);
+          END;
+          EXIT(FALSE);
+        END;
+
+        SETRANGE("Bal. Source Type","Bal. Source Type"::"G/L Account");
+        SETRANGE("Debit Acc. No.",'');
+        SETRANGE("Credit Acc. No.",'');
+        IF FINDFIRST THEN BEGIN
+          IF DIALOG.CONFIRM(GLAccountNoQst,TRUE,"Bal. Source Type"::"G/L Account","Mapping Text")
+          THEN BEGIN
+            DELETEALL(TRUE);
+            EXIT(TRUE);
+          END;
+          EXIT(FALSE);
+        END;
+
+        SETRANGE("Bal. Source Type","Bal. Source Type"::"Bank Account");
+        SETRANGE("Debit Acc. No.",'');
+        SETRANGE("Credit Acc. No.",'');
+        IF FINDFIRST THEN BEGIN
+          IF DIALOG.CONFIRM(GLAccountNoQst,TRUE,"Bal. Source Type"::"Bank Account","Mapping Text")
+          THEN BEGIN
+            DELETEALL(TRUE);
+            EXIT(TRUE);
+          END;
+          EXIT(FALSE);
+        END;
+
+        // Exit normally
+        EXIT(TRUE)
+      END;
+    END;
+
+    [External]
+    PROCEDURE SearchEnteriesInText@17(VAR TextToAccountMapping@1000 : Record 1251;LineDescription@1001 : Text;VendorNo@1002 : Code[20]) : Integer;
+    VAR
+      TempTextToAccountMapping@1003 : TEMPORARY Record 1251;
+      TempDefaultTextToAccountMapping@1005 : TEMPORARY Record 1251;
+      ResultCount@1004 : Integer;
+    BEGIN
+      IF SearchExactMapping(TextToAccountMapping,LineDescription,VendorNo) THEN
+        EXIT(1);
+
+      TextToAccountMapping.RESET;
+      TextToAccountMapping.SETRANGE("Vendor No.",VendorNo);
+      IF NOT TextToAccountMapping.FINDSET THEN
+        EXIT(ResultCount);
+
+      REPEAT
+        IF TextToAccountMapping."Mapping Text" = '' THEN // Default mapping
+          TempDefaultTextToAccountMapping.COPY(TextToAccountMapping)
+        ELSE
+          IF STRPOS(UPPERCASE(LineDescription),UPPERCASE(TextToAccountMapping."Mapping Text")) > 0 THEN BEGIN
+            TempTextToAccountMapping.COPY(TextToAccountMapping);
+            TempTextToAccountMapping.INSERT;
+          END;
+      UNTIL TextToAccountMapping.NEXT = 0;
+
+      ResultCount := TempTextToAccountMapping.COUNT;
+      IF ResultCount = 0 THEN
+        IF TempDefaultTextToAccountMapping."Line No." <> 0 THEN BEGIN
+          TextToAccountMapping.COPY(TempDefaultTextToAccountMapping);
+          EXIT(1);
+        END;
+
+      IF ResultCount <> 1 THEN
+        EXIT(ResultCount);
+
+      TempTextToAccountMapping.FINDFIRST;
+      TextToAccountMapping.COPY(TempTextToAccountMapping);
+      EXIT(ResultCount);
+    END;
+
+    LOCAL PROCEDURE SearchExactMapping@13(VAR TextToAccountMapping@1000 : Record 1251;LineDescription@1001 : Text;VendorNo@1002 : Code[20]) : Boolean;
+    BEGIN
+      TextToAccountMapping.RESET;
+      TextToAccountMapping.SETRANGE("Vendor No.",VendorNo);
+      TextToAccountMapping.SETFILTER("Mapping Text",'%1','@' + DELCHR(LineDescription,'=',FilterInvalidCharTxt));
+      EXIT(TextToAccountMapping.FINDFIRST);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

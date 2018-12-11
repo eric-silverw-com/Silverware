@@ -1,0 +1,345 @@
+OBJECT Codeunit 104000 UPG SaaS
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=12:00:00 PM;
+    Version List=UPGTK13.01.00;
+  }
+  PROPERTIES
+  {
+    Subtype=Upgrade;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      DataUpgradeMgt@1004 : Codeunit 9900;
+      MicrosoftInvoiceOldPlanTxt@1002 : TextConst '@@@={Locked};ENU={07eb0dc4-7da7-4e7b-bb42-2d44c5e08b08}';
+      MicrosoftInvoicingNewPlanTxt@1120 : TextConst '@@@={Locked};ENU={39b5c996-467e-4e60-bd62-46066f572726}';
+      NullGuidTxt@1000 : TextConst '@@@={Locked};ENU={00000000-0000-0000-0000-000000000000}';
+      ExcelTemplateIncomeStatementTxt@1018 : TextConst '@@@={Locked};ENU=ExcelTemplateIncomeStatement';
+      ExcelTemplateBalanceSheetTxt@1017 : TextConst '@@@={Locked};ENU=ExcelTemplateBalanceSheet';
+      ExcelTemplateTrialBalanceTxt@1016 : TextConst '@@@={Locked};ENU=ExcelTemplateTrialBalance';
+      ExcelTemplateRetainedEarningsStatementTxt@1020 : TextConst '@@@={Locked};ENU=ExcelTemplateRetainedEarnings';
+      ExcelTemplateCashFlowStatementTxt@1019 : TextConst '@@@={Locked};ENU=ExcelTemplateCashFlowStatement';
+      ExcelTemplateAgedAccountsReceivableTxt@1021 : TextConst '@@@={Locked};ENU=ExcelTemplateAgedAccountsReceivable';
+      ExcelTemplateAgedAccountsPayableTxt@1022 : TextConst '@@@={Locked};ENU=ExcelTemplateAgedAccountsPayable';
+      ExcelTemplateCompanyInformationTxt@1025 : TextConst '@@@={Locked};ENU=ExcelTemplateViewCompanyInformation';
+
+    [CheckPrecondition]
+    PROCEDURE CheckPreconditions@3();
+    BEGIN
+    END;
+
+    [TableSyncSetup]
+    PROCEDURE GetTableSyncSetupW1@4(VAR TableSynchSetup@1000 : Record 2000000135);
+    BEGIN
+    END;
+
+    [TableSyncSetup]
+    PROCEDURE GetTableSyncSetupCountry@121(VAR TableSynchSetup@1000 : Record 2000000135);
+    BEGIN
+      DataUpgradeMgt.SetTableSyncSetup(
+        3010590,0,TableSynchSetup.Mode::Check);
+    END;
+
+    [UpgradePerCompany]
+    PROCEDURE UpgradeExperienceToEssential@1();
+    VAR
+      ExperienceTierSetup@1001 : Record 9176;
+      ApplicationAreaMgmtFacade@1000 : Codeunit 9179;
+    BEGIN
+      IF ApplicationAreaMgmtFacade.IsBasicExperienceEnabled THEN
+        ApplicationAreaMgmtFacade.SaveExperienceTierCurrentCompany(ExperienceTierSetup.FIELDNAME(Essential));
+    END;
+
+    [UpgradePerCompany]
+    PROCEDURE DisableBussinessProfileSync@7();
+    VAR
+      CompanyInformation@1000 : Record 79;
+      Company@1002 : Record 2000000006;
+    BEGIN
+      IF NOT CompanyInformation.GET THEN
+        EXIT;
+
+      CompanyInformation."Sync with O365 Bus. profile" := FALSE;
+      IF CompanyInformation.MODIFY THEN;
+
+      Company.GET(COMPANYNAME);
+      IF Company."Business Profile Id" <> '' THEN BEGIN
+        Company."Business Profile Id" := '';
+        IF Company.MODIFY THEN;
+      END;
+    END;
+
+    [UpgradePerCompany]
+    PROCEDURE DisableGraphSync@8();
+    VAR
+      MarketingSetup@1000 : Record 5079;
+      O365SalesInitialSetup@1001 : Record 2110;
+    BEGIN
+      IF NOT MarketingSetup.GET THEN
+        EXIT;
+      IF NOT (O365SalesInitialSetup.GET AND O365SalesInitialSetup."Is initialized") THEN
+        EXIT;
+
+      MarketingSetup."Sync with Microsoft Graph" := FALSE;
+      IF MarketingSetup.MODIFY THEN;
+    END;
+
+    [UpgradePerCompany]
+    PROCEDURE DisableKPIs@6();
+    VAR
+      O365C2GraphEventSettings@1000 : Record 2162;
+    BEGIN
+      IF NOT O365C2GraphEventSettings.GET THEN
+        EXIT;
+
+      O365C2GraphEventSettings.SetEventsEnabled(FALSE);
+      IF O365C2GraphEventSettings.MODIFY THEN;
+    END;
+
+    [UpgradePerCompany]
+    PROCEDURE RemoveAllCoupons@13();
+    VAR
+      O365CouponClaim@1000 : Record 2115;
+      O365CouponClaimDocLink@1002 : Record 2116;
+    BEGIN
+      O365CouponClaim.DELETEALL;
+      O365CouponClaimDocLink.DELETEALL;
+    END;
+
+    [UpgradePerCompany]
+    PROCEDURE CleanuoDataExch@11();
+    VAR
+      DataExch@1000 : Record 1220;
+      DataExchField@1001 : Record 1221;
+    BEGIN
+      DataExch.DELETEALL;
+      DataExchField.DELETEALL;
+    END;
+
+    [UpgradePerCompany]
+    PROCEDURE CleanDocumentSentHistoryForGraph@9();
+    VAR
+      O365DocumentSentHistory@1000 : Record 2158;
+      NullGuid@1001 : GUID;
+    BEGIN
+      IF O365DocumentSentHistory.ISEMPTY THEN
+        EXIT;
+
+      // Deletes wrong data: logs for documents sent in foreground with Graph email are all marked as failed even if succeeded.
+      // This might also remove some legit logs, but errors with Graph are already notified to the user in foreground as well.
+      EVALUATE(NullGuid,NullGuidTxt);
+      O365DocumentSentHistory.SETFILTER("Job Queue Entry ID",'=%1',NullGuid);
+      O365DocumentSentHistory.SETRANGE("Job Last Status",O365DocumentSentHistory."Job Last Status"::Error);
+      O365DocumentSentHistory.DELETEALL;
+
+      // Also avoid RC notification of failed documents, since on previous the feature was disabled
+      O365DocumentSentHistory.RESET;
+      O365DocumentSentHistory.MODIFYALL(Notified,TRUE);
+      O365DocumentSentHistory.MODIFYALL(NotificationCleared,TRUE);
+    END;
+
+    [UpgradePerCompany]
+    PROCEDURE UpdateUnpostedNotificationsForAllUsers@5();
+    VAR
+      MyNotifications@1001 : Record 1518;
+      FilterBlob@1004 : Record 99008535;
+      InstructionMgt@1000 : Codeunit 1330;
+      OutStream@1002 : OutStream;
+    BEGIN
+      MyNotifications.SETRANGE("Apply to Table Id",0);
+      MyNotifications.SETRANGE("Notification Id",InstructionMgt.GetClosingUnpostedDocumentNotificationId);
+      IF NOT MyNotifications.ISEMPTY THEN BEGIN
+        FilterBlob.INIT;
+        FilterBlob.Blob.CREATEOUTSTREAM(OutStream);
+        OutStream.WRITE(
+          MyNotifications.GetXmlFromTableView(DATABASE::"Sales Header",InstructionMgt.GetDocumentTypeInvoiceFilter));
+        MyNotifications.MODIFYALL("Apply to Table Filter",FilterBlob.Blob,FALSE);
+        MyNotifications.MODIFYALL("Apply to Table Id",DATABASE::"Sales Header",TRUE);
+      END;
+    END;
+
+    [UpgradePerCompany]
+    PROCEDURE UpdateDefaultDimensionsReferencedIds@14();
+    VAR
+      DefaultDimension@1000 : Record 352;
+    BEGIN
+      IF DefaultDimension.FINDSET THEN
+        REPEAT
+          DefaultDimension.UpdateReferencedIds;
+          IF DefaultDimension.MODIFY THEN ;
+        UNTIL DefaultDimension.NEXT = 0;
+    END;
+
+    [UpgradePerDatabase]
+    PROCEDURE UpdateInvoicingPlan@2();
+    VAR
+      Plan@1000 : Record 9004;
+      UserGroupPlan@1001 : Record 9007;
+      UserGroup@1002 : Record 9000;
+    BEGIN
+      IF Plan.GET(MicrosoftInvoiceOldPlanTxt) THEN BEGIN
+        Plan."Role Center ID" := PAGE::"O365 Sales Activities RC";
+        IF Plan.MODIFY THEN;
+      END;
+
+      IF NOT Plan.GET(MicrosoftInvoicingNewPlanTxt) THEN BEGIN
+        Plan.INIT;
+        Plan."Plan ID" := MicrosoftInvoicingNewPlanTxt;
+        Plan.Name := 'Microsoft Invoicing';
+        Plan."Role Center ID" := PAGE::"O365 Sales Activities RC";
+        IF Plan.INSERT THEN;
+      END;
+
+      IF UserGroup.GET('D365 BUS FULL ACCESS') AND Plan.GET(MicrosoftInvoicingNewPlanTxt) THEN BEGIN
+        UserGroupPlan."Plan ID" := MicrosoftInvoicingNewPlanTxt;
+        UserGroupPlan."User Group Code" := 'D365 BUS FULL ACCESS';
+        IF UserGroupPlan.INSERT THEN;
+      END;
+    END;
+
+    [UpgradePerCompany]
+    PROCEDURE UpdateCheckFieldSetup@1010();
+    VAR
+      IntrastatJnlLine@1001 : Record 263;
+    BEGIN
+      InsertCheckFieldSetup(IntrastatJnlLine.FIELDNO("Tariff No."));
+      InsertCheckFieldSetup(IntrastatJnlLine.FIELDNO("Country/Region Code"));
+      InsertCheckFieldSetup(IntrastatJnlLine.FIELDNO("Transaction Type"));
+      InsertCheckFieldSetup(IntrastatJnlLine.FIELDNO("Total Weight"));
+      InsertCheckFieldSetup(IntrastatJnlLine.FIELDNO(Quantity));
+    END;
+
+    LOCAL PROCEDURE InsertCheckFieldSetup@2323(FieldNumber@1001 : Integer);
+    VAR
+      IntrastatCheckFieldSetup@1002 : Record 8451;
+    BEGIN
+      WITH IntrastatCheckFieldSetup DO BEGIN
+        INIT;
+        VALIDATE("Field No.",FieldNumber);
+        IF INSERT THEN;
+      END;
+    END;
+
+    [UpgradePerCompany]
+    PROCEDURE UpdateGenJournalBatchReferencedIds@10();
+    VAR
+      GenJournalBatch@1000 : Record 232;
+    BEGIN
+      IF GenJournalBatch.FINDSET THEN
+        REPEAT
+          GenJournalBatch.UpdateBalAccountId;
+          IF GenJournalBatch.MODIFY THEN ;
+        UNTIL GenJournalBatch.NEXT = 0;
+    END;
+
+    [UpgradePerCompany]
+    PROCEDURE UpdateItems@201();
+    VAR
+      Item@1000 : Record 27;
+    BEGIN
+      IF Item.FINDSET(TRUE,FALSE) THEN
+        REPEAT
+          Item.VALIDATE("Sales Blocked",FALSE);
+          Item.VALIDATE("Purchasing Blocked",FALSE);
+          IF Item.MODIFY THEN;
+        UNTIL Item.NEXT = 0;
+    END;
+
+    [UpgradePerCompany]
+    PROCEDURE UpdateItemCategoryReferencedIds@16();
+    VAR
+      Item@1000 : Record 27;
+    BEGIN
+      IF Item.FINDSET(TRUE) THEN
+        REPEAT
+          Item.UpdateItemCategoryId;
+          IF Item.MODIFY THEN ;
+        UNTIL Item.NEXT = 0;
+    END;
+
+    [UpgradePerCompany]
+    PROCEDURE UpdateCountyName@21();
+    VAR
+      CountryRegion@1000 : Record 9;
+    BEGIN
+      IF CountryRegion.GET('CA') THEN BEGIN
+        CountryRegion."County Name" := 'Province';
+        CountryRegion.MODIFY;
+      END;
+      IF CountryRegion.GET('US') THEN BEGIN
+        CountryRegion."County Name" := 'State';
+        CountryRegion.MODIFY;
+      END;
+    END;
+
+    [UpgradePerDatabase]
+    PROCEDURE CreateWorkflowWebhookWebServices@17();
+    VAR
+      TenantWebService@1002 : Record 2000000168;
+      WebServiceManagement@1001 : Codeunit 9750;
+    BEGIN
+      WebServiceManagement.CreateTenantWebService(
+        TenantWebService."Object Type"::Page,PAGE::"Sales Document Entity",'salesDocuments',TRUE);
+      WebServiceManagement.CreateTenantWebService(
+        TenantWebService."Object Type"::Page,PAGE::"Sales Document Line Entity",'salesDocumentLines',TRUE);
+      WebServiceManagement.CreateTenantWebService(
+        TenantWebService."Object Type"::Page,PAGE::"Purchase Document Entity",'purchaseDocuments',TRUE);
+      WebServiceManagement.CreateTenantWebService(
+        TenantWebService."Object Type"::Page,PAGE::"Purchase Document Line Entity",'purchaseDocumentLines',TRUE);
+      WebServiceManagement.CreateTenantWebService(
+        TenantWebService."Object Type"::Page,PAGE::"Sales Document Entity",'workflowSalesDocuments',TRUE);
+      WebServiceManagement.CreateTenantWebService(
+        TenantWebService."Object Type"::Page,PAGE::"Sales Document Line Entity",'workflowSalesDocumentLines',TRUE);
+      WebServiceManagement.CreateTenantWebService(
+        TenantWebService."Object Type"::Page,PAGE::"Purchase Document Entity",'workflowPurchaseDocuments',TRUE);
+      WebServiceManagement.CreateTenantWebService(
+        TenantWebService."Object Type"::Page,PAGE::"Purchase Document Line Entity",'workflowPurchaseDocumentLines',TRUE);
+      WebServiceManagement.CreateTenantWebService(
+        TenantWebService."Object Type"::Page,PAGE::"Gen. Journal Batch Entity",'workflowGenJournalBatches',TRUE);
+      WebServiceManagement.CreateTenantWebService(
+        TenantWebService."Object Type"::Page,PAGE::"Gen. Journal Line Entity",'workflowGenJournalLines',TRUE);
+      WebServiceManagement.CreateTenantWebService(
+        TenantWebService."Object Type"::Page,PAGE::"Workflow - Customer Entity",'workflowCustomers',TRUE);
+      WebServiceManagement.CreateTenantWebService(
+        TenantWebService."Object Type"::Page,PAGE::"Workflow - Item Entity",'workflowItems',TRUE);
+      WebServiceManagement.CreateTenantWebService(
+        TenantWebService."Object Type"::Page,PAGE::"Workflow - Vendor Entity",'workflowVendors',TRUE);
+      WebServiceManagement.CreateTenantWebService(
+        TenantWebService."Object Type"::Page,PAGE::"Workflow Webhook Subscriptions",'workflowWebhookSubscriptions',TRUE);
+      WebServiceManagement.CreateTenantWebService(
+        TenantWebService."Object Type"::Codeunit,CODEUNIT::"Workflow Webhook Subscription",'WorkflowActionResponse',TRUE);
+    END;
+
+    [UpgradePerDatabase]
+    PROCEDURE CreateExcelTemplateWebServices@18();
+    BEGIN
+      CreateExcelTemplateWebService(ExcelTemplateIncomeStatementTxt,PAGE::"Income Statement Entity");
+      CreateExcelTemplateWebService(ExcelTemplateBalanceSheetTxt,PAGE::"Balance Sheet Entity");
+      CreateExcelTemplateWebService(ExcelTemplateTrialBalanceTxt,PAGE::"Trial Balance Entity");
+      CreateExcelTemplateWebService(ExcelTemplateRetainedEarningsStatementTxt ,PAGE::"Retained Earnings Entity");
+      CreateExcelTemplateWebService(ExcelTemplateCashFlowStatementTxt ,PAGE::"Cash Flow Statement Entity");
+      CreateExcelTemplateWebService(ExcelTemplateAgedAccountsReceivableTxt ,PAGE::"Aged AR Entity");
+      CreateExcelTemplateWebService(ExcelTemplateAgedAccountsPayableTxt ,PAGE::"Aged AP Entity");
+      CreateExcelTemplateWebService(ExcelTemplateCompanyInformationTxt ,PAGE::ExcelTemplateCompanyInfo);
+    END;
+
+    LOCAL PROCEDURE CreateExcelTemplateWebService@19(ObjectName@1001 : Text;PageID@1000 : Integer);
+    VAR
+      TenantWebService@1003 : Record 2000000168;
+      WebServiceManagement@1002 : Codeunit 9750;
+    BEGIN
+      CLEAR(TenantWebService);
+      WebServiceManagement.CreateTenantWebService(TenantWebService."Object Type"::Page,PageID,ObjectName,TRUE);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

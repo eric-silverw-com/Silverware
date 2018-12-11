@@ -1,0 +1,441 @@
+OBJECT Page 2107 O365 Sales Customer Card
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:10:45 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Customer;
+    SourceTable=Table18;
+    DataCaptionExpr=Name;
+    PageType=Card;
+    PromotedActionCategoriesML=ENU=New,Process,Report,Details;
+    OnInit=VAR
+             O365SalesInitialSetup@1000 : Record 2110;
+             PostcodeServiceManager@1001 : Codeunit 9090;
+           BEGIN
+             IF O365SalesInitialSetup.GET THEN
+               IsUsingVAT := O365SalesInitialSetup.IsUsingVAT;
+             IsAddressLookupAvailable := PostcodeServiceManager.IsConfigured;
+           END;
+
+    OnOpenPage=BEGIN
+                 CurrPage.EDITABLE := Blocked = Blocked::" ";
+                 SETRANGE("Date Filter",0D,WORKDATE);
+                 DeviceContactProviderIsAvailable := DeviceContactProvider.IsAvailable;
+               END;
+
+    OnNewRecord=BEGIN
+                  OnNewRec;
+                END;
+
+    OnInsertRecord=BEGIN
+                     IF Name = '' THEN
+                       CustomerCardState := CustomerCardState::Prompt
+                     ELSE
+                       CustomerCardState := CustomerCardState::Keep;
+
+                     EXIT(TRUE);
+                   END;
+
+    OnModifyRecord=BEGIN
+                     IF Name = '' THEN
+                       CustomerCardState := CustomerCardState::Prompt
+                     ELSE
+                       CustomerCardState := CustomerCardState::Keep;
+
+                     EXIT(TRUE);
+                   END;
+
+    OnDeleteRecord=BEGIN
+                     O365SalesManagement.BlockOrDeleteCustomerAndDeleteContact(Rec);
+                   END;
+
+    OnQueryClosePage=BEGIN
+                       EXIT(CanExitAfterProcessingCustomer);
+                     END;
+
+    OnAfterGetCurrRecord=VAR
+                           TempStandardAddress@1000 : TEMPORARY Record 730;
+                           TaxArea@1001 : Record 318;
+                         BEGIN
+                           CreateCustomerFromTemplate;
+                           CurrPageEditable := CurrPage.EDITABLE;
+
+                           OverdueAmount := CalcOverdueBalance;
+
+                           TempStandardAddress.CopyFromCustomer(Rec);
+                           FullAddress := TempStandardAddress.ToString;
+
+                           IF TaxArea.GET("Tax Area Code") THEN
+                             TaxAreaDescription := TaxArea.GetDescriptionInCurrentLanguage;
+
+                           UpdateInvoicesLbl;
+                           UpdateEstimatesLbl;
+                         END;
+
+    ActionList=ACTIONS
+    {
+      { 11      ;0   ;ActionContainer;
+                      ActionContainerType=ActionItems }
+      { 16      ;1   ;Action    ;
+                      Name=Invoice Discounts;
+                      CaptionML=ENU=Invoice Discounts;
+                      ToolTipML=ENU=Set up different discounts that are applied to invoices for the customer. An invoice discount is automatically granted to the customer when the total on a sales invoice exceeds a certain amount.;
+                      ApplicationArea=#Basic,#Suite,#Invoicing;
+                      Promoted=Yes;
+                      Visible=FALSE;
+                      Image=Discount;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 O365CustInvoiceDiscount@1000 : Page 2156;
+                               BEGIN
+                                 O365CustInvoiceDiscount.FillO365CustInvDiscount("No.");
+                                 O365CustInvoiceDiscount.RUN;
+                               END;
+                                }
+      { 20      ;1   ;Action    ;
+                      Name=ImportDeviceContact;
+                      CaptionML=ENU=Import Contact;
+                      ToolTipML=ENU="Import a contact directly from your iOS or Android device and have the new customer fields automatically populated. ";
+                      ApplicationArea=#Basic,#Suite,#Invoicing;
+                      Promoted=Yes;
+                      Visible=CurrPageEditable AND DeviceContactProviderIsAvailable;
+                      PromotedIsBig=Yes;
+                      PromotedCategory=Process;
+                      Scope=Repeater;
+                      OnAction=BEGIN
+                                 IF DeviceContactProviderIsAvailable THEN BEGIN
+                                   IF ISNULL(DeviceContactProvider) THEN
+                                     DeviceContactProvider := DeviceContactProvider.Create;
+                                   DeviceContactProvider.RequestDeviceContactAsync;
+                                 END
+                               END;
+                                }
+    }
+  }
+  CONTROLS
+  {
+    { 1   ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 2   ;1   ;Group     ;
+                Name=General;
+                CaptionML=ENU=General;
+                GroupType=Group }
+
+    { 3   ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the customer's name.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=Name;
+                ShowCaption=No }
+
+    { 4   ;2   ;Field     ;
+                ExtendedDatatype=E-Mail;
+                CaptionML=ENU=Email Address;
+                ToolTipML=ENU=Specifies the customer's email address.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="E-Mail";
+                Importance=Promoted;
+                OnValidate=VAR
+                             MailManagement@1000 : Codeunit 9520;
+                           BEGIN
+                             MailManagement.ValidateEmailAddressField("E-Mail");
+                           END;
+
+                ShowCaption=No }
+
+    { 7   ;2   ;Field     ;
+                CaptionML=ENU=Phone Number;
+                ToolTipML=ENU=Specifies the customer's telephone number.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Phone No.";
+                ShowCaption=No }
+
+    { 17  ;2   ;Group     ;
+                Visible="Balance (LCY)" <> 0;
+                GroupType=Group }
+
+    { 5   ;3   ;Field     ;
+                Lookup=No;
+                DrillDown=No;
+                CaptionML=ENU=Outstanding;
+                ToolTipML=ENU=Specifies the customer's balance.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Balance (LCY)";
+                AutoFormatType=10;
+                AutoFormatExpr='1';
+                Importance=Additional }
+
+    { 18  ;2   ;Group     ;
+                Visible=OverdueAmount <> 0;
+                GroupType=Group }
+
+    { 6   ;3   ;Field     ;
+                Lookup=No;
+                DrillDown=No;
+                CaptionML=ENU=Overdue;
+                ToolTipML=ENU=Specifies payments from the customer that are overdue per today's date.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=OverdueAmount;
+                AutoFormatType=10;
+                AutoFormatExpr='1';
+                Importance=Additional;
+                Editable=FALSE;
+                Style=Unfavorable;
+                StyleExpr=OverdueAmount > 0 }
+
+    { 8   ;2   ;Field     ;
+                Lookup=No;
+                DrillDown=No;
+                CaptionML=ENU=Total Sales (Excl. Tax);
+                ToolTipML=ENU=Specifies the total net amount of sales to the customer in $.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Sales (LCY)";
+                AutoFormatType=10;
+                AutoFormatExpr='1';
+                Importance=Additional }
+
+    { 22  ;1   ;Group     ;
+                CaptionML=ENU=Details;
+                GroupType=Group }
+
+    { 26  ;2   ;Group     ;
+                GroupType=Group }
+
+    { 13  ;3   ;Group     ;
+                Visible=("Contact Type" = "Contact Type"::Company) AND IsUsingVAT;
+                GroupType=Group }
+
+    { 21  ;4   ;Field     ;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="VAT Registration No." }
+
+    { 23  ;3   ;Group     ;
+                Visible=("Contact Type" = "Contact Type"::Person) AND IsAddressLookupAvailable AND CurrPageEditable;
+                GroupType=Group }
+
+    { 24  ;4   ;Field     ;
+                Name=AddressLookup;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=AddressLookupLbl;
+                Editable=FALSE;
+                ShowCaption=No }
+
+    { 27  ;3   ;Field     ;
+                CaptionML=ENU=Address;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=FullAddress;
+                Editable=CurrPageEditable;
+                OnAssistEdit=VAR
+                               TempStandardAddress@1000 : TEMPORARY Record 730;
+                             BEGIN
+                               CurrPage.SAVERECORD;
+                               COMMIT;
+                               TempStandardAddress.CopyFromCustomer(Rec);
+                               IF PAGE.RUNMODAL(PAGE::"O365 Address",TempStandardAddress) = ACTION::LookupOK THEN BEGIN
+                                 GET("No.");
+                                 FullAddress := TempStandardAddress.ToString;
+                               END;
+                             END;
+
+                QuickEntry=FALSE }
+
+    { 12  ;1   ;Group     ;
+                Name=Tax Information;
+                CaptionML=ENU=Tax;
+                Visible=NOT IsUsingVAT;
+                GroupType=Group }
+
+    { 14  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies if the sales invoice contains sales tax.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Tax Liable" }
+
+    { 19  ;2   ;Field     ;
+                Name=TaxAreaDescription;
+                CaptionML=ENU=Tax Rate;
+                ToolTipML=ENU=Specifies the customer's tax area.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                NotBlank=Yes;
+                SourceExpr=TaxAreaDescription;
+                Editable=CurrPageEditable;
+                OnLookup=VAR
+                           TaxArea@1001 : Record 318;
+                         BEGIN
+                           IF PAGE.RUNMODAL(PAGE::"O365 Tax Area List",TaxArea) = ACTION::LookupOK THEN BEGIN
+                             VALIDATE("Tax Area Code",TaxArea.Code);
+                             TaxAreaDescription := TaxArea.GetDescriptionInCurrentLanguage;
+                           END;
+                         END;
+
+                QuickEntry=FALSE }
+
+    { 15  ;1   ;Group     ;
+                Name=Documents;
+                Visible=NOT CurrPageEditable;
+                GroupType=Group }
+
+    { 30  ;2   ;Field     ;
+                Name=InvoicesForCustomer;
+                DrillDown=Yes;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=InvoicesLabelText;
+                Editable=FALSE;
+                OnDrillDown=VAR
+                              O365SalesDocument@1000 : Record 2103;
+                            BEGIN
+                              O365SalesDocument.SETRANGE("Document Type",O365SalesDocument."Document Type"::Invoice);
+                              O365SalesDocument.SETRANGE("Sell-to Customer No.","No.");
+                              PAGE.RUN(PAGE::"O365 Customer Sales Documents",O365SalesDocument);
+                            END;
+
+                ShowCaption=No }
+
+    { 31  ;2   ;Field     ;
+                Name=EstimatesForCustomer;
+                DrillDown=Yes;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=EstimatesLabelText;
+                Editable=FALSE;
+                OnDrillDown=VAR
+                              O365SalesDocument@1000 : Record 2103;
+                            BEGIN
+                              O365SalesDocument.SETRANGE("Document Type",O365SalesDocument."Document Type"::Quote);
+                              O365SalesDocument.SETRANGE("Sell-to Customer No.","No.");
+                              O365SalesDocument.SETRANGE(Posted,FALSE);
+                              PAGE.RUN(PAGE::"O365 Customer Sales Documents",O365SalesDocument);
+                            END;
+
+                ShowCaption=No }
+
+  }
+  CODE
+  {
+    VAR
+      CustContUpdate@1006 : Codeunit 5056;
+      O365SalesManagement@1013 : Codeunit 2107;
+      ProcessNewCustomerOptionQst@1001 : TextConst 'ENU=Keep editing,Discard';
+      ProcessNewCustomerInstructionTxt@1003 : TextConst 'ENU=Name is missing. Keep the customer?';
+      AddressLookupLbl@1009 : TextConst 'ENU=Lookup customer address';
+      InvoicesForCustomerLbl@1015 : TextConst '@@@="%1= positive or zero integer: the number of invoices for the customer";ENU=Invoices (%1)';
+      EstimatesForCustomerLbl@1016 : TextConst '@@@="%1= positive or zero integer: the number of estimates for the customer";ENU=Estimates (%1)';
+      DeviceContactProvider@1014 : DotNet "'Microsoft.Dynamics.Nav.ClientExtensions, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.Client.Capabilities.DeviceContactProvider" WITHEVENTS RUNONCLIENT;
+      CustomerCardState@1017 : 'Keep,Delete,Prompt';
+      DeviceContactProviderIsAvailable@1018 : Boolean;
+      NewMode@1012 : Boolean;
+      IsAddressLookupAvailable@1011 : Boolean;
+      CurrPageEditable@1010 : Boolean;
+      IsUsingVAT@1008 : Boolean;
+      OverdueAmount@1007 : Decimal;
+      FullAddress@1005 : Text;
+      TaxAreaDescription@1004 : Text[50];
+      InvoicesLabelText@1002 : Text;
+      EstimatesLabelText@1000 : Text;
+
+    LOCAL PROCEDURE CanExitAfterProcessingCustomer@2() : Boolean;
+    VAR
+      Response@1001 : ',KeepEditing,Discard';
+    BEGIN
+      IF "No." = '' THEN
+        EXIT(TRUE);
+
+      IF CustomerCardState = CustomerCardState::Delete THEN
+        EXIT(DeleteCustomerRelatedData);
+
+      IF GUIALLOWED AND (CustomerCardState = CustomerCardState::Prompt) AND (Blocked = Blocked::" ") THEN
+        CASE STRMENU(ProcessNewCustomerOptionQst,Response::KeepEditing,ProcessNewCustomerInstructionTxt) OF
+          Response::Discard:
+            EXIT(DeleteCustomerRelatedData);
+          ELSE
+            EXIT(FALSE);
+        END;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE DeleteCustomerRelatedData@4() : Boolean;
+    BEGIN
+      CustContUpdate.DeleteCustomerContacts(Rec);
+
+      // workaround for bug: delete for new empty record returns false
+      IF DELETE(TRUE) THEN;
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE OnNewRec@1();
+    VAR
+      DocumentNoVisibility@1000 : Codeunit 1400;
+    BEGIN
+      IF GUIALLOWED AND DocumentNoVisibility.CustomerNoSeriesIsDefault THEN
+        NewMode := TRUE;
+    END;
+
+    LOCAL PROCEDURE CreateCustomerFromTemplate@3();
+    VAR
+      MiniCustomerTemplate@1001 : Record 1300;
+      Customer@1000 : Record 18;
+    BEGIN
+      IF NewMode THEN BEGIN
+        IF MiniCustomerTemplate.NewCustomerFromTemplate(Customer) THEN BEGIN
+          COPY(Customer);
+          CurrPage.UPDATE;
+        END;
+        CustomerCardState := CustomerCardState::Delete;
+        NewMode := FALSE;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateInvoicesLbl@6();
+    VAR
+      SalesInvoiceHeader@1000 : Record 112;
+      SalesHeader@1001 : Record 36;
+      NumberOfInvoices@1002 : Integer;
+    BEGIN
+      SalesHeader.SETRANGE("Sell-to Customer No.","No.");
+      SalesHeader.SETRANGE("Document Type",SalesHeader."Document Type"::Invoice);
+      NumberOfInvoices := SalesHeader.COUNT;
+
+      SalesInvoiceHeader.SETRANGE("Sell-to Customer No.","No.");
+      NumberOfInvoices := NumberOfInvoices + SalesInvoiceHeader.COUNT;
+
+      InvoicesLabelText := STRSUBSTNO(InvoicesForCustomerLbl,NumberOfInvoices);
+    END;
+
+    LOCAL PROCEDURE UpdateEstimatesLbl@7();
+    VAR
+      SalesHeader@1001 : Record 36;
+      NumberOfEstimates@1000 : Integer;
+    BEGIN
+      SalesHeader.SETRANGE("Sell-to Customer No.","No.");
+      SalesHeader.SETRANGE("Document Type",SalesHeader."Document Type"::Quote);
+      NumberOfEstimates := SalesHeader.COUNT;
+
+      EstimatesLabelText := STRSUBSTNO(EstimatesForCustomerLbl,NumberOfEstimates);
+    END;
+
+    EVENT DeviceContactProvider@1014::DeviceContactRetrieved@9(deviceContact@1000 : DotNet "'Microsoft.Dynamics.Nav.ClientExtensions, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.Client.Capabilities.DeviceContact");
+    BEGIN
+      IF deviceContact.Status <> 0 THEN
+        EXIT;
+
+      CreateCustomerFromTemplate;
+
+      Name := COPYSTR(deviceContact.PreferredName,1,MAXSTRLEN(Name));
+      "E-Mail" := COPYSTR(deviceContact.PreferredEmail,1,MAXSTRLEN("E-Mail"));
+      "Phone No." := COPYSTR(deviceContact.PreferredPhoneNumber,1,MAXSTRLEN("Phone No."));
+      Address := COPYSTR(deviceContact.PreferredAddress.StreetAddress,1,MAXSTRLEN(Address));
+      City := COPYSTR(deviceContact.PreferredAddress.Locality,1,MAXSTRLEN(City));
+      County := COPYSTR(deviceContact.PreferredAddress.Region,1,MAXSTRLEN(County));
+
+      CurrPage.UPDATE;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

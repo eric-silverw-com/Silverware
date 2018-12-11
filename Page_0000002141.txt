@@ -1,0 +1,608 @@
+OBJECT Page 2141 O365 Sales Quote
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:10:46 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Estimate;
+    DeleteAllowed=No;
+    SourceTable=Table36;
+    SourceTableView=WHERE(Document Type=CONST(Quote));
+    PageType=Document;
+    RefreshOnActivate=Yes;
+    OnOpenPage=VAR
+                 O365SalesInitialSetup@1000 : Record 2110;
+               BEGIN
+                 IsUsingVAT := O365SalesInitialSetup.IsUsingVAT;
+               END;
+
+    OnNewRecord=BEGIN
+                  CustomerName := '';
+                  CustomerEmail := '';
+                  WorkDescription := '';
+                  SetDefaultPaymentServices;
+                END;
+
+    OnInsertRecord=BEGIN
+                     "Document Type" := "Document Type"::Quote;
+                   END;
+
+    OnDeleteRecord=VAR
+                     CustInvoiceDisc@1000 : Record 19;
+                   BEGIN
+                     ForceExit := TRUE;
+
+                     IF CustInvoiceDisc.GET("Invoice Disc. Code","Currency Code",0) THEN
+                       CustInvoiceDisc.DELETE;
+                   END;
+
+    OnQueryClosePage=BEGIN
+                       EXIT(O365SalesInvoiceMgmt.OnQueryCloseForSalesHeader(Rec,ForceExit,CustomerName));
+                     END;
+
+    OnAfterGetCurrRecord=VAR
+                           Currency@1000 : Record 4;
+                           GLSetup@1001 : Record 98;
+                           TaxArea@1004 : Record 318;
+                           O365DocumentSendMgt@1003 : Codeunit 2158;
+                           CurrencySymbol@1002 : Text[10];
+                           DummyCountryCode@1005 : Code[10];
+                         BEGIN
+                           CustomerName := "Sell-to Customer Name";
+                           CustomerEmail := GetCustomerEmail;
+                           IsCompanyContact := O365SalesInvoiceMgmt.IsCustomerCompanyContact("Sell-to Customer No.");
+                           WorkDescription := GetWorkDescription;
+                           CurrPageEditable := CurrPage.EDITABLE;
+                           UpdateNoOfAttachmentsLabel(O365SalesAttachmentMgt.GetNoOfAttachments(Rec));
+                           SetDefaultPaymentServices;
+                           IF "Currency Code" = '' THEN BEGIN
+                             GLSetup.GET;
+                             CurrencySymbol := GLSetup.GetCurrencySymbol;
+                           END ELSE BEGIN
+                             IF Currency.GET("Currency Code") THEN;
+                             CurrencySymbol := Currency.GetCurrencySymbol;
+                           END;
+                           CurrencyFormat := STRSUBSTNO('%1<precision, 2:2><standard format, 0>',CurrencySymbol);
+                           O365SalesInvoiceMgmt.UpdateAddress(Rec,FullAddress,DummyCountryCode);
+                           IF ("Sell-to Customer No." = '') AND ("Quote Valid Until Date" < WORKDATE) THEN
+                             "Quote Valid Until Date" := WORKDATE + 30;
+                           CalcInvoiceDiscountAmount;
+
+                           O365DocumentSendMgt.ShowSalesHeaderFailedNotification(Rec);
+
+                           TaxAreaDescription := '';
+                           IF "Tax Area Code" <> '' THEN
+                             IF TaxArea.GET("Tax Area Code") THEN
+                               TaxAreaDescription := TaxArea.GetDescriptionInCurrentLanguage;
+                         END;
+
+    ActionList=ACTIONS
+    {
+      { 22      ;    ;ActionContainer;
+                      CaptionML=ENU=Invoice;
+                      ActionContainerType=ActionItems }
+      { 11      ;1   ;Action    ;
+                      Name=EmailQuote;
+                      CaptionML=ENU=Send estimate;
+                      ApplicationArea=#Basic,#Suite,#Invoicing;
+                      Promoted=Yes;
+                      Enabled="Sell-to Customer Name" <> '';
+                      PromotedIsBig=Yes;
+                      Image=Invoicing-Send;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 SETRECFILTER;
+
+                                 IF NOT O365SendResendInvoice.SendSalesInvoiceOrQuote(Rec) THEN
+                                   EXIT;
+
+                                 FIND;
+                                 CurrPage.UPDATE;
+                                 ForceExit := TRUE;
+                                 CurrPage.CLOSE;
+                               END;
+
+                      Gesture=LeftSwipe }
+      { 23      ;1   ;Action    ;
+                      Name=Post;
+                      CaptionML=ENU=Send final invoice;
+                      ToolTipML=ENU=Finalize and send the invoice.;
+                      ApplicationArea=#Basic,#Suite,#Invoicing;
+                      Promoted=Yes;
+                      Visible=false;
+                      Enabled="Sell-to Customer Name" <> '';
+                      PromotedIsBig=Yes;
+                      Image=PostSendTo;
+                      PromotedCategory=Process;
+                      PromotedOnly=Yes;
+                      OnAction=BEGIN
+                                 ForceExit := TRUE;
+                                 COMMIT;
+                                 IF NOT O365SendResendInvoice.SendInvoiceFromQuote(Rec,FALSE) THEN
+                                   ForceExit := FALSE;
+                               END;
+                                }
+      { 28      ;1   ;Action    ;
+                      Name=MakeToInvoice;
+                      CaptionML=ENU=Turn estimate into an invoice;
+                      ApplicationArea=#Basic,#Suite,#Invoicing;
+                      Promoted=Yes;
+                      Enabled="Sell-to Customer Name" <> '';
+                      Image=Invoicing-Document;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 SalesHeader@1000 : Record 36;
+                               BEGIN
+                                 IF NOT O365SendResendInvoice.MakeInvoiceFromQuote(SalesHeader,Rec,TRUE) THEN
+                                   EXIT;
+
+                                 ForceExit := TRUE;
+
+                                 SalesHeader.SETRECFILTER;
+                                 PAGE.RUN(PAGE::"O365 Sales Invoice",SalesHeader);
+                                 CurrPage.CLOSE;
+                               END;
+                                }
+      { 3       ;1   ;Action    ;
+                      Name=ViewPdf;
+                      CaptionML=ENU=Preview estimate;
+                      ToolTipML=ENU=View the preview of the estimate before sending.;
+                      ApplicationArea=#Basic,#Suite,#Invoicing;
+                      Promoted=Yes;
+                      Enabled="Sell-to Customer Name" <> '';
+                      Image=Invoicing-View;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 ReportSelections@1001 : Record 77;
+                                 DocumentPath@1000 : Text[250];
+                               BEGIN
+                                 SETRECFILTER;
+                                 LOCKTABLE;
+                                 FIND;
+                                 ReportSelections.GetPdfReport(DocumentPath,ReportSelections.Usage::"S.Quote",Rec,"Sell-to Customer No.");
+                                 DOWNLOAD(DocumentPath,'','','',DocumentPath);
+                                 FIND;
+                               END;
+                                }
+      { 24      ;1   ;Action    ;
+                      Name=SaveForLater;
+                      CaptionML=ENU=Save for later;
+                      ToolTipML=ENU=Close the estimate and save it for later.;
+                      ApplicationArea=#Basic,#Suite,#Invoicing;
+                      Promoted=Yes;
+                      Enabled="Sell-to Customer Name" <> '';
+                      Image=Invoicing-Save;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 ForceExit := TRUE;
+                                 CurrPage.CLOSE;
+                               END;
+                                }
+      { 30      ;1   ;Action    ;
+                      Name=DeleteAction;
+                      CaptionML=ENU=Discard estimate;
+                      ToolTipML=ENU=Discards the estimate;
+                      ApplicationArea=#Basic,#Suite,#Invoicing;
+                      Promoted=Yes;
+                      Enabled=CustomerName <> '';
+                      Image=Invoicing-Delete;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 CustInvoiceDisc@1000 : Record 19;
+                               BEGIN
+                                 IF NOT CONFIRM(DeleteQst) THEN
+                                   EXIT;
+
+                                 ForceExit := TRUE;
+
+                                 IF CustInvoiceDisc.GET("Invoice Disc. Code","Currency Code",0) THEN
+                                   CustInvoiceDisc.DELETE;
+                                 DELETE(TRUE);
+                               END;
+                                }
+    }
+  }
+  CONTROLS
+  {
+    { 1   ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 25  ;1   ;Group     ;
+                GroupType=Group }
+
+    { 5   ;2   ;Group     ;
+                CaptionML=ENU=Sell to;
+                GroupType=Group }
+
+    { 9   ;3   ;Field     ;
+                Lookup=Yes;
+                CaptionML=ENU=Customer Name;
+                ToolTipML=ENU=Specifies the customer's name.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Sell-to Customer Name";
+                Importance=Promoted;
+                Editable=CurrPageEditable;
+                LookupPageID=O365 Customer Lookup;
+                OnValidate=VAR
+                             Customer@1000 : Record 18;
+                             DummyCountryCode@1001 : Code[10];
+                           BEGIN
+                             IF NOT Customer.GET(Customer.GetCustNoOpenCard("Sell-to Customer Name",FALSE,TRUE)) THEN BEGIN
+                               IF Customer.IsLookupRequested THEN
+                                 IF LookupCustomerName("Sell-to Customer Name") THEN
+                                   EXIT;
+                               ERROR('');
+                             END;
+
+                             VALIDATE("Sell-to Customer No.",Customer."No.");
+                             CustomerName := Customer.Name;
+                             CustomerEmail := GetCustomerEmail;
+                             O365SalesInvoiceMgmt.UpdateAddress(Rec,FullAddress,DummyCountryCode);
+                             CurrPage.UPDATE(TRUE);
+                           END;
+
+                OnLookup=BEGIN
+                           CurrPage.SAVERECORD;
+                           O365SalesInvoiceMgmt.LookupContactFromSalesHeader(Rec);
+                           CurrPage.UPDATE;
+                         END;
+
+                ShowMandatory=TRUE;
+                ShowCaption=No;
+                QuickEntry=FALSE }
+
+    { 18  ;3   ;Field     ;
+                ExtendedDatatype=E-Mail;
+                CaptionML=ENU=Email Address;
+                ToolTipML=ENU=Specifies the customer's email address.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=CustomerEmail;
+                Editable=CurrPageEditable AND (CustomerName <> '');
+                OnValidate=BEGIN
+                             O365SalesInvoiceMgmt.ValidateCustomerEmail(Rec,CustomerEmail);
+                           END;
+
+                ShowCaption=No }
+
+    { 29  ;3   ;Field     ;
+                CaptionML=ENU=Customer accepted;
+                ToolTipML=ENU=Specifies whether the customer has accepted the quote or not.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Quote Accepted";
+                Editable=CurrPageEditable AND (CustomerName <> '') }
+
+    { 2   ;1   ;Group     ;
+                Name=Quote;
+                CaptionML=ENU=Details;
+                GroupType=Group }
+
+    { 26  ;2   ;Field     ;
+                CaptionML=ENU=Valid until;
+                ToolTipML=ENU=Specifies how long the quote is valid.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Quote Valid Until Date";
+                Importance=Additional;
+                Editable=CustomerName <> '' }
+
+    { 4   ;2   ;Field     ;
+                CaptionML=ENU=Sent;
+                ToolTipML=ENU=Specifies date and time of when the quote was sent to the customer.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Quote Sent to Customer";
+                Importance=Additional }
+
+    { 6   ;2   ;Field     ;
+                CaptionML=ENU=Accepted on;
+                ToolTipML=ENU=Specifies when the client accepted the quote.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Quote Accepted Date";
+                Importance=Additional }
+
+    { 37  ;2   ;Field     ;
+                CaptionML=ENU=Customer is tax liable;
+                ToolTipML=ENU=Specifies if the sales invoice contains sales tax.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Tax Liable";
+                Importance=Additional;
+                Visible=NOT IsUsingVAT;
+                Editable=CustomerName <> '';
+                OnValidate=BEGIN
+                             CurrPage.UPDATE;
+                           END;
+                            }
+
+    { 36  ;2   ;Field     ;
+                Name=TaxAreaDescription;
+                CaptionML=ENU=Customer tax rate;
+                ToolTipML=ENU=Specifies the customer's tax area.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                NotBlank=Yes;
+                SourceExpr=TaxAreaDescription;
+                Importance=Additional;
+                Visible=NOT IsUsingVAT;
+                Editable=CustomerName <> '';
+                OnValidate=BEGIN
+                             CurrPage.UPDATE;
+                           END;
+
+                OnLookup=VAR
+                           TaxArea@1000 : Record 318;
+                         BEGIN
+                           IF PAGE.RUNMODAL(PAGE::"O365 Tax Area List",TaxArea) = ACTION::LookupOK THEN BEGIN
+                             VALIDATE("Tax Area Code",TaxArea.Code);
+                             TaxAreaDescription := TaxArea.GetDescriptionInCurrentLanguage;
+                             CurrPage.UPDATE;
+                           END;
+                         END;
+                          }
+
+    { 35  ;2   ;Field     ;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="VAT Registration No.";
+                Importance=Additional;
+                Visible=IsUsingVAT;
+                Editable=(IsUsingVAT AND IsCompanyContact) }
+
+    { 17  ;2   ;Field     ;
+                CaptionML=ENU=Address;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=FullAddress;
+                Importance=Additional;
+                Editable=CurrPageEditable AND (CustomerName <> '');
+                OnAssistEdit=VAR
+                               TempStandardAddress@1000 : TEMPORARY Record 730;
+                               DummyCountryCode@1001 : Code[10];
+                             BEGIN
+                               CurrPage.SAVERECORD;
+                               COMMIT;
+                               TempStandardAddress.CopyFromSalesHeaderSellTo(Rec);
+                               IF PAGE.RUNMODAL(PAGE::"O365 Address",TempStandardAddress) = ACTION::LookupOK THEN BEGIN
+                                 FIND;
+                                 O365SalesInvoiceMgmt.UpdateAddress(Rec,FullAddress,DummyCountryCode);
+                                 CurrPage.UPDATE(TRUE);
+                               END;
+                             END;
+
+                QuickEntry=FALSE }
+
+    { 32  ;1   ;Part      ;
+                Name=DummyLines;
+                CaptionML=ENU=Line Items;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SubPageLink=Document Type=FIELD(Document Type),
+                            Document No.=FIELD(No.);
+                PagePartID=Page2183;
+                Visible=CustomerName = '';
+                Editable=CustomerName <> '';
+                PartType=Page;
+                UpdatePropagation=Both }
+
+    { 21  ;1   ;Part      ;
+                Name=Lines;
+                CaptionML=ENU=Line Items;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SubPageLink=Document Type=FIELD(Document Type),
+                            Document No.=FIELD(No.);
+                PagePartID=Page2111;
+                Visible=CustomerName <> '';
+                Editable=FALSE;
+                PartType=Page;
+                UpdatePropagation=Both }
+
+    { 16  ;1   ;Group     ;
+                Visible=InvDiscAmountVisible;
+                GroupType=Group }
+
+    { 20  ;2   ;Field     ;
+                CaptionML=ENU=Subtotal;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=SubTotalAmount;
+                AutoFormatType=10;
+                AutoFormatExpr=CurrencyFormat;
+                Editable=FALSE }
+
+    { 19  ;2   ;Field     ;
+                Name=Invoice Discount Percent;
+                CaptionML=ENU=Discount %;
+                ToolTipML=ENU=Specifies a discount amount that is deducted from the value in the Total Incl. Tax field. You can enter or change the amount manually.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Invoice Discount Value";
+                Importance=Promoted;
+                Editable=FALSE }
+
+    { 15  ;2   ;Field     ;
+                Lookup=No;
+                DrillDown=No;
+                CaptionML=ENU=Net Total;
+                ToolTipML=ENU=Specifies the total amount on the sales invoice excluding tax.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=Amount;
+                AutoFormatType=10;
+                AutoFormatExpr=CurrencyFormat }
+
+    { 14  ;2   ;Field     ;
+                Lookup=No;
+                DrillDown=No;
+                CaptionML=ENU=Total Including Tax;
+                ToolTipML=ENU=Specifies the total amount on the sales invoice including tax.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Amount Including VAT";
+                AutoFormatType=10;
+                AutoFormatExpr=CurrencyFormat;
+                Importance=Promoted;
+                Style=Strong;
+                StyleExpr=TRUE }
+
+    { 10  ;1   ;Group     ;
+                Visible=NOT InvDiscAmountVisible;
+                GroupType=Group }
+
+    { 7   ;2   ;Field     ;
+                Name=Amount2;
+                Lookup=No;
+                DrillDown=No;
+                CaptionML=ENU=Net Total;
+                ToolTipML=ENU=Specifies the total amount on the sales invoice excluding tax.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=Amount;
+                AutoFormatType=10;
+                AutoFormatExpr=CurrencyFormat }
+
+    { 8   ;2   ;Field     ;
+                Name=AmountIncludingVAT2;
+                Lookup=No;
+                DrillDown=No;
+                CaptionML=ENU=Total Including Tax;
+                ToolTipML=ENU=Specifies the total amount on the sales invoice including tax.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Amount Including VAT";
+                AutoFormatType=10;
+                AutoFormatExpr=CurrencyFormat;
+                Importance=Promoted;
+                Style=Strong;
+                StyleExpr=TRUE }
+
+    { 31  ;1   ;Group     ;
+                Visible=CustomerName <> '';
+                GroupType=Group }
+
+    { 12  ;2   ;Field     ;
+                Name=DiscountLink;
+                DrillDown=Yes;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=DiscountTxt;
+                Enabled=CustomerName <> '';
+                Editable=FALSE;
+                OnDrillDown=BEGIN
+                              IF PAGE.RUNMODAL(PAGE::"O365 Sales Invoice Discount",Rec) = ACTION::LookupOK THEN
+                                CurrPage.UPDATE(FALSE);
+                            END;
+
+                ShowCaption=No }
+
+    { 13  ;2   ;Field     ;
+                DrillDown=Yes;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=NoOfAttachmentsValueTxt;
+                Enabled=CustomerName <> '';
+                Editable=FALSE;
+                OnDrillDown=BEGIN
+                              UpdateNoOfAttachmentsLabel(O365SalesAttachmentMgt.EditAttachments(Rec));
+                              CurrPage.UPDATE(FALSE);
+                            END;
+
+                ShowCaption=No }
+
+    { 27  ;2   ;Field     ;
+                CaptionML=ENU=Note for customer;
+                ToolTipML=ENU=Specifies the products or service being offered;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=WorkDescription;
+                Editable=CurrPageEditable AND (CustomerName <> '');
+                MultiLine=Yes;
+                OnValidate=BEGIN
+                             SetWorkDescription(WorkDescription);
+                           END;
+                            }
+
+  }
+  CODE
+  {
+    VAR
+      O365SalesAttachmentMgt@1006 : Codeunit 2112;
+      O365SendResendInvoice@1001 : Codeunit 2104;
+      O365SalesInvoiceMgmt@1005 : Codeunit 2310;
+      CustomerName@1000 : Text[50];
+      CustomerEmail@1004 : Text[80];
+      WorkDescription@1002 : Text;
+      FullAddress@1016 : Text;
+      CurrPageEditable@1003 : Boolean;
+      IsUsingVAT@1014 : Boolean;
+      IsCompanyContact@1018 : Boolean;
+      ForceExit@1012 : Boolean;
+      NoOfAttachmentsTxt@1010 : TextConst '@@@="%1=an integer number, starting at 0";ENU=Attachments (%1)';
+      InvDiscAmountVisible@1022 : Boolean;
+      SubTotalAmount@1020 : Decimal;
+      DiscountTxt@1019 : Text;
+      NoOfAttachmentsValueTxt@1011 : Text;
+      CurrencyFormat@1013 : Text;
+      AddDiscountTxt@1024 : TextConst 'ENU=Add discount';
+      ChangeDiscountTxt@1023 : TextConst 'ENU=Change discount';
+      DeleteQst@1009 : TextConst 'ENU=Are you sure that you want to discard the estimate?';
+      AddAttachmentTxt@1026 : TextConst 'ENU=Add attachment';
+      TaxAreaDescription@1017 : Text[50];
+
+    LOCAL PROCEDURE LookupCustomerName@1(Text@1000 : Text) : Boolean;
+    VAR
+      Customer@1002 : Record 18;
+      O365CustomerLookup@1001 : Page 2116;
+    BEGIN
+      IF Text <> '' THEN BEGIN
+        Customer.SETRANGE(Name,Text);
+        IF Customer.FINDFIRST THEN;
+        Customer.SETRANGE(Name);
+      END;
+
+      O365CustomerLookup.LOOKUPMODE(TRUE);
+      O365CustomerLookup.SETRECORD(Customer);
+
+      IF O365CustomerLookup.RUNMODAL = ACTION::LookupOK THEN BEGIN
+        O365CustomerLookup.GETRECORD(Customer);
+        SetHideValidationDialog(TRUE);
+        CustomerName := Customer.Name;
+        VALIDATE("Sell-to Customer No.",Customer."No.");
+        CustomerEmail := GetCustomerEmail;
+        EXIT(TRUE);
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE GetCustomerEmail@2() : Text[80];
+    VAR
+      Customer@1000 : Record 18;
+    BEGIN
+      IF "Sell-to Customer No." <> '' THEN
+        IF Customer.GET("Sell-to Customer No.") THEN
+          EXIT(Customer."E-Mail");
+      EXIT('');
+    END;
+
+    LOCAL PROCEDURE CalcInvoiceDiscountAmount@8();
+    VAR
+      SalesLine@1000 : Record 37;
+    BEGIN
+      SalesLine.SETRANGE("Document Type","Document Type");
+      SalesLine.SETRANGE("Document No.","No.");
+      SalesLine.CALCSUMS("Inv. Discount Amount","Line Amount");
+      SubTotalAmount := SalesLine."Line Amount";
+      IF "Invoice Discount Value" <> 0 THEN
+        DiscountTxt := ChangeDiscountTxt
+      ELSE
+        DiscountTxt := AddDiscountTxt;
+
+      InvDiscAmountVisible := "Invoice Discount Value" <> 0;
+    END;
+
+    PROCEDURE SuppressExitPrompt@5();
+    BEGIN
+      ForceExit := TRUE;
+    END;
+
+    LOCAL PROCEDURE UpdateNoOfAttachmentsLabel@7(NoOfAttachments@1000 : Integer);
+    BEGIN
+      IF NoOfAttachments = 0 THEN
+        NoOfAttachmentsValueTxt := AddAttachmentTxt
+      ELSE
+        NoOfAttachmentsValueTxt := STRSUBSTNO(NoOfAttachmentsTxt,NoOfAttachments);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

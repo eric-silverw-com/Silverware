@@ -1,0 +1,674 @@
+OBJECT Codeunit 10093 Export Payments (IAT)
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:54 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      BankAccount@1030000 : Record 270;
+      CompanyInformation@1030001 : Record 79;
+      Vendor@1030002 : Record 23;
+      VendorBankAcct@1030003 : Record 288;
+      Customer@1030004 : Record 18;
+      CustBankAcct@1030005 : Record 287;
+      RBMgt@1030006 : Codeunit 419;
+      ExportPaymentsACH@1020000 : Codeunit 10090;
+      ExportFile@1030007 : File;
+      TotalFileDebit@1030008 : Decimal;
+      TotalFileCredit@1030009 : Decimal;
+      TotalBatchDebit@1030010 : Decimal;
+      TotalBatchCredit@1030011 : Decimal;
+      RecordLength@1030012 : Integer;
+      BlockingFactor@1030013 : Integer;
+      BlockCount@1030014 : Integer;
+      EntryAddendaCount@1030015 : Integer;
+      FileEntryAddendaCount@1030016 : Integer;
+      NoOfRec@1030017 : Integer;
+      Justification@1030018 : 'Left,Right';
+      BatchNo@1030019 : Integer;
+      BatchCount@1030020 : Integer;
+      FileHashTotal@1030021 : Decimal;
+      BatchHashTotal@1030022 : Decimal;
+      FileName@1030023 : Text[250];
+      FileIsInProcess@1030024 : Boolean;
+      BatchIsInProcess@1030025 : Boolean;
+      FileDate@1030026 : Date;
+      FileTime@1030027 : Time;
+      ModifierValues@1030028 : ARRAY [26] OF Code[1];
+      TraceNo@1030029 : Integer;
+      ClientFile@1030030 : Text[250];
+      DestinationAcctType@1030031 : Text[1];
+      DestinationAcctNo@1030032 : Code[20];
+      DestinationName@1030033 : Text[50];
+      DestinationFederalIDNo@1030034 : Text[30];
+      DestinationAddress@1030035 : Text[100];
+      DestinationCity@1030036 : Text[30];
+      DestinationCountryCode@1030037 : Code[10];
+      DestinationCounty@1030038 : Text[30];
+      DestinationPostCode@1030039 : Code[20];
+      DestinationBankName@1030040 : Text[50];
+      DestinationBankTransitNo@1030041 : Text[20];
+      DestinationBankAcctNo@1030042 : Text[30];
+      DestinationBankCountryCode@1030043 : Code[10];
+      DestinationBankCurrencyCode@1030044 : Code[10];
+      ExportInProcessErr@1030045 : TextConst '@@@=CustomerBlockedErr;ENU=Cannot start new Export File while %1 is in process.';
+      ExportFilePathErr@1030047 : TextConst '@@@="%1 = the export file path, %2 the field in the table, ie, bank, customer etc, %3 = the identifier for the record, ie, bankaccount number etc. ";ENU=%1 in %2 %3 is invalid.';
+      FileAlreadyExistsErr@1030048 : TextConst '@@@="%1 = file name, %2 file patch, the bank account table, the identifier in the bank account table, ie the .No";ENU=File %1 already exists. Check the %2 in %3 %4.';
+      ExportFileNotStartedErr@1030049 : TextConst 'ENU=Cannot start export batch until an export file is started.';
+      ExportFileNotCompletedErr@1030050 : TextConst 'ENU=Cannot start new export batch until previous batch is completed.';
+      ExportDetailsFileNotStartedErr@1030051 : TextConst 'ENU=Cannot export details until an export file is started.';
+      ExportDetailsFileNotCompletedErr@1030052 : TextConst 'ENU=Cannot export details until an export batch is started.';
+      CustBankAccErr@1030055 : TextConst '@@@=%1 the Customer No.;ENU=Customer No. %1 has no bank account setup for electronic payments.';
+      CustMoreThanOneBankAccErr@1030056 : TextConst '@@@=%1 the customer No.;ENU=Customer No. %1 has more than one bank account setup for electronic payments.';
+      ExportBatchFileNotStartedErr@1030057 : TextConst 'ENU=Cannot end export batch until an export file is started.';
+      ExportBatchNotStartedErr@1030058 : TextConst 'ENU=Cannot end export batch until an export batch is started.';
+      ExportFileNotEndedFileNotStartedErr@1030059 : TextConst 'ENU=Cannot end export file until an export file is started.';
+      ExportFileNotEndedFileNotEndedErr@1030060 : TextConst 'ENU=Cannot end export file until export batch is ended.';
+      InvalidPaymentSpecErr@1030061 : TextConst '@@@="%1 = Account Type, %2 = the account,%3 = Vendor table, %4 = Customer table";ENU=Either %1 or %2 must refer to either a %3 or a %4 for an electronic payment.';
+      CustomerBlockedErr@1030062 : TextConst '@@@="%1 = account type, %2 = customer.blocked";ENU=%1 is blocked for %2 processing.';
+      PrivacyBlockedErr@1234567 : TextConst '@@@="%1 = account type";ENU=%1 is blocked for privacy.';
+      CustTransitNumNotValidErr@1020002 : TextConst '@@@=%1 the transit number, %2 The customer  No.;ENU=The specified transit number %1 for customer %2  is not valid.';
+      BankTransitNumNotValidErr@1020001 : TextConst '@@@=%1 the transit number, %2 The bank  No.;ENU=The specified transit number %1 for bank %2  is not valid.';
+
+    [External]
+    PROCEDURE StartExportFile@6(BankAccountNo@1030063 : Code[20];ReferenceCode@1030064 : Code[10]);
+    VAR
+      FileHeaderRec@1030065 : Text[250];
+      i@1030066 : Integer;
+    BEGIN
+      BuildIDModifier;
+      IF FileIsInProcess THEN
+        ERROR(ExportInProcessErr,FileName);
+
+      CompanyInformation.GET;
+      CompanyInformation.TESTFIELD("Federal ID No.");
+
+      WITH BankAccount DO BEGIN
+        LOCKTABLE;
+        GET(BankAccountNo);
+        TESTFIELD("Export Format","Export Format"::US);
+        TESTFIELD("Transit No.");
+        IF NOT ExportPaymentsACH.CheckDigit("Transit No.") THEN
+          FIELDERROR("Transit No.",STRSUBSTNO(BankTransitNumNotValidErr,"Transit No.","No."));
+        TESTFIELD("E-Pay Export File Path");
+        IF "E-Pay Export File Path"[STRLEN("E-Pay Export File Path")] <> '\' THEN
+          ERROR(ExportFilePathErr,
+            FIELDCAPTION("E-Pay Export File Path"),
+            TABLECAPTION,
+            "No.");
+        TESTFIELD("Last E-Pay Export File Name");
+        TESTFIELD("Bank Acc. Posting Group");
+        TESTFIELD(Blocked,FALSE);
+        "Last E-Pay Export File Name" := INCSTR("Last E-Pay Export File Name");
+        FileName := RBMgt.ServerTempFileName('');
+
+        IF "Last ACH File ID Modifier" = '' THEN
+          "Last ACH File ID Modifier" := 'A'
+        ELSE BEGIN
+          i := 1;
+          WHILE (i < ARRAYLEN(ModifierValues)) AND
+                ("Last ACH File ID Modifier" <> ModifierValues[i])
+          DO
+            i := i + 1;
+          IF i = ARRAYLEN(ModifierValues) THEN
+            i := 1
+          ELSE
+            i := i + 1;
+          "Last ACH File ID Modifier" := ModifierValues[i];
+        END;
+        MODIFY;
+
+        IF EXISTS(FileName) THEN
+          ERROR(FileAlreadyExistsErr,
+            FileName,
+            FIELDCAPTION("Last E-Pay Export File Name"),
+            TABLECAPTION,
+            "No.");
+        ExportFile.TEXTMODE(TRUE);
+        ExportFile.WRITEMODE(TRUE);
+        ExportFile.CREATE(FileName);
+
+        FileIsInProcess := TRUE;
+        FileDate := TODAY;
+        FileTime := TIME;
+        NoOfRec := 0;
+        FileHashTotal := 0;
+        TotalFileDebit := 0;
+        TotalFileCredit := 0;
+        FileEntryAddendaCount := 0;
+        BatchCount := 0;
+        BlockingFactor := 10;
+        RecordLength := 94;
+        BatchNo := 0;
+
+        FileHeaderRec := '';
+
+        AddNumToPrnString(FileHeaderRec,1,1,1);
+        AddNumToPrnString(FileHeaderRec,1,2,2);
+        AddToPrnString(FileHeaderRec,"Transit No.",4,10,Justification::Right,' ');
+        AddFedIDToPrnString(FileHeaderRec,CompanyInformation."Federal ID No.",14,10);
+        AddToPrnString(FileHeaderRec,FORMAT(FileDate,0,'<Year,2><Month,2><Day,2>'),24,6,Justification::Right,'0');
+        AddToPrnString(FileHeaderRec,FORMAT(FileTime,0,'<Hours24,2><Minutes,2>'),30,4,Justification::Right,'0');
+        AddToPrnString(FileHeaderRec,"Last ACH File ID Modifier",34,1,Justification::Right,'0');
+        AddNumToPrnString(FileHeaderRec,RecordLength,35,3);
+        AddNumToPrnString(FileHeaderRec,BlockingFactor,38,2);
+        AddNumToPrnString(FileHeaderRec,1,40,1);
+        AddToPrnString(FileHeaderRec,Name,41,23,Justification::Left,' ');
+        AddToPrnString(FileHeaderRec,CompanyInformation.Name,64,23,Justification::Left,' ');
+        AddToPrnString(FileHeaderRec,ReferenceCode,87,8,Justification::Left,' ');
+        ExportPrnString(FileHeaderRec);
+      END;
+    END;
+
+    [External]
+    PROCEDURE StartExportBatch@7(GenJournalLine@1030067 : Record 81;ServiceClassCode@1030139 : Code[10];SettleDate@1030068 : Date);
+    VAR
+      GLSetup@1030069 : Record 98;
+      BatchHeaderRec@1030070 : Text[250];
+    BEGIN
+      IF NOT FileIsInProcess THEN
+        ERROR(ExportFileNotStartedErr);
+      IF BatchIsInProcess THEN
+        ERROR(ExportFileNotCompletedErr);
+
+      WITH GenJournalLine DO BEGIN
+        IF "Account Type" = "Account Type"::Vendor THEN BEGIN
+          DestinationAcctType := 'V';
+          DestinationAcctNo := "Account No.";
+        END ELSE
+          IF "Account Type" = "Account Type"::Customer THEN BEGIN
+            DestinationAcctType := 'C';
+            DestinationAcctNo := "Account No.";
+          END ELSE
+            IF "Bal. Account Type" = "Bal. Account Type"::Vendor THEN BEGIN
+              DestinationAcctType := 'V';
+              DestinationAcctNo := "Bal. Account No.";
+            END ELSE
+              IF "Bal. Account Type" = "Bal. Account Type"::Customer THEN BEGIN
+                DestinationAcctType := 'C';
+                DestinationAcctNo := "Bal. Account No.";
+              END ELSE
+                ERROR(InvalidPaymentSpecErr,
+                  FIELDCAPTION("Account Type"),FIELDCAPTION("Bal. Account Type"),Vendor.TABLECAPTION,Customer.TABLECAPTION);
+
+        IF DestinationAcctType = 'V' THEN BEGIN
+          ExportPaymentsACH.CheckVendorTransitNum(DestinationAcctNo,Vendor,VendorBankAcct,TRUE);
+          DestinationName := Vendor.Name;
+          DestinationFederalIDNo := Vendor."Federal ID No.";
+          DestinationAddress := Vendor.Address + ' ' + Vendor."Address 2";
+          DestinationCity := Vendor.City;
+          DestinationCountryCode := Vendor."Country/Region Code";
+          DestinationCounty := Vendor.County;
+          DestinationPostCode := Vendor."Post Code";
+
+          VendorBankAcct.TESTFIELD("Bank Account No.");
+          DestinationBankName := VendorBankAcct.Name;
+          DestinationBankTransitNo := VendorBankAcct."Transit No.";
+          DestinationBankAcctNo := VendorBankAcct."Bank Account No.";
+          DestinationBankCurrencyCode := VendorBankAcct."Currency Code";
+          DestinationBankCountryCode := VendorBankAcct."Country/Region Code";
+        END ELSE
+          IF DestinationAcctType = 'C' THEN BEGIN
+            Customer.GET(DestinationAcctNo);
+            IF Customer."Privacy Blocked" THEN
+              ERROR(PrivacyBlockedErr,"Account Type");
+            IF Customer.Blocked IN [Customer.Blocked::All] THEN
+              ERROR(CustomerBlockedErr,"Account Type",Customer.Blocked);
+            DestinationName := Customer.Name;
+            DestinationFederalIDNo := ' ';
+            DestinationAddress := Customer.Address + ' ' + Customer."Address 2";
+            DestinationCity := Customer.City;
+            DestinationCountryCode := Customer."Country/Region Code";
+            DestinationCounty := Customer.County;
+            DestinationPostCode := Customer."Post Code";
+
+            CustBankAcct.SETRANGE("Customer No.",DestinationAcctNo);
+            CustBankAcct.SETRANGE("Use for Electronic Payments",TRUE);
+            CustBankAcct.FINDFIRST;
+
+            IF CustBankAcct.COUNT < 1 THEN
+              ERROR(CustBankAccErr,DestinationAcctNo);
+            IF CustBankAcct.COUNT > 1 THEN
+              ERROR(CustMoreThanOneBankAccErr,DestinationAcctNo);
+
+            IF NOT ExportPaymentsACH.CheckDigit(CustBankAcct."Transit No.") THEN
+              CustBankAcct.FIELDERROR("Transit No.",STRSUBSTNO(CustTransitNumNotValidErr,CustBankAcct."Transit No.",Customer."No."));
+            CustBankAcct.TESTFIELD("Bank Account No.");
+            DestinationBankName := CustBankAcct.Name;
+            DestinationBankTransitNo := CustBankAcct."Transit No.";
+            DestinationBankAcctNo := CustBankAcct."Bank Account No.";
+            DestinationBankCurrencyCode := CustBankAcct."Currency Code";
+            DestinationBankCountryCode := CustBankAcct."Country/Region Code";
+          END;
+      END;
+
+      BatchIsInProcess := TRUE;
+      BatchNo := BatchNo + 1;
+      BatchHashTotal := 0;
+      TotalBatchDebit := 0;
+      TotalBatchCredit := 0;
+      EntryAddendaCount := 0;
+      TraceNo := 0;
+      BatchHeaderRec := '';
+
+      AddNumToPrnString(BatchHeaderRec,5,1,1);
+      AddToPrnString(BatchHeaderRec,ServiceClassCode,2,3,Justification::Right,'0');
+      AddToPrnString(BatchHeaderRec,' ',5,16,Justification::Left,' ');
+      AddToPrnString(BatchHeaderRec,FORMAT(GenJournalLine."Foreign Exchange Indicator"),21,2,Justification::Left,' ');
+      AddToPrnString(BatchHeaderRec,FORMAT(GenJournalLine."Foreign Exchange Ref.Indicator"),23,1,Justification::Left,' ');
+      AddToPrnString(BatchHeaderRec,GenJournalLine."Foreign Exchange Reference",24,15,Justification::Left,' ');
+      AddToPrnString(BatchHeaderRec,DestinationCountryCode,39,2,Justification::Left,' ');
+      AddFedIDToPrnString(BatchHeaderRec,CompanyInformation."Federal ID No.",41,10);
+      AddToPrnString(BatchHeaderRec,'IAT',51,3,Justification::Left,' ');
+      AddToPrnString(BatchHeaderRec,GenJournalLine."Source Code",54,10,Justification::Left,' ');
+      IF BankAccount."Currency Code" = '' THEN BEGIN
+        GLSetup.GET;
+        AddToPrnString(BatchHeaderRec,GLSetup."LCY Code",64,3,Justification::Left,' ');
+      END ELSE
+        AddToPrnString(BatchHeaderRec,BankAccount."Currency Code",64,3,Justification::Left,' ');
+
+      IF DestinationBankCurrencyCode = '' THEN BEGIN
+        GLSetup.GET;
+        AddToPrnString(BatchHeaderRec,GLSetup."LCY Code",67,3,Justification::Left,' ');
+      END ELSE
+        AddToPrnString(BatchHeaderRec,DestinationBankCurrencyCode,67,3,Justification::Left,' ');
+
+      AddToPrnString(BatchHeaderRec,FORMAT(SettleDate,0,'<Year><Month,2><Day,2>'),70,6,Justification::Left,' ');
+      AddToPrnString(BatchHeaderRec,' ',76,3,Justification::Left,' ');
+      AddNumToPrnString(BatchHeaderRec,1,79,1);
+      AddToPrnString(BatchHeaderRec,BankAccount."Transit No.",80,8,Justification::Left,' ');
+      AddNumToPrnString(BatchHeaderRec,BatchNo,88,7);
+      ExportPrnString(BatchHeaderRec);
+    END;
+
+    [External]
+    PROCEDURE ExportElectronicPayment@17(GenJnlLine@1030071 : Record 81;PaymentAmount@1030072 : Decimal) : Code[30];
+    VAR
+      TransitNo@1030073 : Text[20];
+      DetailRec@1030074 : Text[250];
+      IATEntryTraceNo@1030075 : Text[250];
+      EntryDetailSeqNo@1030076 : Text[7];
+      FirstAddendaRec@1030077 : Text[250];
+      SecondAddendaRec@1030078 : Text[250];
+      ThirdAddendaRec@1030079 : Text[250];
+      FourthAddendaRec@1030080 : Text[250];
+      FifthAddendaRec@1030081 : Text[250];
+      SixthAddendaRec@1030082 : Text[250];
+      SeventhAddendaRec@1030083 : Text[250];
+      DemandCredit@1030084 : Boolean;
+    BEGIN
+      IF NOT FileIsInProcess THEN
+        ERROR(ExportDetailsFileNotStartedErr);
+      IF NOT BatchIsInProcess THEN
+        ERROR(ExportDetailsFileNotCompletedErr);
+
+      IF PaymentAmount = 0 THEN
+        EXIT('');
+      DemandCredit := (PaymentAmount < 0);
+      PaymentAmount := ABS(PaymentAmount);
+
+      TraceNo := TraceNo + 1;
+
+      ClearWorkingVars(DetailRec,IATEntryTraceNo,EntryDetailSeqNo,FirstAddendaRec,SecondAddendaRec,ThirdAddendaRec,FourthAddendaRec,
+        FifthAddendaRec,SixthAddendaRec,SeventhAddendaRec,TransitNo);
+
+      AddNumToPrnString(DetailRec,6,1,1);
+      IF DemandCredit THEN
+        AddNumToPrnString(DetailRec,22,2,2)
+      ELSE
+        AddNumToPrnString(DetailRec,27,2,2);
+      AddToPrnString(DetailRec,DestinationBankTransitNo,4,8,Justification::Right,' ');
+      AddToPrnString(DetailRec,COPYSTR(FORMAT(DestinationBankTransitNo),9,1),12,1,Justification::Right,' ');
+      AddNumToPrnString(DetailRec,7,13,4);
+      AddToPrnString(DetailRec,' ',17,13,Justification::Left,' ');
+      AddAmtToPrnString(DetailRec,PaymentAmount,30,10);
+      AddToPrnString(DetailRec,DELCHR(DestinationBankAcctNo,'=',' '),40,35,Justification::Left,' ');
+      AddToPrnString(DetailRec,' ',75,2,Justification::Left,' ');
+      AddToPrnString(DetailRec,FORMAT(GenJnlLine."Gateway Operator OFAC Scr.Inc"),77,1,Justification::Left,' ');
+      AddToPrnString(DetailRec,FORMAT(GenJnlLine."Secondary OFAC Scr.Indicator"),78,1,Justification::Left,' ');
+      AddNumToPrnString(DetailRec,1,79,1);
+      IATEntryTraceNo := GenerateTraceNoCode(TraceNo);
+      AddToPrnString(DetailRec,IATEntryTraceNo,80,15,Justification::Left,' ');
+
+      ExportPrnString(DetailRec);
+      EntryAddendaCount := EntryAddendaCount + 1;
+      IF DemandCredit THEN
+        TotalBatchCredit := TotalBatchCredit + PaymentAmount
+      ELSE
+        TotalBatchDebit := TotalBatchDebit + PaymentAmount;
+      IncrementHashTotal(BatchHashTotal,MakeHash(COPYSTR(TransitNo,1,8)));
+
+      AddNumToPrnString(FirstAddendaRec,7,1,1);
+      AddNumToPrnString(FirstAddendaRec,10,2,2);
+      AddToPrnString(FirstAddendaRec,FORMAT(GenJnlLine."Transaction Type Code"),4,3,Justification::Left,' ');
+      AddAmtToPrnString(FirstAddendaRec,PaymentAmount,7,18);
+      AddToPrnString(FirstAddendaRec,' ',25,22,Justification::Left,' ');
+      AddToPrnString(FirstAddendaRec,DestinationName,47,35,Justification::Left,' ');
+      AddToPrnString(FirstAddendaRec,' ',82,6,Justification::Left,' ');
+      EntryDetailSeqNo := COPYSTR(IATEntryTraceNo,STRLEN(IATEntryTraceNo) - 6,STRLEN(IATEntryTraceNo));
+      AddToPrnString(FirstAddendaRec,EntryDetailSeqNo,88,7,Justification::Right,'0');
+
+      ExportPrnString(FirstAddendaRec);
+      EntryAddendaCount := EntryAddendaCount + 1;
+
+      AddNumToPrnString(SecondAddendaRec,7,1,1);
+      AddNumToPrnString(SecondAddendaRec,11,2,2);
+      AddToPrnString(SecondAddendaRec,CompanyInformation.Name,4,35,Justification::Left,' ');
+      AddToPrnString(SecondAddendaRec,CompanyInformation.Address + ' ' + CompanyInformation."Address 2",39,35,Justification::Left,' ');
+      AddToPrnString(SecondAddendaRec,' ',74,14,Justification::Left,' ');
+      AddToPrnString(SecondAddendaRec,EntryDetailSeqNo,88,7,Justification::Right,'0');
+
+      ExportPrnString(SecondAddendaRec);
+      EntryAddendaCount := EntryAddendaCount + 1;
+
+      AddNumToPrnString(ThirdAddendaRec,7,1,1);
+      AddNumToPrnString(ThirdAddendaRec,12,2,2);
+      AddToPrnString(ThirdAddendaRec,CompanyInformation.City + '*' + CompanyInformation.County + '\'
+        ,4,35,Justification::Left,' ');
+      AddToPrnString(ThirdAddendaRec,CompanyInformation."Country/Region Code" + '*' + CompanyInformation."Post Code" + '\'
+        ,39,35,Justification::Left,' ');
+      AddToPrnString(ThirdAddendaRec,' ',74,14,Justification::Left,' ');
+      AddToPrnString(ThirdAddendaRec,EntryDetailSeqNo,88,7,Justification::Right,'0');
+
+      ExportPrnString(ThirdAddendaRec);
+      EntryAddendaCount := EntryAddendaCount + 1;
+
+      AddNumToPrnString(FourthAddendaRec,7,1,1);
+      AddNumToPrnString(FourthAddendaRec,13,2,2);
+      AddToPrnString(FourthAddendaRec,BankAccount.Name,4,35,Justification::Left,' ');
+      AddToPrnString(FourthAddendaRec,FORMAT(GenJnlLine."Origin. DFI ID Qualifier"),39,2,Justification::Left,' ');
+      AddToPrnString(FourthAddendaRec,PADSTR(BankAccount."Transit No.",8),41,34,Justification::Left,' ');
+      AddToPrnString(FourthAddendaRec,BankAccount."Country/Region Code",75,3,Justification::Left,' ');
+      AddToPrnString(FourthAddendaRec,' ',78,10,Justification::Left,' ');
+      AddToPrnString(FourthAddendaRec,EntryDetailSeqNo,88,7,Justification::Right,'0');
+
+      ExportPrnString(FourthAddendaRec);
+      EntryAddendaCount := EntryAddendaCount + 1;
+
+      AddNumToPrnString(FifthAddendaRec,7,1,1);
+      AddNumToPrnString(FifthAddendaRec,14,2,2);
+      AddToPrnString(FifthAddendaRec,DestinationBankName,4,35,Justification::Left,' ');
+      AddToPrnString(FifthAddendaRec,FORMAT(GenJnlLine."Receiv. DFI ID Qualifier"),39,2,Justification::Left,' ');
+      AddToPrnString(FifthAddendaRec,DestinationBankTransitNo,41,34,Justification::Left,' ');
+      AddToPrnString(FifthAddendaRec,DestinationBankCountryCode,75,3,Justification::Left,' ');
+      AddToPrnString(FifthAddendaRec,' ',78,10,Justification::Left,' ');
+      AddToPrnString(FifthAddendaRec,EntryDetailSeqNo,88,7,Justification::Right,'0');
+
+      ExportPrnString(FifthAddendaRec);
+      EntryAddendaCount := EntryAddendaCount + 1;
+
+      AddNumToPrnString(SixthAddendaRec,7,1,1);
+      AddNumToPrnString(SixthAddendaRec,15,2,2);
+      AddToPrnString(SixthAddendaRec,DestinationFederalIDNo,4,15,Justification::Left,' ');
+      AddToPrnString(SixthAddendaRec,DestinationAddress,19,35,Justification::Left,' ');
+      AddToPrnString(SixthAddendaRec,' ',54,34,Justification::Left,' ');
+      AddToPrnString(SixthAddendaRec,EntryDetailSeqNo,88,7,Justification::Right,'0');
+
+      ExportPrnString(SixthAddendaRec);
+      EntryAddendaCount := EntryAddendaCount + 1;
+
+      AddNumToPrnString(SeventhAddendaRec,7,1,1);
+      AddNumToPrnString(SeventhAddendaRec,16,2,2);
+      AddToPrnString(SeventhAddendaRec,DestinationCity + '*' + DestinationCounty + '\',
+        4,35,Justification::Left,' ');
+      AddToPrnString(SeventhAddendaRec,DestinationCountryCode + '*' + DestinationPostCode + '\',
+        39,35,Justification::Left,' ');
+      AddToPrnString(SeventhAddendaRec,' ',74,14,Justification::Left,' ');
+      AddToPrnString(SeventhAddendaRec,EntryDetailSeqNo,88,7,Justification::Right,'0');
+
+      ExportPrnString(SeventhAddendaRec);
+      EntryAddendaCount := EntryAddendaCount + 1;
+
+      EXIT(GenerateFullTraceNoCode(TraceNo));
+    END;
+
+    [External]
+    PROCEDURE EndExportBatch@9(ServiceClassCode@1030085 : Code[10]);
+    VAR
+      BatchControlRec@1030086 : Text[250];
+    BEGIN
+      IF NOT FileIsInProcess THEN
+        ERROR(ExportBatchFileNotStartedErr);
+      IF NOT BatchIsInProcess THEN
+        ERROR(ExportBatchNotStartedErr);
+
+      BatchIsInProcess := FALSE;
+      BatchControlRec := '';
+
+      AddNumToPrnString(BatchControlRec,8,1,1);
+      AddToPrnString(BatchControlRec,ServiceClassCode,2,3,Justification::Right,'0');
+      AddNumToPrnString(BatchControlRec,EntryAddendaCount,5,6);
+      AddToPrnString(BatchControlRec,FORMAT(BatchHashTotal,0,2),11,10,Justification::Right,'0');
+      AddAmtToPrnString(BatchControlRec,TotalBatchDebit,21,12);
+      AddAmtToPrnString(BatchControlRec,TotalBatchCredit,33,12);
+      AddFedIDToPrnString(BatchControlRec,CompanyInformation."Federal ID No.",45,10);
+      AddToPrnString(BatchControlRec,' ',55,19,Justification::Right,' ');
+      AddToPrnString(BatchControlRec,' ',74,6,Justification::Right,' ');
+      AddToPrnString(BatchControlRec,BankAccount."Transit No.",80,8,Justification::Left,' ');
+      AddNumToPrnString(BatchControlRec,BatchNo,88,7);
+      ExportPrnString(BatchControlRec);
+
+      BatchCount := BatchCount + 1;
+      IncrementHashTotal(FileHashTotal,BatchHashTotal);
+      TotalFileDebit := TotalFileDebit + TotalBatchDebit;
+      TotalFileCredit := TotalFileCredit + TotalBatchCredit;
+      FileEntryAddendaCount := FileEntryAddendaCount + EntryAddendaCount;
+    END;
+
+    [External]
+    PROCEDURE EndExportFile@1030087() : Boolean;
+    VAR
+      FileControlRec@1030088 : Text[250];
+    BEGIN
+      IF NOT FileIsInProcess THEN
+        ERROR(ExportFileNotEndedFileNotStartedErr);
+      IF BatchIsInProcess THEN
+        ERROR(ExportFileNotEndedFileNotEndedErr);
+
+      FileIsInProcess := FALSE;
+      FileControlRec := '';
+      BlockCount := (NoOfRec + 1) DIV BlockingFactor;
+      IF (NoOfRec + 1) MOD BlockingFactor <> 0 THEN
+        BlockCount := BlockCount + 1;
+
+      AddNumToPrnString(FileControlRec,9,1,1);
+      AddNumToPrnString(FileControlRec,BatchCount,2,6);
+      AddNumToPrnString(FileControlRec,BlockCount,8,6);
+      AddNumToPrnString(FileControlRec,FileEntryAddendaCount,14,8);
+      AddToPrnString(FileControlRec,FORMAT(FileHashTotal,0,2),22,10,Justification::Right,'0');
+      AddAmtToPrnString(FileControlRec,TotalFileDebit,32,12);
+      AddAmtToPrnString(FileControlRec,TotalFileCredit,44,12);
+      AddToPrnString(FileControlRec,' ',56,39,Justification::Right,' ');
+      ExportPrnString(FileControlRec);
+
+      WHILE NoOfRec MOD BlockingFactor <> 0 DO BEGIN
+        FileControlRec := PADSTR('',RecordLength,'9');
+        ExportPrnString(FileControlRec);
+      END;
+      ExportFile.CLOSE;
+
+      ClientFile := BankAccount."E-Pay Export File Path" + BankAccount."Last E-Pay Export File Name";
+      IF NOT DOWNLOAD(FileName,'','','',ClientFile) THEN BEGIN
+        ERASE(FileName);
+        EXIT(FALSE);
+      END;
+      ERASE(FileName);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE GenerateFullTraceNoCode@1030089(TraceNo@1030090 : Integer) : Code[30];
+    VAR
+      TraceCode@1030091 : Text[250];
+    BEGIN
+      TraceCode := '';
+      AddToPrnString(TraceCode,FORMAT(FileDate,0,'<Year,2><Month,2><Day,2>'),1,6,Justification::Left,' ');
+      AddToPrnString(TraceCode,BankAccount."Last ACH File ID Modifier",7,1,Justification::Right,'0');
+      AddNumToPrnString(TraceCode,BatchNo,8,7);
+      AddToPrnString(TraceCode,GenerateTraceNoCode(TraceNo),15,15,Justification::Left,' ');
+      EXIT(TraceCode);
+    END;
+
+    LOCAL PROCEDURE GenerateTraceNoCode@1030092(TraceNo@1030093 : Integer) : Code[15];
+    VAR
+      TraceCode@1030094 : Text[250];
+    BEGIN
+      TraceCode := '';
+      AddToPrnString(TraceCode,BankAccount."Transit No.",1,8,Justification::Left,' ');
+      AddNumToPrnString(TraceCode,TraceNo,9,7);
+      EXIT(TraceCode);
+    END;
+
+    LOCAL PROCEDURE AddNumToPrnString@1030095(VAR PrnString@1030096 : Text[250];Number@1030097 : Integer;StartPos@1030098 : Integer;Length@1030099 : Integer);
+    VAR
+      TmpString@1030100 : Text[250];
+    BEGIN
+      TmpString := DELCHR(FORMAT(Number),'=','.,-');
+      AddToPrnString(PrnString,TmpString,StartPos,Length,Justification::Right,'0');
+    END;
+
+    LOCAL PROCEDURE AddAmtToPrnString@1030101(VAR PrnString@1030102 : Text[250];Amount@1030103 : Decimal;StartPos@1030104 : Integer;Length@1030105 : Integer);
+    VAR
+      TmpString@1030106 : Text[250];
+      I@1030107 : Integer;
+    BEGIN
+      TmpString := FORMAT(Amount);
+      I := STRPOS(TmpString,'.');
+      CASE TRUE OF
+        I = 0:
+          TmpString := TmpString + '.00';
+        I = STRLEN(TmpString) - 1:
+          TmpString := TmpString + '0';
+      END;
+      TmpString := DELCHR(TmpString,'=','.,-');
+      AddToPrnString(PrnString,TmpString,StartPos,Length,Justification::Right,'0');
+    END;
+
+    [External]
+    PROCEDURE AddFedIDToPrnString@1030108(VAR PrnString@1030109 : Text[250];FedID@1030110 : Text[30];StartPos@1030111 : Integer;Length@1030112 : Integer);
+    BEGIN
+      AddToPrnString(PrnString,'1' + DELCHR(FedID,'=',' .,-'),StartPos,Length,Justification::Left,' ');
+    END;
+
+    LOCAL PROCEDURE AddToPrnString@1030113(VAR PrnString@1030114 : Text[251];SubString@1030115 : Text[250];StartPos@1030116 : Integer;Length@1030117 : Integer;Justification@1030118 : 'Left,Right';Filler@1030119 : Text[1]);
+    VAR
+      I@1030120 : Integer;
+      SubStrLen@1030121 : Integer;
+    BEGIN
+      SubString := UPPERCASE(DELCHR(SubString,'<>',' '));
+      SubStrLen := STRLEN(SubString);
+
+      IF SubStrLen > Length THEN BEGIN
+        SubString := COPYSTR(SubString,1,Length);
+        SubStrLen := Length;
+      END;
+
+      IF Justification = Justification::Right THEN
+        FOR I := 1 TO (Length - SubStrLen) DO
+          SubString := Filler + SubString
+      ELSE
+        FOR I := SubStrLen + 1 TO Length DO
+          SubString := SubString + Filler;
+
+      IF STRLEN(PrnString) >= StartPos THEN
+        IF StartPos > 1 THEN
+          PrnString := COPYSTR(PrnString,1,StartPos - 1) + SubString + COPYSTR(PrnString,StartPos)
+        ELSE
+          PrnString := SubString + PrnString
+      ELSE BEGIN
+        FOR I := STRLEN(PrnString) + 1 TO StartPos - 1 DO
+          PrnString := PrnString + ' ';
+        PrnString := PrnString + SubString;
+      END;
+    END;
+
+    LOCAL PROCEDURE ExportPrnString@1030122(VAR PrnString@1030123 : Text[250]);
+    BEGIN
+      PrnString := PADSTR(PrnString,RecordLength,' ');
+      ExportFile.WRITE(PrnString);
+      NoOfRec := NoOfRec + 1;
+      PrnString := '';
+    END;
+
+    LOCAL PROCEDURE IncrementHashTotal@1030132(VAR HashTotal@1030133 : Decimal;HashIncrement@1030134 : Decimal);
+    VAR
+      SubTotal@1030135 : Decimal;
+    BEGIN
+      SubTotal := HashTotal + HashIncrement;
+      IF SubTotal < 10000000000.0 THEN
+        HashTotal := SubTotal
+      ELSE
+        HashTotal := SubTotal - 10000000000.0;
+    END;
+
+    LOCAL PROCEDURE MakeHash@1030136(InputString@1030137 : Text[30]) : Decimal;
+    VAR
+      HashAmt@1030138 : Decimal;
+    BEGIN
+      InputString := DELCHR(InputString,'=','.,- ');
+      IF EVALUATE(HashAmt,InputString) THEN
+        EXIT(HashAmt);
+
+      EXIT(0);
+    END;
+
+    LOCAL PROCEDURE BuildIDModifier@1030139();
+    BEGIN
+      ModifierValues[1] := 'A';
+      ModifierValues[2] := 'B';
+      ModifierValues[3] := 'C';
+      ModifierValues[4] := 'D';
+      ModifierValues[5] := 'E';
+      ModifierValues[6] := 'F';
+      ModifierValues[7] := 'G';
+      ModifierValues[8] := 'H';
+      ModifierValues[9] := 'I';
+      ModifierValues[10] := 'J';
+      ModifierValues[11] := 'K';
+      ModifierValues[12] := 'L';
+      ModifierValues[13] := 'M';
+      ModifierValues[14] := 'N';
+      ModifierValues[15] := 'O';
+      ModifierValues[16] := 'P';
+      ModifierValues[17] := 'Q';
+      ModifierValues[18] := 'R';
+      ModifierValues[19] := 'S';
+      ModifierValues[20] := 'T';
+      ModifierValues[21] := 'U';
+      ModifierValues[22] := 'V';
+      ModifierValues[23] := 'W';
+      ModifierValues[24] := 'X';
+      ModifierValues[25] := 'Y';
+      ModifierValues[26] := 'Z';
+    END;
+
+    LOCAL PROCEDURE ClearWorkingVars@1020000(VAR DtlRec@1020000 : Text[250];VAR IATEntTraceNo@1020001 : Text[250];VAR EntryDtlSeqNo@1020002 : Text[7];VAR FirstAddRec@1020003 : Text[250];VAR SecondAddRec@1020004 : Text[250];VAR ThirdAddRec@1020005 : Text[250];VAR FourthAddRec@1020006 : Text[250];VAR FifthAddRec@1020007 : Text[250];VAR SixthAddRec@1020008 : Text[250];VAR SeventhAddRec@1020009 : Text[250];VAR TransitNo@1020010 : Text[20]);
+    BEGIN
+      DtlRec := '';
+      IATEntTraceNo := '';
+      EntryDtlSeqNo := '';
+      FirstAddRec := '';
+      SecondAddRec := '';
+      ThirdAddRec := '';
+      FourthAddRec := '';
+      FifthAddRec := '';
+      SixthAddRec := '';
+      SeventhAddRec := '';
+      TransitNo := '';
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,158 @@
+OBJECT Table 8620 Config. Tmpl. Selection Rules
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:15:43 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    ReplicateData=No;
+    CaptionML=ENU=Config. Tmpl. Selection Rules;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Table ID            ;Integer       ;TableRelation=AllObjWithCaption."Object ID" WHERE (Object Type=CONST(Table));
+                                                   CaptionML=ENU=Table ID }
+    { 2   ;   ;Template Code       ;Code10        ;TableRelation="Config. Template Header".Code WHERE (Table ID=FIELD(Table ID));
+                                                   CaptionML=ENU=Template Code;
+                                                   NotBlank=Yes }
+    { 5   ;   ;Selection Criteria  ;BLOB          ;CaptionML=ENU=Selection Criteria }
+    { 6   ;   ;Description         ;Text250       ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup("Config. Template Header".Description WHERE (Code=FIELD(Template Code),
+                                                                                                                   Table ID=FIELD(Table ID)));
+                                                   CaptionML=ENU=Description;
+                                                   Editable=No }
+    { 10  ;   ;Order               ;Integer       ;CaptionML=ENU=Order }
+    { 11  ;   ;Page ID             ;Integer       ;OnValidate=VAR
+                                                                PageMetadata@1000 : Record 2000000138;
+                                                              BEGIN
+                                                                PageMetadata.GET("Page ID");
+                                                                VALIDATE("Table ID",PageMetadata.SourceTable);
+                                                              END;
+
+                                                   CaptionML=ENU=Page ID }
+  }
+  KEYS
+  {
+    {    ;Table ID,Template Code,Page ID          ;Clustered=Yes }
+    {    ;Order                                    }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      DefineFiltersTxt@1001 : TextConst 'ENU=Specify criteria for when the template will be applied.';
+
+    PROCEDURE SetSelectionCriteria@4();
+    VAR
+      ConfigTmplSelectionRules@1004 : Record 8620;
+      RequestPageParametersHelper@1000 : Codeunit 1530;
+      CurrentFilters@1002 : Text;
+      NewFilters@1003 : Text;
+    BEGIN
+      TESTFIELD("Table ID");
+      TESTFIELD("Template Code");
+
+      CurrentFilters := GetExistingFilters;
+
+      IF NOT RequestPageParametersHelper.ShowRequestPageAndGetFilters(NewFilters,CurrentFilters,'',"Table ID",DefineFiltersTxt) THEN BEGIN
+        IF NOT ConfigTmplSelectionRules.GET("Table ID","Template Code","Page ID") THEN
+          INSERT(TRUE);
+        EXIT;
+      END;
+
+      SaveTextFilter(NewFilters);
+
+      IF NOT ConfigTmplSelectionRules.GET("Table ID","Template Code","Page ID") THEN
+        INSERT(TRUE)
+      ELSE
+        MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE GetExistingFilters@12() Filters : Text;
+    VAR
+      FiltersInStream@1000 : InStream;
+    BEGIN
+      CALCFIELDS("Selection Criteria");
+      IF NOT "Selection Criteria".HASVALUE THEN
+        EXIT;
+
+      "Selection Criteria".CREATEINSTREAM(FiltersInStream);
+      FiltersInStream.READ(Filters);
+    END;
+
+    PROCEDURE GetFiltersAsTextDisplay@5() : Text;
+    VAR
+      TempBlob@1002 : TEMPORARY Record 99008535;
+      RequestPageParametersHelper@1001 : Codeunit 1530;
+      FiltersRecordRef@1000 : RecordRef;
+    BEGIN
+      FiltersRecordRef.OPEN("Table ID");
+      CALCFIELDS("Selection Criteria");
+      TempBlob.Blob := "Selection Criteria";
+
+      IF RequestPageParametersHelper.ConvertParametersToFilters(FiltersRecordRef,TempBlob) THEN
+        EXIT(FiltersRecordRef.GETFILTERS);
+
+      EXIT('');
+    END;
+
+    LOCAL PROCEDURE SaveTextFilter@15(NewFilters@1000 : Text);
+    VAR
+      FiltersOutStream@1001 : OutStream;
+    BEGIN
+      CLEAR("Selection Criteria");
+      "Selection Criteria".CREATEOUTSTREAM(FiltersOutStream);
+      FiltersOutStream.WRITETEXT(NewFilters);
+    END;
+
+    PROCEDURE FindTemplateBasedOnRecordFields@1(RecordVariant@1001 : Variant;VAR ConfigTemplateHeader@1000 : Record 8618) : Boolean;
+    VAR
+      ConfigTmplSelectionRules@1006 : Record 8620;
+      TempBlob@1007 : TEMPORARY Record 99008535;
+      DataTypeManagement@1002 : Codeunit 701;
+      RequestPageParametersHelper@1004 : Codeunit 1530;
+      RecRef@1003 : RecordRef;
+      SearchRecRef@1008 : RecordRef;
+      SearchRecRefVariant@1005 : Variant;
+    BEGIN
+      IF NOT DataTypeManagement.GetRecordRef(RecordVariant,RecRef) THEN
+        EXIT(FALSE);
+
+      ConfigTmplSelectionRules.SETCURRENTKEY(Order);
+      ConfigTmplSelectionRules.ASCENDING(TRUE);
+      ConfigTmplSelectionRules.SETRANGE("Table ID",RecRef.NUMBER);
+      ConfigTmplSelectionRules.SETAUTOCALCFIELDS("Selection Criteria");
+      IF NOT ConfigTmplSelectionRules.FINDSET(FALSE) THEN
+        EXIT(FALSE);
+
+      // Insert RecRef on a temporary table
+      SearchRecRef.OPEN(RecRef.NUMBER,TRUE);
+      SearchRecRefVariant := SearchRecRef;
+      RecRef.SETTABLE(SearchRecRefVariant);
+      DataTypeManagement.GetRecordRef(SearchRecRefVariant,SearchRecRef);
+      SearchRecRef.INSERT;
+
+      REPEAT
+        TempBlob.Blob := ConfigTmplSelectionRules."Selection Criteria";
+        IF NOT TempBlob.Blob.HASVALUE THEN
+          EXIT(ConfigTemplateHeader.GET(ConfigTmplSelectionRules."Template Code"));
+
+        IF RequestPageParametersHelper.ConvertParametersToFilters(SearchRecRef,TempBlob) THEN
+          IF SearchRecRef.FIND THEN
+            EXIT(ConfigTemplateHeader.GET(ConfigTmplSelectionRules."Template Code"));
+
+      UNTIL ConfigTmplSelectionRules.NEXT = 0;
+
+      EXIT(FALSE);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

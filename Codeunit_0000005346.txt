@@ -1,0 +1,159 @@
+OBJECT Codeunit 5346 CRM Sales Document Posting Mgt
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:21 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    SingleInstance=Yes;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      CRMIntegrationManagement@1001 : Codeunit 5330;
+      CRMSalesOrderId@1000 : GUID;
+      CRMDocumentHasBeenPostedMsg@1002 : TextConst '@@@="%1=Document Type;%2=Document Id";ENU=%1 ''%2'' has been posted.';
+
+    [EventSubscriber(Table,36,OnBeforeDeleteEvent)]
+    PROCEDURE SetCRMSalesOrderIdOnSalesHeaderDeletion@1(VAR Rec@1000 : Record 36;RunTrigger@1001 : Boolean);
+    VAR
+      CRMIntegrationRecord@1003 : Record 5331;
+    BEGIN
+      IF (Rec."Document Type" <> Rec."Document Type"::Order) OR
+         (Rec.Status = Rec.Status::Open) OR
+         RunTrigger // RunTrigger is expected to be FALSE on removal of Sales Order Header on posting
+      THEN
+        EXIT;
+      IF NOT CRMIntegrationManagement.IsCRMIntegrationEnabled THEN
+        EXIT;
+
+      IF NOT CRMIntegrationRecord.FindIDFromRecordID(Rec.RECORDID,CRMSalesOrderId) THEN
+        CLEAR(CRMSalesOrderId);
+    END;
+
+    [EventSubscriber(Codeunit,80,OnAfterPostSalesDoc)]
+    PROCEDURE PostCRMSalesDocumentOnAfterPostSalesDoc@2(VAR SalesHeader@1000 : Record 36;VAR GenJnlPostLine@1001 : Codeunit 12;SalesShptHdrNo@1002 : Code[20];RetRcpHdrNo@1003 : Code[20];SalesInvHdrNo@1004 : Code[20];SalesCrMemoHdrNo@1005 : Code[20]);
+    BEGIN
+      IF NOT CRMIntegrationManagement.IsCRMIntegrationEnabled THEN
+        EXIT;
+
+      AddPostedSalesDocumentToCRMAccountWall(SalesHeader);
+
+      IF NOT ISNULLGUID(CRMSalesOrderId) THEN // Should be set by SetOrderOnSalesHeaderDeletion
+        SetCRMSalesOrderStateAsInvoiced;
+    END;
+
+    LOCAL PROCEDURE AddPostedSalesDocumentToCRMAccountWall@3(SalesHeader@1002 : Record 36);
+    VAR
+      Customer@1000 : Record 18;
+      CRMSetupDefaults@1003 : Codeunit 5334;
+    BEGIN
+      IF NOT CRMSetupDefaults.GetAddPostedSalesDocumentToCRMAccountWallConfig THEN
+        EXIT;
+      IF SalesHeader."Document Type" IN [SalesHeader."Document Type"::Order,SalesHeader."Document Type"::Invoice] THEN BEGIN
+        Customer.GET(SalesHeader."Sell-to Customer No.");
+        AddPostToCRMEntityWall(
+          Customer.RECORDID,STRSUBSTNO(CRMDocumentHasBeenPostedMsg,SalesHeader."Document Type",SalesHeader."No."));
+      END;
+    END;
+
+    LOCAL PROCEDURE AddPostToCRMEntityWall@4(TargetRecordID@1000 : RecordID;Message@1004 : Text);
+    VAR
+      CRMPost@1003 : Record 5344;
+      CRMAccount@1006 : Record 5341;
+      CRMIntegrationRecord@1007 : Record 5331;
+      CRMIntegrationManagement@1005 : Codeunit 5330;
+      EntityID@1001 : GUID;
+      EntityTypeName@1002 : Text;
+    BEGIN
+      IF NOT GetCRMEntityIdAndTypeName(TargetRecordID,EntityID,EntityTypeName) THEN
+        EXIT;
+
+      IF NOT CRMIntegrationManagement.IsWorkingConnection THEN
+        EXIT;
+
+      CRMIntegrationRecord.FindByRecordID(TargetRecordID);
+      IF CRMIntegrationRecord."Table ID" = DATABASE::Customer THEN
+        IF NOT CRMAccount.GET(EntityID) THEN BEGIN
+          CRMIntegrationRecord.Skipped := TRUE;
+          CRMIntegrationRecord.MODIFY(TRUE);
+          EXIT;
+        END;
+
+      CLEAR(CRMPost);
+      EVALUATE(CRMPost.RegardingObjectTypeCode,EntityTypeName);
+      CRMPost.RegardingObjectId := EntityID;
+      CRMPost.Text := COPYSTR(Message,1,MAXSTRLEN(CRMPost.Text));
+      CRMPost.Source := CRMPost.Source::AutoPost;
+      CRMPost.Type := CRMPost.Type::Status;
+      CRMPost.INSERT;
+    END;
+
+    LOCAL PROCEDURE GetCRMEntityIdAndTypeName@6(DestinationRecordID@1001 : RecordID;VAR EntityID@1000 : GUID;VAR EntityTypeName@1002 : Text) : Boolean;
+    VAR
+      CRMIntegrationRecord@1003 : Record 5331;
+    BEGIN
+      IF NOT CRMIntegrationRecord.FindIDFromRecordID(DestinationRecordID,EntityID) THEN
+        EXIT(FALSE);
+
+      EntityTypeName := CRMIntegrationManagement.GetCRMEntityTypeName(DestinationRecordID.TABLENO);
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE SetCRMSalesOrderStateAsInvoiced@5();
+    VAR
+      CRMSalesorder@1000 : Record 5353;
+    BEGIN
+      IF CRMSalesorder.GET(CRMSalesOrderId) THEN BEGIN
+        CRMSalesorder.StateCode := CRMSalesorder.StateCode::Invoiced;
+        CRMSalesorder.StatusCode := CRMSalesorder.StatusCode::Invoiced;
+        CRMSalesorder.MODIFY;
+      END;
+
+      CLEAR(CRMSalesOrderId);
+    END;
+
+    [External]
+    PROCEDURE CheckShippedOrders@14(VAR SalesHeaderOrder@1000 : Record 36);
+    VAR
+      CRMIntegrationRecord@1001 : Record 5331;
+    BEGIN
+      IF SalesHeaderOrder.FINDSET THEN
+        REPEAT
+          IF IsSalesOrderFullyInvoiced(SalesHeaderOrder) THEN
+            IF CRMIntegrationRecord.FindIDFromRecordID(SalesHeaderOrder.RECORDID,CRMSalesOrderId) THEN
+              SetCRMSalesOrderStateAsInvoiced;
+        UNTIL SalesHeaderOrder.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE IsSalesOrderFullyInvoiced@7(SalesHeader@1000 : Record 36) : Boolean;
+    VAR
+      SalesLine@1001 : Record 37;
+    BEGIN
+      SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+      SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+      SalesLine.SETFILTER("Quantity Invoiced",'<>0');
+      IF SalesLine.FINDFIRST THEN BEGIN
+        SalesLine.SETRANGE("Quantity Invoiced");
+        SalesLine.SETFILTER("Outstanding Quantity",'<>0');
+        IF SalesLine.ISEMPTY THEN BEGIN
+          SalesLine.SETRANGE("Outstanding Quantity");
+          SalesLine.SETFILTER("Qty. Shipped Not Invoiced",'<>0');
+          EXIT(SalesLine.ISEMPTY);
+        END;
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

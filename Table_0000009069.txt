@@ -1,0 +1,217 @@
+OBJECT Table 9069 O365 Sales Cue
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:15:46 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=O365 Sales Cue;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Primary Key         ;Code10        ;CaptionML=ENU=Primary Key }
+    { 2   ;   ;Overdue Sales Documents;Integer    ;FieldClass=FlowField;
+                                                   CalcFormula=Count("Cust. Ledger Entry" WHERE (Document Type=FILTER(Invoice|Credit Memo),
+                                                                                                 Due Date=FIELD(Overdue Date Filter),
+                                                                                                 Open=CONST(Yes)));
+                                                   CaptionML=ENU=Overdue Sales Documents }
+    { 3   ;   ;Customers - Blocked ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count(Customer WHERE (Blocked=FILTER(<>' ')));
+                                                   CaptionML=ENU=Customers - Blocked }
+    { 4   ;   ;CM Date Filter      ;Date          ;FieldClass=FlowFilter;
+                                                   CaptionML=ENU=CM Date Filter }
+    { 5   ;   ;YTD Date Filter     ;Date          ;FieldClass=FlowFilter;
+                                                   CaptionML=ENU=YTD Date Filter }
+    { 6   ;   ;Due Date Filter     ;Date          ;FieldClass=FlowFilter;
+                                                   CaptionML=ENU=Due Date Filter }
+    { 7   ;   ;Overdue Date Filter ;Date          ;FieldClass=FlowFilter;
+                                                   CaptionML=ENU=Overdue Date Filter }
+    { 8   ;   ;User ID Filter      ;Code50        ;FieldClass=FlowFilter;
+                                                   CaptionML=ENU=User ID Filter }
+    { 9   ;   ;Non-Applied Payments;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count("Bank Acc. Reconciliation" WHERE (Statement Type=CONST(Payment Application)));
+                                                   CaptionML=ENU=Non-Applied Payments }
+    { 10  ;   ;Invoiced YTD        ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Sales Invoice Entity Aggregate"."Amount Including VAT" WHERE (Document Date=FIELD(YTD Date Filter),
+                                                                                                                                  Status=FILTER(Open|Paid)));
+                                                   CaptionML=ENU=Invoiced YTD }
+    { 11  ;   ;Invoiced CM         ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Sales Invoice Entity Aggregate"."Amount Including VAT" WHERE (Document Date=FIELD(CM Date Filter),
+                                                                                                                                  Status=FILTER(Open|Paid)));
+                                                   CaptionML=ENU=Invoiced CM }
+    { 12  ;   ;Sales Invoices Outstanding;Decimal ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Detailed Cust. Ledg. Entry"."Amount (LCY)");
+                                                   CaptionML=ENU=Sales Invoices Outstanding }
+    { 13  ;   ;Sales Invoices Overdue;Decimal     ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Detailed Cust. Ledg. Entry"."Amount (LCY)" WHERE (Initial Entry Due Date=FIELD(Overdue Date Filter)));
+                                                   CaptionML=ENU=Sales Invoices Overdue }
+    { 14  ;   ;No. of Quotes       ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count("Sales Header" WHERE (Document Type=CONST(Quote)));
+                                                   CaptionML=ENU=No. of Quotes }
+    { 15  ;   ;No. of Draft Invoices;Integer      ;FieldClass=FlowField;
+                                                   CalcFormula=Count("Sales Header" WHERE (Document Type=CONST(Invoice)));
+                                                   CaptionML=ENU=No. of Draft Invoices }
+    { 16  ;   ;No. of Invoices YTD ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count("Sales Invoice Header" WHERE (Posting Date=FIELD(YTD Date Filter)));
+                                                   CaptionML=ENU=No. of Invoices YTD }
+    { 17  ;   ;Requested DateTime  ;DateTime      ;CaptionML=ENU=Requested DateTime }
+  }
+  KEYS
+  {
+    {    ;Primary Key                             ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      NoOutstandingMsg@1001 : TextConst 'ENU=There are no outstanding invoices.';
+      NoOverdueMsg@1000 : TextConst 'ENU=There are no overdue invoices.';
+      RequestedDateMustBeInAccountingPeriodErr@1003 : TextConst '@@@="%1 = The first date of the current fiscal year, %2 = The last date of the current fiscal year.";ENU=The requested date must be in the current fiscal year ''%1..%2''.';
+
+    PROCEDURE OnOpenActivitiesPage@1(VAR CurrencyFormatTxt@1004 : Text);
+    BEGIN
+      OnOpenActivitiesPageForRequestedDate(CurrencyFormatTxt,0DT);
+    END;
+
+    PROCEDURE OnOpenActivitiesPageForRequestedDate@9(VAR CurrencyFormatTxt@1004 : Text;RequestedDateTime@1005 : DateTime);
+    VAR
+      AccountingPeriod@1003 : Record 50;
+      GLSetup@1002 : Record 98;
+      O365SalesStatistics@1001 : Codeunit 2100;
+      RoleCenterNotificationMgt@1000 : Codeunit 1430;
+      ConfPersonalizationMgt@1007 : Codeunit 9170;
+      RequestedDate@1006 : Date;
+    BEGIN
+      RESET;
+      IF NOT GET THEN BEGIN
+        INIT;
+        INSERT;
+      END;
+
+      O365SalesStatistics.GetCurrentAccountingPeriod(AccountingPeriod);
+
+      IF RequestedDateTime <> 0DT THEN BEGIN
+        RequestedDate := DT2DATE(RequestedDateTime);
+
+        IF (AccountingPeriod.GetFiscalYearStartDate(WORKDATE) > RequestedDate) OR
+           (AccountingPeriod.GetFiscalYearEndDate(WORKDATE) < RequestedDate)
+        THEN
+          ERROR(RequestedDateMustBeInAccountingPeriodErr,
+            AccountingPeriod.GetFiscalYearStartDate(WORKDATE),
+            AccountingPeriod.GetFiscalYearEndDate(WORKDATE));
+      END ELSE
+        RequestedDate := WORKDATE;
+
+      SETFILTER("Due Date Filter",'..%1',RequestedDate);
+      SETFILTER("Overdue Date Filter",'<%1',RequestedDate);
+      SETFILTER("CM Date Filter",'%1..%2',CALCDATE('<CM+1D-1M>',RequestedDate),RequestedDate);
+      SETFILTER("YTD Date Filter",'%1..%2',AccountingPeriod."Starting Date",RequestedDate);
+
+      GLSetup.GET;
+
+      CurrencyFormatTxt := STRSUBSTNO('%1<precision, 0:0><standard format, 0>',GLSetup.GetCurrencySymbol);
+
+      IF GUIALLOWED THEN BEGIN
+        RoleCenterNotificationMgt.ShowNotifications;
+        ConfPersonalizationMgt.OnRoleCenterOpen;
+      END
+    END;
+
+    PROCEDURE ShowInvoices@3(OnlyOverdue@1000 : Boolean);
+    VAR
+      SalesInvoiceEntityAggregate@1001 : Record 5475;
+      Customer@1003 : Record 18;
+      O365SalesStatistics@1002 : Codeunit 2100;
+    BEGIN
+      SalesInvoiceEntityAggregate.SETRANGE(Status,SalesInvoiceEntityAggregate.Status::Open);
+      IF OnlyOverdue THEN
+        SalesInvoiceEntityAggregate.SETFILTER("Due Date",'<%1',WORKDATE);
+
+      IF O365SalesStatistics.GetCustomersFromSalesInvoiceEntityAggregates(SalesInvoiceEntityAggregate,Customer) THEN
+        PAGE.RUN(PAGE::"BC O365 Customer List",Customer)
+      ELSE // no customers
+        IF OnlyOverdue THEN
+          MESSAGE(NoOverdueMsg)
+        ELSE
+          MESSAGE(NoOutstandingMsg);
+    END;
+
+    PROCEDURE ShowMonthlySalesOverview@4();
+    VAR
+      TempNameValueBuffer@1002 : TEMPORARY Record 823;
+      Month@1000 : Integer;
+    BEGIN
+      Month := DATE2DMY(WORKDATE,2);
+      TempNameValueBuffer.INIT;
+      TempNameValueBuffer.ID := Month;
+      TempNameValueBuffer.INSERT;
+
+      PAGE.RUN(PAGE::"O365 Sales Month Summary",TempNameValueBuffer);
+    END;
+
+    PROCEDURE ShowYearlySalesOverview@5();
+    VAR
+      O365SalesStatistics@1000 : Codeunit 2100;
+      O365SalesYearSummaryCard@1001 : Page 2168;
+    BEGIN
+      IF O365SalesStatistics.GetRelativeMonthToFY <> 1 THEN BEGIN
+        O365SalesYearSummaryCard.ShowMonthlyDataPart;
+        O365SalesYearSummaryCard.RUN;
+      END ELSE
+        ShowMonthlySalesOverview; // the current month is the first month in the FY
+    END;
+
+    PROCEDURE ShowQuotes@6();
+    BEGIN
+      ShowUnpostedDocuments(TRUE);
+    END;
+
+    PROCEDURE ShowDraftInvoices@7();
+    BEGIN
+      ShowUnpostedDocuments(FALSE);
+    END;
+
+    PROCEDURE ShowUnpostedDocuments@11(FilterToQuotes@1001 : Boolean);
+    VAR
+      O365SalesDocument@1000 : Record 2103;
+    BEGIN
+      O365SalesDocument.SETRANGE(Posted,FALSE);
+      IF FilterToQuotes THEN BEGIN
+        O365SalesDocument.SETRANGE("Document Type",O365SalesDocument."Document Type"::Quote);
+        PAGE.RUN(PAGE::"BC O365 Estimate List",O365SalesDocument);
+      END ELSE BEGIN
+        O365SalesDocument.SETRANGE("Document Type",O365SalesDocument."Document Type"::Invoice);
+        PAGE.RUN(PAGE::"BC O365 Invoice List",O365SalesDocument);
+      END;
+    END;
+
+    PROCEDURE ShowUnpaidInvoices@2();
+    VAR
+      O365SalesDocument@1000 : Record 2103;
+    BEGIN
+      O365SalesDocument.SETRANGE(Posted,TRUE);
+      O365SalesDocument.SETRANGE("Document Type",O365SalesDocument."Document Type"::Invoice);
+      O365SalesDocument.SETFILTER("Outstanding Amount",'>0');
+      O365SalesDocument.SetSortByDueDate;
+      PAGE.RUN(PAGE::"BC O365 Invoice List",O365SalesDocument);
+    END;
+
+    PROCEDURE GetNumberOfUnpaidInvoices@8() Number : Integer;
+    VAR
+      SalesInvoiceEntityAggregate@1000 : Record 5475;
+    BEGIN
+      SalesInvoiceEntityAggregate.SETRANGE(Posted,TRUE);
+      SalesInvoiceEntityAggregate.SETRANGE(Status,SalesInvoiceEntityAggregate.Status::Open);
+      Number := SalesInvoiceEntityAggregate.COUNT;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

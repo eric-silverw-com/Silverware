@@ -1,0 +1,221 @@
+OBJECT Codeunit 1803 Encrypted Key/Value Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:14 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 1805=rimd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      EncryptedKeyValueTxt@1000 : TextConst 'ENU=Encrypted Key/Value';
+      NamespaceKeyTemplateTxt@1006 : TextConst '@@@={Locked};ENU=%1_%2';
+      ServiceKeyExistsErr@1002 : TextConst '@@@="%1 = key name that has been provided (e.g. ServiceName_Username)";ENU=Configuration key %1 already exists.';
+      ServiceKeyNotExistsErr@1003 : TextConst '@@@="%1 = key name that has been provided (e.g. ServiceName_Username)";ENU=Configuration key %1 does not exist.';
+      ServiceKeyTooLongErr@1005 : TextConst 'ENU=The specified key name is too long.';
+      InvalidKeyErr@1004 : TextConst 'ENU=The specified key name is not valid.';
+      InsertEventTxt@1008 : TextConst 'ENU=Insert key.';
+      UpdateEventTxt@1009 : TextConst 'ENU=Update key.';
+      DeleteEventTxt@1010 : TextConst 'ENU=Delete key.';
+      CleanupEventTxt@1001 : TextConst 'ENU=Cleanup.';
+      SuccessTxt@1012 : TextConst 'ENU=Success.';
+      RequestInitTxt@1013 : TextConst 'ENU=Request initiated.';
+      NoPermissionTxt@1007 : TextConst 'ENU=The user does not have permission.';
+      NoEncryptionTxt@1011 : TextConst 'ENU=Encryption has not been enabled.';
+      DevBetaEnabledTxt@1015 : TextConst 'ENU=Developer Mode Enabled.';
+      DevBetaDisabledTxt@1016 : TextConst 'ENU=Developer Mode Disabled.';
+
+    [External]
+    PROCEDURE Insert@1(Namespace@1003 : Code[50];Key@1000 : Code[50];Value@1001 : Text) : Boolean;
+    VAR
+      EncryptedKeyValue@1002 : Record 1805;
+      FullKey@1004 : Code[50];
+    BEGIN
+      FullKey := GenerateFullKey(Namespace,Key);
+
+      // If key is DEV_BETA we should set development mode and exit
+      IF ProcessSettingDevelopmentMode(FullKey,Value) THEN
+        EXIT(TRUE);
+
+      IF NOT HasCapability(InsertEventTxt) THEN
+        EXIT(FALSE);
+
+      IF EncryptedKeyValue.GET(FullKey) THEN BEGIN
+        LogActivity(InsertEventTxt,STRSUBSTNO(ServiceKeyExistsErr,FullKey),FALSE);
+        EXIT(FALSE);
+      END;
+
+      EncryptedKeyValue.INIT;
+      EncryptedKeyValue.VALIDATE(Key,FullKey);
+      EncryptedKeyValue.InsertValue(Value);
+      EncryptedKeyValue.INSERT(TRUE);
+
+      LogActivity(InsertEventTxt,FullKey,TRUE);
+      EXIT(TRUE);
+    END;
+
+    [External]
+    PROCEDURE Update@2(Namespace@1003 : Code[50];Key@1001 : Code[50];Value@1000 : Text) : Boolean;
+    VAR
+      EncryptedKeyValue@1002 : Record 1805;
+      FullKey@1004 : Code[50];
+    BEGIN
+      IF NOT HasCapability(UpdateEventTxt) THEN
+        EXIT(FALSE);
+
+      FullKey := GenerateFullKey(Namespace,Key);
+
+      IF NOT EncryptedKeyValue.GET(FullKey) THEN BEGIN
+        LogActivity(UpdateEventTxt,STRSUBSTNO(ServiceKeyNotExistsErr,FullKey),FALSE);
+        EXIT(FALSE);
+      END;
+
+      EncryptedKeyValue.InsertValue(Value);
+      EncryptedKeyValue.MODIFY(TRUE);
+
+      LogActivity(UpdateEventTxt,FullKey,TRUE);
+      EXIT(TRUE);
+    END;
+
+    [External]
+    PROCEDURE Remove@3(Namespace@1002 : Code[50];Key@1001 : Code[50]) : Boolean;
+    VAR
+      EncryptedKeyValue@1000 : Record 1805;
+      FullKey@1003 : Code[50];
+    BEGIN
+      IF NOT HasCapability(DeleteEventTxt) THEN
+        EXIT(FALSE);
+
+      FullKey := GenerateFullKey(Namespace,Key);
+
+      IF EncryptedKeyValue.GET(FullKey) THEN BEGIN
+        EncryptedKeyValue.DELETE(TRUE);
+        LogActivity(DeleteEventTxt,FullKey,TRUE);
+      END ELSE
+        LogActivity(DeleteEventTxt,STRSUBSTNO(ServiceKeyNotExistsErr,FullKey),TRUE);
+
+      EXIT(TRUE);
+    END;
+
+    [External]
+    PROCEDURE Cleanup@4() : Boolean;
+    VAR
+      EncryptedKeyValue@1001 : Record 1805;
+      ErrorOccured@1000 : Boolean;
+    BEGIN
+      IF NOT HasCapability(CleanupEventTxt) THEN
+        EXIT(FALSE);
+
+      LogActivity(CleanupEventTxt,RequestInitTxt,TRUE);
+      COMMIT;
+
+      ErrorOccured := FALSE;
+      OnCleanUpEvent(ErrorOccured);
+
+      IF NOT ErrorOccured THEN
+        EncryptedKeyValue.DELETEALL;
+
+      LogActivity(CleanupEventTxt,SuccessTxt,NOT ErrorOccured);
+      EXIT(NOT ErrorOccured);
+    END;
+
+    LOCAL PROCEDURE ProcessSettingDevelopmentMode@7(Key@1000 : Code[50];Value@1001 : Text) : Boolean;
+    VAR
+      CompanyInformation@1002 : Record 79;
+      EnableDeveloperMode@1003 : Boolean;
+    BEGIN
+      IF Key <> CompanyInformation.GetDevBetaModeTxt THEN
+        EXIT(FALSE);
+
+      IF NOT EVALUATE(EnableDeveloperMode,Value,9) THEN
+        EXIT(FALSE);
+
+      CompanyInformation.GET;
+
+      IF (NOT EnableDeveloperMode) AND (CompanyInformation."Custom System Indicator Text" <> CompanyInformation.GetDevBetaModeTxt) THEN
+        EXIT(FALSE);
+
+      IF EnableDeveloperMode THEN BEGIN
+        CompanyInformation.VALIDATE("Custom System Indicator Text",CompanyInformation.GetDevBetaModeTxt);
+        LogActivity(InsertEventTxt,DevBetaEnabledTxt,TRUE);
+      END ELSE BEGIN
+        CLEAR(CompanyInformation."Custom System Indicator Text");
+        LogActivity(InsertEventTxt,DevBetaDisabledTxt,TRUE);
+      END;
+
+      CompanyInformation.MODIFY(TRUE);
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE GenerateFullKey@15(Namespace@1000 : Code[50];Key@1001 : Code[50]) : Code[50];
+    VAR
+      Result@1002 : Code[50];
+    BEGIN
+      IF (Namespace = '') OR (Key = '') THEN
+        ERROR(InvalidKeyErr);
+
+      IF STRLEN(STRSUBSTNO(NamespaceKeyTemplateTxt,Namespace,Key)) > MAXSTRLEN(Result) THEN
+        ERROR(ServiceKeyTooLongErr);
+
+      Result := COPYSTR(STRSUBSTNO(NamespaceKeyTemplateTxt,Namespace,Key),1,MAXSTRLEN(Result));
+      EXIT(Result);
+    END;
+
+    LOCAL PROCEDURE LogActivity@31(ActivityDescription@1002 : Text;ActivityMessage@1003 : Text;Success@1001 : Boolean);
+    VAR
+      ActivityLog@1000 : Record 710;
+      EncryptedKeyValue@1005 : Record 1805;
+      Status@1004 : Integer;
+    BEGIN
+      IF Success THEN
+        Status := ActivityLog.Status::Success
+      ELSE
+        Status := ActivityLog.Status::Failed;
+
+      ActivityLog.LogActivity(EncryptedKeyValue.RECORDID,Status,EncryptedKeyValueTxt,
+        ActivityDescription,ActivityMessage);
+    END;
+
+    LOCAL PROCEDURE HasCapability@6(EventType@1004 : Text) : Boolean;
+    VAR
+      EncryptedKeyValue@1000 : Record 1805;
+      EncryptionManagement@1003 : Codeunit 1266;
+      HasPermission@1001 : Boolean;
+      HasEncryption@1002 : Boolean;
+    BEGIN
+      HasPermission := EncryptedKeyValue.WRITEPERMISSION AND EncryptedKeyValue.READPERMISSION;
+      HasEncryption := EncryptionManagement.IsEncryptionEnabled AND EncryptionManagement.IsEncryptionPossible;
+
+      IF NOT HasPermission THEN BEGIN
+        LogActivity(EventType,NoPermissionTxt,FALSE);
+        EXIT(FALSE);
+      END;
+
+      IF NOT HasEncryption THEN BEGIN
+        LogActivity(EventType,NoEncryptionTxt,FALSE);
+        EXIT(FALSE);
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnCleanUpEvent@5(VAR ErrorOccured@1000 : Boolean);
+    BEGIN
+      // The subscriber of this event should perform any clean up that is dependant on the Encrypted Key/Value table.
+      // If an error occurs it should set ErrorOccured to true.
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

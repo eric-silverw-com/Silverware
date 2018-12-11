@@ -1,0 +1,490 @@
+OBJECT Codeunit 5703 Catalog Item Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:28 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=Item %1 already exists.';
+      Text001@1001 : TextConst 'ENU=Item %1 is created.';
+      Text002@1002 : TextConst '@@@="%1=Sales Line document type";ENU=You cannot enter a catalog item on %1.';
+      Text003@1003 : TextConst 'ENU=Creating item card for catalog item\';
+      Text004@1004 : TextConst 'ENU=Manufacturer Code    #1####\';
+      Text005@1005 : TextConst 'ENU=Vendor               #2##################\';
+      Text006@1006 : TextConst 'ENU=Vendor Item          #3##################\';
+      Text007@1007 : TextConst 'ENU=Item No.             #4##################';
+      NewItem@1008 : Record 27;
+      ItemLedgEntry@1009 : Record 32;
+      NonStock@1010 : Record 5718;
+      PurchLine@1012 : Record 39;
+      ItemVend@1014 : Record 99;
+      ServInvLine@1018 : Record 5902;
+      SalesLine@1019 : Record 37;
+      BOMComp@1024 : Record 90;
+      ProdBOMLine@1025 : Record 99000772;
+      ProdBOMHeader@1026 : Record 99000771;
+      ProgWindow@1020 : Dialog;
+
+    [External]
+    PROCEDURE NonstockAutoItem@2(NonStock2@1000 : Record 5718);
+    BEGIN
+      IF NewItem.GET(NonStock2."Item No.") THEN
+        ERROR(Text000,NonStock2."Item No.");
+
+      NonStock2."Item No." :=
+        GetNewItemNo(
+          NonStock2,STRLEN(NonStock2."Vendor Item No."),STRLEN(NonStock2."Manufacturer Code"));
+      NonStock2.MODIFY;
+      InsertItemUnitOfMeasure(NonStock2."Unit of Measure",NonStock2."Item No.");
+
+      NonStock2.TESTFIELD("Vendor No.");
+      NonStock2.TESTFIELD("Vendor Item No.");
+      NonStock2.TESTFIELD("Item Template Code");
+
+      IF NewItem.GET(NonStock2."Item No.") THEN
+        ERROR(Text000,NonStock2."Item No.");
+
+      CreateNewItem(NonStock2."Item No.",NonStock2);
+      MESSAGE(Text001,NonStock2."Item No.");
+
+      IF CheckLicensePermission(DATABASE::"Item Vendor") THEN
+        NonstockItemVend(NonStock2);
+      IF CheckLicensePermission(DATABASE::"Item Cross Reference") THEN
+        NonstockItemCrossRef(NonStock2);
+    END;
+
+    LOCAL PROCEDURE NonstockItemVend@5(NonStock2@1000 : Record 5718);
+    BEGIN
+      ItemVend.SETRANGE("Item No.",NonStock2."Item No.");
+      ItemVend.SETRANGE("Vendor No.",NonStock2."Vendor No.");
+      IF ItemVend.FINDFIRST THEN
+        EXIT;
+
+      ItemVend."Item No." := NonStock2."Item No.";
+      ItemVend."Vendor No." := NonStock2."Vendor No.";
+      ItemVend."Vendor Item No." := NonStock2."Vendor Item No.";
+      ItemVend.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE NonstockItemCrossRef@7(VAR NonStock2@1000 : Record 5718);
+    VAR
+      ItemCrossReference@1001 : Record 5717;
+    BEGIN
+      ItemCrossReference.SETRANGE("Item No.",NonStock2."Item No.");
+      ItemCrossReference.SETRANGE("Unit of Measure",NonStock2."Unit of Measure");
+      ItemCrossReference.SETRANGE("Cross-Reference Type",ItemCrossReference."Cross-Reference Type"::Vendor);
+      ItemCrossReference.SETRANGE("Cross-Reference Type No.",NonStock2."Vendor No.");
+      ItemCrossReference.SETRANGE("Cross-Reference No.",NonStock2."Vendor Item No.");
+      OnAfterItemCrossReferenceFilter(ItemCrossReference,NonStock2);
+      IF NOT ItemCrossReference.FINDFIRST THEN BEGIN
+        ItemCrossReference.INIT;
+        ItemCrossReference.VALIDATE("Item No.",NonStock2."Item No.");
+        ItemCrossReference.VALIDATE("Unit of Measure",NonStock2."Unit of Measure");
+        ItemCrossReference.VALIDATE("Cross-Reference Type",ItemCrossReference."Cross-Reference Type"::Vendor);
+        ItemCrossReference.VALIDATE("Cross-Reference Type No.",NonStock2."Vendor No.");
+        ItemCrossReference.VALIDATE("Cross-Reference No.",NonStock2."Vendor Item No.");
+        ItemCrossReference.INSERT;
+        OnAfterItemCrossReferenceInsert(ItemCrossReference,NonStock2);
+      END;
+      IF NonStock2."Bar Code" <> '' THEN BEGIN
+        ItemCrossReference.RESET;
+        ItemCrossReference.SETRANGE("Item No.",NonStock2."Item No.");
+        ItemCrossReference.SETRANGE("Unit of Measure",NonStock2."Unit of Measure");
+        ItemCrossReference.SETRANGE("Cross-Reference Type",ItemCrossReference."Cross-Reference Type"::"Bar Code");
+        ItemCrossReference.SETRANGE("Cross-Reference No.",NonStock2."Bar Code");
+        OnAfterItemCrossReferenceFilter(ItemCrossReference,NonStock2);
+        IF NOT ItemCrossReference.FINDFIRST THEN BEGIN
+          ItemCrossReference.INIT;
+          ItemCrossReference.VALIDATE("Item No.",NonStock2."Item No.");
+          ItemCrossReference.VALIDATE("Unit of Measure",NonStock2."Unit of Measure");
+          ItemCrossReference.VALIDATE("Cross-Reference Type",ItemCrossReference."Cross-Reference Type"::"Bar Code");
+          ItemCrossReference.VALIDATE("Cross-Reference No.",NonStock2."Bar Code");
+          ItemCrossReference.INSERT;
+          OnAfterItemCrossReferenceInsert(ItemCrossReference,NonStock2);
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE NonstockItemDel@8(VAR Item@1000 : Record 27);
+    VAR
+      ItemCrossReference@1001 : Record 5717;
+    BEGIN
+      ItemVend.SETRANGE("Item No.",Item."No.");
+      ItemVend.SETRANGE("Vendor No.",Item."Vendor No.");
+      ItemVend.DELETEALL;
+
+      ItemCrossReference.SETRANGE("Item No.",Item."No.");
+      ItemCrossReference.SETRANGE("Variant Code",Item."Variant Filter");
+      ItemCrossReference.DELETEALL;
+
+      NonStock.SETCURRENTKEY("Item No.");
+      NonStock.SETRANGE("Item No.",Item."No.");
+      IF NonStock.FIND('-') THEN
+        NonStock.MODIFYALL("Item No.",'');
+    END;
+
+    [External]
+    PROCEDURE NonStockSales@1(VAR SalesLine2@1000 : Record 37);
+    BEGIN
+      IF (SalesLine2."Document Type" IN
+          [SalesLine2."Document Type"::"Return Order",SalesLine2."Document Type"::"Credit Memo"])
+      THEN
+        ERROR(Text002,SalesLine2."Document Type");
+
+      NonStock.GET(SalesLine2."No.");
+      IF NonStock."Item No." <> '' THEN BEGIN
+        SalesLine2."No." := NonStock."Item No.";
+        EXIT;
+      END;
+
+      SalesLine2."No." :=
+        GetNewItemNo(
+          NonStock,STRLEN(NonStock."Vendor Item No."),STRLEN(NonStock."Manufacturer Code"));
+      NonStock."Item No." := SalesLine2."No.";
+      NonStock.MODIFY;
+      InsertItemUnitOfMeasure(NonStock."Unit of Measure",SalesLine2."No.");
+
+      NewItem.SETRANGE("No.",SalesLine2."No.");
+      IF NewItem.FINDFIRST THEN
+        EXIT;
+
+      ProgWindow.OPEN(Text003 +
+        Text004 +
+        Text005 +
+        Text006 +
+        Text007);
+      ProgWindow.UPDATE(1,NonStock."Manufacturer Code");
+      ProgWindow.UPDATE(2,NonStock."Vendor No.");
+      ProgWindow.UPDATE(3,NonStock."Vendor Item No.");
+      ProgWindow.UPDATE(4,SalesLine2."No.");
+
+      CreateNewItem(SalesLine2."No.",NonStock);
+
+      IF CheckLicensePermission(DATABASE::"Item Vendor") THEN
+        NonstockItemVend(NonStock);
+      IF CheckLicensePermission(DATABASE::"Item Cross Reference") THEN
+        NonstockItemCrossRef(NonStock);
+
+      ProgWindow.CLOSE;
+    END;
+
+    [External]
+    PROCEDURE DelNonStockSales@28(VAR SalesLine2@1000 : Record 37);
+    BEGIN
+      IF SalesLine2.Nonstock = FALSE THEN
+        EXIT;
+
+      NewItem.GET(SalesLine2."No.");
+      SalesLine2."No." := '';
+      SalesLine2.MODIFY;
+
+      DelNonStockItem(NewItem);
+    END;
+
+    [External]
+    PROCEDURE DelNonStockPurch@4(VAR PurchLine2@1000 : Record 39);
+    BEGIN
+      IF PurchLine2.Nonstock = FALSE THEN
+        EXIT;
+
+      NewItem.GET(PurchLine2."No.");
+      PurchLine2."No." := '';
+      PurchLine2.MODIFY;
+
+      DelNonStockItem(NewItem);
+    END;
+
+    [External]
+    PROCEDURE DelNonStockFSM@9(VAR ServInvLine2@1000 : Record 5902);
+    BEGIN
+      IF ServInvLine2.Nonstock = FALSE THEN
+        EXIT;
+
+      NewItem.GET(ServInvLine2."No.");
+      ServInvLine2."No." := '';
+      ServInvLine2.MODIFY;
+
+      DelNonStockItem(NewItem);
+    END;
+
+    [External]
+    PROCEDURE DelNonStockSalesArch@11(VAR SalesLineArchive2@1000 : Record 5108);
+    BEGIN
+      IF NewItem.GET(SalesLineArchive2."No.") THEN BEGIN
+        SalesLineArchive2."No." := '';
+        SalesLineArchive2.MODIFY;
+
+        DelNonStockItem(NewItem);
+      END;
+    END;
+
+    [External]
+    PROCEDURE NonStockFSM@6(VAR ServInvLine2@1000 : Record 5902);
+    BEGIN
+      NonStock.GET(ServInvLine2."No.");
+      IF NonStock."Item No." <> '' THEN BEGIN
+        ServInvLine2."No." := NonStock."Item No.";
+        EXIT;
+      END;
+
+      ServInvLine2."No." :=
+        GetNewItemNo(
+          NonStock,STRLEN(NonStock."Vendor Item No."),STRLEN(NonStock."Manufacturer Code"));
+      NonStock."Item No." := ServInvLine2."No.";
+      NonStock.MODIFY;
+      InsertItemUnitOfMeasure(NonStock."Unit of Measure",ServInvLine2."No.");
+
+      NewItem.SETRANGE("No.",ServInvLine2."No.");
+      IF NewItem.FINDFIRST THEN
+        EXIT;
+
+      ProgWindow.OPEN(Text003 +
+        Text004 +
+        Text005 +
+        Text006 +
+        Text007);
+      ProgWindow.UPDATE(1,NonStock."Manufacturer Code");
+      ProgWindow.UPDATE(2,NonStock."Vendor No.");
+      ProgWindow.UPDATE(3,NonStock."Vendor Item No.");
+      ProgWindow.UPDATE(4,ServInvLine2."No.");
+
+      CreateNewItem(ServInvLine2."No.",NonStock);
+
+      IF CheckLicensePermission(DATABASE::"Item Vendor") THEN
+        NonstockItemVend(NonStock);
+      IF CheckLicensePermission(DATABASE::"Item Cross Reference") THEN
+        NonstockItemCrossRef(NonStock);
+
+      ProgWindow.CLOSE;
+    END;
+
+    [External]
+    PROCEDURE CreateItemFromNonstock@3(Nonstock2@1000 : Record 5718);
+    BEGIN
+      IF NewItem.GET(Nonstock2."Item No.") THEN
+        ERROR(Text000,Nonstock2."Item No.");
+
+      Nonstock2."Item No." :=
+        GetNewItemNo(
+          Nonstock2,STRLEN(Nonstock2."Vendor Item No."),STRLEN(Nonstock2."Manufacturer Code"));
+      Nonstock2.MODIFY;
+      InsertItemUnitOfMeasure(Nonstock2."Unit of Measure",Nonstock2."Item No.");
+
+      Nonstock2.TESTFIELD("Vendor No.");
+      Nonstock2.TESTFIELD("Vendor Item No.");
+      Nonstock2.TESTFIELD("Item Template Code");
+
+      IF NewItem.GET(Nonstock2."Item No.") THEN
+        ERROR(Text000,Nonstock2."Item No.");
+
+      CreateNewItem(Nonstock2."Item No.",Nonstock2);
+
+      IF CheckLicensePermission(DATABASE::"Item Vendor") THEN
+        NonstockItemVend(Nonstock2);
+      IF CheckLicensePermission(DATABASE::"Item Cross Reference") THEN
+        NonstockItemCrossRef(Nonstock2);
+    END;
+
+    LOCAL PROCEDURE CheckLicensePermission@15(TableID@1000 : Integer) : Boolean;
+    VAR
+      LicensePermission@1001 : Record 2000000043;
+    BEGIN
+      LicensePermission.SETRANGE("Object Type",LicensePermission."Object Type"::TableData);
+      LicensePermission.SETRANGE("Object Number",TableID);
+      LicensePermission.SETFILTER("Insert Permission",'<>%1',LicensePermission."Insert Permission"::" ");
+      EXIT(LicensePermission.FINDFIRST);
+    END;
+
+    LOCAL PROCEDURE DelNonStockItem@10(VAR Item@1000 : Record 27);
+    VAR
+      SalesLineArch@1002 : Record 5108;
+    BEGIN
+      ItemLedgEntry.SETCURRENTKEY("Item No.");
+      ItemLedgEntry.SETRANGE("Item No.",Item."No.");
+      IF ItemLedgEntry.FINDFIRST THEN
+        EXIT;
+
+      SalesLine.SETCURRENTKEY(Type,"No.");
+      SalesLine.SETRANGE(Type,SalesLine.Type::Item);
+      SalesLine.SETRANGE("No.",Item."No.");
+      IF SalesLine.FINDFIRST THEN
+        EXIT;
+
+      PurchLine.SETCURRENTKEY(Type,"No.");
+      PurchLine.SETRANGE(Type,PurchLine.Type::Item);
+      PurchLine.SETRANGE("No.",Item."No.");
+      IF PurchLine.FINDFIRST THEN
+        EXIT;
+
+      ServInvLine.SETCURRENTKEY(Type,"No.");
+      ServInvLine.SETRANGE(Type,ServInvLine.Type::Item);
+      ServInvLine.SETRANGE("No.",Item."No.");
+      IF ServInvLine.FINDFIRST THEN
+        EXIT;
+
+      BOMComp.SETCURRENTKEY(Type,"No.");
+      BOMComp.SETRANGE(Type,BOMComp.Type::Item);
+      BOMComp.SETRANGE("No.",Item."No.");
+      IF BOMComp.FINDFIRST THEN
+        EXIT;
+
+      SalesLineArch.SETCURRENTKEY(Type,"No.");
+      SalesLineArch.SETRANGE(Type,SalesLineArch.Type::Item);
+      SalesLineArch.SETRANGE("No.",Item."No.");
+      IF NOT SalesLineArch.ISEMPTY THEN
+        EXIT;
+
+      ProdBOMLine.RESET;
+      ProdBOMLine.SETCURRENTKEY(Type,"No.");
+      ProdBOMLine.SETRANGE(Type,ProdBOMLine.Type::Item);
+      ProdBOMLine.SETRANGE("No.",Item."No.");
+      IF ProdBOMLine.FIND('-') THEN
+        REPEAT
+          IF ProdBOMHeader.GET(ProdBOMLine."Production BOM No.") AND
+             (ProdBOMHeader.Status = ProdBOMHeader.Status::Certified)
+          THEN
+            EXIT;
+        UNTIL ProdBOMLine.NEXT = 0;
+
+      NewItem.GET(Item."No.");
+      IF NewItem.DELETE(TRUE) THEN BEGIN
+        NonStock.SETRANGE("Item No.",Item."No.");
+        IF NonStock.FIND('-') THEN
+          REPEAT
+            NonStock."Item No." := '';
+            NonStock.MODIFY;
+          UNTIL NonStock.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertItemUnitOfMeasure@12(UnitOfMeasureCode@1002 : Code[10];ItemNo@1003 : Code[20]);
+    VAR
+      UnitOfMeasure@1000 : Record 204;
+      ItemUnitOfMeasure@1001 : Record 5404;
+    BEGIN
+      IF NOT UnitOfMeasure.GET(UnitOfMeasureCode) THEN BEGIN
+        UnitOfMeasure.Code := UnitOfMeasureCode;
+        UnitOfMeasure.INSERT;
+      END;
+      IF NOT ItemUnitOfMeasure.GET(ItemNo,UnitOfMeasureCode) THEN BEGIN
+        ItemUnitOfMeasure."Item No." := ItemNo;
+        ItemUnitOfMeasure.Code := UnitOfMeasureCode;
+        ItemUnitOfMeasure."Qty. per Unit of Measure" := 1;
+        ItemUnitOfMeasure.INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetNewItemNo@45(NonstockItem@1000 : Record 5718;Length1@1002 : Integer;Length2@1003 : Integer) NewItemNo : Code[20];
+    VAR
+      NonstockItemSetupMy@1001 : Record 5719;
+    BEGIN
+      NonstockItemSetupMy.GET;
+      CASE NonstockItemSetupMy."No. Format" OF
+        NonstockItemSetupMy."No. Format"::"Vendor Item No.":
+          NewItemNo := NonstockItem."Vendor Item No.";
+        NonstockItemSetupMy."No. Format"::"Mfr. + Vendor Item No.":
+          IF NonstockItemSetupMy."No. Format Separator" = '' THEN BEGIN
+            IF Length1 + Length2 <= 20 THEN
+              EVALUATE(NewItemNo,NonstockItem."Manufacturer Code" + NonstockItem."Vendor Item No.")
+            ELSE
+              EVALUATE(NewItemNo,NonstockItem."Manufacturer Code" + NonstockItem."Entry No.");
+          END ELSE BEGIN
+            IF Length1 + Length2 < 20 THEN
+              EVALUATE(
+                NewItemNo,
+                NonstockItem."Manufacturer Code" + NonstockItemSetupMy."No. Format Separator" + NonstockItem."Vendor Item No.")
+            ELSE
+              EVALUATE(
+                NewItemNo,
+                NonstockItem."Manufacturer Code" + NonstockItemSetupMy."No. Format Separator" + NonstockItem."Entry No.");
+          END;
+        NonstockItemSetupMy."No. Format"::"Vendor Item No. + Mfr.":
+          IF NonstockItemSetupMy."No. Format Separator" = '' THEN BEGIN
+            IF Length1 + Length2 <= 20 THEN
+              EVALUATE(NewItemNo,NonstockItem."Vendor Item No." + NonstockItem."Manufacturer Code")
+            ELSE
+              EVALUATE(NewItemNo,NonstockItem."Entry No." + NonstockItem."Manufacturer Code");
+          END ELSE BEGIN
+            IF Length1 + Length2 < 20 THEN
+              EVALUATE(
+                NewItemNo,
+                NonstockItem."Vendor Item No." + NonstockItemSetupMy."No. Format Separator" + NonstockItem."Manufacturer Code")
+            ELSE
+              EVALUATE(
+                NewItemNo,
+                NonstockItem."Entry No." + NonstockItemSetupMy."No. Format Separator" + NonstockItem."Manufacturer Code");
+          END;
+        NonstockItemSetupMy."No. Format"::"Entry No.":
+          NewItemNo := NonstockItem."Entry No.";
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateNewItem@75(ItemNo@1003 : Code[20];NonstockItem@1000 : Record 5718);
+    VAR
+      Item@1001 : Record 27;
+      DummyItemTemplate@1004 : Record 1301;
+      ConfigTemplateHeader@1002 : Record 8618;
+    BEGIN
+      Item.INIT;
+
+      ConfigTemplateHeader.SETRANGE(Code,NonstockItem."Item Template Code");
+      ConfigTemplateHeader.FINDFIRST;
+      DummyItemTemplate.InitializeTempRecordFromConfigTemplate(DummyItemTemplate,ConfigTemplateHeader);
+      Item."Inventory Posting Group" := DummyItemTemplate."Inventory Posting Group";
+      Item."Costing Method" := DummyItemTemplate."Costing Method";
+      Item."Gen. Prod. Posting Group" := DummyItemTemplate."Gen. Prod. Posting Group";
+      Item."Tax Group Code" := DummyItemTemplate."Tax Group Code";
+      Item."VAT Prod. Posting Group" := DummyItemTemplate."VAT Prod. Posting Group";
+
+      Item."No." := ItemNo;
+      Item.Description := NonstockItem.Description;
+      Item.VALIDATE(Description,Item.Description);
+      Item.VALIDATE("Base Unit of Measure",NonstockItem."Unit of Measure");
+      Item."Unit Price" := NonstockItem."Unit Price";
+      Item."Unit Cost" := NonstockItem."Negotiated Cost";
+      Item."Last Direct Cost" := NonstockItem."Negotiated Cost";
+      IF Item."Costing Method" = Item."Costing Method"::Standard THEN
+        Item."Standard Cost" := NonstockItem."Negotiated Cost";
+      Item."Automatic Ext. Texts" := FALSE;
+      Item."Vendor No." := NonstockItem."Vendor No.";
+      Item."Vendor Item No." := NonstockItem."Vendor Item No.";
+      Item."Net Weight" := NonstockItem."Net Weight";
+      Item."Gross Weight" := NonstockItem."Gross Weight";
+      Item."Manufacturer Code" := NonstockItem."Manufacturer Code";
+      Item."Item Category Code" := DummyItemTemplate."Item Category Code";
+      Item."Created From Nonstock Item" := TRUE;
+      OnBeforeCreateNewItem(Item,DummyItemTemplate,NonstockItem);
+      Item.INSERT;
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterItemCrossReferenceFilter@13(VAR ItemCrossReference@1000 : Record 5717;NonstockItem@1001 : Record 5718);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterItemCrossReferenceInsert@14(VAR ItemCrossReference@1001 : Record 5717;NonstockItem@1000 : Record 5718);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeCreateNewItem@16(VAR Item@1000 : Record 27;ItemTemplate@1001 : Record 1301;NonstockItem@1002 : Record 5718);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

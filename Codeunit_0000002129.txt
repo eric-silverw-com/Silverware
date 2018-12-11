@@ -1,0 +1,282 @@
+OBJECT Codeunit 2129 O365 Export Invoices + Email
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:16 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      SalesInvoiceHeader@1022 : Record 112;
+      SalesInvoiceLine@1021 : Record 113;
+      TempExcelBuffer@1001 : TEMPORARY Record 370;
+      NoInvoicesExportedErr@1005 : TextConst 'ENU=There were no invoices to export.';
+      InvoicesExportedMsg@1004 : TextConst 'ENU=Your exported invoices have been sent.';
+      AttachmentNameTxt@1002 : TextConst 'ENU=Invoices.xlsx';
+      ExportInvoicesEmailSubjectTxt@1007 : TextConst '@@@="%1 = Start Date, %2 =End Date";ENU=Please find the invoices summary and price details from %1 date until %2 date in the attached Excel book.';
+      InvoiceNoFieldTxt@1003 : TextConst 'ENU=Invoice No.';
+      CustomerNameFieldTxt@1006 : TextConst 'ENU=Customer Name';
+      AddressFieldTxt@1008 : TextConst 'ENU=Address';
+      CityFieldTxt@1009 : TextConst 'ENU=City';
+      CountyFieldTxt@1010 : TextConst 'ENU=State';
+      CountryRegionCodeFieldTxt@1011 : TextConst 'ENU=Country/Region Code';
+      InvoiceDateFieldTxt@1012 : TextConst 'ENU=Invoice Date';
+      NetTotalFieldTxt@1013 : TextConst 'ENU=Net Total';
+      TotalIncludingVatFieldTxt@1014 : TextConst 'ENU=Total Including Tax';
+      VatPercentFieldTxt@1015 : TextConst '@@@=The heading used when exporting the invoice lines;ENU=Tax %';
+      InvoicesSummaryHeaderTxt@1016 : TextConst 'ENU=Invoices Summary';
+      ItemsHeaderTxt@1017 : TextConst 'ENU=Prices';
+      InvoicesSheetNameTxt@1018 : TextConst 'ENU=Invoices';
+      CompanyInformation@1020003 : Record 79;
+      CellBold@1000 : Boolean;
+      RowNo@1019 : Integer;
+      LineRowNo@1020 : Integer;
+      InvoiceStatusTxt@1024 : TextConst 'ENU=Status';
+      ExportInvoicesCategoryLbl@1026 : TextConst '@@@={Locked};ENU=AL Export Invoices';
+      ExportInvoicesFailedNoInvoicesTxt@1025 : TextConst '@@@={Locked};ENU=Export Invoices failed, there are no invoices.';
+      ExportInvoicesSuccessTxt@1027 : TextConst '@@@={Locked};ENU=Export Invoices succeeded.';
+      ExportInvoicesFailedSendingTxt@1029 : TextConst '@@@={Locked};ENU=Export Invoices failed sending.';
+      GSTAmountTxt@1020000 : TextConst 'ENU=GST Amount';
+      PSTAmountTxt@1020001 : TextConst 'ENU=PST Amount';
+      HSTAmountTxt@1020002 : TextConst 'ENU=HST Amount';
+
+    PROCEDURE ExportInvoicesToExcelandEmail@2(StartDate@1000 : Date;EndDate@1002 : Date;Email@1012 : Text[80]);
+    VAR
+      TempEmailItem@1011 : TEMPORARY Record 9500;
+      EmailSuccess@1001 : Boolean;
+      ServerFileName@1005 : Text;
+    BEGIN
+      SalesInvoiceHeader.SETRANGE("Document Date",StartDate,EndDate);
+
+      IF NOT SalesInvoiceHeader.FINDSET THEN BEGIN
+        SENDTRACETAG('000023Z',ExportInvoicesCategoryLbl,VERBOSITY::Normal,
+          ExportInvoicesFailedNoInvoicesTxt,DATACLASSIFICATION::SystemMetadata);
+        ERROR(NoInvoicesExportedErr);
+      END;
+
+      TempExcelBuffer.RESET;
+      TempExcelBuffer.DELETEALL;
+      ServerFileName := ExportInvoicesToExcel(StartDate,EndDate);
+
+      TempExcelBuffer.CreateBook(ServerFileName,InvoicesSheetNameTxt);
+      TempExcelBuffer.WriteSheet(InvoicesSheetNameTxt,COMPANYNAME,USERID);
+      TempExcelBuffer.CloseBook;
+
+      CODEUNIT.RUN(CODEUNIT::"O365 Setup Email");
+
+      WITH TempEmailItem DO BEGIN
+        VALIDATE("Send to",Email);
+        VALIDATE(Subject,STRSUBSTNO(ExportInvoicesEmailSubjectTxt,StartDate,EndDate));
+        "Attachment File Path" := COPYSTR(ServerFileName,1,250);
+        VALIDATE("Attachment Name",AttachmentNameTxt);
+        EmailSuccess := Send(TRUE);
+      END;
+
+      IF EmailSuccess THEN BEGIN
+        SENDTRACETAG('0000240',ExportInvoicesCategoryLbl,VERBOSITY::Normal,
+          ExportInvoicesSuccessTxt,DATACLASSIFICATION::SystemMetadata);
+        MESSAGE(InvoicesExportedMsg);
+      END ELSE
+        SENDTRACETAG('0000241',ExportInvoicesCategoryLbl,VERBOSITY::Warning,
+          ExportInvoicesFailedSendingTxt,DATACLASSIFICATION::SystemMetadata);
+    END;
+
+    PROCEDURE ExportInvoicesToExcel@1030001(StartDate@1030001 : Date;EndDate@1030000 : Date) ServerFileName : Text;
+    VAR
+      FileManagement@1030002 : Codeunit 419;
+    BEGIN
+      TempExcelBuffer.RESET;
+      TempExcelBuffer.DELETEALL;
+      SalesInvoiceHeader.SETRANGE("Document Date",StartDate,EndDate);
+
+      IF NOT SalesInvoiceHeader.FINDSET THEN
+        ERROR(NoInvoicesExportedErr);
+
+      TempExcelBuffer.RESET;
+      InsertHeaderTextForSalesInvoices;
+      InsertHeaderTextForSalesLines;
+      InsertSalesInvoices;
+
+      ServerFileName := FileManagement.ServerTempFileName('xlsx');
+      TempExcelBuffer.CreateBook(ServerFileName,InvoicesSheetNameTxt);
+      TempExcelBuffer.WriteSheet(InvoicesSheetNameTxt,COMPANYNAME,USERID);
+      TempExcelBuffer.CloseBook;
+    END;
+
+    LOCAL PROCEDURE EnterCell@3(RowNo@1000 : Integer;ColumnNo@1001 : Integer;CellValue@1002 : Variant);
+    BEGIN
+      TempExcelBuffer.EnterCell(TempExcelBuffer,RowNo,ColumnNo,CellValue,CellBold,FALSE,FALSE);
+    END;
+
+    LOCAL PROCEDURE InsertSalesInvoiceSummary@8();
+    VAR
+      TempSalesTaxAmountLine@1020000 : TEMPORARY Record 10011;
+      ColNo@1020001 : Integer;
+    BEGIN
+      EnterCell(RowNo,1,SalesInvoiceHeader."No.");
+      EnterCell(RowNo,2,SalesInvoiceHeader."Sell-to Customer Name");
+      EnterCell(RowNo,3,SalesInvoiceHeader."Sell-to Address");
+      EnterCell(RowNo,4,SalesInvoiceHeader."Sell-to City");
+      EnterCell(RowNo,5,SalesInvoiceHeader."Sell-to County");
+      EnterCell(RowNo,6,SalesInvoiceHeader."Sell-to Country/Region Code");
+      EnterCell(RowNo,7,SalesInvoiceHeader."Document Date");
+      EnterCell(RowNo,8,SalesInvoiceHeader."Due Date");
+      EnterCell(RowNo,9,SalesInvoiceHeader."Tax Liable");
+      EnterCell(RowNo,10,SalesInvoiceHeader.GetWorkDescription);
+      EnterCell(RowNo,11,SalesInvoiceHeader.Amount);
+      EnterCell(RowNo,12,SalesInvoiceHeader."Amount Including VAT");
+      EnterCell(RowNo,13,SalesInvoiceHeader."Invoice Discount Amount");
+
+      IF CompanyInformation.IsCanada THEN BEGIN
+        GetTaxSummarizedLines(TempSalesTaxAmountLine);
+        IF TempSalesTaxAmountLine.FINDSET THEN
+          REPEAT
+            CASE TempSalesTaxAmountLine."Print Description" OF
+              'GST':
+                EnterCell(RowNo,14,TempSalesTaxAmountLine."Tax Amount");
+              'PST','QST':
+                EnterCell(RowNo,15,TempSalesTaxAmountLine."Tax Amount");
+              'HST':
+                EnterCell(RowNo,16,TempSalesTaxAmountLine."Tax Amount");
+            END;
+          UNTIL TempSalesTaxAmountLine.NEXT = 0;
+      END;
+
+      IF CompanyInformation.IsCanada THEN
+        ColNo := 17
+      ELSE
+        ColNo := 14;
+
+      EnterCell(RowNo,ColNo,GetDocumentStatus(SalesInvoiceHeader));
+    END;
+
+    LOCAL PROCEDURE InsertSalesLineItem@9();
+    BEGIN
+      EnterCell(LineRowNo,1,SalesInvoiceLine."Document No.");
+      EnterCell(LineRowNo,2,SalesInvoiceHeader."Sell-to Customer Name");
+      EnterCell(LineRowNo,3,SalesInvoiceLine.Description);
+      EnterCell(LineRowNo,4,SalesInvoiceLine.Quantity);
+      EnterCell(LineRowNo,5,SalesInvoiceLine."Unit of Measure");
+      EnterCell(LineRowNo,6,SalesInvoiceLine."Unit Price");
+      EnterCell(LineRowNo,7,SalesInvoiceLine."Tax Group Code");
+      EnterCell(LineRowNo,8,SalesInvoiceLine."VAT %");
+      EnterCell(LineRowNo,9,SalesInvoiceLine.Amount);
+      EnterCell(LineRowNo,10,SalesInvoiceLine."Amount Including VAT");
+      EnterCell(LineRowNo,11,SalesInvoiceLine."Line Discount Amount");
+    END;
+
+    LOCAL PROCEDURE InsertHeaderTextForSalesInvoices@11();
+    BEGIN
+      CellBold := TRUE;
+      RowNo := 1;
+      EnterCell(RowNo,1,InvoicesSummaryHeaderTxt);
+
+      RowNo := RowNo + 1;
+      EnterCell(RowNo,1,InvoiceNoFieldTxt);
+      EnterCell(RowNo,2,CustomerNameFieldTxt);
+      EnterCell(RowNo,3,AddressFieldTxt);
+      EnterCell(RowNo,4,CityFieldTxt);
+      EnterCell(RowNo,5,CountyFieldTxt);
+      EnterCell(RowNo,6,CountryRegionCodeFieldTxt);
+      EnterCell(RowNo,7,InvoiceDateFieldTxt);
+      EnterCell(RowNo,8,SalesInvoiceHeader.FIELDCAPTION("Due Date"));
+      EnterCell(RowNo,9,SalesInvoiceHeader.FIELDCAPTION("Tax Liable"));
+      EnterCell(RowNo,10,SalesInvoiceHeader.FIELDCAPTION("Work Description"));
+      EnterCell(RowNo,11,NetTotalFieldTxt);
+      EnterCell(RowNo,12,TotalIncludingVatFieldTxt);
+      EnterCell(RowNo,13,SalesInvoiceHeader.FIELDCAPTION("Invoice Discount Amount"));
+      IF CompanyInformation.IsCanada THEN BEGIN
+        EnterCell(RowNo,14,GSTAmountTxt);
+        EnterCell(RowNo,15,PSTAmountTxt);
+        EnterCell(RowNo,16,HSTAmountTxt);
+        EnterCell(RowNo,17,InvoiceStatusTxt);
+      END ELSE
+        EnterCell(RowNo,14,InvoiceStatusTxt);
+
+      CellBold := FALSE;
+    END;
+
+    LOCAL PROCEDURE InsertHeaderTextForSalesLines@12();
+    VAR
+      NumberOfEmptyLines@1000 : Integer;
+    BEGIN
+      CellBold := TRUE;
+      NumberOfEmptyLines := 5;
+      LineRowNo := SalesInvoiceHeader.COUNT + NumberOfEmptyLines;
+      EnterCell(LineRowNo,1,ItemsHeaderTxt);
+
+      LineRowNo := LineRowNo + 1;
+      EnterCell(LineRowNo,1,InvoiceNoFieldTxt);
+      EnterCell(LineRowNo,2,CustomerNameFieldTxt);
+      EnterCell(LineRowNo,3,SalesInvoiceLine.FIELDCAPTION(Description));
+      EnterCell(LineRowNo,4,SalesInvoiceLine.FIELDCAPTION(Quantity));
+      EnterCell(LineRowNo,5,SalesInvoiceLine.FIELDCAPTION("Unit of Measure"));
+      EnterCell(LineRowNo,6,SalesInvoiceLine.FIELDCAPTION("Unit Price"));
+      EnterCell(LineRowNo,7,SalesInvoiceLine.FIELDCAPTION("Tax Group Code"));
+      EnterCell(LineRowNo,8,VatPercentFieldTxt);
+      EnterCell(LineRowNo,9,SalesInvoiceLine.FIELDCAPTION(Amount));
+      EnterCell(LineRowNo,10,SalesInvoiceLine.FIELDCAPTION("Amount Including VAT"));
+      EnterCell(LineRowNo,11,SalesInvoiceLine.FIELDCAPTION("Line Discount Amount"));
+      CellBold := FALSE;
+    END;
+
+    LOCAL PROCEDURE InsertSalesInvoices@16();
+    BEGIN
+      IF SalesInvoiceHeader.FINDSET THEN BEGIN
+        REPEAT
+          RowNo := RowNo + 1;
+          SalesInvoiceHeader.CALCFIELDS(Amount,"Amount Including VAT","Work Description","Invoice Discount Amount");
+          InsertSalesInvoiceSummary;
+          SalesInvoiceLine.SETRANGE("Document No.",SalesInvoiceHeader."No.");
+          IF SalesInvoiceLine.FINDSET THEN BEGIN
+            REPEAT
+              LineRowNo := LineRowNo + 1;
+              InsertSalesLineItem;
+            UNTIL SalesInvoiceLine.NEXT = 0;
+          END;
+        UNTIL SalesInvoiceHeader.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetDocumentStatus@1(SalesInvoiceHeader@1001 : Record 112) Status : Text;
+    VAR
+      O365SalesDocument@1000 : Record 2103;
+    BEGIN
+      O365SalesDocument.SETRANGE("No.",SalesInvoiceHeader."No.");
+      O365SalesDocument.SETRANGE(Posted,TRUE);
+      IF O365SalesDocument.OnFind('+') THEN
+        Status := O365SalesDocument."Outstanding Status";
+    END;
+
+    LOCAL PROCEDURE GetTaxSummarizedLines@1030000(VAR TempSalesTaxAmountLine@1030001 : TEMPORARY Record 10011);
+    VAR
+      TaxArea@1030003 : Record 318;
+      SalesTaxCalculate@1030000 : Codeunit 398;
+    BEGIN
+      IF NOT TaxArea.GET(SalesInvoiceHeader."Tax Area Code") THEN
+        EXIT;
+      SalesTaxCalculate.StartSalesTaxCalculation;
+      IF TaxArea."Use External Tax Engine" THEN
+        SalesTaxCalculate.CallExternalTaxEngineForDoc(DATABASE::"Sales Invoice Header",0,SalesInvoiceHeader."No.")
+      ELSE BEGIN
+        SalesTaxCalculate.AddSalesInvoiceLines(SalesInvoiceHeader."No.");
+        SalesTaxCalculate.EndSalesTaxCalculation(SalesInvoiceHeader."Posting Date");
+      END;
+      TempSalesTaxAmountLine.DELETEALL;
+      SalesTaxCalculate.GetSalesTaxAmountLineTable(TempSalesTaxAmountLine);
+      SalesTaxCalculate.GetSummarizedSalesTaxTable(TempSalesTaxAmountLine);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

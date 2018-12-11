@@ -1,0 +1,126 @@
+OBJECT Codeunit 5527 Graph Mgt - Purchase Invoice
+{
+  OBJECT-PROPERTIES
+  {
+    Date=;
+    Time=;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 122=rimd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    PROCEDURE ProcessComplexTypes@1(VAR PurchInvEntityAggregate@1000 : Record 5477;PayToAddressJSON@1001 : Text);
+    BEGIN
+      ParsePayToVendorAddressFromJSON(PayToAddressJSON,PurchInvEntityAggregate);
+    END;
+
+    PROCEDURE ParsePayToVendorAddressFromJSON@10(PayToAddressJSON@1000 : Text;VAR PurchInvEntityAggregate@1002 : Record 5477);
+    VAR
+      GraphMgtComplexTypes@1003 : Codeunit 5468;
+      RecRef@1001 : RecordRef;
+    BEGIN
+      IF PayToAddressJSON <> '' THEN
+        WITH PurchInvEntityAggregate DO BEGIN
+          RecRef.GETTABLE(PurchInvEntityAggregate);
+          GraphMgtComplexTypes.ApplyPostalAddressFromJSON(PayToAddressJSON,RecRef,
+            FIELDNO("Buy-from Address"),FIELDNO("Buy-from Address 2"),FIELDNO("Buy-from City"),FIELDNO("Buy-from County"),
+            FIELDNO("Buy-from Country/Region Code"),FIELDNO("Buy-from Post Code"));
+          RecRef.SETTABLE(PurchInvEntityAggregate);
+        END;
+    END;
+
+    PROCEDURE PayToVendorAddressToJSON@5(PurchInvEntityAggregate@1000 : Record 5477) JSON : Text;
+    VAR
+      GraphMgtComplexTypes@1001 : Codeunit 5468;
+    BEGIN
+      WITH PurchInvEntityAggregate DO
+        GraphMgtComplexTypes.GetPostalAddressJSON("Buy-from Address","Buy-from Address 2",
+          "Buy-from City","Buy-from County","Buy-from Country/Region Code","Buy-from Post Code",JSON);
+    END;
+
+    PROCEDURE UpdateIntegrationRecordIds@34(OnlyRecordsWithoutID@1007 : Boolean);
+    VAR
+      DummyPurchInvEntityAggregate@1001 : Record 5477;
+      DummyVendor@1005 : Record 23;
+      GraphMgtGeneralTools@1008 : Codeunit 5465;
+      PurchaseInvoiceHeaderRecordRef@1002 : RecordRef;
+      PurchaseHeaderRecordRef@1000 : RecordRef;
+      VendorRecordRef@1004 : RecordRef;
+    BEGIN
+      VendorRecordRef.OPEN(DATABASE::Vendor);
+      GraphMgtGeneralTools.UpdateIntegrationRecords(
+        VendorRecordRef,DummyVendor.FIELDNO(Id),TRUE);
+
+      PurchaseHeaderRecordRef.OPEN(DATABASE::"Purchase Header");
+      GraphMgtGeneralTools.UpdateIntegrationRecords(
+        PurchaseHeaderRecordRef,DummyPurchInvEntityAggregate.FIELDNO(Id),OnlyRecordsWithoutID);
+
+      PurchaseInvoiceHeaderRecordRef.OPEN(DATABASE::"Purch. Inv. Header");
+      GraphMgtGeneralTools.UpdateIntegrationRecords(
+        PurchaseInvoiceHeaderRecordRef,DummyPurchInvEntityAggregate.FIELDNO(Id),OnlyRecordsWithoutID);
+    END;
+
+    LOCAL PROCEDURE CheckSupportedTable@3(VAR RecRef@1000 : RecordRef) : Boolean;
+    VAR
+      PurchaseHeader@1002 : Record 38;
+    BEGIN
+      CASE RecRef.NUMBER OF
+        DATABASE::"Purch. Inv. Header":
+          EXIT(TRUE);
+        DATABASE::"Purchase Header":
+          BEGIN
+            RecRef.SETTABLE(PurchaseHeader);
+            EXIT(PurchaseHeader."Document Type" = PurchaseHeader."Document Type"::Invoice);
+          END;
+        ELSE
+          EXIT(FALSE);
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,5150,OnUpdateReferencedIdField)]
+    LOCAL PROCEDURE HandleUpdateReferencedIdFieldOnPurchaseInvoiceHeader@19(VAR RecRef@1000 : RecordRef;NewId@1001 : GUID;VAR Handled@1002 : Boolean);
+    VAR
+      DummyPurchInvEntityAggregate@1004 : Record 5477;
+      GraphMgtGeneralTools@1003 : Codeunit 5465;
+    BEGIN
+      IF NOT CheckSupportedTable(RecRef) THEN
+        EXIT;
+
+      GraphMgtGeneralTools.HandleUpdateReferencedIdFieldOnItem(
+        RecRef,NewId,Handled,RecRef.NUMBER,DummyPurchInvEntityAggregate.FIELDNO(Id));
+    END;
+
+    [EventSubscriber(Codeunit,5150,OnGetPredefinedIdValue)]
+    LOCAL PROCEDURE HandleGetPredefinedIdValue@21(VAR Id@1000 : GUID;VAR RecRef@1001 : RecordRef;VAR Handled@1002 : Boolean);
+    VAR
+      DummyPurchInvEntityAggregate@1004 : Record 5477;
+      GraphMgtGeneralTools@1007 : Codeunit 5465;
+    BEGIN
+      IF NOT CheckSupportedTable(RecRef) THEN
+        EXIT;
+
+      GraphMgtGeneralTools.HandleGetPredefinedIdValue(
+        Id,RecRef,Handled,RecRef.NUMBER,DummyPurchInvEntityAggregate.FIELDNO(Id));
+    END;
+
+    [EventSubscriber(Codeunit,5465,ApiSetup)]
+    PROCEDURE HandleApiSetup@2();
+    VAR
+      PurchInvAggregator@1000 : Codeunit 5529;
+    BEGIN
+      UpdateIntegrationRecordIds(FALSE);
+      PurchInvAggregator.UpdateAggregateTableRecords;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,402 @@
+OBJECT Page 2113 O365 Posted Sales Invoice
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:10:45 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Editable=No;
+    CaptionML=ENU=Sent Invoice;
+    SourceTable=Table112;
+    PageType=Document;
+    RefreshOnActivate=Yes;
+    OnInit=VAR
+             O365SalesInitialSetup@6115 : Record 2110;
+           BEGIN
+             IsUsingVAT := O365SalesInitialSetup.IsUsingVAT;
+           END;
+
+    OnAfterGetCurrRecord=VAR
+                           DummyCustLedgerEntry@1001 : Record 21;
+                           Customer@1002 : Record 18;
+                           Currency@1003 : Record 4;
+                           O365PostedCouponClaim@1008 : Record 2117;
+                           GLSetup@1004 : Record 98;
+                           TaxArea@1007 : Record 318;
+                           TempStandardAddress@1006 : TEMPORARY Record 730;
+                           O365SalesInvoicePayment@1000 : Codeunit 2105;
+                           O365DocumentSendMgt@1009 : Codeunit 2158;
+                           CurrencySymbol@1005 : Text[10];
+                         BEGIN
+                           IsFullyPaid := O365SalesInvoicePayment.GetPaymentCustLedgerEntry(DummyCustLedgerEntry,"No.");
+                           WorkDescription := GetWorkDescription;
+                           UpdateNoOfAttachmentsLabel(O365SalesAttachmentMgt.GetNoOfAttachments(Rec));
+                           InvoiceCancelled := O365SalesCancelInvoice.IsInvoiceCanceled(Rec);
+
+                           IF Customer.GET("Sell-to Customer No.") THEN
+                             CustomerEmail := Customer."E-Mail";
+
+                           IF "Currency Code" = '' THEN BEGIN
+                             GLSetup.GET;
+                             CurrencySymbol := GLSetup.GetCurrencySymbol;
+                           END ELSE BEGIN
+                             IF Currency.GET("Currency Code") THEN;
+                             CurrencySymbol := Currency.GetCurrencySymbol;
+                           END;
+                           CurrencyFormat := STRSUBSTNO('%1<precision, 2:2><standard format, 0>',CurrencySymbol);
+
+                           IF TaxArea.GET("Tax Area Code") THEN
+                             TaxAreaDescription := TaxArea.GetDescriptionInCurrentLanguage;
+
+                           TempStandardAddress.CopyFromSalesInvoiceHeaderSellTo(Rec);
+                           FullAddress := TempStandardAddress.ToString;
+                           CalcInvoiceDiscount;
+                           DiscountVisible := InvoiceDiscountAmount <> 0;
+                           CouponCodes := O365PostedCouponClaim.GetAppliedClaimsForSalesInvoice(Rec);
+
+                           O365DocumentSendMgt.ShowSalesInvoiceHeaderFailedNotification(Rec);
+                         END;
+
+    ActionList=ACTIONS
+    {
+      { 22      ;    ;ActionContainer;
+                      CaptionML=ENU=Invoice;
+                      ActionContainerType=ActionItems }
+      { 5       ;1   ;Action    ;
+                      Name=MarkAsPaid;
+                      CaptionML=ENU=Register payment;
+                      ToolTipML=ENU=Pay the invoice as specified in the default Payment Registration Setup.;
+                      ApplicationArea=#Basic,#Suite,#Invoicing;
+                      Promoted=Yes;
+                      Visible=NOT IsFullyPaid AND NOT InvoiceCancelled AND (Amount <> 0);
+                      Image=Invoicing-Payment;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 IF O365SalesInvoicePayment.MarkAsPaid("No.") THEN
+                                   CurrPage.CLOSE;
+                               END;
+                                }
+      { 3       ;1   ;Action    ;
+                      Name=MarkAsUnpaid;
+                      CaptionML=ENU=Cancel payment registration;
+                      ToolTipML=ENU=Cancel payment registrations for this invoice.;
+                      ApplicationArea=#Basic,#Suite,#Invoicing;
+                      Promoted=Yes;
+                      Visible=IsFullyPaid AND NOT InvoiceCancelled AND (Amount <> 0);
+                      Image=Invoicing-Payment;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 IF O365SalesInvoicePayment.CancelSalesInvoicePayment("No.") THEN
+                                   CurrPage.CLOSE;
+                               END;
+                                }
+      { 13      ;1   ;Action    ;
+                      Name=ShowPayments;
+                      CaptionML=ENU=Show payments;
+                      ToolTipML=ENU=Show a list of payments made for this invoice.;
+                      ApplicationArea=#Basic,#Suite,#Invoicing;
+                      Promoted=Yes;
+                      Visible=NOT InvoiceCancelled AND (Amount <> 0);
+                      Image=Invoicing-ViewPayment;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 O365SalesInvoicePayment.ShowHistory("No.");
+                               END;
+                                }
+      { 20      ;1   ;Action    ;
+                      Name=CancelInvoice;
+                      CaptionML=ENU=Cancel invoice;
+                      ToolTipML=ENU=Cancels the invoice.;
+                      ApplicationArea=#Basic,#Suite,#Invoicing;
+                      Promoted=Yes;
+                      Visible=NOT InvoiceCancelled;
+                      Image=Invoicing-Cancel;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 SalesInvoiceHeader@1001 : Record 112;
+                                 O365SalesCancelInvoice@1000 : Codeunit 2103;
+                                 O365DocumentSendMgt@1002 : Codeunit 2158;
+                               BEGIN
+                                 IF SalesInvoiceHeader.GET("No.") THEN BEGIN
+                                   SalesInvoiceHeader.SETRECFILTER;
+                                   O365SalesCancelInvoice.CancelInvoice(SalesInvoiceHeader);
+                                 END;
+
+                                 SalesInvoiceHeader.CALCFIELDS(Cancelled);
+                                 IF SalesInvoiceHeader.Cancelled THEN
+                                   O365DocumentSendMgt.RecallEmailFailedNotification;
+                               END;
+                                }
+      { 23      ;1   ;Action    ;
+                      Name=Send;
+                      CaptionML=ENU=Resend by email;
+                      ToolTipML=ENU=Sends the invoice as pdf by email.;
+                      ApplicationArea=#Basic,#Suite,#Invoicing;
+                      Promoted=Yes;
+                      Visible=NOT InvoiceCancelled;
+                      Image=Invoicing-Send;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 O365SendResendInvoice@1000 : Codeunit 2104;
+                               BEGIN
+                                 O365SendResendInvoice.ResendSalesInvoice(Rec);
+                               END;
+                                }
+      { 24      ;1   ;Action    ;
+                      Name=ViewPdf;
+                      CaptionML=ENU=View invoice;
+                      ToolTipML=ENU=View the final invoice as pdf.;
+                      ApplicationArea=#Basic,#Suite,#Invoicing;
+                      Promoted=Yes;
+                      Image=Invoicing-View;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 ReportSelections@1001 : Record 77;
+                                 DocumentPath@1002 : Text[250];
+                               BEGIN
+                                 SETRECFILTER;
+                                 LOCKTABLE;
+                                 FIND;
+                                 ReportSelections.GetPdfReport(DocumentPath,ReportSelections.Usage::"S.Invoice",Rec,"Sell-to Customer No.");
+                                 DOWNLOAD(DocumentPath,'','','',DocumentPath);
+                                 FIND;
+                               END;
+                                }
+    }
+  }
+  CONTROLS
+  {
+    { 1   ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 25  ;1   ;Group     ;
+                GroupType=Group }
+
+    { 29  ;2   ;Group     ;
+                CaptionML=ENU=Sell to;
+                GroupType=Group }
+
+    { 26  ;3   ;Field     ;
+                CaptionML=ENU=Customer Name;
+                ToolTipML=ENU=Specifies the customer's name.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Sell-to Customer Name";
+                ShowCaption=No }
+
+    { 9   ;3   ;Field     ;
+                ExtendedDatatype=E-Mail;
+                CaptionML=ENU=Email;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=CustomerEmail;
+                ShowCaption=No }
+
+    { 2   ;1   ;Group     ;
+                CaptionML=ENU=Invoice Details;
+                GroupType=Group }
+
+    { 27  ;2   ;Field     ;
+                CaptionML=ENU=Due Date;
+                ToolTipML=ENU=Specifies when the posted sales invoice must be paid.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Due Date" }
+
+    { 6   ;2   ;Field     ;
+                CaptionML=ENU=Invoice Date;
+                ToolTipML=ENU=Specifies when the posted sales invoice was created.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Document Date";
+                Importance=Additional }
+
+    { 4   ;2   ;Field     ;
+                CaptionML=ENU=Invoice No.;
+                ToolTipML=ENU=Specifies the number of the record.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="No." }
+
+    { 17  ;2   ;Field     ;
+                CaptionML=ENU=Customer is tax liable;
+                ToolTipML=ENU=Specifies if the sales invoice contains sales tax.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Tax Liable";
+                Importance=Additional;
+                Visible=NOT IsUsingVAT }
+
+    { 19  ;2   ;Field     ;
+                CaptionML=ENU=Customer tax rate;
+                ToolTipML=ENU=Specifies the tax area code that is used to calculate and post sales tax.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=TaxAreaDescription;
+                Importance=Additional;
+                Visible=NOT IsUsingVAT }
+
+    { 37  ;2   ;Field     ;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="VAT Registration No.";
+                Importance=Additional;
+                Visible=IsUsingVAT }
+
+    { 30  ;2   ;Field     ;
+                CaptionML=ENU=Address;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=FullAddress;
+                Importance=Additional;
+                QuickEntry=FALSE }
+
+    { 21  ;1   ;Part      ;
+                Name=Lines;
+                CaptionML=ENU=Line Items;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SubPageLink=Document No.=FIELD(No.);
+                PagePartID=Page2114;
+                PartType=Page }
+
+    { 11  ;1   ;Group     ;
+                Visible=DiscountVisible;
+                GroupType=Group }
+
+    { 15  ;2   ;Field     ;
+                CaptionML=ENU=Subtotal;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=SubTotalAmount;
+                AutoFormatType=10;
+                AutoFormatExpr=CurrencyFormat }
+
+    { 10  ;2   ;Field     ;
+                Name=InvoiceDiscountAmount;
+                CaptionML=ENU=Discount;
+                ToolTipML=ENU=Specifies a discount amount that is deducted from the value in the Total Incl. Tax field. You can enter or change the amount manually.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=InvoiceDiscountAmount;
+                AutoFormatType=10;
+                AutoFormatExpr=CurrencyFormat;
+                Importance=Promoted;
+                Enabled=FALSE }
+
+    { 7   ;2   ;Field     ;
+                CaptionML=ENU=Net Total;
+                ToolTipML=ENU=Specifies the total amount on the sales invoice excluding tax.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=Amount;
+                AutoFormatType=10;
+                AutoFormatExpr=CurrencyFormat;
+                Importance=Promoted;
+                Enabled=FALSE }
+
+    { 8   ;2   ;Field     ;
+                CaptionML=ENU=Total Including Tax;
+                ToolTipML=ENU=Specifies the total amount on the sales invoice including tax.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Amount Including VAT";
+                AutoFormatType=10;
+                AutoFormatExpr=CurrencyFormat;
+                Importance=Promoted;
+                Enabled=FALSE;
+                Style=Strong;
+                StyleExpr=TRUE }
+
+    { 16  ;1   ;Group     ;
+                Visible=NOT DiscountVisible;
+                GroupType=Group }
+
+    { 14  ;2   ;Field     ;
+                Name=Amount2;
+                CaptionML=ENU=Net Total;
+                ToolTipML=ENU=Specifies the total amount on the sales invoice excluding tax.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=Amount;
+                AutoFormatType=10;
+                AutoFormatExpr=CurrencyFormat;
+                Importance=Promoted;
+                Enabled=FALSE }
+
+    { 12  ;2   ;Field     ;
+                Name=AmountIncludingVAT2;
+                CaptionML=ENU=Total Including Tax;
+                ToolTipML=ENU=Specifies the total amount on the sales invoice including tax.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Amount Including VAT";
+                AutoFormatType=10;
+                AutoFormatExpr=CurrencyFormat;
+                Importance=Promoted;
+                Enabled=FALSE;
+                Style=Strong;
+                StyleExpr=TRUE }
+
+    { 56  ;1   ;Field     ;
+                Name=NoOfAttachments;
+                DrillDown=Yes;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=NoOfAttachmentsValueTxt;
+                Editable=FALSE;
+                OnDrillDown=BEGIN
+                              UpdateNoOfAttachmentsLabel(O365SalesAttachmentMgt.EditAttachments(Rec));
+                            END;
+
+                ShowCaption=No }
+
+    { 18  ;1   ;Field     ;
+                Name=CouponCodes;
+                CaptionML=ENU=Coupons;
+                ToolTipML=ENU=Specifies the coupon codes used on this invoice.;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=CouponCodes;
+                QuickEntry=FALSE }
+
+    { 28  ;1   ;Field     ;
+                CaptionML=ENU=Note for customer;
+                ToolTipML=ENU=Specifies the products or service being offered;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=WorkDescription;
+                Importance=Additional;
+                Editable=FALSE;
+                MultiLine=Yes }
+
+  }
+  CODE
+  {
+    VAR
+      O365SalesInvoicePayment@1002 : Codeunit 2105;
+      O365SalesCancelInvoice@1007 : Codeunit 2103;
+      NoOfAttachmentsTxt@1003 : TextConst '@@@="%1=an integer number, starting at 0";ENU=Attachments (%1)';
+      O365SalesAttachmentMgt@1011 : Codeunit 2112;
+      WorkDescription@1018 : Text;
+      NoOfAttachmentsValueTxt@1017 : Text;
+      CustomerEmail@1016 : Text;
+      FullAddress@1000 : Text;
+      InvoiceCancelled@1015 : Boolean;
+      IsFullyPaid@1014 : Boolean;
+      IsUsingVAT@1013 : Boolean;
+      CurrencyFormat@1012 : Text;
+      InvoiceDiscountAmount@1001 : Decimal;
+      AddAttachmentTxt@1004 : TextConst 'ENU=Add attachment';
+      SubTotalAmount@1005 : Decimal;
+      DiscountVisible@1006 : Boolean;
+      TaxAreaDescription@1008 : Text[50];
+      CouponCodes@1009 : Text;
+
+    LOCAL PROCEDURE CalcInvoiceDiscount@3();
+    VAR
+      SalesInvoiceLine@1000 : Record 113;
+    BEGIN
+      SalesInvoiceLine.SETRANGE("Document No.","No.");
+      SalesInvoiceLine.CALCSUMS("Inv. Discount Amount","Line Amount");
+      InvoiceDiscountAmount := SalesInvoiceLine."Inv. Discount Amount";
+      SubTotalAmount := SalesInvoiceLine."Line Amount";
+    END;
+
+    LOCAL PROCEDURE UpdateNoOfAttachmentsLabel@7(NoOfAttachments@1000 : Integer);
+    BEGIN
+      IF NoOfAttachments = 0 THEN
+        NoOfAttachmentsValueTxt := AddAttachmentTxt
+      ELSE
+        NoOfAttachmentsValueTxt := STRSUBSTNO(NoOfAttachmentsTxt,NoOfAttachments);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

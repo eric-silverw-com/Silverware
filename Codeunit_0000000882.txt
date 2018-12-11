@@ -1,0 +1,190 @@
+OBJECT Codeunit 882 OCR - Sync Master Data
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:00 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    TableNo=472;
+    OnRun=BEGIN
+            SyncMasterData;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      JobDelayMinutesTxt@1001 : TextConst '@@@={Locked};ENU=5';
+      MaxNoOfAttemptsTxt@1000 : TextConst '@@@={Locked};ENU=3';
+
+    LOCAL PROCEDURE SyncMasterData@18();
+    VAR
+      ReadSoftOCRMasterDataSync@1000 : Codeunit 884;
+    BEGIN
+      ReadSoftOCRMasterDataSync.SyncMasterData(FALSE,TRUE);
+    END;
+
+    LOCAL PROCEDURE ResetLastSyncTime@1();
+    VAR
+      ReadSoftOCRMasterDataSync@1000 : Codeunit 884;
+    BEGIN
+      ReadSoftOCRMasterDataSync.ResetLastSyncTime;
+    END;
+
+    [External]
+    PROCEDURE ScheduleJob@7();
+    VAR
+      JobQueueEntry@1000 : Record 472;
+      ReadSoftOCRMasterDataSync@1001 : Codeunit 884;
+    BEGIN
+      IF NOT ReadSoftOCRMasterDataSync.IsSyncEnabled THEN
+        EXIT;
+
+      JobQueueEntry.SETRANGE("Object Type to Run",JobQueueEntry."Object Type to Run"::Codeunit);
+      JobQueueEntry.SETRANGE("Object ID to Run",CODEUNIT::"OCR - Sync Master Data");
+      JobQueueEntry.SETRANGE(Status,JobQueueEntry.Status::Ready);
+      IF JobQueueEntry.FINDFIRST THEN BEGIN
+        RestartJob(JobQueueEntry);
+        EXIT;
+      END;
+
+      JobQueueEntry.SETFILTER(Status,'%1|%2',JobQueueEntry.Status::"On Hold",JobQueueEntry.Status::Finished);
+      IF JobQueueEntry.FINDFIRST THEN BEGIN
+        RestartJob(JobQueueEntry);
+        EXIT;
+      END;
+
+      CreateNewJob;
+    END;
+
+    [External]
+    PROCEDURE CancelJob@16();
+    VAR
+      JobQueueEntry@1000 : Record 472;
+    BEGIN
+      JobQueueEntry.SETRANGE("Object Type to Run",JobQueueEntry."Object Type to Run"::Codeunit);
+      JobQueueEntry.SETRANGE("Object ID to Run",CODEUNIT::"OCR - Sync Master Data");
+      WHILE JobQueueEntry.FindJobQueueEntry(JobQueueEntry."Object Type to Run"::Codeunit,CODEUNIT::"OCR - Sync Master Data") DO
+        JobQueueEntry.Cancel;
+    END;
+
+    LOCAL PROCEDURE RestartJob@20(VAR JobQueueEntry@1001 : Record 472);
+    BEGIN
+      IF ModifiedByUser(JobQueueEntry) THEN BEGIN
+        CancelJob;
+        CreateNewJob;
+      END ELSE
+        IF JobQueueEntry.Status <> JobQueueEntry.Status::Ready THEN
+          JobQueueEntry.Restart;
+    END;
+
+    LOCAL PROCEDURE ModifiedByUser@31(VAR JobQueueEntry@1001 : Record 472) : Boolean;
+    BEGIN
+      CASE TRUE OF
+        JobQueueEntry."Maximum No. of Attempts to Run" <> MaxNoOfAttempts:
+          EXIT(TRUE);
+        JobQueueEntry."Rerun Delay (sec.)" <> JobDelayMinutes * 60:
+          EXIT(TRUE);
+        JobQueueEntry."Earliest Start Date/Time" > CURRENTDATETIME + JobDelayMinutes * 60000:
+          EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE CreateNewJob@32();
+    VAR
+      JobQueueEntry@1000 : Record 472;
+    BEGIN
+      JobQueueEntry.LOCKTABLE;
+      JobQueueEntry."Object Type to Run" := JobQueueEntry."Object Type to Run"::Codeunit;
+      JobQueueEntry."Object ID to Run" := CODEUNIT::"OCR - Sync Master Data";
+      JobQueueEntry."Earliest Start Date/Time" := CURRENTDATETIME + JobDelayMinutes * 60000;
+      JobQueueEntry."Maximum No. of Attempts to Run" := MaxNoOfAttempts;
+      JobQueueEntry."Rerun Delay (sec.)" := JobDelayMinutes * 60;
+      CODEUNIT.RUN(CODEUNIT::"Job Queue - Enqueue",JobQueueEntry);
+    END;
+
+    LOCAL PROCEDURE JobDelayMinutes@23() : Integer;
+    VAR
+      Result@1000 : Integer;
+    BEGIN
+      EVALUATE(Result,JobDelayMinutesTxt);
+      EXIT(Result);
+    END;
+
+    LOCAL PROCEDURE MaxNoOfAttempts@22() : Integer;
+    VAR
+      Result@1000 : Integer;
+    BEGIN
+      EVALUATE(Result,MaxNoOfAttemptsTxt);
+      EXIT(Result);
+    END;
+
+    [EventSubscriber(Table,23,OnAfterDeleteEvent)]
+    LOCAL PROCEDURE OnAfterDeleteVendor@2(VAR Rec@1000 : Record 23;RunTrigger@1001 : Boolean);
+    BEGIN
+      IF NOT Rec.ISTEMPORARY THEN BEGIN
+        ResetLastSyncTime;
+        ScheduleJob;
+      END;
+    END;
+
+    [EventSubscriber(Table,23,OnAfterInsertEvent)]
+    LOCAL PROCEDURE OnAfterInsertVendor@5(VAR Rec@1000 : Record 23;RunTrigger@1001 : Boolean);
+    BEGIN
+      IF NOT Rec.ISTEMPORARY THEN
+        ScheduleJob;
+    END;
+
+    [EventSubscriber(Table,23,OnAfterModifyEvent)]
+    LOCAL PROCEDURE OnAfterModifyVendor@6(VAR Rec@1000 : Record 23;VAR xRec@1001 : Record 23;RunTrigger@1002 : Boolean);
+    BEGIN
+      IF NOT Rec.ISTEMPORARY THEN
+        ScheduleJob;
+    END;
+
+    [EventSubscriber(Table,23,OnAfterRenameEvent)]
+    LOCAL PROCEDURE OnAfterRenameVendor@8(VAR Rec@1000 : Record 23;VAR xRec@1001 : Record 23;RunTrigger@1002 : Boolean);
+    BEGIN
+      IF NOT Rec.ISTEMPORARY THEN BEGIN
+        ResetLastSyncTime;
+        ScheduleJob;
+      END;
+    END;
+
+    [EventSubscriber(Table,288,OnAfterDeleteEvent)]
+    LOCAL PROCEDURE OnAfterDeleteVendorBankAccount@11(VAR Rec@1000 : Record 288;RunTrigger@1001 : Boolean);
+    BEGIN
+      IF NOT Rec.ISTEMPORARY THEN
+        ScheduleJob;
+    END;
+
+    [EventSubscriber(Table,288,OnAfterInsertEvent)]
+    LOCAL PROCEDURE OnAfterInsertVendorBankAccount@12(VAR Rec@1000 : Record 288;RunTrigger@1001 : Boolean);
+    BEGIN
+      IF NOT Rec.ISTEMPORARY THEN
+        ScheduleJob;
+    END;
+
+    [EventSubscriber(Table,288,OnAfterModifyEvent)]
+    LOCAL PROCEDURE OnAfterModifyVendorBankAccount@13(VAR Rec@1000 : Record 288;VAR xRec@1001 : Record 288;RunTrigger@1002 : Boolean);
+    BEGIN
+      IF NOT Rec.ISTEMPORARY THEN
+        ScheduleJob;
+    END;
+
+    [EventSubscriber(Table,288,OnAfterRenameEvent)]
+    LOCAL PROCEDURE OnAfterRenameVendorBankAccount@14(VAR Rec@1000 : Record 288;VAR xRec@1001 : Record 288;RunTrigger@1002 : Boolean);
+    BEGIN
+      IF NOT Rec.ISTEMPORARY THEN
+        ScheduleJob;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

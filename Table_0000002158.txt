@@ -1,0 +1,232 @@
+OBJECT Table 2158 O365 Document Sent History
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:14:36 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 2158=rimd;
+    CaptionML=ENU=O365 Document Sent History;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Document Type       ;Option        ;CaptionML=ENU=Document Type;
+                                                   OptionCaptionML=ENU=Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order;
+                                                   OptionString=Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order }
+    { 2   ;   ;Document No.        ;Code20        ;CaptionML=ENU=Document No. }
+    { 3   ;   ;Posted              ;Boolean       ;CaptionML=ENU=Posted }
+    { 4   ;   ;Created Date-Time   ;DateTime      ;CaptionML=ENU=Created Date-Time }
+    { 7   ;   ;Source Type         ;Option        ;CaptionML=ENU=Source Type;
+                                                   OptionCaptionML=ENU=" ,Customer,Vendor";
+                                                   OptionString=[ ,Customer,Vendor] }
+    { 8   ;   ;Source No.          ;Code20        ;TableRelation=IF (Source Type=CONST(Customer)) Customer
+                                                                 ELSE IF (Source Type=CONST(Vendor)) Vendor;
+                                                   CaptionML=ENU=Source No. }
+    { 11  ;   ;Job Queue Entry ID  ;GUID          ;CaptionML=ENU=Job Queue Entry ID }
+    { 12  ;   ;Job Last Status     ;Option        ;OnValidate=VAR
+                                                                JobQueueLogEntry@1000 : Record 474;
+                                                              BEGIN
+                                                                IF "Job Last Status" = "Job Last Status"::"In Process" THEN
+                                                                  CLEAR("Job Completed")
+                                                                ELSE
+                                                                  IF ISNULLGUID("Job Queue Entry ID") THEN
+                                                                    "Job Completed" := CURRENTDATETIME
+                                                                  ELSE BEGIN
+                                                                    JobQueueLogEntry.SETRANGE(ID,"Job Queue Entry ID");
+                                                                    JobQueueLogEntry.SETCURRENTKEY("Entry No.");
+
+                                                                    IF JobQueueLogEntry.FINDLAST THEN
+                                                                      "Job Completed" := JobQueueLogEntry."End Date/Time"
+                                                                    ELSE
+                                                                      "Job Completed" := CURRENTDATETIME;
+                                                                  END;
+                                                              END;
+
+                                                   CaptionML=ENU=Job Last Status;
+                                                   OptionCaptionML=ENU=,In Process,Finished,Error;
+                                                   OptionString=,In Process,Finished,Error }
+    { 13  ;   ;Job Completed       ;DateTime      ;CaptionML=ENU=Job Completed }
+    { 14  ;   ;Notified            ;Boolean       ;CaptionML=ENU=Notified }
+    { 15  ;   ;NotificationCleared ;Boolean       ;CaptionML=ENU=NotificationCleared }
+  }
+  KEYS
+  {
+    {    ;Document Type,Document No.,Posted,Created Date-Time;
+                                                   Clustered=Yes }
+    {    ;Job Queue Entry ID                       }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      DocSentHistoryCategoryTxt@1000 : TextConst '@@@={LOCKED};ENU=AL Doc Sent History';
+      FailedToSetStatusTelemetryErr@1001 : TextConst '@@@={LOCKED};ENU=Failed to set Document Sent History status to %1 because of error %2.';
+      UnrecognizedParentRecordErr@1010 : TextConst '@@@={LOCKED};ENU=Unsupported parent record: Table %1';
+      StatusSetTelemetryMsg@1002 : TextConst '@@@={LOCKED};ENU=Document Sent History status set to %1.';
+
+    PROCEDURE NewInProgressFromJobQueue@2(VAR JobQueueEntry@1000 : Record 472) : Boolean;
+    VAR
+      RecRef@1040 : RecordRef;
+    BEGIN
+      SETRANGE("Job Queue Entry ID",JobQueueEntry.ID);
+      IF FINDFIRST THEN BEGIN
+        VALIDATE("Job Last Status","Job Last Status"::"In Process");
+        EXIT(MODIFY(TRUE));
+      END;
+      SETRANGE("Job Queue Entry ID");
+
+      IF NOT RecRef.GET(JobQueueEntry."Record ID to Process") THEN
+        EXIT(FALSE);
+
+      IF NOT NewInProgressFromRecRef(RecRef) THEN
+        EXIT(FALSE);
+
+      VALIDATE("Job Queue Entry ID",JobQueueEntry.ID);
+      VALIDATE("Job Last Status","Job Last Status"::"In Process");
+
+      EXIT(MODIFY(TRUE));
+    END;
+
+    PROCEDURE DeleteSentHistoryForDocument@1(DocType@1000 : 'Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order';DocNo@1001 : Code[20];DocPosted@1002 : Boolean);
+    VAR
+      O365DocumentSentHistory@1003 : Record 2158;
+    BEGIN
+      O365DocumentSentHistory.SETRANGE("Document Type",DocType);
+      O365DocumentSentHistory.SETRANGE("Document No.",DocNo);
+      O365DocumentSentHistory.SETRANGE(Posted,DocPosted);
+
+      O365DocumentSentHistory.DELETEALL;
+    END;
+
+    PROCEDURE ShowJobQueueErrorMessage@3();
+    VAR
+      JobQueueLogEntry@1000 : Record 474;
+    BEGIN
+      JobQueueLogEntry.SETRANGE(ID,"Job Queue Entry ID");
+      IF NOT JobQueueLogEntry.FINDFIRST THEN
+        EXIT;
+
+      JobQueueLogEntry.ShowErrorMessage;
+    END;
+
+    PROCEDURE GetJobQueueErrorMessage@4() : Text;
+    VAR
+      JobQueueLogEntry@1000 : Record 474;
+    BEGIN
+      JobQueueLogEntry.SETRANGE(ID,"Job Queue Entry ID");
+      IF NOT JobQueueLogEntry.FINDFIRST THEN
+        EXIT;
+
+      EXIT(JobQueueLogEntry.GetErrorMessage);
+    END;
+
+    PROCEDURE NewInProgressFromSalesHeader@5(SalesHeader@1000 : Record 36) : Boolean;
+    BEGIN
+      SetHistoryForDocumentAsNotified(SalesHeader."Document Type",SalesHeader."No.",FALSE);
+
+      "Document Type" := SalesHeader."Document Type";
+      "Document No." := SalesHeader."No.";
+      Posted := FALSE;
+      "Created Date-Time" := CURRENTDATETIME;
+      "Source Type" := "Source Type"::Customer;
+      "Source No." := SalesHeader."Bill-to Customer No.";
+      VALIDATE("Job Last Status","Job Last Status"::"In Process");
+
+      EXIT(INSERT(TRUE));
+    END;
+
+    PROCEDURE NewInProgressFromSalesInvoiceHeader@6(SalesInvoiceHeader@1000 : Record 112) : Boolean;
+    BEGIN
+      SetHistoryForDocumentAsNotified("Document Type"::Invoice,SalesInvoiceHeader."No.",TRUE);
+
+      "Document Type" := "Document Type"::Invoice;
+      "Document No." := SalesInvoiceHeader."No.";
+      Posted := TRUE;
+      "Created Date-Time" := CURRENTDATETIME;
+      "Source Type" := "Source Type"::Customer;
+      "Source No." := SalesInvoiceHeader."Bill-to Customer No.";
+      VALIDATE("Job Last Status","Job Last Status"::"In Process");
+
+      EXIT(INSERT(TRUE));
+    END;
+
+    PROCEDURE NewInProgressFromRecRef@9(RecRef@1000 : RecordRef) : Boolean;
+    VAR
+      SalesHeader@1001 : Record 36;
+      SalesInvoiceHeader@1002 : Record 112;
+    BEGIN
+      CASE RecRef.NUMBER OF
+        DATABASE::"Sales Header":
+          BEGIN
+            RecRef.SETTABLE(SalesHeader);
+            EXIT(NewInProgressFromSalesHeader(SalesHeader));
+          END;
+        DATABASE::"Sales Invoice Header":
+          BEGIN
+            RecRef.SETTABLE(SalesInvoiceHeader);
+            EXIT(NewInProgressFromSalesInvoiceHeader(SalesInvoiceHeader));
+          END;
+        ELSE BEGIN
+          SENDTRACETAG('000028D',DocSentHistoryCategoryTxt,VERBOSITY::Error,STRSUBSTNO(UnrecognizedParentRecordErr,RecRef.NUMBER),
+            DATACLASSIFICATION::SystemMetadata);
+          EXIT(FALSE);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE SetHistoryForDocumentAsNotified@7(DocumentType@1000 : Integer;DocumentNo@1001 : Code[20];IsPosted@1002 : Boolean);
+    VAR
+      O365DocumentSentHistory@1003 : Record 2158;
+    BEGIN
+      O365DocumentSentHistory.SETRANGE("Document Type",DocumentType);
+      O365DocumentSentHistory.SETRANGE("Document No.",DocumentNo);
+      O365DocumentSentHistory.SETRANGE(Posted,IsPosted);
+
+      O365DocumentSentHistory.MODIFYALL(Notified,TRUE);
+      O365DocumentSentHistory.MODIFYALL(NotificationCleared,TRUE);
+    END;
+
+    PROCEDURE SetStatusAsFailed@8() : Boolean;
+    BEGIN
+      VALIDATE("Job Last Status","Job Last Status"::Error);
+
+      IF MODIFY(TRUE) THEN BEGIN
+        SENDTRACETAG('00001ZM',DocSentHistoryCategoryTxt,VERBOSITY::Normal,
+          STRSUBSTNO(StatusSetTelemetryMsg,"Job Last Status"::Error),
+          DATACLASSIFICATION::SystemMetadata);
+        EXIT(TRUE);
+      END;
+
+      SENDTRACETAG('00001ZN',DocSentHistoryCategoryTxt,VERBOSITY::Error,
+        STRSUBSTNO(FailedToSetStatusTelemetryErr,"Job Last Status"::Error,GETLASTERRORTEXT),
+        DATACLASSIFICATION::CustomerContent);
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE SetStatusAsSuccessfullyFinished@10() : Boolean;
+    BEGIN
+      VALIDATE("Job Last Status","Job Last Status"::Finished);
+
+      IF MODIFY(TRUE) THEN BEGIN
+        SENDTRACETAG('00001ZO',DocSentHistoryCategoryTxt,VERBOSITY::Normal,
+          STRSUBSTNO(StatusSetTelemetryMsg,"Job Last Status"::Finished),
+          DATACLASSIFICATION::SystemMetadata);
+        EXIT(TRUE);
+      END;
+
+      SENDTRACETAG('00001ZP',DocSentHistoryCategoryTxt,VERBOSITY::Error,
+        STRSUBSTNO(FailedToSetStatusTelemetryErr,"Job Last Status"::Finished,GETLASTERRORTEXT),
+        DATACLASSIFICATION::CustomerContent);
+      EXIT(FALSE);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

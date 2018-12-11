@@ -1,0 +1,289 @@
+OBJECT Report 9000 Add/Subtract Permission Set
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:13:25 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Add/Subtract Permission Set;
+    ProcessingOnly=Yes;
+    OnPreReport=BEGIN
+                  IF DestinationAggregatePermissionSet."Role ID" = '' THEN
+                    ERROR(NoDestinationErr);
+                  IF DummySourceAggregatePermissionSet."Role ID" = '' THEN
+                    ERROR(NoSourceErr);
+                  IF DestinationAggregatePermissionSet.RECORDID = DummySourceAggregatePermissionSet.RECORDID THEN
+                    ERROR(SameSrcDestnErr);
+                  DummySourceAggregatePermissionSet.SETRECFILTER;
+                END;
+
+  }
+  DATASET
+  {
+    { 1   ;    ;DataItem;SourcePermissionSet ;
+               DataItemTable=Table2000000167;
+               DataItemTableView=SORTING(Scope,App ID,Role ID)
+                                 ORDER(Ascending);
+               OnPreDataItem=BEGIN
+                               COPYFILTERS(DummySourceAggregatePermissionSet);
+                             END;
+
+               OnAfterGetRecord=VAR
+                                  Permission@1002 : Record 2000000005;
+                                  TenantPermission@1003 : Record 2000000166;
+                                BEGIN
+                                  IF DummySourceAggregatePermissionSet.Scope = DummySourceAggregatePermissionSet.Scope::System THEN BEGIN
+                                    Permission.SETRANGE("Role ID",DummySourceAggregatePermissionSet."Role ID");
+                                    IF Permission.FINDSET THEN
+                                      REPEAT
+                                        IncludeExcludePermission(Permission);
+                                      UNTIL Permission.NEXT = 0;
+                                  END ELSE BEGIN
+                                    TenantPermission.SETRANGE("App ID",DummySourceAggregatePermissionSet."App ID");
+                                    TenantPermission.SETRANGE("Role ID",DummySourceAggregatePermissionSet."Role ID");
+                                    IF TenantPermission.FINDSET THEN
+                                      REPEAT
+                                        IncludeExcludeTenantPermission(TenantPermission);
+                                      UNTIL TenantPermission.NEXT = 0;
+                                  END;
+                                END;
+                                 }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+      { 1   ;    ;Container ;
+                  Name=Parameter;
+                  ContainerType=ContentArea }
+
+      { 2   ;1   ;Field     ;
+                  Name=DstnAggregatePermissionSet;
+                  CaptionML=ENU=Destination;
+                  ToolTipML=ENU=Specifies the permission set for which permission sets are included or excluded.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=DestinationAggregatePermissionSet."Role ID";
+                  TableRelation="Aggregate Permission Set"."Role ID";
+                  Editable=FALSE }
+
+      { 4   ;1   ;Field     ;
+                  Name=SetOperation;
+                  CaptionML=ENU=Operation;
+                  ToolTipML=ENU=Specifies if the batch job includes or excludes a permission set for the destination permission set.;
+                  OptionCaptionML=ENU=Include,Exclude;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=SetOperation }
+
+      { 3   ;1   ;Field     ;
+                  Name=SourceAggregatePermissionSet;
+                  CaptionML=ENU=Source;
+                  ToolTipML=ENU=Specifies which permission set is included or excluded for the destination permission set.;
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=DummySourceAggregatePermissionSet."Role ID";
+                  Editable=FALSE;
+                  OnAssistEdit=VAR
+                                 TempPermissionSetBuffer@1001 : TEMPORARY Record 9009;
+                                 PermissionSetList@1000 : Page 9851;
+                               BEGIN
+                                 PermissionSetList.LOOKUPMODE := TRUE;
+                                 IF PermissionSetList.RUNMODAL = ACTION::LookupOK THEN BEGIN
+                                   PermissionSetList.GETRECORD(TempPermissionSetBuffer);
+                                   DummySourceAggregatePermissionSet.TRANSFERFIELDS(TempPermissionSetBuffer);
+                                 END;
+                               END;
+                                }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      DestinationAggregatePermissionSet@1000 : Record 2000000167;
+      DummySourceAggregatePermissionSet@1001 : Record 2000000167;
+      SetOperation@1002 : 'Include,Exclude';
+      NoDestinationErr@1003 : TextConst 'ENU=No destination permission set has been set.';
+      NoSourceErr@1004 : TextConst 'ENU=You must select a source permission set.';
+      SameSrcDestnErr@1005 : TextConst 'ENU=You cannot select permission set as both source and destination.';
+
+    [External]
+    PROCEDURE SetDestination@3(NewDestinationAggregatePermissionSet@1000 : Record 2000000167);
+    BEGIN
+      DestinationAggregatePermissionSet := NewDestinationAggregatePermissionSet;
+    END;
+
+    LOCAL PROCEDURE PermissionValueIsGreaterOrEqual@5(Left@1000 : ' ,Yes,Indirect';Right@1001 : ' ,Yes,Indirect') : Boolean;
+    BEGIN
+      // Returns (Left >= Right)
+      CASE Left OF
+        Left::" ":
+          EXIT(Right = Right::" ");
+        Left::Yes:
+          EXIT(TRUE);
+        Left::Indirect:
+          EXIT(Right <> Right::Yes);
+      END;
+    END;
+
+    LOCAL PROCEDURE IncludeExcludePermission@20(SourcePermission@1000 : Record 2000000005);
+    VAR
+      DestinationTenantPermission@1002 : Record 2000000166;
+    BEGIN
+      CASE SetOperation OF
+        SetOperation::Include:
+          IF DestinationTenantPermission.GET(
+               DestinationAggregatePermissionSet."App ID",DestinationAggregatePermissionSet."Role ID",
+               SourcePermission."Object Type",SourcePermission."Object ID")
+          THEN BEGIN
+            IF PermissionValueIsGreaterOrEqual(SourcePermission."Read Permission",DestinationTenantPermission."Read Permission") THEN
+              DestinationTenantPermission."Read Permission" := SourcePermission."Read Permission";
+            IF PermissionValueIsGreaterOrEqual(SourcePermission."Insert Permission",DestinationTenantPermission."Insert Permission") THEN
+              DestinationTenantPermission."Insert Permission" := SourcePermission."Insert Permission";
+            IF PermissionValueIsGreaterOrEqual(SourcePermission."Modify Permission",DestinationTenantPermission."Modify Permission") THEN
+              DestinationTenantPermission."Modify Permission" := SourcePermission."Modify Permission";
+            IF PermissionValueIsGreaterOrEqual(SourcePermission."Delete Permission",DestinationTenantPermission."Delete Permission") THEN
+              DestinationTenantPermission."Delete Permission" := SourcePermission."Delete Permission";
+            IF PermissionValueIsGreaterOrEqual(SourcePermission."Execute Permission",DestinationTenantPermission."Execute Permission") THEN
+              DestinationTenantPermission."Execute Permission" := SourcePermission."Execute Permission";
+            DestinationTenantPermission.MODIFY;
+          END ELSE BEGIN
+            DestinationTenantPermission."Object ID" := SourcePermission."Object ID";
+            DestinationTenantPermission."Object Type" := SourcePermission."Object Type";
+            DestinationTenantPermission."Read Permission" := SourcePermission."Read Permission";
+            DestinationTenantPermission."Insert Permission" := SourcePermission."Insert Permission";
+            DestinationTenantPermission."Modify Permission" := SourcePermission."Modify Permission";
+            DestinationTenantPermission."Delete Permission" := SourcePermission."Delete Permission";
+            DestinationTenantPermission."Execute Permission" := SourcePermission."Execute Permission";
+            DestinationTenantPermission."Security Filter" := SourcePermission."Security Filter";
+            DestinationTenantPermission."Role ID" := DestinationAggregatePermissionSet."Role ID";
+            DestinationTenantPermission."App ID" := DestinationAggregatePermissionSet."App ID";
+            DestinationTenantPermission.INSERT;
+          END;
+        SetOperation::Exclude:
+          BEGIN
+            DestinationTenantPermission.SETRANGE("App ID",DestinationAggregatePermissionSet."App ID");
+            DestinationTenantPermission.SETRANGE("Role ID",DestinationAggregatePermissionSet."Role ID");
+            DestinationTenantPermission.SETRANGE("Object Type",SourcePermission."Object Type");
+            IF SourcePermission."Object ID" <> 0 THEN
+              DestinationTenantPermission.SETRANGE("Object ID",SourcePermission."Object ID");
+            IF DestinationTenantPermission.FINDSET THEN
+              REPEAT
+                IF PermissionValueIsGreaterOrEqual(SourcePermission."Read Permission",DestinationTenantPermission."Read Permission") THEN
+                  DestinationTenantPermission."Read Permission" := SourcePermission."Read Permission"::" ";
+                IF PermissionValueIsGreaterOrEqual(SourcePermission."Insert Permission",DestinationTenantPermission."Insert Permission") THEN
+                  DestinationTenantPermission."Insert Permission" := SourcePermission."Insert Permission"::" ";
+                IF PermissionValueIsGreaterOrEqual(SourcePermission."Modify Permission",DestinationTenantPermission."Modify Permission") THEN
+                  DestinationTenantPermission."Modify Permission" := SourcePermission."Modify Permission"::" ";
+                IF PermissionValueIsGreaterOrEqual(SourcePermission."Delete Permission",DestinationTenantPermission."Delete Permission") THEN
+                  DestinationTenantPermission."Delete Permission" := SourcePermission."Delete Permission"::" ";
+                IF PermissionValueIsGreaterOrEqual(
+                     SourcePermission."Execute Permission",DestinationTenantPermission."Execute Permission")
+                THEN
+                  DestinationTenantPermission."Execute Permission" := SourcePermission."Execute Permission"::" ";
+                DestinationTenantPermission.MODIFY;
+                IF (DestinationTenantPermission."Read Permission" = SourcePermission."Read Permission"::" ") AND
+                   (DestinationTenantPermission."Insert Permission" = SourcePermission."Read Permission"::" ") AND
+                   (DestinationTenantPermission."Modify Permission" = SourcePermission."Read Permission"::" ") AND
+                   (DestinationTenantPermission."Delete Permission" = SourcePermission."Read Permission"::" ") AND
+                   (DestinationTenantPermission."Execute Permission" = SourcePermission."Read Permission"::" ")
+                THEN
+                  DestinationTenantPermission.DELETE;
+              UNTIL DestinationTenantPermission.NEXT = 0;
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE IncludeExcludeTenantPermission@21(SourceTenantPermission@1000 : Record 2000000166);
+    VAR
+      DestinationTenantPermission@1002 : Record 2000000166;
+    BEGIN
+      CASE SetOperation OF
+        SetOperation::Include:
+          IF DestinationTenantPermission.GET(
+               DestinationAggregatePermissionSet."App ID",DestinationAggregatePermissionSet."Role ID",
+               SourceTenantPermission."Object Type",SourceTenantPermission."Object ID")
+          THEN BEGIN
+            IF PermissionValueIsGreaterOrEqual(SourceTenantPermission."Read Permission",DestinationTenantPermission."Read Permission") THEN
+              DestinationTenantPermission."Read Permission" := SourceTenantPermission."Read Permission";
+            IF PermissionValueIsGreaterOrEqual(
+                 SourceTenantPermission."Insert Permission",DestinationTenantPermission."Insert Permission")
+            THEN
+              DestinationTenantPermission."Insert Permission" := SourceTenantPermission."Insert Permission";
+            IF PermissionValueIsGreaterOrEqual(
+                 SourceTenantPermission."Modify Permission",DestinationTenantPermission."Modify Permission")
+            THEN
+              DestinationTenantPermission."Modify Permission" := SourceTenantPermission."Modify Permission";
+            IF PermissionValueIsGreaterOrEqual(
+                 SourceTenantPermission."Delete Permission",DestinationTenantPermission."Delete Permission")
+            THEN
+              DestinationTenantPermission."Delete Permission" := SourceTenantPermission."Delete Permission";
+            IF PermissionValueIsGreaterOrEqual(
+                 SourceTenantPermission."Execute Permission",DestinationTenantPermission."Execute Permission")
+            THEN
+              DestinationTenantPermission."Execute Permission" := SourceTenantPermission."Execute Permission";
+            DestinationTenantPermission.MODIFY;
+          END ELSE BEGIN
+            DestinationTenantPermission := SourceTenantPermission;
+            DestinationTenantPermission."Role ID" := DestinationAggregatePermissionSet."Role ID";
+            DestinationTenantPermission."App ID" := DestinationAggregatePermissionSet."App ID";
+            DestinationTenantPermission.INSERT;
+          END;
+        SetOperation::Exclude:
+          BEGIN
+            DestinationTenantPermission.SETRANGE("App ID",DestinationAggregatePermissionSet."App ID");
+            DestinationTenantPermission.SETRANGE("Role ID",DestinationAggregatePermissionSet."Role ID");
+            DestinationTenantPermission.SETRANGE("Object Type",SourceTenantPermission."Object Type");
+            IF SourceTenantPermission."Object ID" <> 0 THEN
+              DestinationTenantPermission.SETRANGE("Object ID",SourceTenantPermission."Object ID");
+            IF DestinationTenantPermission.FINDSET THEN
+              REPEAT
+                IF PermissionValueIsGreaterOrEqual(
+                     SourceTenantPermission."Read Permission",DestinationTenantPermission."Read Permission")
+                THEN
+                  DestinationTenantPermission."Read Permission" := SourceTenantPermission."Read Permission"::" ";
+                IF PermissionValueIsGreaterOrEqual(
+                     SourceTenantPermission."Insert Permission",DestinationTenantPermission."Insert Permission")
+                THEN
+                  DestinationTenantPermission."Insert Permission" := SourceTenantPermission."Insert Permission"::" ";
+                IF PermissionValueIsGreaterOrEqual(
+                     SourceTenantPermission."Modify Permission",DestinationTenantPermission."Modify Permission")
+                THEN
+                  DestinationTenantPermission."Modify Permission" := SourceTenantPermission."Modify Permission"::" ";
+                IF PermissionValueIsGreaterOrEqual(
+                     SourceTenantPermission."Delete Permission",DestinationTenantPermission."Delete Permission")
+                THEN
+                  DestinationTenantPermission."Delete Permission" := SourceTenantPermission."Delete Permission"::" ";
+                IF PermissionValueIsGreaterOrEqual(
+                     SourceTenantPermission."Execute Permission",DestinationTenantPermission."Execute Permission")
+                THEN
+                  DestinationTenantPermission."Execute Permission" := SourceTenantPermission."Execute Permission"::" ";
+                DestinationTenantPermission.MODIFY;
+                IF (DestinationTenantPermission."Read Permission" = SourceTenantPermission."Read Permission"::" ") AND
+                   (DestinationTenantPermission."Insert Permission" = SourceTenantPermission."Read Permission"::" ") AND
+                   (DestinationTenantPermission."Modify Permission" = SourceTenantPermission."Read Permission"::" ") AND
+                   (DestinationTenantPermission."Delete Permission" = SourceTenantPermission."Read Permission"::" ") AND
+                   (DestinationTenantPermission."Execute Permission" = SourceTenantPermission."Read Permission"::" ")
+                THEN
+                  DestinationTenantPermission.DELETE;
+              UNTIL DestinationTenantPermission.NEXT = 0;
+          END;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

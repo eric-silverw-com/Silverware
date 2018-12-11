@@ -1,0 +1,228 @@
+OBJECT Codeunit 8400 Record Set Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=;
+    Time=;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 8400=rimd,
+                TableData 8401=rimd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    [External]
+    PROCEDURE SaveSetSingleTable@2(RecordsVariant@1000 : Variant) : Integer;
+    VAR
+      TempRecordSetBuffer@1009 : TEMPORARY Record 8402;
+      DataTypeManagement@1001 : Codeunit 701;
+      SetRecordRef@1002 : RecordRef;
+      CurrentKey@1008 : Integer;
+    BEGIN
+      DataTypeManagement.GetRecordRef(RecordsVariant,SetRecordRef);
+      IF SetRecordRef.ISEMPTY THEN
+        EXIT;
+
+      SortAscending(SetRecordRef);
+      SetRecordRef.FINDSET;
+
+      CurrentKey := 0;
+      REPEAT
+        CLEAR(TempRecordSetBuffer);
+        TempRecordSetBuffer."Value RecordID" := SetRecordRef.RECORDID;
+        TempRecordSetBuffer.No := CurrentKey;
+        CurrentKey += 1;
+        TempRecordSetBuffer.INSERT;
+      UNTIL SetRecordRef.NEXT = 0;
+
+      TempRecordSetBuffer.FINDFIRST;
+      EXIT(SaveSet(TempRecordSetBuffer));
+    END;
+
+    [External]
+    PROCEDURE SaveSet@6(VAR TempRecordSetBuffer@1000 : TEMPORARY Record 8402) SetID : Integer;
+    VAR
+      RecordSetTree@1008 : Record 8401;
+      TempFoundRecordSetTree@1006 : TEMPORARY Record 8401;
+      TempCurrentRecordSetBuffer@1003 : TEMPORARY Record 8402;
+      SavedRecordRef@1005 : RecordRef;
+      ParentNodeID@1002 : Integer;
+      NewSetNeeded@1001 : Boolean;
+    BEGIN
+      IF TempRecordSetBuffer.ISEMPTY THEN
+        EXIT;
+
+      TempCurrentRecordSetBuffer.COPY(TempRecordSetBuffer);
+      TempRecordSetBuffer.SETCURRENTKEY("Value RecordID");
+      TempRecordSetBuffer.ASCENDING(TRUE);
+      TempRecordSetBuffer.FINDSET;
+
+      SetID := 0;
+      ParentNodeID := 0;
+
+      REPEAT
+        SavedRecordRef.GET(TempRecordSetBuffer."Value RecordID");
+
+        IF NOT FindNode(RecordSetTree,SavedRecordRef,ParentNodeID) THEN BEGIN
+          CLEAR(RecordSetTree);
+          InsertNewNode(RecordSetTree,SavedRecordRef,ParentNodeID);
+          NewSetNeeded := TRUE;
+        END;
+
+        ParentNodeID := RecordSetTree."Node ID";
+        TempFoundRecordSetTree := RecordSetTree;
+        TempFoundRecordSetTree.INSERT;
+      UNTIL TempRecordSetBuffer.NEXT = 0;
+
+      IF NOT NewSetNeeded THEN BEGIN
+        // Set might be a subset of existing set, we need to create a new one
+        SetID := FindExistingSet(TempFoundRecordSetTree);
+        NewSetNeeded := SetID = 0;
+      END;
+
+      IF NewSetNeeded THEN
+        SetID := CreateNewSet(TempFoundRecordSetTree);
+
+      TempRecordSetBuffer.COPY(TempCurrentRecordSetBuffer);
+    END;
+
+    [External]
+    PROCEDURE GetSet@1(VAR TempRecordSetBuffer@1000 : TEMPORARY Record 8402;SetID@1001 : Integer);
+    VAR
+      TempUnsortedRecordSetBuffer@1007 : TEMPORARY Record 8402;
+      RecordSetDefinition@1002 : Record 8400;
+      RecRef@1003 : RecordRef;
+      CurrentKey@1005 : Integer;
+    BEGIN
+      RecordSetDefinition.SETRANGE("Set ID",SetID);
+      RecordSetDefinition.SETAUTOCALCFIELDS(Value);
+
+      IF NOT RecordSetDefinition.FINDSET THEN
+        EXIT;
+
+      REPEAT
+        IF RecRef.GET(RecordSetDefinition.Value) THEN BEGIN
+          CurrentKey := TempUnsortedRecordSetBuffer.No;
+          CLEAR(TempUnsortedRecordSetBuffer);
+          TempUnsortedRecordSetBuffer."Value RecordID" := RecRef.RECORDID;
+          TempUnsortedRecordSetBuffer.No := CurrentKey + 1;
+          TempUnsortedRecordSetBuffer.INSERT;
+        END;
+      UNTIL RecordSetDefinition.NEXT = 0;
+
+      TempUnsortedRecordSetBuffer.SETCURRENTKEY("Value RecordID");
+      TempUnsortedRecordSetBuffer.ASCENDING(TRUE);
+      IF NOT TempUnsortedRecordSetBuffer.FINDSET THEN
+        EXIT;
+
+      REPEAT
+        CurrentKey := TempRecordSetBuffer.No;
+        CLEAR(TempRecordSetBuffer);
+        TempRecordSetBuffer.No := CurrentKey + 1;
+        TempRecordSetBuffer."Value RecordID" := TempUnsortedRecordSetBuffer."Value RecordID";
+        TempRecordSetBuffer.INSERT;
+      UNTIL TempUnsortedRecordSetBuffer.NEXT = 0;
+    END;
+
+    [External]
+    PROCEDURE RenameRecord@4(RecRef@1001 : RecordRef;xRecRef@1000 : RecordRef);
+    VAR
+      RecordSetTree@1002 : Record 8401;
+    BEGIN
+      RecordSetTree.SETRANGE("Table No.",RecRef.NUMBER);
+      IF RecordSetTree.ISEMPTY THEN
+        EXIT;
+
+      RecordSetTree.SETRANGE(Value,xRecRef.RECORDID);
+      RecordSetTree.MODIFYALL(Value,RecRef.RECORDID);
+    END;
+
+    LOCAL PROCEDURE SortAscending@7(VAR SetRecordRef@1000 : RecordRef);
+    VAR
+      TypeHelper@1001 : Codeunit 10;
+      KeyString@1004 : Text;
+    BEGIN
+      KeyString := TypeHelper.GetKeyAsString(SetRecordRef,1);
+      TypeHelper.SortRecordRef(SetRecordRef,KeyString,TRUE);
+    END;
+
+    LOCAL PROCEDURE FindNode@16(VAR RecordSetTree@1002 : Record 8401;ValueRecordRef@1000 : RecordRef;ParentNodeID@1003 : Integer) : Boolean;
+    BEGIN
+      RecordSetTree.SETRANGE("Table No.",ValueRecordRef.NUMBER);
+      RecordSetTree.SETRANGE("Parent Node ID",ParentNodeID);
+      RecordSetTree.SETRANGE(Value,ValueRecordRef.RECORDID);
+      EXIT(RecordSetTree.FINDFIRST);
+    END;
+
+    LOCAL PROCEDURE InsertNewNode@20(VAR RecordSetTree@1002 : Record 8401;ValueRecordRef@1000 : RecordRef;ParentNodeID@1003 : Integer);
+    BEGIN
+      RecordSetTree.INIT;
+      RecordSetTree."Table No." := ValueRecordRef.NUMBER;
+      RecordSetTree."Parent Node ID" := ParentNodeID;
+      RecordSetTree.Value := ValueRecordRef.RECORDID;
+      RecordSetTree.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CreateNewSet@17(VAR TempFoundRecordSetTree@1000 : TEMPORARY Record 8401) : Integer;
+    VAR
+      RecordSetDefinition@1001 : Record 8400;
+      SetID@1002 : Integer;
+    BEGIN
+      TempFoundRecordSetTree.FINDFIRST;
+      SetID := 0;
+      REPEAT
+        CreateSetDefinitionLine(RecordSetDefinition,SetID,TempFoundRecordSetTree);
+        SetID := RecordSetDefinition."Set ID";
+      UNTIL TempFoundRecordSetTree.NEXT = 0;
+
+      EXIT(RecordSetDefinition."Set ID");
+    END;
+
+    LOCAL PROCEDURE CreateSetDefinitionLine@3(VAR RecordSetDefinition@1000 : Record 8400;SetID@1001 : Integer;VAR TempFoundRecordSetTree@1002 : TEMPORARY Record 8401);
+    BEGIN
+      CLEAR(RecordSetDefinition);
+      RecordSetDefinition."Table No." := TempFoundRecordSetTree."Table No.";
+      RecordSetDefinition."Set ID" := SetID;
+      RecordSetDefinition."Node ID" := TempFoundRecordSetTree."Node ID";
+      RecordSetDefinition.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE FindExistingSet@25(VAR TempFoundRecordSetTree@1000 : TEMPORARY Record 8401) : Integer;
+    VAR
+      RecordSetDefinition@1001 : Record 8400;
+      CurrentRecordSetDefinition@1002 : Record 8400;
+    BEGIN
+      FindSetsContainingValue(RecordSetDefinition,TempFoundRecordSetTree);
+
+      REPEAT
+        CurrentRecordSetDefinition := RecordSetDefinition;
+        CurrentRecordSetDefinition.SETRANGE("Node ID");
+        CurrentRecordSetDefinition.SETRANGE("Set ID",RecordSetDefinition."Set ID");
+        IF CurrentRecordSetDefinition.FIND('+') THEN
+          IF (CurrentRecordSetDefinition.NEXT = 0) AND (CurrentRecordSetDefinition.COUNT = TempFoundRecordSetTree.COUNT) THEN
+            EXIT(CurrentRecordSetDefinition."Set ID");
+      UNTIL RecordSetDefinition.NEXT = 0;
+
+      EXIT;
+    END;
+
+    LOCAL PROCEDURE FindSetsContainingValue@22(VAR RecordSetDefinition@1000 : Record 8400;VAR TempFoundRecordSetTree@1001 : TEMPORARY Record 8401);
+    BEGIN
+      RecordSetDefinition.SETRANGE("Table No.",TempFoundRecordSetTree."Table No.");
+
+      // Node ID Is unique for a given path, all sets containing a node ID will be part of the subpath
+      RecordSetDefinition.SETRANGE("Node ID",TempFoundRecordSetTree."Node ID");
+      RecordSetDefinition.FINDSET;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

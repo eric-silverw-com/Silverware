@@ -1,0 +1,199 @@
+OBJECT Codeunit 5455 Graph Data Setup
+{
+  OBJECT-PROPERTIES
+  {
+    Date=;
+    Time=;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            OnCreateIntegrationMappings;
+          END;
+
+  }
+  CODE
+  {
+
+    [External]
+    PROCEDURE AddIntgrationFieldMapping@10(MappingName@1000 : Text[20];NavFieldNo@1003 : Integer;IntegrationFieldNo@1001 : Integer;ValidateField@1004 : Boolean);
+    VAR
+      IntegrationFieldMapping@1002 : Record 5336;
+    BEGIN
+      WITH IntegrationFieldMapping DO BEGIN
+        INIT;
+        "Integration Table Mapping Name" := MappingName;
+        "Field No." := NavFieldNo;
+        "Integration Table Field No." := IntegrationFieldNo;
+        Direction := Direction::Bidirectional;
+        "Validate Field" := ValidateField;
+        INSERT(TRUE);
+      END;
+    END;
+
+    [External]
+    PROCEDURE AddIntegrationTableMapping@6(MappingName@1002 : Code[20];TableID@1003 : Integer;IntTableID@1004 : Integer;IntTableUIDFldNo@1005 : Integer;IntTableModFldNo@1006 : Integer;ParentName@1007 : Text[20];IntTableDeltaTokenFldNo@1000 : Integer;IntTableChangeKeyFldNo@1008 : Integer;IntTableStateFldNo@1009 : Integer);
+    VAR
+      IntegrationTableMapping@1001 : Record 5335;
+    BEGIN
+      WITH IntegrationTableMapping DO BEGIN
+        INIT;
+        Name := MappingName;
+        "Table ID" := TableID;
+        "Integration Table ID" := IntTableID;
+        "Integration Table UID Fld. No." := IntTableUIDFldNo;
+        "Int. Tbl. Modified On Fld. No." := IntTableModFldNo;
+        "Synch. Codeunit ID" := CODEUNIT::"Graph Integration Table Sync";
+        Direction := Direction::Bidirectional;
+        "Synch. Only Coupled Records" := FALSE;
+        "Parent Name" := ParentName;
+        "Int. Tbl. Delta Token Fld. No." := IntTableDeltaTokenFldNo;
+        "Int. Tbl. ChangeKey Fld. No." := IntTableChangeKeyFldNo;
+        "Int. Tbl. State Fld. No." := IntTableStateFldNo;
+        IF NOT INSERT(TRUE) THEN
+          MODIFY(TRUE);
+      END;
+    END;
+
+    [External]
+    PROCEDURE CanSyncRecord@8(EntityRecRef@1000 : RecordRef) CanSync : Boolean;
+    VAR
+      IntegrationFieldMapping@1001 : Record 5336;
+      EmptyRecordRef@1004 : RecordRef;
+      FieldRef@1003 : FieldRef;
+      EmptyFieldRef@1005 : FieldRef;
+      MappingName@1002 : Code[20];
+      Handled@1006 : Boolean;
+    BEGIN
+      // Determines whether the record is empty based on the fields
+      // within the integration field mapping table
+
+      OnCheckCanSyncRecord(EntityRecRef,CanSync,Handled);
+      IF Handled THEN
+        EXIT;
+
+      EmptyRecordRef.OPEN(EntityRecRef.NUMBER);
+      EmptyRecordRef.INIT;
+
+      MappingName := GetMappingCodeForTable(EntityRecRef.NUMBER);
+      IntegrationFieldMapping.SETRANGE("Integration Table Mapping Name",MappingName);
+      IF IntegrationFieldMapping.FINDSET THEN
+        REPEAT
+          FieldRef := EntityRecRef.FIELD(IntegrationFieldMapping."Field No.");
+          EmptyFieldRef := EmptyRecordRef.FIELD(IntegrationFieldMapping."Field No.");
+          CanSync := FieldRef.VALUE <> EmptyFieldRef.VALUE;
+        UNTIL (IntegrationFieldMapping.NEXT = 0) OR CanSync;
+    END;
+
+    [External]
+    PROCEDURE ClearIntegrationMapping@4(MappingCode@1002 : Code[20]);
+    VAR
+      IntegrationTableMapping@1000 : Record 5335;
+    BEGIN
+      IntegrationTableMapping.SETRANGE(Name,MappingCode);
+      IntegrationTableMapping.DELETEALL(TRUE);
+    END;
+
+    [External]
+    PROCEDURE CreateIntegrationMapping@21(MappingCode@1000 : Code[20]);
+    BEGIN
+      IF IntegrationMappingExists(MappingCode) THEN
+        ClearIntegrationMapping(MappingCode);
+      AddIntegrationMapping(MappingCode);
+    END;
+
+    [External]
+    PROCEDURE GetGraphRecord@16(VAR GraphRecordRef@1000 : RecordRef;DestinationGraphID@1001 : Text[250];TableID@1002 : Integer) Found : Boolean;
+    BEGIN
+      OnGetGraphRecord(GraphRecordRef,DestinationGraphID,TableID,Found);
+    END;
+
+    [External]
+    PROCEDURE GetInboundTableID@17(MappingCode@1000 : Code[20]) TableID : Integer;
+    BEGIN
+      OnGetInboundTableID(MappingCode,TableID);
+    END;
+
+    [External]
+    PROCEDURE GetIntegrationTableMapping@12(VAR IntegrationTableMapping@1000 : Record 5335;MappingCode@1007 : Code[20]);
+    VAR
+      GraphDataSetup@1001 : Codeunit 5455;
+      IntegrationManagement@1002 : Codeunit 5150;
+      InsertEnabled@1006 : Boolean;
+      ModifyEnabled@1005 : Boolean;
+      DeleteEnabled@1004 : Boolean;
+      RenameEnabled@1003 : Boolean;
+    BEGIN
+      IF NOT IntegrationTableMapping.GET(MappingCode) THEN BEGIN
+        GraphDataSetup.CreateIntegrationMapping(MappingCode);
+        IntegrationTableMapping.GET(MappingCode)
+      END;
+
+      // This code is needed to make sure the integration for the table is set
+      IntegrationManagement.GetDatabaseTableTriggerSetup(
+        IntegrationTableMapping."Table ID",InsertEnabled,ModifyEnabled,DeleteEnabled,RenameEnabled);
+    END;
+
+    [External]
+    PROCEDURE GetMappingCodeForTable@18(TableID@1000 : Integer) MappingCode : Code[20];
+    BEGIN
+      OnGetMappingCodeForTable(TableID,MappingCode);
+    END;
+
+    [External]
+    PROCEDURE IntegrationMappingExists@2(MappingCode@1002 : Code[20]) : Boolean;
+    VAR
+      IntegrationTableMapping@1000 : Record 5335;
+      IntegrationFieldMapping@1001 : Record 5336;
+    BEGIN
+      IF NOT IntegrationTableMapping.GET(MappingCode) THEN
+        EXIT(FALSE);
+
+      IntegrationFieldMapping.SETRANGE("Integration Table Mapping Name",MappingCode);
+      EXIT(NOT IntegrationFieldMapping.ISEMPTY);
+    END;
+
+    LOCAL PROCEDURE AddIntegrationMapping@3(MappingCode@1000 : Code[20]);
+    VAR
+      TableID@1001 : Integer;
+    BEGIN
+      OnGetInboundTableID(MappingCode,TableID);
+      OnAddIntegrationMapping(MappingCode);
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAddIntegrationMapping@9(MappingCode@1000 : Code[20]);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnCheckCanSyncRecord@11(EntityRecordRef@1000 : RecordRef;VAR CanSyncRecord@1001 : Boolean;VAR Handled@1002 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnCreateIntegrationMappings@7();
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnGetGraphRecord@1(VAR GraphRecordRef@1000 : RecordRef;DestinationGraphID@1001 : Text[250];TableID@1002 : Integer;VAR Found@1003 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnGetInboundTableID@5(MappingCode@1000 : Code[20];VAR TableID@1001 : Integer);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnGetMappingCodeForTable@15(TableID@1000 : Integer;VAR MappingCode@1001 : Code[20]);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

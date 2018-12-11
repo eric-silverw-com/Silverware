@@ -1,0 +1,106 @@
+OBJECT Codeunit 9804 Log Recorded Events
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:53 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    EventSubscriberInstance=Manual;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      TempRecordedEventBuffer@1001 : TEMPORARY Record 9804;
+      EventReceiver@1000 : DotNet "'Microsoft.Dynamics.Nav.EtwListener, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.EtwListener.NavEventEventReceiver" WITHEVENTS;
+      RecordingErrorMsg@1003 : TextConst 'ENU=An internal error has occurred. The recording of events has been stopped.';
+      CallOrder@1002 : Integer;
+
+    [External]
+    PROCEDURE Start@9();
+    BEGIN
+      CallOrder := 0;
+      TempRecordedEventBuffer.DELETEALL;
+
+      IF ISNULL(EventReceiver) THEN
+        EventReceiver := EventReceiver.NavEventEventReceiver;
+
+      EventReceiver.RegisterForEvents;
+    END;
+
+    [External]
+    PROCEDURE Stop@12(VAR TempRecordedEventBufferVar@1005 : TEMPORARY Record 9804);
+    BEGIN
+      // Returns the list of all events collected.
+      EventReceiver.UnregisterEvents;
+
+      TempRecordedEventBufferVar.COPY(TempRecordedEventBuffer,TRUE);
+    END;
+
+    EVENT EventReceiver@1000::OnEventCheckEvent@9(sender@1001 : Variant;e@1000 : DotNet "'Microsoft.Dynamics.Nav.EtwListener, Version=13.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.EtwListener.EventCheckEventArgs");
+    VAR
+      IsEventLogged@1002 : Boolean;
+    BEGIN
+      // Do not record the usages related to the recorder itself.
+      IF (((e.ObjectType = TempRecordedEventBuffer."Object Type"::Codeunit) AND (e.ObjectId = CODEUNIT::"Log Recorded Events")) OR
+          ((e.ObjectType = TempRecordedEventBuffer."Object Type"::Table) AND (e.ObjectId = DATABASE::"Recorded Event Buffer")) OR
+          ((e.ObjectType = TempRecordedEventBuffer."Object Type"::Page) AND (e.ObjectId = PAGE::"Event Recorder")))
+      THEN
+        EXIT;
+
+      IF NOT (SESSIONID = e.SessionId) THEN BEGIN
+        // We should not be recording events in other sessions, but in case it happens,
+        // sending a telemetry event and not adding it.
+        EventReceiver.OnWrongSessionRecorded(SESSIONID,e.SessionId);
+        EXIT;
+      END;
+
+      IsEventLogged := TempRecordedEventBuffer.GET(
+          e.ObjectType,
+          e.ObjectId,
+          e.EventName,
+          e.ElementName,
+          e.EventType,
+          e.CallingObjectType,
+          e.CallingObjectId,
+          e.CallingMethodName,
+          CallOrder);
+
+      IF NOT IsEventLogged THEN BEGIN
+        CallOrder := CallOrder + 1;
+        TempRecordedEventBuffer.INIT;
+        TempRecordedEventBuffer."Session ID" := e.SessionId;
+        TempRecordedEventBuffer."Object Type" := e.ObjectType;
+        TempRecordedEventBuffer."Object ID" := e.ObjectId;
+        TempRecordedEventBuffer."Event Name" := e.EventName;
+        TempRecordedEventBuffer."Event Type" := e.EventType;
+        TempRecordedEventBuffer."Element Name" := e.ElementName;
+        TempRecordedEventBuffer."Call Order" := CallOrder;
+        TempRecordedEventBuffer."Calling Object Type" := e.CallingObjectType;
+        TempRecordedEventBuffer."Calling Object ID" := e.CallingObjectId;
+        TempRecordedEventBuffer."Calling Method" := e.CallingMethodName;
+        TempRecordedEventBuffer."Hit Count" := 0;
+        TempRecordedEventBuffer.INSERT;
+      END;
+
+      // Update the hit count of the event.
+      TempRecordedEventBuffer."Hit Count" += 1;
+      TempRecordedEventBuffer.MODIFY;
+    END;
+
+    EVENT EventReceiver@1000::OnRecordingErrorOccurred@10(sender@1001 : Variant;e@1000 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.EventArgs");
+    BEGIN
+      // Warn the user that the recording of events has been stopped.
+      MESSAGE(RecordingErrorMsg);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

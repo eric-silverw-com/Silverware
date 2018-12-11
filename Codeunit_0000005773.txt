@@ -1,0 +1,183 @@
+OBJECT Codeunit 5773 Whse.-Transfer Release
+{
+  OBJECT-PROPERTIES
+  {
+    Date=;
+    Time=;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Location@1000 : Record 14;
+      WhseMgt@1001 : Codeunit 5775;
+      CalledFromTransferOrder@1002 : Boolean;
+
+    [External]
+    PROCEDURE Release@1(TransHeader@1000 : Record 5740);
+    VAR
+      WhseRqst@1001 : Record 5765;
+    BEGIN
+      OnBeforeRelease(TransHeader);
+
+      WITH TransHeader DO BEGIN
+        InitializeWhseRequest(WhseRqst,TransHeader,Status::Released);
+
+        IF Location.RequireReceive("Transfer-to Code") OR Location.RequirePutaway("Transfer-to Code") THEN
+          CreateInboundWhseRequest(WhseRqst,TransHeader);
+        IF Location.RequireShipment("Transfer-from Code") OR Location.RequirePicking("Transfer-from Code") THEN
+          CreateOutboundWhseRequest(WhseRqst,TransHeader);
+
+        DeleteOpenWhseRequest("No.");
+      END;
+
+      OnAfterRelease(TransHeader);
+    END;
+
+    [External]
+    PROCEDURE Reopen@2(TransHeader@1000 : Record 5740);
+    VAR
+      WhseRqst@1001 : Record 5765;
+    BEGIN
+      OnBeforeReopen(TransHeader);
+
+      WITH TransHeader DO BEGIN
+        IF WhseRqst.GET(WhseRqst.Type::Inbound,"Transfer-to Code",DATABASE::"Transfer Line",1,"No.") THEN BEGIN
+          WhseRqst."Document Status" := Status::Open;
+          WhseRqst.MODIFY;
+        END;
+        IF WhseRqst.GET(WhseRqst.Type::Outbound,"Transfer-from Code",DATABASE::"Transfer Line",0,"No.") THEN BEGIN
+          WhseRqst."Document Status" := Status::Open;
+          WhseRqst.MODIFY;
+        END;
+      END;
+
+      OnAfterReopen(TransHeader);
+    END;
+
+    PROCEDURE InitializeWhseRequest@7(VAR WarehouseRequest@1001 : Record 5765;TransferHeader@1000 : Record 5740;DocumentStatus@1002 : Option);
+    BEGIN
+      WITH WarehouseRequest DO BEGIN
+        "Source Type" := DATABASE::"Transfer Line";
+        "Source No." := TransferHeader."No.";
+        "Document Status" := DocumentStatus;
+        "Destination Type" := "Destination Type"::Location;
+        "External Document No." := TransferHeader."External Document No.";
+      END;
+    END;
+
+    PROCEDURE CreateInboundWhseRequest@9(VAR WarehouseRequest@1001 : Record 5765;TransferHeader@1000 : Record 5740);
+    BEGIN
+      WITH WarehouseRequest DO BEGIN
+        CheckUnitOfMeasureCode(TransferHeader."No.");
+        TransferHeader.SETRANGE("Location Filter",TransferHeader."Transfer-to Code");
+        TransferHeader.CALCFIELDS("Completely Received");
+
+        Type := Type::Inbound;
+        "Source Subtype" := 1;
+        "Source Document" := WhseMgt.GetSourceDocument("Source Type","Source Subtype");
+        "Expected Receipt Date" := TransferHeader."Receipt Date";
+        "Location Code" := TransferHeader."Transfer-to Code";
+        "Completely Handled" := TransferHeader."Completely Received";
+        "Shipment Method Code" := TransferHeader."Shipment Method Code";
+        "Shipping Agent Code" := TransferHeader."Shipping Agent Code";
+        "Destination No." := TransferHeader."Transfer-to Code";
+        OnBeforeCreateWhseRequest(WarehouseRequest,TransferHeader);
+        IF CalledFromTransferOrder THEN BEGIN
+          IF MODIFY THEN;
+        END ELSE
+          IF NOT INSERT THEN
+            MODIFY;
+      END;
+    END;
+
+    PROCEDURE CreateOutboundWhseRequest@11(VAR WarehouseRequest@1001 : Record 5765;TransferHeader@1000 : Record 5740);
+    BEGIN
+      WITH WarehouseRequest DO BEGIN
+        CheckUnitOfMeasureCode(TransferHeader."No.");
+        TransferHeader.SETRANGE("Location Filter",TransferHeader."Transfer-from Code");
+        TransferHeader.CALCFIELDS("Completely Shipped");
+
+        Type := Type::Outbound;
+        "Source Subtype" := 0;
+        "Source Document" := WhseMgt.GetSourceDocument("Source Type","Source Subtype");
+        "Location Code" := TransferHeader."Transfer-from Code";
+        "Completely Handled" := TransferHeader."Completely Shipped";
+        "Shipment Method Code" := TransferHeader."Shipment Method Code";
+        "Shipping Agent Code" := TransferHeader."Shipping Agent Code";
+        "Shipping Advice" := TransferHeader."Shipping Advice";
+        "Shipment Date" := TransferHeader."Shipment Date";
+        "Destination No." := TransferHeader."Transfer-from Code";
+        OnBeforeCreateWhseRequest(WarehouseRequest,TransferHeader);
+        IF NOT INSERT THEN
+          MODIFY;
+      END;
+    END;
+
+    LOCAL PROCEDURE DeleteOpenWhseRequest@13(TransferOrderNo@1000 : Code[20]);
+    VAR
+      WarehouseRequest@1001 : Record 5765;
+    BEGIN
+      WITH WarehouseRequest DO BEGIN
+        SETCURRENTKEY("Source Type","Source No.");
+        SETRANGE("Source Type",DATABASE::"Transfer Line");
+        SETRANGE("Source No.",TransferOrderNo);
+        SETRANGE("Document Status","Document Status"::Open);
+        IF NOT ISEMPTY THEN
+          DELETEALL(TRUE);
+      END;
+    END;
+
+    [External]
+    PROCEDURE SetCallFromTransferOrder@3(CalledFromTransferOrder2@1000 : Boolean);
+    BEGIN
+      CalledFromTransferOrder := CalledFromTransferOrder2;
+    END;
+
+    LOCAL PROCEDURE CheckUnitOfMeasureCode@5(DocumentNo@1000 : Code[20]);
+    VAR
+      TransLine@1001 : Record 5741;
+    BEGIN
+      TransLine.SETRANGE("Document No.",DocumentNo);
+      TransLine.SETRANGE("Unit of Measure Code",'');
+      TransLine.SETFILTER("Item No.",'<>%1','');
+      IF TransLine.FINDFIRST THEN
+        TransLine.TESTFIELD("Unit of Measure Code");
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeCreateWhseRequest@4(VAR WarehouseRequest@1000 : Record 5765;TransferHeader@1001 : Record 5740);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterRelease@6(VAR TransferHeader@1000 : Record 5740);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterReopen@8(VAR TransferHeader@1000 : Record 5740);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeRelease@10(VAR TransferHeader@1000 : Record 5740);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeReopen@12(VAR TransferHeader@1000 : Record 5740);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

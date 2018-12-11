@@ -1,0 +1,986 @@
+OBJECT Codeunit 27000 Export Accounts
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:57 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      TempErrorMessage@1020002 : TEMPORARY Record 700;
+      CurrencyExchangeRate@1020019 : Record 330;
+      TestFileName@1020004 : Text;
+      GLAccountTypeErr@1020012 : TextConst 'ENU=Debit/Credit ''%1'' is not supported in %2.';
+      InvalidMonthErr@1020003 : TextConst 'ENU=The Month must be in the range 1-12.';
+      InvalidYearErr@1020017 : TextConst 'ENU=The Year must be in the range 2000-2999.';
+      MissingUpdateDateErr@1020015 : TextConst 'ENU=You need to specify an update date before export.';
+      MissingOrderNumberErr@1020016 : TextConst 'ENU=You need to specify an Order Number before export.';
+      NoSATAccountDefinedErr@1020018 : TextConst 'ENU=You need to specify SAT Account Code on G/L Accounts before export.';
+      NamespaceTxt@1020006 : TextConst '@@@={Locked};ENU=http://www.sat.gob.mx/esquemas/ContabilidadE/1_3/';
+      NamespaceW3Txt@1020020 : TextConst '@@@={Locked};ENU=http://www.w3.org/2001/XMLSchema-instance';
+      CatalogoNamespaceTxt@1020007 : TextConst '@@@={Locked};ENU=CatalogoCuentas';
+      BalanzaNamespaceTxt@1020008 : TextConst '@@@={Locked};ENU=BalanzaComprobacion';
+      PolizasNamespaceTxt@1020013 : TextConst '@@@={Locked};ENU=PolizasPeriodo';
+      AuxiliaryAccountNamespaceTxt@1020010 : TextConst '@@@={Locked};ENU=AuxiliarCtas';
+      CatalogoNodeTxt@1020014 : TextConst '@@@={Locked};ENU=Catalogo';
+      BalanzaNodeTxt@1020009 : TextConst '@@@={Locked};ENU=Balanza';
+      PolizasNodeTxt@1020005 : TextConst '@@@={Locked};ENU=Polizas';
+      AuxiliaryAccountNodeTxt@1020011 : TextConst '@@@={Locked};ENU=AuxiliarCtas';
+
+    [External]
+    PROCEDURE ExportChartOfAccounts@1020000(Year@1020006 : Integer;Month@1020007 : Integer);
+    VAR
+      GLAccount@1020003 : Record 15;
+      TempXMLBuffer@1020005 : TEMPORARY Record 1235;
+    BEGIN
+      TempErrorMessage.ClearLog;
+      GLAccount.SETFILTER("SAT Account Code",'<>%1','');
+
+      CreateXMLHeader(TempXMLBuffer,CatalogoNodeTxt,CatalogoNamespaceTxt,Year,Month,'1.3');
+      IF GLAccount.FINDSET THEN BEGIN
+        REPEAT
+          TempErrorMessage.LogIfEmpty(GLAccount,GLAccount.FIELDNO(Name),TempErrorMessage."Message Type"::Error);
+
+          GLAccount.CALCFIELDS("Debit Amount","Credit Amount");
+          TempXMLBuffer.AddGroupElement('Ctas');
+          TempXMLBuffer.AddAttribute('CodAgrup',GLAccount."SAT Account Code");
+          TempXMLBuffer.AddAttribute('NumCta',GLAccount."No.");
+          TempXMLBuffer.AddAttribute('Desc',GLAccount.Name);
+          TempXMLBuffer.AddAttribute('Nivel',FORMAT(GLAccount.Indentation + 1));
+          CASE GLAccount."Debit/Credit" OF
+            GLAccount."Debit/Credit"::Debit:
+              TempXMLBuffer.AddAttribute('Natur','D');
+            GLAccount."Debit/Credit"::Credit:
+              TempXMLBuffer.AddAttribute('Natur','A');
+            ELSE
+              TempErrorMessage.LogMessage(
+                GLAccount,GLAccount.FIELDNO("Debit/Credit"),TempErrorMessage."Message Type"::Error,
+                STRSUBSTNO(GLAccountTypeErr,GLAccount."Debit/Credit",GLAccount.RECORDID));
+          END;
+          TempXMLBuffer.GetParent;
+        UNTIL GLAccount.NEXT = 0;
+      END ELSE
+        TempErrorMessage.LogSimpleMessage(TempErrorMessage."Message Type"::Error,NoSATAccountDefinedErr);
+
+      IF NOT TempErrorMessage.HasErrors(TRUE) THEN
+        SaveXMLToClient(TempXMLBuffer,Year,Month,'CT');
+      TempErrorMessage.ShowErrorMessages(FALSE);
+    END;
+
+    [External]
+    PROCEDURE ExportBalanceSheet@1020001(Year@1020009 : Integer;Month@1020010 : Integer;DeliveryType@1020011 : 'Normal,Complementary';UpdateDate@1020012 : Date;ClosingBalanceSheet@1020007 : Boolean);
+    VAR
+      GLAccount@1020002 : Record 15;
+      GLAccountBalanceIni@1020008 : Record 15;
+      GLAccountBalanceFin@1020013 : Record 15;
+      TempXMLBuffer@1020015 : TEMPORARY Record 1235;
+      StartDate@1020001 : Date;
+      EndDate@1020000 : Date;
+      FileType@1020014 : Text;
+    BEGIN
+      TempErrorMessage.ClearLog;
+
+      IF NOT ClosingBalanceSheet THEN BEGIN
+        StartDate := DMY2DATE(1,Month,Year);
+        EndDate := CALCDATE('<CM>',StartDate);
+      END ELSE BEGIN
+        StartDate := DMY2DATE(1,1,Year);
+        EndDate := CLOSINGDATE(CALCDATE('<CY>',DMY2DATE(1,1,Year)));
+        Month := 13;
+      END;
+
+      CreateXMLHeader(TempXMLBuffer,BalanzaNodeTxt,BalanzaNamespaceTxt,Year,Month,'1.3');
+
+      GLAccount.SETRANGE("Date Filter",StartDate,EndDate);
+      GLAccount.SETFILTER("SAT Account Code",'<>%1','');
+
+      IF DeliveryType = DeliveryType::Normal THEN
+        TempXMLBuffer.AddAttribute('TipoEnvio','N')
+      ELSE BEGIN
+        TempXMLBuffer.AddAttribute('TipoEnvio','C');
+        IF UpdateDate = 0D THEN
+          TempErrorMessage.LogSimpleMessage(TempErrorMessage."Message Type"::Error,MissingUpdateDateErr);
+        TempXMLBuffer.AddAttribute('FechaModBal',FORMAT(UpdateDate,0,9));
+      END;
+
+      IF GLAccount.FINDSET THEN
+        REPEAT
+          GLAccount.CALCFIELDS("Debit Amount","Credit Amount");
+
+          GLAccountBalanceIni.GET(GLAccount."No.");
+          GLAccountBalanceIni.SETFILTER("Date Filter",'..%1',CLOSINGDATE(StartDate - 1));
+          GLAccountBalanceIni.CALCFIELDS("Balance at Date");
+
+          GLAccountBalanceFin.GET(GLAccount."No.");
+          GLAccountBalanceFin.SETFILTER("Date Filter",'..%1',EndDate);
+          GLAccountBalanceFin.CALCFIELDS("Balance at Date");
+
+          TempXMLBuffer.AddGroupElement('Ctas');
+          TempXMLBuffer.AddAttribute('NumCta',GLAccount."No.");
+          TempXMLBuffer.AddAttribute('SaldoIni',FormatDecimal(GLAccountBalanceIni."Balance at Date"));
+          TempXMLBuffer.AddAttribute('Debe',FormatDecimal(GLAccount."Debit Amount"));
+          TempXMLBuffer.AddAttribute('Haber',FormatDecimal(GLAccount."Credit Amount"));
+          TempXMLBuffer.AddAttribute('SaldoFin',FormatDecimal(GLAccountBalanceFin."Balance at Date"));
+          TempXMLBuffer.GetParent;
+        UNTIL GLAccount.NEXT = 0;
+
+      IF DeliveryType = DeliveryType::Normal THEN
+        FileType := 'BN'
+      ELSE
+        FileType := 'BC';
+
+      IF NOT TempErrorMessage.HasErrors(TRUE) THEN
+        SaveXMLToClient(TempXMLBuffer,Year,Month,FileType);
+
+      TempErrorMessage.ShowErrorMessages(FALSE);
+    END;
+
+    [External]
+    PROCEDURE ExportTransactions@1020002(Year@1020000 : Integer;Month@1020001 : Integer;RequestType@1020016 : 'AF,FC,DE,CO';OrderNumber@1020015 : Text[13];ProcessNumber@1020009 : Text[14]);
+    VAR
+      GLEntry@1020002 : Record 17;
+      TempXMLBuffer@1020003 : TEMPORARY Record 1235;
+      StartDate@1020010 : Date;
+      EndDate@1020011 : Date;
+      TransactionNoCurrent@1020014 : Integer;
+    BEGIN
+      TempErrorMessage.ClearLog;
+      StartDate := DMY2DATE(1,Month,Year);
+      EndDate := CALCDATE('<CM>',StartDate);
+
+      CreateXMLHeader(TempXMLBuffer,PolizasNodeTxt,PolizasNamespaceTxt,Year,Month,'1.3');
+      TempXMLBuffer.AddAttribute('TipoSolicitud',FORMAT(RequestType));
+      IF RequestType IN [RequestType::AF,RequestType::FC] THEN BEGIN
+        IF OrderNumber <> '' THEN
+          TempXMLBuffer.AddAttribute('NumOrden',OrderNumber)
+        ELSE
+          TempErrorMessage.LogSimpleMessage(TempErrorMessage."Message Type"::Error,MissingOrderNumberErr);
+      END ELSE BEGIN
+        IF ProcessNumber <> '' THEN
+          TempXMLBuffer.AddAttribute('NumTramite',ProcessNumber)
+        ELSE
+          TempErrorMessage.LogSimpleMessage(TempErrorMessage."Message Type"::Error,MissingOrderNumberErr);
+      END;
+
+      GLEntry.SETCURRENTKEY("Transaction No.");
+      GLEntry.SETRANGE("Posting Date",StartDate,EndDate);
+
+      IF GLEntry.FINDSET THEN BEGIN
+        REPEAT
+          IF TransactionNoCurrent <> GLEntry."Transaction No." THEN BEGIN
+            IF TransactionNoCurrent <> 0 THEN
+              TempXMLBuffer.GetParent;
+            TransactionNoCurrent := GLEntry."Transaction No.";
+            CreatePolizaNode(TempXMLBuffer,GLEntry);
+          END;
+          CreateTransaccionNode(TempXMLBuffer,GLEntry);
+        UNTIL GLEntry.NEXT = 0;
+        TempXMLBuffer.GetParent;
+      END;
+
+      IF NOT TempErrorMessage.HasErrors(TRUE) THEN
+        SaveXMLToClient(TempXMLBuffer,Year,Month,'PL');
+
+      TempErrorMessage.ShowErrorMessages(FALSE);
+    END;
+
+    [External]
+    PROCEDURE ExportAuxiliaryAccounts@1020023(Year@1020006 : Integer;Month@1020007 : Integer;RequestType@1020015 : 'AF,FC,DE,CO';OrderNumber@1020014 : Text[13];ProcessNumber@1020013 : Text[14]);
+    VAR
+      GLAccount@1020003 : Record 15;
+      GLAccountBalanceIni@1020010 : Record 15;
+      GLAccountBalanceFin@1020012 : Record 15;
+      GLEntry@1020011 : Record 17;
+      TempXMLBuffer@1020016 : TEMPORARY Record 1235;
+      StartDate@1020009 : Date;
+      EndDate@1020008 : Date;
+    BEGIN
+      TempErrorMessage.ClearLog;
+      StartDate := DMY2DATE(1,Month,Year);
+      EndDate := CALCDATE('<CM>',StartDate);
+
+      GLAccount.SETRANGE("Date Filter",StartDate,EndDate);
+      GLAccount.SETFILTER("SAT Account Code",'<>%1','');
+
+      CreateXMLHeader(TempXMLBuffer,AuxiliaryAccountNodeTxt,AuxiliaryAccountNamespaceTxt,Year,Month,'1.3');
+      TempXMLBuffer.AddAttribute('TipoSolicitud',FORMAT(RequestType));
+      IF RequestType IN [RequestType::AF,RequestType::FC] THEN BEGIN
+        IF OrderNumber <> '' THEN
+          TempXMLBuffer.AddAttribute('NumOrden',OrderNumber)
+        ELSE
+          TempErrorMessage.LogSimpleMessage(TempErrorMessage."Message Type"::Error,MissingOrderNumberErr);
+      END ELSE BEGIN
+        IF ProcessNumber <> '' THEN
+          TempXMLBuffer.AddAttribute('NumTramite',ProcessNumber)
+        ELSE
+          TempErrorMessage.LogSimpleMessage(TempErrorMessage."Message Type"::Error,MissingOrderNumberErr);
+      END;
+
+      IF GLAccount.FINDSET THEN BEGIN
+        REPEAT
+          GLEntry.SETRANGE("G/L Account No.",GLAccount."No.");
+          GLEntry.SETRANGE("Posting Date",StartDate,EndDate);
+          IF GLEntry.FINDSET THEN BEGIN
+            GLAccountBalanceIni.GET(GLAccount."No.");
+            GLAccountBalanceIni.SETFILTER("Date Filter",'..%1',CLOSINGDATE(StartDate - 1));
+            GLAccountBalanceIni.CALCFIELDS("Balance at Date");
+
+            GLAccountBalanceFin.GET(GLAccount."No.");
+            GLAccountBalanceFin.SETFILTER("Date Filter",'..%1',EndDate);
+            GLAccountBalanceFin.CALCFIELDS("Balance at Date");
+
+            TempErrorMessage.LogIfEmpty(GLAccount,GLAccount.FIELDNO(Name),TempErrorMessage."Message Type"::Error);
+
+            TempXMLBuffer.AddGroupElement('Cuenta');
+            TempXMLBuffer.AddAttribute('NumCta',GLAccount."No.");
+            TempXMLBuffer.AddAttribute('DesCta',GLAccount.Name);
+            TempXMLBuffer.AddAttribute('SaldoIni',FormatDecimal(GLAccountBalanceIni."Balance at Date"));
+            TempXMLBuffer.AddAttribute('SaldoFin',FormatDecimal(GLAccountBalanceFin."Balance at Date"));
+
+            REPEAT
+              TempErrorMessage.LogIfEmpty(GLEntry,GLEntry.FIELDNO("Source Code"),TempErrorMessage."Message Type"::Warning);
+              TempXMLBuffer.AddGroupElement('DetalleAux');
+              TempXMLBuffer.AddAttribute('Fecha',FORMAT(GLEntry."Posting Date",0,9));
+              TempXMLBuffer.AddAttribute('NumUnIdenPol',FORMAT(GLEntry."Transaction No."));
+              TempXMLBuffer.AddAttribute('Concepto',GLEntry."Source Code");
+              TempXMLBuffer.AddAttribute('Debe',FormatDecimal(GLEntry."Debit Amount"));
+              TempXMLBuffer.AddAttribute('Haber',FormatDecimal(GLEntry."Credit Amount"));
+              TempXMLBuffer.GetParent;
+            UNTIL GLEntry.NEXT = 0;
+            TempXMLBuffer.GetParent;
+          END;
+        UNTIL GLAccount.NEXT = 0;
+      END;
+
+      IF NOT TempErrorMessage.HasErrors(TRUE) THEN
+        SaveXMLToClient(TempXMLBuffer,Year,Month,'XC');
+
+      TempErrorMessage.ShowErrorMessages(FALSE);
+    END;
+
+    LOCAL PROCEDURE CreateXMLHeader@1020003(VAR TempXMLBuffer@1020004 : TEMPORARY Record 1235;RootNodeName@1020003 : Text;NodeNameSpace@1020005 : Text;Year@1020007 : Integer;Month@1020008 : Integer;Version@1020002 : Text);
+    VAR
+      CompanyInformation@1020006 : Record 79;
+      FullNameSpace@1020009 : Text;
+    BEGIN
+      CompanyInformation.GET;
+
+      TempErrorMessage.LogIfEmpty(CompanyInformation,CompanyInformation.FIELDNO("RFC No."),TempErrorMessage."Message Type"::Error);
+      IF (Month < 1) OR (Month > 13) THEN
+        TempErrorMessage.LogSimpleMessage(TempErrorMessage."Message Type"::Error,InvalidMonthErr);
+      IF (Year < 2000) OR (Month > 2999) THEN
+        TempErrorMessage.LogSimpleMessage(TempErrorMessage."Message Type"::Error,InvalidYearErr);
+
+      FullNameSpace := NamespaceTxt + NodeNameSpace;
+      TempXMLBuffer.CreateRootElement(RootNodeName);
+      TempXMLBuffer.AddNamespace('',FullNameSpace);
+
+      TempXMLBuffer.AddAttribute('Version',Version);
+      TempXMLBuffer.AddAttribute('RFC',CompanyInformation."RFC No.");
+      TempXMLBuffer.AddAttribute('Mes',FORMAT(Month,2,'<Integer,2><Filler Character,0>'));
+      TempXMLBuffer.AddAttribute('Anio',FORMAT(Year));
+      TempXMLBuffer.AddAttribute('xsi:schemaLocation',
+        FullNameSpace + ' ' + FullNameSpace + '/' + NodeNameSpace + '_1_3.xsd');
+      TempXMLBuffer.AddAttribute('xmlns:xsi',NamespaceW3Txt);
+    END;
+
+    LOCAL PROCEDURE CreatePolizaNode@1020004(VAR TempXMLBuffer@1020001 : TEMPORARY Record 1235;GLEntry@1020004 : Record 17);
+    BEGIN
+      TempErrorMessage.LogIfEmpty(GLEntry,GLEntry.FIELDNO("Source Code"),TempErrorMessage."Message Type"::Warning);
+
+      TempXMLBuffer.AddGroupElement('Poliza');
+      TempXMLBuffer.AddAttribute('NumUnIdenPol',FORMAT(GLEntry."Transaction No."));
+      TempXMLBuffer.AddAttribute('Fecha',FORMAT(GLEntry."Posting Date",0,9));
+      TempXMLBuffer.AddAttribute('Concepto',GLEntry."Source Code");
+    END;
+
+    LOCAL PROCEDURE CreateTransaccionNode@1020005(VAR TempXMLBuffer@1020002 : Record 1235;GLEntry@1020004 : Record 17);
+    VAR
+      GeneralLedgerSetup@1020003 : Record 98;
+      GLAccount@1020001 : Record 15;
+    BEGIN
+      GeneralLedgerSetup.GET;
+      GLAccount.GET(GLEntry."G/L Account No.");
+
+      TempErrorMessage.LogIfEmpty(GLAccount,GLAccount.FIELDNO(Name),TempErrorMessage."Message Type"::Error);
+      TempErrorMessage.LogIfEmpty(GLEntry,GLEntry.FIELDNO(Description),TempErrorMessage."Message Type"::Warning);
+
+      TempXMLBuffer.AddGroupElement('Transaccion');
+      TempXMLBuffer.AddAttribute('NumCta',GLAccount."No.");
+      TempXMLBuffer.AddAttribute('DesCta',GLAccount.Name);
+      TempXMLBuffer.AddAttribute('Concepto',GLEntry.Description);
+      TempXMLBuffer.AddAttribute('Debe',FormatDecimal(GLEntry."Debit Amount"));
+      TempXMLBuffer.AddAttribute('Haber',FormatDecimal(GLEntry."Credit Amount"));
+
+      CreateCustomerReceipts(TempXMLBuffer,GLEntry,FALSE);
+      CreateVendorReceipts(TempXMLBuffer,GLEntry,FALSE);
+
+      CreateTransfers(TempXMLBuffer,GLEntry);
+      TempXMLBuffer.GetParent;
+    END;
+
+    LOCAL PROCEDURE CreateVendorReceipts@1020008(VAR TempXMLBuffer@1020000 : Record 1235;GLEntry@1020001 : Record 17;IsAuxiliary@1020009 : Boolean);
+    VAR
+      VendorLedgerEntry@1020011 : Record 25;
+      AppliedVendorLedgerEntry@1020005 : Record 25;
+      VendorPostingGroup@1020002 : Record 93;
+    BEGIN
+      VendorLedgerEntry.SETRANGE("Transaction No.",GLEntry."Transaction No.");
+
+      IF VendorLedgerEntry.FINDSET THEN
+        REPEAT
+          VendorPostingGroup.GET(VendorLedgerEntry."Vendor Posting Group");
+          IF VendorPostingGroup."Payables Account" = GLEntry."G/L Account No." THEN BEGIN
+            IF VendorLedgerEntry."Document Type" IN [VendorLedgerEntry."Document Type"::Payment,
+                                                     VendorLedgerEntry."Document Type"::Refund]
+            THEN BEGIN
+              FindAppliedVendorReceipts(AppliedVendorLedgerEntry,VendorLedgerEntry."Entry No.");
+              IF AppliedVendorLedgerEntry.FINDSET THEN
+                REPEAT
+                  CreateReceipt(TempXMLBuffer,AppliedVendorLedgerEntry,IsAuxiliary);
+                UNTIL AppliedVendorLedgerEntry.NEXT = 0;
+            END ELSE
+              CreateReceipt(TempXMLBuffer,VendorLedgerEntry,IsAuxiliary);
+          END;
+        UNTIL VendorLedgerEntry.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE CreateCustomerReceipts@1020037(VAR TempXMLBuffer@1020000 : Record 1235;GLEntry@1020001 : Record 17;IsAuxiliary@1020009 : Boolean);
+    VAR
+      CustLedgerEntry@1020011 : Record 21;
+      AppliedCustLedgerEntry@1020005 : Record 21;
+      CustomerPostingGroup@1020002 : Record 92;
+    BEGIN
+      CustLedgerEntry.SETRANGE("Transaction No.",GLEntry."Transaction No.");
+
+      IF CustLedgerEntry.FINDSET THEN
+        REPEAT
+          CustomerPostingGroup.GET(CustLedgerEntry."Customer Posting Group");
+          IF CustomerPostingGroup."Receivables Account" = GLEntry."G/L Account No." THEN BEGIN
+            IF CustLedgerEntry."Document Type" IN [CustLedgerEntry."Document Type"::Payment,
+                                                   CustLedgerEntry."Document Type"::Refund]
+            THEN BEGIN
+              FindAppliedCustomerReceipts(AppliedCustLedgerEntry,CustLedgerEntry."Entry No.");
+              IF AppliedCustLedgerEntry.FINDSET THEN
+                REPEAT
+                  CreateReceipt(TempXMLBuffer,AppliedCustLedgerEntry,IsAuxiliary);
+                UNTIL AppliedCustLedgerEntry.NEXT = 0;
+            END ELSE
+              CreateReceipt(TempXMLBuffer,CustLedgerEntry,IsAuxiliary);
+          END;
+        UNTIL CustLedgerEntry.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE FindAppliedVendorReceipts@1020015(VAR AppliedVendorLedgerEntry@1020005 : Record 25;EntryNo@1020000 : Integer);
+    VAR
+      DetailedVendorLedgEntry1@1020003 : Record 380;
+      DetailedVendorLedgEntry2@1020002 : Record 380;
+      VendorLedgerEntry@1020001 : Record 25;
+    BEGIN
+      WITH AppliedVendorLedgerEntry DO BEGIN
+        RESET;
+
+        VendorLedgerEntry.GET(EntryNo);
+
+        DetailedVendorLedgEntry1.SETCURRENTKEY("Vendor Ledger Entry No.");
+        DetailedVendorLedgEntry1.SETRANGE("Vendor Ledger Entry No.",VendorLedgerEntry."Entry No.");
+        DetailedVendorLedgEntry1.SETRANGE(Unapplied,FALSE);
+        IF DetailedVendorLedgEntry1.FIND('-') THEN
+          REPEAT
+            IF DetailedVendorLedgEntry1."Vendor Ledger Entry No." =
+               DetailedVendorLedgEntry1."Applied Vend. Ledger Entry No."
+            THEN BEGIN
+              DetailedVendorLedgEntry2.INIT;
+              DetailedVendorLedgEntry2.SETCURRENTKEY("Applied Vend. Ledger Entry No.","Entry Type");
+              DetailedVendorLedgEntry2.SETRANGE(
+                "Applied Vend. Ledger Entry No.",DetailedVendorLedgEntry1."Applied Vend. Ledger Entry No.");
+              DetailedVendorLedgEntry2.SETRANGE("Entry Type",DetailedVendorLedgEntry2."Entry Type"::Application);
+              DetailedVendorLedgEntry2.SETRANGE(Unapplied,FALSE);
+              IF DetailedVendorLedgEntry2.FIND('-') THEN
+                REPEAT
+                  IF DetailedVendorLedgEntry2."Vendor Ledger Entry No." <> DetailedVendorLedgEntry2."Applied Vend. Ledger Entry No."
+                  THEN BEGIN
+                    SETCURRENTKEY("Entry No.");
+                    SETRANGE("Entry No.",DetailedVendorLedgEntry2."Vendor Ledger Entry No.");
+                    IF FIND('-') THEN
+                      MARK(TRUE);
+                  END;
+                UNTIL DetailedVendorLedgEntry2.NEXT = 0;
+            END ELSE BEGIN
+              SETCURRENTKEY("Entry No.");
+              SETRANGE("Entry No.",DetailedVendorLedgEntry1."Applied Vend. Ledger Entry No.");
+              IF FIND('-') THEN
+                MARK(TRUE);
+            END;
+          UNTIL DetailedVendorLedgEntry1.NEXT = 0;
+
+        SETCURRENTKEY("Entry No.");
+        SETRANGE("Entry No.");
+
+        IF VendorLedgerEntry."Closed by Entry No." <> 0 THEN BEGIN
+          "Entry No." := VendorLedgerEntry."Closed by Entry No.";
+          MARK(TRUE);
+        END;
+
+        SETCURRENTKEY("Closed by Entry No.");
+        SETRANGE("Closed by Entry No.",VendorLedgerEntry."Entry No.");
+        IF FIND('-') THEN
+          REPEAT
+            MARK(TRUE);
+          UNTIL NEXT = 0;
+
+        SETCURRENTKEY("Entry No.");
+        SETRANGE("Closed by Entry No.");
+        MARKEDONLY(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE FindAppliedCustomerReceipts@1020033(VAR AppliedCustLedgerEntry@1020005 : Record 21;EntryNo@1020000 : Integer);
+    VAR
+      DetailedCustLedgEntry1@1020003 : Record 379;
+      DetailedCustLedgEntry2@1020002 : Record 379;
+      CustLedgerEntry@1020001 : Record 21;
+    BEGIN
+      WITH AppliedCustLedgerEntry DO BEGIN
+        RESET;
+
+        CustLedgerEntry.GET(EntryNo);
+
+        DetailedCustLedgEntry1.SETCURRENTKEY("Cust. Ledger Entry No.");
+        DetailedCustLedgEntry1.SETRANGE("Cust. Ledger Entry No.",CustLedgerEntry."Entry No.");
+        DetailedCustLedgEntry1.SETRANGE(Unapplied,FALSE);
+        IF DetailedCustLedgEntry1.FIND('-') THEN
+          REPEAT
+            IF DetailedCustLedgEntry1."Cust. Ledger Entry No." = DetailedCustLedgEntry1."Applied Cust. Ledger Entry No." THEN BEGIN
+              DetailedCustLedgEntry2.INIT;
+              DetailedCustLedgEntry2.SETCURRENTKEY("Applied Cust. Ledger Entry No.","Entry Type");
+              DetailedCustLedgEntry2.SETRANGE(
+                "Applied Cust. Ledger Entry No.",DetailedCustLedgEntry1."Applied Cust. Ledger Entry No.");
+              DetailedCustLedgEntry2.SETRANGE("Entry Type",DetailedCustLedgEntry2."Entry Type"::Application);
+              DetailedCustLedgEntry2.SETRANGE(Unapplied,FALSE);
+              IF DetailedCustLedgEntry2.FIND('-') THEN
+                REPEAT
+                  IF DetailedCustLedgEntry2."Cust. Ledger Entry No." <> DetailedCustLedgEntry2."Applied Cust. Ledger Entry No."
+                  THEN BEGIN
+                    SETCURRENTKEY("Entry No.");
+                    SETRANGE("Entry No.",DetailedCustLedgEntry2."Cust. Ledger Entry No.");
+                    IF FIND('-') THEN
+                      MARK(TRUE);
+                  END;
+                UNTIL DetailedCustLedgEntry2.NEXT = 0;
+            END ELSE BEGIN
+              SETCURRENTKEY("Entry No.");
+              SETRANGE("Entry No.",DetailedCustLedgEntry1."Applied Cust. Ledger Entry No.");
+              IF FIND('-') THEN
+                MARK(TRUE);
+            END;
+          UNTIL DetailedCustLedgEntry1.NEXT = 0;
+
+        SETCURRENTKEY("Entry No.");
+        SETRANGE("Entry No.");
+
+        IF CustLedgerEntry."Closed by Entry No." <> 0 THEN BEGIN
+          "Entry No." := CustLedgerEntry."Closed by Entry No.";
+          MARK(TRUE);
+        END;
+
+        SETCURRENTKEY("Closed by Entry No.");
+        SETRANGE("Closed by Entry No.",CustLedgerEntry."Entry No.");
+        IF FIND('-') THEN
+          REPEAT
+            MARK(TRUE);
+          UNTIL NEXT = 0;
+
+        SETCURRENTKEY("Entry No.");
+        SETRANGE("Closed by Entry No.");
+        MARKEDONLY(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateReceipt@1020010(VAR TempXMLBuffer@1020000 : Record 1235;LedgerEntry@1020014 : Variant;IsAuxiliary@1020009 : Boolean);
+    VAR
+      SourceCodeSetup@1020002 : Record 242;
+      CompanyInformation@1020007 : Record 79;
+      PaymentMethod@1020005 : Record 289;
+      LedgerEntryRecordRef@1020001 : RecordRef;
+      AmountFieldRef@1020015 : FieldRef;
+      CountryRegion@1020016 : Code[10];
+      DocumentNo@1020017 : Code[20];
+      RFCNo@1020018 : Code[13];
+      CurrencyCode@1020020 : Code[10];
+      PaymentMethodCode@1020004 : Code[10];
+      UUIDCFDI@1020008 : Text;
+      VATRegistrationNo@1020019 : Text[20];
+      CustVendName@1020022 : Text;
+      Amount@1020003 : Decimal;
+      AdjustedCurrencyFactor@1020021 : Decimal;
+    BEGIN
+      SourceCodeSetup.GET;
+      CompanyInformation.GET;
+
+      LedgerEntryRecordRef.GETTABLE(LedgerEntry);
+      FindCustVendDetails(LedgerEntryRecordRef,CountryRegion,RFCNo,VATRegistrationNo,CustVendName);
+      AmountFieldRef := LedgerEntryRecordRef.FIELD(13);
+      AmountFieldRef.CALCFIELD;
+      Amount := AmountFieldRef.VALUE;
+      CurrencyCode := LedgerEntryRecordRef.FIELD(11).VALUE;
+      AdjustedCurrencyFactor := LedgerEntryRecordRef.FIELD(73).VALUE;
+      PaymentMethodCode := LedgerEntryRecordRef.FIELD(172).VALUE;
+
+      DocumentNo := LedgerEntryRecordRef.FIELD(6).VALUE;
+      IF (CountryRegion = CompanyInformation."Country/Region Code") OR (CountryRegion = '') THEN BEGIN
+        UUIDCFDI := FindUUIDCFDI(LedgerEntryRecordRef);
+
+        IF UUIDCFDI <> '' THEN BEGIN
+          IF IsAuxiliary THEN
+            TempXMLBuffer.AddGroupElement('ComprNal')
+          ELSE
+            TempXMLBuffer.AddGroupElement('CompNal');
+          TempXMLBuffer.AddAttribute('UUID_CFDI',UUIDCFDI);
+        END ELSE BEGIN
+          IF IsAuxiliary THEN
+            TempXMLBuffer.AddGroupElement('ComprNalOtr')
+          ELSE
+            TempXMLBuffer.AddGroupElement('CompNalOtr');
+          TempErrorMessage.LogIfInvalidCharacters(LedgerEntryRecordRef,6,TempErrorMessage."Message Type"::Warning,'0123456789');
+          DocumentNo := DELCHR(DocumentNo,'=',DELCHR(DocumentNo,'=','0123456789'));
+          TempXMLBuffer.AddAttribute('CFD_CBB_NumFol',DocumentNo);
+        END;
+        TempXMLBuffer.AddAttribute('RFC',RFCNo);
+      END ELSE BEGIN
+        IF IsAuxiliary THEN
+          TempXMLBuffer.AddGroupElement('ComprExt')
+        ELSE
+          TempXMLBuffer.AddGroupElement('CompExt');
+        TempXMLBuffer.AddAttribute('NumFactExt',DocumentNo);
+        TempXMLBuffer.AddAttribute('TaxID',VATRegistrationNo);
+      END;
+
+      IF IsAuxiliary AND PaymentMethod.GET(PaymentMethodCode) THEN BEGIN
+        TempErrorMessage.LogIfEmpty(
+          PaymentMethod,PaymentMethod.FIELDNO("SAT Payment Method Code"),TempErrorMessage."Message Type"::Error);
+        TempXMLBuffer.AddAttribute('MetPagoAux',PaymentMethod."SAT Payment Method Code");
+      END;
+
+      IF LedgerEntryRecordRef.NUMBER = DATABASE::"Vendor Ledger Entry" THEN
+        Amount := -Amount;
+      TempXMLBuffer.AddAttribute('MontoTotal',FormatDecimal(Amount));
+      IF CurrencyCode <> '' THEN BEGIN
+        TempXMLBuffer.AddAttribute('Moneda',CurrencyCode);
+        TempXMLBuffer.AddAttribute('TipCamb',FormatDecimal(1 / AdjustedCurrencyFactor));
+      END;
+      TempXMLBuffer.GetParent;
+    END;
+
+    LOCAL PROCEDURE CreateTransfers@1020031(VAR TempXMLBuffer@1020003 : TEMPORARY Record 1235;GLEntry@1020002 : Record 17);
+    VAR
+      BankAccountLedgerEntry@1020004 : Record 271;
+      CheckLedgerEntry@1020005 : Record 272;
+      BankAccountPostingGroup@1020000 : Record 277;
+      PaymentHandled@1020006 : Boolean;
+    BEGIN
+      BankAccountLedgerEntry.SETCURRENTKEY("Transaction No.");
+      CheckLedgerEntry.SETCURRENTKEY("Bank Account Ledger Entry No.");
+
+      BankAccountLedgerEntry.SETRANGE("Transaction No.",GLEntry."Transaction No.");
+      BankAccountLedgerEntry.SETFILTER("Credit Amount",'>0');
+      IF BankAccountLedgerEntry.FINDSET THEN
+        REPEAT
+          BankAccountPostingGroup.GET(BankAccountLedgerEntry."Bank Acc. Posting Group");
+          IF BankAccountPostingGroup."G/L Bank Account No." = GLEntry."G/L Account No." THEN BEGIN
+            CheckLedgerEntry.SETRANGE("Bank Account Ledger Entry No.",BankAccountLedgerEntry."Entry No.");
+            IF CheckLedgerEntry.FINDSET THEN
+              REPEAT
+                PaymentHandled := CreateChequeNode(TempXMLBuffer,CheckLedgerEntry) OR PaymentHandled;
+              UNTIL CheckLedgerEntry.NEXT = 0
+            ELSE
+              PaymentHandled := CreateTransferenciaNode(TempXMLBuffer,BankAccountLedgerEntry) OR PaymentHandled
+          END ELSE
+            PaymentHandled := TRUE;
+        UNTIL BankAccountLedgerEntry.NEXT = 0;
+
+      WITH GLEntry DO
+        IF (NOT PaymentHandled) AND
+           ("Credit Amount" > 0) AND
+           ("Document Type" = "Document Type"::Payment)
+        THEN BEGIN
+          CreateOtrMetodoPagoNode(TempXMLBuffer,DATABASE::"Cust. Ledger Entry","Transaction No.");
+          CreateOtrMetodoPagoNode(TempXMLBuffer,DATABASE::"Vendor Ledger Entry","Transaction No.");
+        END
+    END;
+
+    LOCAL PROCEDURE CreateChequeNode@1020007(VAR TempXMLBuffer@1020005 : TEMPORARY Record 1235;CheckLedgerEntry@1020001 : Record 272) : Boolean;
+    VAR
+      BankAccountLedgerEntry@1020012 : Record 271;
+      Vendor@1020003 : Record 23;
+      Customer@1020008 : Record 18;
+      BankAccount@1020007 : Record 270;
+      RecipientBankAccount@1020002 : Record 270;
+      CompanyInformation@1020011 : Record 79;
+      Benef@1020009 : Text[300];
+      RFC@1020010 : Code[13];
+      ExchangeRate@1020014 : Decimal;
+    BEGIN
+      BankAccountLedgerEntry.GET(CheckLedgerEntry."Bank Account Ledger Entry No.");
+      BankAccount.GET(CheckLedgerEntry."Bank Account No.");
+
+      TempErrorMessage.LogIfEmpty(CheckLedgerEntry,CheckLedgerEntry.FIELDNO("Check No."),TempErrorMessage."Message Type"::Warning);
+      TempErrorMessage.LogIfEmpty(CheckLedgerEntry,CheckLedgerEntry.FIELDNO("Check Date"),TempErrorMessage."Message Type"::Warning);
+      TempErrorMessage.LogIfEmpty(BankAccount,BankAccount.FIELDNO("Bank Code"),TempErrorMessage."Message Type"::Error);
+      TempErrorMessage.LogIfEmpty(BankAccount,BankAccount.FIELDNO("Bank Account No."),TempErrorMessage."Message Type"::Error);
+      TempErrorMessage.LogIfEmpty(BankAccount,BankAccount.FIELDNO(Name),TempErrorMessage."Message Type"::Error);
+
+      CASE CheckLedgerEntry."Bal. Account Type" OF
+        CheckLedgerEntry."Bal. Account Type"::Vendor:
+          BEGIN
+            Vendor.GET(CheckLedgerEntry."Bal. Account No.");
+            TempErrorMessage.LogIfEmpty(Vendor,Vendor.FIELDNO(Name),TempErrorMessage."Message Type"::Error);
+            TempErrorMessage.LogIfEmpty(Vendor,Vendor.FIELDNO("RFC No."),TempErrorMessage."Message Type"::Error);
+            Benef := Vendor.Name;
+            RFC := Vendor."RFC No.";
+          END;
+        CheckLedgerEntry."Bal. Account Type"::Customer:
+          BEGIN
+            Customer.GET(CheckLedgerEntry."Bal. Account No.");
+            TempErrorMessage.LogIfEmpty(Customer,Customer.FIELDNO(Name),TempErrorMessage."Message Type"::Error);
+            TempErrorMessage.LogIfEmpty(Customer,Customer.FIELDNO("RFC No."),TempErrorMessage."Message Type"::Error);
+            Benef := Customer.Name;
+            RFC := Customer."RFC No.";
+          END;
+        CheckLedgerEntry."Bal. Account Type"::"Bank Account":
+          BEGIN
+            CompanyInformation.GET;
+            RecipientBankAccount.GET(CheckLedgerEntry."Bal. Account No.");
+            TempErrorMessage.LogIfEmpty(
+              RecipientBankAccount,RecipientBankAccount.FIELDNO(Name),TempErrorMessage."Message Type"::Error);
+            TempErrorMessage.LogIfEmpty(
+              CompanyInformation,CompanyInformation.FIELDNO("RFC No."),TempErrorMessage."Message Type"::Error);
+            Benef := RecipientBankAccount.Name;
+            RFC := CompanyInformation."RFC No.";
+          END;
+      END;
+
+      TempXMLBuffer.AddGroupElement('Cheque');
+      TempXMLBuffer.AddAttribute('Num',CheckLedgerEntry."Check No.");
+      TempXMLBuffer.AddAttribute('BanEmisNal',BankAccount."Bank Code");
+      TempXMLBuffer.AddAttribute('BanEmisExt',BankAccount.Name);
+      TempXMLBuffer.AddAttribute('CtaOri',BankAccount."Bank Account No.");
+      TempXMLBuffer.AddAttribute('Fecha',FORMAT(CheckLedgerEntry."Check Date",0,9));
+      TempXMLBuffer.AddAttribute('Benef',Benef);
+      TempXMLBuffer.AddAttribute('RFC',RFC);
+      TempXMLBuffer.AddAttribute('Monto',FormatDecimal(CheckLedgerEntry.Amount));
+
+      IF BankAccountLedgerEntry."Currency Code" <> '' THEN BEGIN
+        ExchangeRate := CurrencyExchangeRate.ExchangeRate(CheckLedgerEntry."Posting Date",BankAccountLedgerEntry."Currency Code");
+        TempXMLBuffer.AddAttribute('Moneda',BankAccountLedgerEntry."Currency Code");
+        TempXMLBuffer.AddAttribute('TipCamb',FormatDecimal(1 / ExchangeRate));
+      END;
+      TempXMLBuffer.GetParent;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CreateTransferenciaNode@1020006(VAR TempXMLBuffer@1020002 : TEMPORARY Record 1235;BankAccountLedgerEntry@1020001 : Record 271) : Boolean;
+    VAR
+      CustLedgerEntry@1020005 : Record 21;
+      VendorLedgerEntry@1020006 : Record 25;
+      Customer@1020008 : Record 18;
+      Vendor@1020010 : Record 23;
+      BankAccount@1020011 : Record 270;
+      CustomerBankAccount@1020012 : Record 287;
+      VendorBankAccount@1020021 : Record 288;
+      CompanyInformation@1020022 : Record 79;
+      RecipientBankAccount@1020023 : Record 270;
+      CtaDest@1020017 : Text[50];
+      BancoDestNal@1020016 : Code[3];
+      BancoDestExt@1020024 : Text;
+      Benef@1020015 : Text[300];
+      RFC@1020014 : Code[13];
+      ExchangeRate@1020025 : Decimal;
+    BEGIN
+      CASE BankAccountLedgerEntry."Bal. Account Type" OF
+        BankAccountLedgerEntry."Bal. Account Type"::Customer:
+          BEGIN
+            CustLedgerEntry.SETCURRENTKEY("Transaction No.");
+            CustLedgerEntry.SETRANGE("Transaction No.",BankAccountLedgerEntry."Transaction No.");
+            CustLedgerEntry.SETFILTER("Recipient Bank Account",'<>%1','');
+            IF NOT CustLedgerEntry.FINDFIRST THEN
+              EXIT(FALSE);
+            Customer.GET(CustLedgerEntry."Customer No.");
+            CustomerBankAccount.GET(Customer."No.",CustLedgerEntry."Recipient Bank Account");
+
+            TempErrorMessage.LogIfEmpty(
+              CustomerBankAccount,CustomerBankAccount.FIELDNO("Bank Account No."),TempErrorMessage."Message Type"::Error);
+            TempErrorMessage.LogIfEmpty(
+              CustomerBankAccount,CustomerBankAccount.FIELDNO("Bank Code"),TempErrorMessage."Message Type"::Error);
+            TempErrorMessage.LogIfEmpty(CustomerBankAccount,CustomerBankAccount.FIELDNO(Name),TempErrorMessage."Message Type"::Error);
+            TempErrorMessage.LogIfEmpty(Customer,Customer.FIELDNO(Name),TempErrorMessage."Message Type"::Error);
+            TempErrorMessage.LogIfEmpty(Customer,Customer.FIELDNO("RFC No."),TempErrorMessage."Message Type"::Error);
+
+            CtaDest := CustomerBankAccount."Bank Account No.";
+            BancoDestNal := CustomerBankAccount."Bank Code";
+            BancoDestExt := CustomerBankAccount.Name;
+            Benef := Customer.Name;
+            RFC := Customer."RFC No.";
+          END;
+        BankAccountLedgerEntry."Bal. Account Type"::Vendor:
+          BEGIN
+            VendorLedgerEntry.SETCURRENTKEY("Transaction No.");
+            VendorLedgerEntry.SETRANGE("Transaction No.",BankAccountLedgerEntry."Transaction No.");
+            VendorLedgerEntry.SETFILTER("Recipient Bank Account",'<>%1','');
+            IF NOT VendorLedgerEntry.FINDFIRST THEN
+              EXIT(FALSE);
+            Vendor.GET(VendorLedgerEntry."Vendor No.");
+            VendorBankAccount.GET(Vendor."No.",VendorLedgerEntry."Recipient Bank Account");
+
+            TempErrorMessage.LogIfEmpty(
+              VendorBankAccount,VendorBankAccount.FIELDNO("Bank Account No."),TempErrorMessage."Message Type"::Error);
+            TempErrorMessage.LogIfEmpty(
+              VendorBankAccount,VendorBankAccount.FIELDNO("Bank Code"),TempErrorMessage."Message Type"::Error);
+            TempErrorMessage.LogIfEmpty(VendorBankAccount,VendorBankAccount.FIELDNO(Name),TempErrorMessage."Message Type"::Error);
+            TempErrorMessage.LogIfEmpty(Vendor,Vendor.FIELDNO(Name),TempErrorMessage."Message Type"::Error);
+            TempErrorMessage.LogIfEmpty(Vendor,Vendor.FIELDNO("RFC No."),TempErrorMessage."Message Type"::Error);
+
+            CtaDest := VendorBankAccount."Bank Account No.";
+            BancoDestNal := VendorBankAccount."Bank Code";
+            BancoDestExt := VendorBankAccount.Name;
+            Benef := Vendor.Name;
+            RFC := Vendor."RFC No.";
+          END;
+        BankAccountLedgerEntry."Bal. Account Type"::"Bank Account":
+          BEGIN
+            IF NOT RecipientBankAccount.GET(BankAccountLedgerEntry."Bal. Account No.") THEN
+              EXIT(FALSE);
+            CompanyInformation.GET;
+
+            TempErrorMessage.LogIfEmpty(
+              RecipientBankAccount,RecipientBankAccount.FIELDNO("Bank Account No."),TempErrorMessage."Message Type"::Error);
+            TempErrorMessage.LogIfEmpty(
+              RecipientBankAccount,RecipientBankAccount.FIELDNO("Bank Code"),TempErrorMessage."Message Type"::Error);
+            TempErrorMessage.LogIfEmpty(
+              RecipientBankAccount,RecipientBankAccount.FIELDNO(Name),TempErrorMessage."Message Type"::Error);
+            TempErrorMessage.LogIfEmpty(CompanyInformation,CompanyInformation.FIELDNO(Name),TempErrorMessage."Message Type"::Error);
+            TempErrorMessage.LogIfEmpty(
+              CompanyInformation,CompanyInformation.FIELDNO("RFC No."),TempErrorMessage."Message Type"::Error);
+
+            CtaDest := RecipientBankAccount."Bank Account No.";
+            BancoDestNal := RecipientBankAccount."Bank Code";
+            BancoDestExt := RecipientBankAccount.Name;
+            Benef := CompanyInformation.Name;
+            RFC := CompanyInformation."RFC No.";
+          END;
+        ELSE
+          EXIT(FALSE);
+      END;
+
+      BankAccount.GET(BankAccountLedgerEntry."Bank Account No.");
+
+      TempErrorMessage.LogIfEmpty(BankAccount,BankAccount.FIELDNO("Bank Account No."),TempErrorMessage."Message Type"::Error);
+      TempErrorMessage.LogIfEmpty(BankAccount,BankAccount.FIELDNO("Bank Code"),TempErrorMessage."Message Type"::Error);
+      TempErrorMessage.LogIfEmpty(BankAccount,BankAccount.FIELDNO(Name),TempErrorMessage."Message Type"::Error);
+
+      TempXMLBuffer.AddGroupElement('Transferencia');
+      TempXMLBuffer.AddAttribute('CtaOri',BankAccount."Bank Account No.");
+      TempXMLBuffer.AddAttribute('BancoOriNal',BankAccount."Bank Code");
+      TempXMLBuffer.AddAttribute('BancoOriExt',BankAccount.Name);
+      TempXMLBuffer.AddAttribute('CtaDest',CtaDest);
+      TempXMLBuffer.AddAttribute('BancoDestNal',BancoDestNal);
+      TempXMLBuffer.AddAttribute('BancoDestExt',BancoDestExt);
+      TempXMLBuffer.AddAttribute('Fecha',FORMAT(BankAccountLedgerEntry."Posting Date",0,9));
+      TempXMLBuffer.AddAttribute('Benef',Benef);
+      TempXMLBuffer.AddAttribute('RFC',RFC);
+      TempXMLBuffer.AddAttribute('Monto',FormatDecimal(BankAccountLedgerEntry."Credit Amount"));
+
+      IF BankAccountLedgerEntry."Currency Code" <> '' THEN BEGIN
+        ExchangeRate :=
+          CurrencyExchangeRate.ExchangeRate(BankAccountLedgerEntry."Posting Date",BankAccountLedgerEntry."Currency Code");
+        TempXMLBuffer.AddAttribute('Moneda',BankAccountLedgerEntry."Currency Code");
+        TempXMLBuffer.AddAttribute('TipCamb',FormatDecimal(1 / ExchangeRate));
+      END;
+      TempXMLBuffer.GetParent;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CreateOtrMetodoPagoNode@1020021(VAR TempXMLBuffer@1020002 : Record 1235;LedgerEntryTableNo@1020012 : Integer;TransactionNo@1020001 : Integer);
+    VAR
+      PaymentMethod@1020008 : Record 289;
+      PaymentMethodFieldRef@1020013 : FieldRef;
+      LedgerEntryRecordRef@1020014 : RecordRef;
+      TransactionNoFieldRef@1020024 : FieldRef;
+      AmountFieldRef@1020023 : FieldRef;
+      CountryRegion@1020022 : Code[10];
+      RFCNo@1020020 : Code[13];
+      CurrencyCode@1020019 : Code[10];
+      VATRegistrationNo@1020018 : Text[20];
+      Amount@1020003 : Decimal;
+      AdjustedCurrencyFactor@1020017 : Decimal;
+      Name@1020016 : Text;
+      PostingDate@1020015 : Date;
+    BEGIN
+      LedgerEntryRecordRef.OPEN(LedgerEntryTableNo);
+      TransactionNoFieldRef := LedgerEntryRecordRef.FIELD(53);
+      TransactionNoFieldRef.SETRANGE(TransactionNo);
+      PaymentMethodFieldRef := LedgerEntryRecordRef.FIELD(172);
+      PaymentMethodFieldRef.SETFILTER('<> %1','');
+      IF LedgerEntryRecordRef.FINDSET THEN
+        REPEAT
+          PaymentMethod.GET(PaymentMethodFieldRef.VALUE);
+
+          TempErrorMessage.LogIfEmpty(
+            PaymentMethod,PaymentMethod.FIELDNO("SAT Payment Method Code"),TempErrorMessage."Message Type"::Error);
+
+          FindCustVendDetails(LedgerEntryRecordRef,CountryRegion,RFCNo,VATRegistrationNo,Name);
+          AmountFieldRef := LedgerEntryRecordRef.FIELD(13);
+          AmountFieldRef.CALCFIELD;
+          Amount := AmountFieldRef.VALUE;
+          CurrencyCode := LedgerEntryRecordRef.FIELD(11).VALUE;
+          AdjustedCurrencyFactor := LedgerEntryRecordRef.FIELD(73).VALUE;
+          PostingDate := LedgerEntryRecordRef.FIELD(4).VALUE;
+
+          TempXMLBuffer.AddGroupElement('OtrMetodoPago');
+          TempXMLBuffer.AddAttribute('MetPagoPol',PaymentMethod."SAT Payment Method Code");
+          TempXMLBuffer.AddAttribute('Fecha',FORMAT(PostingDate,0,9));
+          TempXMLBuffer.AddAttribute('Benef',Name);
+          TempXMLBuffer.AddAttribute('RFC',RFCNo);
+
+          TempXMLBuffer.AddAttribute('Monto',FormatDecimal(ABS(Amount)));
+          IF CurrencyCode <> '' THEN BEGIN
+            TempXMLBuffer.AddAttribute('Moneda',CurrencyCode);
+            TempXMLBuffer.AddAttribute('TipCamb',FormatDecimal(1 / AdjustedCurrencyFactor));
+          END;
+          TempXMLBuffer.GetParent;
+        UNTIL LedgerEntryRecordRef.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE FindUUIDCFDI@1020014(CustVendLedgerEntry@1020000 : Variant) : Text;
+    VAR
+      SalesInvoiceHeader@1020008 : Record 112;
+      SalesCrMemoHeader@1020007 : Record 114;
+      ServiceInvoiceHeader@1020006 : Record 5992;
+      ServiceCrMemoHeader@1020005 : Record 5994;
+      PurchInvHeader@1020012 : Record 122;
+      PurchCrMemoHdr@1020013 : Record 124;
+      SourceCodeSetup@1020009 : Record 242;
+      RecordRef@1020001 : RecordRef;
+      DocumentType@1020003 : ' ,Payment,Invoice,Credit Memo,Finance Charge Memo,Reminder,Refund';
+      DocumentNo@1020010 : Code[20];
+      SourceCode@1020011 : Code[10];
+    BEGIN
+      SourceCodeSetup.GET;
+      RecordRef.GETTABLE(CustVendLedgerEntry);
+      DocumentType := RecordRef.FIELD(5).VALUE;
+      DocumentNo := RecordRef.FIELD(6).VALUE;
+      SourceCode := RecordRef.FIELD(28).VALUE;
+      CASE SourceCode OF
+        SourceCodeSetup.Sales:
+          CASE DocumentType OF
+            DocumentType::Invoice:
+              IF SalesInvoiceHeader.GET(DocumentNo) THEN
+                EXIT(SalesInvoiceHeader."Fiscal Invoice Number PAC");
+            DocumentType::"Credit Memo":
+              IF SalesCrMemoHeader.GET(DocumentNo) THEN
+                EXIT(SalesCrMemoHeader."Fiscal Invoice Number PAC");
+          END;
+        SourceCodeSetup."Service Management":
+          CASE DocumentType OF
+            DocumentType::Invoice:
+              IF ServiceInvoiceHeader.GET(DocumentNo) THEN
+                EXIT(ServiceInvoiceHeader."Fiscal Invoice Number PAC");
+            DocumentType::"Credit Memo":
+              IF ServiceCrMemoHeader.GET(DocumentNo) THEN
+                EXIT(ServiceCrMemoHeader."Fiscal Invoice Number PAC");
+          END;
+        SourceCodeSetup.Purchases:
+          CASE DocumentType OF
+            DocumentType::Invoice:
+              IF PurchInvHeader.GET(DocumentNo) THEN
+                EXIT(PurchInvHeader."Fiscal Invoice Number PAC");
+            DocumentType::"Credit Memo":
+              IF PurchCrMemoHdr.GET(DocumentNo) THEN
+                EXIT(PurchCrMemoHdr."Fiscal Invoice Number PAC");
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE FindCustVendDetails@1020040(LedgerEntryRecordRef@1020000 : RecordRef;VAR CountryRegion@1020004 : Code[10];VAR RFCNo@1020002 : Code[13];VAR VATRegistrationNo@1020001 : Text[20];VAR Name@1020007 : Text);
+    VAR
+      Customer@1020005 : Record 18;
+      Vendor@1020006 : Record 23;
+      CustVendNo@1020003 : Code[20];
+    BEGIN
+      CustVendNo := LedgerEntryRecordRef.FIELD(3).VALUE;
+      IF LedgerEntryRecordRef.NUMBER = DATABASE::"Cust. Ledger Entry" THEN BEGIN
+        Customer.GET(CustVendNo);
+
+        TempErrorMessage.LogIfEmpty(Customer,Customer.FIELDNO(Name),TempErrorMessage."Message Type"::Error);
+        TempErrorMessage.LogIfEmpty(Customer,Customer.FIELDNO("VAT Registration No."),TempErrorMessage."Message Type"::Error);
+        TempErrorMessage.LogIfEmpty(Customer,Customer.FIELDNO("RFC No."),TempErrorMessage."Message Type"::Error);
+
+        CountryRegion := Customer."Country/Region Code";
+        RFCNo := Customer."RFC No.";
+        VATRegistrationNo := Customer."VAT Registration No.";
+        Name := Customer.Name;
+      END ELSE BEGIN
+        Vendor.GET(CustVendNo);
+
+        TempErrorMessage.LogIfEmpty(Vendor,Vendor.FIELDNO(Name),TempErrorMessage."Message Type"::Error);
+        TempErrorMessage.LogIfEmpty(Vendor,Vendor.FIELDNO("VAT Registration No."),TempErrorMessage."Message Type"::Error);
+        TempErrorMessage.LogIfEmpty(Vendor,Vendor.FIELDNO("RFC No."),TempErrorMessage."Message Type"::Error);
+
+        CountryRegion := Vendor."Country/Region Code";
+        RFCNo := Vendor."RFC No.";
+        VATRegistrationNo := Vendor."VAT Registration No.";
+        Name := Vendor.Name;
+      END;
+    END;
+
+    LOCAL PROCEDURE SaveXMLToClient@1020016(VAR TempXMLBuffer@1020001 : TEMPORARY Record 1235;Year@1020002 : Integer;Month@1020003 : Integer;Type@1020004 : Text) : Boolean;
+    VAR
+      CompanyInformation@1020006 : Record 79;
+      FileManagement@1020007 : Codeunit 419;
+      TempXMLFilePath@1020000 : Text;
+      ClientFileName@1020005 : Text;
+      ZipFilePath@1020008 : Text;
+    BEGIN
+      IF TestFileName <> '' THEN
+        TempXMLBuffer.Save(TestFileName)
+      ELSE BEGIN
+        CompanyInformation.GET;
+        ClientFileName := CompanyInformation."RFC No." + FORMAT(Year) +
+          FORMAT(Month,2,'<Integer,2><Filler Character,0>') + Type;
+        TempXMLFilePath := FileManagement.ServerTempFileName('xml');
+        TempXMLBuffer.Save(TempXMLFilePath);
+        ZipFilePath := FileManagement.CreateZipArchiveObject;
+        FileManagement.AddFileToZipArchive(TempXMLFilePath,ClientFileName + '.xml');
+        FileManagement.CloseZipArchive;
+        EXIT(
+          FileManagement.DownloadHandler(
+            ZipFilePath,'','',FileManagement.GetToFilterText('',TempXMLFilePath),ClientFileName + '.zip'));
+      END;
+    END;
+
+    LOCAL PROCEDURE FormatDecimal@1020017(Amount@1020000 : Decimal) : Text;
+    BEGIN
+      EXIT(FORMAT(Amount,0,'<Precision,2:2><Standard Format,9>'));
+    END;
+
+    [External]
+    PROCEDURE InitializeRequest@1020019(FileName@1020000 : Text);
+    BEGIN
+      TestFileName := FileName;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,1743 @@
+OBJECT Page 256 Payment Journal
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:10:11 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Payment Journals;
+    ApplicationArea=#Basic,#Suite;
+    SaveValues=Yes;
+    SourceTable=Table81;
+    DataCaptionExpr=DataCaption;
+    DelayedInsert=Yes;
+    PageType=Worksheet;
+    UsageCategory=Tasks;
+    AutoSplitKey=Yes;
+    PromotedActionCategoriesML=ENU=New,Process,Report,Bank,Prepare,Approve,Page;
+    OnInit=VAR
+             PermissionManager@1020000 : Codeunit 9002;
+           BEGIN
+             TotalBalanceVisible := TRUE;
+             BalanceVisible := TRUE;
+             AmountVisible := TRUE;
+           END;
+
+    OnOpenPage=VAR
+                 ServerConfigSettingHandler@1001 : Codeunit 6723;
+                 PermissionManager@1002 : Codeunit 9002;
+                 JnlSelected@1000 : Boolean;
+               BEGIN
+                 IsSaasExcelAddinEnabled := ServerConfigSettingHandler.GetIsSaasExcelAddinEnabled;
+                 IsSaaS := PermissionManager.SoftwareAsAService;
+                 IF CURRENTCLIENTTYPE = CLIENTTYPE::ODataV4 THEN
+                   EXIT;
+
+                 BalAccName := '';
+
+                 SetConrolVisibility;
+                 IF IsOpenedFromBatch THEN BEGIN
+                   CurrentJnlBatchName := "Journal Batch Name";
+                   GenJnlManagement.OpenJnl(CurrentJnlBatchName,Rec);
+                   SetControlAppearanceFromBatch;
+                   EXIT;
+                 END;
+                 GenJnlManagement.TemplateSelection(PAGE::"Payment Journal",4,FALSE,Rec,JnlSelected);
+                 IF NOT JnlSelected THEN
+                   ERROR('');
+                 GenJnlManagement.OpenJnl(CurrentJnlBatchName,Rec);
+                 SetControlAppearanceFromBatch;
+                 VoidWarningDisplayed := FALSE;
+               END;
+
+    OnAfterGetRecord=BEGIN
+                       StyleTxt := GetOverdueDateInteractions(OverdueWarningText);
+                       ShowShortcutDimCode(ShortcutDimCode);
+                       HasPmtFileErr := HasPaymentFileErrors;
+                       RecipientBankAccountMandatory := IsAllowPaymentExport AND
+                         (("Bal. Account Type" = "Bal. Account Type"::Vendor) OR ("Bal. Account Type" = "Bal. Account Type"::Customer));
+                       SetAMCAppearance;
+                     END;
+
+    OnNewRecord=BEGIN
+                  HasPmtFileErr := FALSE;
+                  UpdateBalance;
+                  EnableApplyEntriesAction;
+                  SetUpNewLine(xRec,Balance,BelowxRec);
+                  CLEAR(ShortcutDimCode);
+                  IF NOT VoidWarningDisplayed THEN BEGIN
+                    GenJnlTemplate.GET("Journal Template Name");
+                    IF NOT GenJnlTemplate."Force Doc. Balance" THEN
+                      MESSAGE(CheckCannotVoidMsg);
+                    VoidWarningDisplayed := TRUE;
+                  END;
+                  SetAMCAppearance;
+                END;
+
+    OnModifyRecord=BEGIN
+                     CheckForPmtJnlErrors;
+                   END;
+
+    OnAfterGetCurrRecord=VAR
+                           GenJournalBatch@1000 : Record 232;
+                           WorkflowEventHandling@1001 : Codeunit 1520;
+                           WorkflowManagement@1002 : Codeunit 1501;
+                         BEGIN
+                           StyleTxt := GetOverdueDateInteractions(OverdueWarningText);
+                           GenJnlManagement.GetAccounts(Rec,AccName,BalAccName);
+                           UpdateBalance;
+                           EnableApplyEntriesAction;
+                           SetControlAppearance;
+                           CurrPage.IncomingDocAttachFactBox.PAGE.LoadDataFromRecord(Rec);
+
+                           IF GenJournalBatch.GET("Journal Template Name","Journal Batch Name") THEN BEGIN
+                             ShowWorkflowStatusOnBatch := CurrPage.WorkflowStatusBatch.PAGE.SetFilterOnWorkflowRecord(GenJournalBatch.RECORDID);
+                             IsAllowPaymentExport := GenJournalBatch."Allow Payment Export";
+                           END;
+                           ShowWorkflowStatusOnLine := CurrPage.WorkflowStatusLine.PAGE.SetFilterOnWorkflowRecord(RECORDID);
+
+                           EventFilter := WorkflowEventHandling.RunWorkflowOnSendGeneralJournalLineForApprovalCode;
+                           EnabledApprovalWorkflowsExist := WorkflowManagement.EnabledWorkflowExist(DATABASE::"Gen. Journal Line",EventFilter);
+                         END;
+
+    ActionList=ACTIONS
+    {
+      { 1900000003;0 ;ActionContainer;
+                      ActionContainerType=RelatedInformation }
+      { 57      ;1   ;ActionGroup;
+                      CaptionML=ENU=&Line;
+                      Image=Line }
+      { 58      ;2   ;Action    ;
+                      AccessByPermission=TableData 348=R;
+                      ShortCutKey=Shift+Ctrl+D;
+                      CaptionML=ENU=Dimensions;
+                      ToolTipML=ENU=View or edit dimensions, such as area, project, or department, that you can assign to sales and purchase documents to distribute costs and analyze transaction history.;
+                      ApplicationArea=#Dimensions;
+                      Promoted=Yes;
+                      Image=Dimensions;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 ShowDimensions;
+                                 CurrPage.SAVERECORD;
+                               END;
+                                }
+      { 92      ;2   ;Action    ;
+                      Name=IncomingDoc;
+                      AccessByPermission=TableData 130=R;
+                      CaptionML=ENU=Incoming Document;
+                      ToolTipML=ENU=View or create an incoming document record that is linked to the entry or document.;
+                      ApplicationArea=#Basic,#Suite;
+                      Promoted=Yes;
+                      Image=Document;
+                      PromotedCategory=Process;
+                      Scope=Repeater;
+                      OnAction=VAR
+                                 IncomingDocument@1000 : Record 130;
+                               BEGIN
+                                 VALIDATE("Incoming Document Entry No.",IncomingDocument.SelectIncomingDocument("Incoming Document Entry No.",RECORDID));
+                               END;
+                                }
+      { 37      ;1   ;ActionGroup;
+                      CaptionML=ENU=A&ccount;
+                      Image=ChartOfAccounts }
+      { 38      ;2   ;Action    ;
+                      ShortCutKey=Shift+F7;
+                      CaptionML=ENU=Card;
+                      ToolTipML=ENU=View or change detailed information about the record on the document or journal line.;
+                      ApplicationArea=#Basic,#Suite;
+                      RunObject=Codeunit 15;
+                      Image=EditLines }
+      { 39      ;2   ;Action    ;
+                      ShortCutKey=Ctrl+F7;
+                      CaptionML=ENU=Ledger E&ntries;
+                      ToolTipML=ENU=View the history of transactions that have been posted for the selected record.;
+                      ApplicationArea=#Basic,#Suite;
+                      RunObject=Codeunit 14;
+                      Promoted=No;
+                      Image=GLRegisters;
+                      PromotedCategory=Process }
+      { 41      ;1   ;ActionGroup;
+                      CaptionML=ENU=&Payments;
+                      Image=Payment }
+      { 42      ;2   ;Action    ;
+                      Name=SuggestVendorPayments;
+                      Ellipsis=Yes;
+                      CaptionML=ENU=Suggest Vendor Payments;
+                      ToolTipML=ENU=Create payment suggestions as lines in the payment journal.;
+                      ApplicationArea=#Basic,#Suite;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=SuggestVendorPayments;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 SuggestVendorPayments@1001 : Report 393;
+                               BEGIN
+                                 CLEAR(SuggestVendorPayments);
+                                 SuggestVendorPayments.SetGenJnlLine(Rec);
+                                 SuggestVendorPayments.RUNMODAL;
+                               END;
+                                }
+      { 112     ;2   ;Action    ;
+                      Name=SuggestEmployeePayments;
+                      Ellipsis=Yes;
+                      CaptionML=ENU=Suggest Employee Payments;
+                      ToolTipML=ENU=Create payment suggestions as lines in the payment journal.;
+                      ApplicationArea=#BasicHR;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=SuggestVendorPayments;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 SuggestEmployeePayments@1001 : Report 394;
+                               BEGIN
+                                 CLEAR(SuggestEmployeePayments);
+                                 SuggestEmployeePayments.SetGenJnlLine(Rec);
+                                 SuggestEmployeePayments.RUNMODAL;
+                               END;
+                                }
+      { 63      ;2   ;Action    ;
+                      Name=PreviewCheck;
+                      CaptionML=ENU=P&review Check;
+                      ToolTipML=ENU=Preview the check before printing it.;
+                      ApplicationArea=#Basic,#Suite;
+                      RunObject=Page 404;
+                      RunPageLink=Journal Template Name=FIELD(Journal Template Name),
+                                  Journal Batch Name=FIELD(Journal Batch Name),
+                                  Line No.=FIELD(Line No.);
+                      Image=ViewCheck }
+      { 64      ;2   ;Action    ;
+                      Name=PrintCheck;
+                      AccessByPermission=TableData 272=R;
+                      Ellipsis=Yes;
+                      CaptionML=ENU=Print Check;
+                      ToolTipML=ENU=Prepare to print the check.;
+                      ApplicationArea=#Basic,#Suite;
+                      Promoted=Yes;
+                      Image=PrintCheck;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 GenJnlLine.RESET;
+                                 GenJnlLine.COPY(Rec);
+                                 GenJnlLine.SETRANGE("Journal Template Name","Journal Template Name");
+                                 GenJnlLine.SETRANGE("Journal Batch Name","Journal Batch Name");
+                                 DocPrint.PrintCheck(GenJnlLine);
+                                 CODEUNIT.RUN(CODEUNIT::"Adjust Gen. Journal Balance",Rec);
+                               END;
+                                }
+      { 106     ;2   ;ActionGroup;
+                      CaptionML=ENU=Electronic Payments;
+                      Image=ElectronicPayment }
+      { 15      ;3   ;Action    ;
+                      Name=ExportPaymentsToFile;
+                      Ellipsis=Yes;
+                      CaptionML=ENU=E&xport;
+                      ToolTipML=ENU=Export a file with the payment information on the journal lines.;
+                      ApplicationArea=#Basic,#Suite;
+                      Promoted=Yes;
+                      Image=ExportFile;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 BankExportImportSetup@1020007 : Record 1200;
+                                 BankAccount@1020000 : Record 270;
+                                 CompanyInformation@1020003 : Record 79;
+                                 GenJournalBatch@1020004 : Record 232;
+                                 BulkVendorRemitReporting@1020002 : Codeunit 10250;
+                                 PaymentExportGenJnlCheck@1020006 : Codeunit 1211;
+                                 GenJnlLineRecordRef@1020001 : RecordRef;
+                                 Window@1002 : Dialog;
+                                 ExportNewLines@1020005 : Boolean;
+                               BEGIN
+                                 CheckIfPrivacyBlocked;
+
+                                 Window.OPEN(GeneratingPaymentsMsg);
+                                 GenJournalBatch.GET("Journal Template Name",CurrentJnlBatchName);
+                                 BankAccount.GET(GenJournalBatch."Bal. Account No.");
+
+                                 IF (BankAccount."Export Format" = 0) OR (BankAccount."Export Format" = BankAccount."Export Format"::Other) THEN BEGIN
+                                   // Export Format is either empty or 'OTHER'
+                                   GenJnlLine.COPYFILTERS(Rec);
+                                   GenJnlLine.FINDFIRST;
+                                   GenJnlLine.ExportPaymentFile;
+                                 END ELSE BEGIN
+                                   CompanyInformation.GET;
+                                   CompanyInformation.TESTFIELD("Federal ID No.");
+                                   GenJnlLine.RESET;
+                                   GenJnlLine.COPY(Rec);
+                                   GenJnlLine.SETRANGE("Journal Template Name","Journal Template Name");
+                                   GenJnlLine.SETRANGE("Journal Batch Name","Journal Batch Name");
+
+                                   IF GenJnlLine.FINDFIRST THEN BEGIN
+                                     REPEAT
+                                       GenJnlLine.DeletePaymentFileErrors;
+                                       IF GenJnlLine."Currency Code" <> BankAccount."Currency Code" THEN
+                                         GenJnlLine.InsertPaymentFileError(NoExportDiffCurrencyErr);
+                                       IF ((GenJnlLine."Account Type" = GenJnlLine."Account Type"::"Bank Account") OR
+                                           (GenJnlLine."Bal. Account Type" = GenJnlLine."Bal. Account Type"::"Bank Account")) AND
+                                          ((GenJnlLine."Bank Payment Type" <> GenJnlLine."Bank Payment Type"::"Electronic Payment") AND
+                                           (GenJnlLine."Bank Payment Type" <> GenJnlLine."Bank Payment Type"::"Electronic Payment-IAT"))
+                                       THEN
+                                         GenJnlLine.InsertPaymentFileError(STRSUBSTNO(WrongBankPaymentTypeErr,FIELDCAPTION("Bank Payment Type"),
+                                             "Bank Payment Type"::"Electronic Payment","Bank Payment Type"::"Electronic Payment-IAT"));
+                                       IF NOT GenJournalBatch."Allow Payment Export" THEN
+                                         PaymentExportGenJnlCheck.AddBatchEmptyError(GenJnlLine,GenJournalBatch.FIELDCAPTION("Allow Payment Export"),'');
+                                       IF GenJnlLine.Amount < 0 THEN
+                                         GenJnlLine.InsertPaymentFileError(NoExportNegativeErr);
+                                       IF GenJnlLine."Recipient Bank Account" = '' THEN
+                                         GenJnlLine.InsertPaymentFileError(RecipientBankAccountEmptyErr)
+                                       ELSE
+                                         IF NOT UseForElecPaymentChecked(GenJnlLine) THEN
+                                           GenJnlLine.InsertPaymentFileError(UseForElecPaymentCheckedErr);
+                                     UNTIL GenJnlLine.NEXT = 0;
+                                   END;
+
+                                   IF BankAccount."Last Remittance Advice No." = '' THEN
+                                     InsertPaymentFileError(LastRemittanceErr);
+
+                                   IF GenJnlLine.HasPaymentFileErrorsInBatch THEN BEGIN
+                                     COMMIT;
+                                     ERROR(HasErrorsErr);
+                                   END;
+
+                                   IF "Bank Payment Type" = "Bank Payment Type"::"Electronic Payment" THEN
+                                     BankExportImportSetup.GET(BankAccount."Payment Export Format")
+                                   ELSE
+                                     IF "Bank Payment Type" = "Bank Payment Type"::"Electronic Payment-IAT" THEN
+                                       BankExportImportSetup.GET(BankAccount."EFT Export Code");
+
+                                   IF GenJnlLine.FINDFIRST THEN BEGIN
+                                     REPEAT
+                                       ExportNewLines := BulkVendorRemitReporting.ProcessLine(GenJnlLine);
+                                     UNTIL (ExportNewLines = TRUE) OR (GenJnlLine.NEXT = 0);
+                                   END;
+
+                                   IF ExportNewLines THEN BEGIN
+                                     GenJnlLineRecordRef.GETTABLE(GenJnlLine);
+                                     GenJnlLineRecordRef.SETVIEW(GenJnlLine.GETVIEW);
+                                     BulkVendorRemitReporting.RunWithRecord(GenJnlLine)
+                                   END;
+                                 END;
+
+                                 Window.CLOSE;
+                               END;
+                                }
+      { 104     ;3   ;Action    ;
+                      Name=VoidPayments;
+                      Ellipsis=Yes;
+                      CaptionML=ENU=Void;
+                      ToolTipML=ENU=Void the exported electronic payment file.;
+                      ApplicationArea=#Basic,#Suite;
+                      Promoted=Yes;
+                      Image=VoidElectronicDocument;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 BankAccount@1020000 : Record 270;
+                               BEGIN
+                                 IF "Account Type" = "Account Type"::"Bank Account" THEN
+                                   BankAccount.GET("Account No.");
+                                 IF "Bal. Account Type" = "Bal. Account Type"::"Bank Account" THEN
+                                   BankAccount.GET("Bal. Account No.");
+                                 IF (BankAccount."Export Format" = 0) OR (BankAccount."Export Format" = BankAccount."Export Format"::Other) THEN BEGIN
+                                   GenJnlLine.COPYFILTERS(Rec);
+
+                                   IF NOT EntriesToVoid(GenJnlLine,TRUE) THEN
+                                     ERROR(NoEntriesToVoidErr);
+                                   IF GenJnlLine.FINDFIRST THEN
+                                     GenJnlLine.VoidPaymentFile;
+                                 END ELSE BEGIN
+                                   GenJnlLine.RESET;
+                                   GenJnlLine := Rec;
+                                   GenJnlLine.SETRANGE("Journal Template Name","Journal Template Name");
+                                   GenJnlLine.SETRANGE("Journal Batch Name","Journal Batch Name");
+
+                                   IF NOT EntriesToVoid(GenJnlLine,FALSE) THEN
+                                     ERROR(NoEntriesToVoidErr);
+                                   CLEAR(VoidTransmitElecPayments);
+                                   VoidTransmitElecPayments.SetUsageType(1);   // Void
+                                   VoidTransmitElecPayments.SETTABLEVIEW(GenJnlLine);
+                                   IF "Account Type" = "Account Type"::"Bank Account" THEN
+                                     VoidTransmitElecPayments.SetBankAccountNo("Account No.")
+                                   ELSE
+                                     IF "Bal. Account Type" = "Bal. Account Type"::"Bank Account" THEN
+                                       VoidTransmitElecPayments.SetBankAccountNo("Bal. Account No.");
+                                   VoidTransmitElecPayments.RUNMODAL;
+                                 END;
+                               END;
+                                }
+      { 107     ;3   ;Action    ;
+                      Name=TransmitPayments;
+                      Ellipsis=Yes;
+                      CaptionML=ENU=Transmit;
+                      ToolTipML=ENU=Transmit the exported electronic payment file to the bank.;
+                      ApplicationArea=#Basic,#Suite;
+                      Promoted=Yes;
+                      Enabled=AMCFormat;
+                      Image=TransmitElectronicDoc;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 BankAccount@1020000 : Record 270;
+                               BEGIN
+                                 IF "Account Type" = "Account Type"::"Bank Account" THEN
+                                   BankAccount.GET("Account No.");
+                                 IF "Bal. Account Type" = "Bal. Account Type"::"Bank Account" THEN
+                                   BankAccount.GET("Bal. Account No.");
+                                 IF (BankAccount."Export Format" = 0) OR (BankAccount."Export Format" = BankAccount."Export Format"::Other) THEN BEGIN
+                                   GenJnlLine.COPYFILTERS(Rec);
+                                   IF GenJnlLine.FINDFIRST THEN
+                                     GenJnlLine.TransmitPaymentFile;
+                                 END;
+                               END;
+                                }
+      { 65      ;2   ;Action    ;
+                      CaptionML=ENU=Void Check;
+                      ToolTipML=ENU=Void the check if, for example, the check is not cashed by the bank.;
+                      ApplicationArea=#Basic,#Suite;
+                      Promoted=Yes;
+                      Image=VoidCheck;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 TESTFIELD("Bank Payment Type","Bank Payment Type"::"Computer Check");
+                                 TESTFIELD("Check Printed",TRUE);
+                                 IF CONFIRM(Text000,FALSE,"Document No.") THEN
+                                   CheckManagement.VoidCheck(Rec);
+                               END;
+                                }
+      { 66      ;2   ;Action    ;
+                      CaptionML=ENU=Void &All Checks;
+                      ToolTipML=ENU=Void all checks if, for example, the checks are not cashed by the bank.;
+                      ApplicationArea=#Basic,#Suite;
+                      Image=VoidAllChecks;
+                      OnAction=BEGIN
+                                 IF CONFIRM(Text001,FALSE) THEN BEGIN
+                                   GenJnlLine.RESET;
+                                   GenJnlLine.COPY(Rec);
+                                   GenJnlLine.SETRANGE("Bank Payment Type","Bank Payment Type"::"Computer Check");
+                                   GenJnlLine.SETRANGE("Check Printed",TRUE);
+                                   IF GenJnlLine.FIND('-') THEN
+                                     REPEAT
+                                       GenJnlLine2 := GenJnlLine;
+                                       CheckManagement.VoidCheck(GenJnlLine2);
+                                     UNTIL GenJnlLine.NEXT = 0;
+                                 END;
+                               END;
+                                }
+      { 26      ;2   ;Action    ;
+                      Name=CreditTransferRegEntries;
+                      CaptionML=ENU=Credit Transfer Reg. Entries;
+                      ToolTipML=ENU=View or edit the credit transfer entries that are related to file export for credit transfers.;
+                      ApplicationArea=#Basic,#Suite;
+                      RunObject=Codeunit 16;
+                      Promoted=Yes;
+                      Enabled=AMCFormat;
+                      PromotedIsBig=Yes;
+                      Image=ExportReceipt;
+                      PromotedCategory=Category4 }
+      { 23      ;2   ;Action    ;
+                      Name=CreditTransferRegisters;
+                      CaptionML=ENU=Credit Transfer Registers;
+                      ToolTipML=ENU=View or edit the payment files that have been exported in connection with credit transfers.;
+                      ApplicationArea=#Basic,#Suite;
+                      RunObject=Page 1205;
+                      Promoted=Yes;
+                      Enabled=AMCFormat;
+                      PromotedIsBig=Yes;
+                      Image=ExportElectronicDocument;
+                      PromotedCategory=Category4 }
+      { 54      ;1   ;Action    ;
+                      Name=Approvals;
+                      AccessByPermission=TableData 454=R;
+                      CaptionML=ENU=Approvals;
+                      ToolTipML=ENU=View a list of the records that are waiting to be approved. For example, you can see who requested the record to be approved, when it was sent, and when it is due to be approved.;
+                      ApplicationArea=#Suite;
+                      Image=Approvals;
+                      OnAction=VAR
+                                 GenJournalLine@1001 : Record 81;
+                                 ApprovalsMgmt@1000 : Codeunit 1535;
+                               BEGIN
+                                 GetCurrentlySelectedLines(GenJournalLine);
+                                 ApprovalsMgmt.ShowJournalApprovalEntries(GenJournalLine);
+                               END;
+                                }
+      { 1900000004;0 ;ActionContainer;
+                      ActionContainerType=ActionItems }
+      { 40      ;1   ;ActionGroup;
+                      CaptionML=ENU=F&unctions;
+                      Image=Action }
+      { 19      ;2   ;Action    ;
+                      CaptionML=ENU=Renumber Document Numbers;
+                      ToolTipML=ENU=Resort the numbers in the Document No. column to avoid posting errors because the document numbers are not in sequence. Entry applications and line groupings are preserved.;
+                      ApplicationArea=#Basic,#Suite;
+                      Image=EditLines;
+                      OnAction=BEGIN
+                                 RenumberDocumentNo
+                               END;
+                                }
+      { 93      ;2   ;Action    ;
+                      Name=ApplyEntries;
+                      ShortCutKey=Shift+F11;
+                      Ellipsis=Yes;
+                      CaptionML=ENU=Apply Entries;
+                      ToolTipML=ENU=Apply the payment amount on a journal line to a sales or purchase document that was already posted for a customer or vendor. This updates the amount on the posted document, and the document can either be partially paid, or closed as paid or refunded.;
+                      ApplicationArea=#Basic,#Suite;
+                      RunObject=Codeunit 225;
+                      Promoted=Yes;
+                      Enabled=ApplyEntriesActionEnabled;
+                      Image=ApplyEntries;
+                      PromotedCategory=Process }
+      { 68      ;2   ;Action    ;
+                      Name=CalculatePostingDate;
+                      CaptionML=ENU=Calculate Posting Date;
+                      ToolTipML=ENU=Calculate the date that will appear as the posting date on the journal lines.;
+                      ApplicationArea=#Basic,#Suite;
+                      Promoted=Yes;
+                      Image=CalcWorkCenterCalendar;
+                      PromotedCategory=Category5;
+                      OnAction=BEGIN
+                                 CalculatePostingDate;
+                               END;
+                                }
+      { 94      ;2   ;Action    ;
+                      CaptionML=ENU=Insert Conv. $ Rndg. Lines;
+                      ToolTipML=ENU=Insert a rounding correction line in the journal. This rounding correction line will balance in $ when amounts in the foreign currency also balance. You can then post the journal.;
+                      ApplicationArea=#Basic,#Suite;
+                      RunObject=Codeunit 407;
+                      Image=InsertCurrency }
+      { 34      ;2   ;Action    ;
+                      Name=PositivePayExport;
+                      CaptionML=ENU=Positive Pay Export;
+                      ToolTipML=ENU=Export a Positive Pay file that contains vendor information, check number, and payment amount, which you send to the bank to make sure that your bank only clears validated checks and amounts when you process payments.;
+                      ApplicationArea=#Basic,#Suite;
+                      Visible=FALSE;
+                      Image=Export;
+                      OnAction=VAR
+                                 GenJnlBatch@1000 : Record 232;
+                                 BankAcc@1001 : Record 270;
+                               BEGIN
+                                 GenJnlBatch.GET("Journal Template Name",CurrentJnlBatchName);
+                                 IF GenJnlBatch."Bal. Account Type" = GenJnlBatch."Bal. Account Type"::"Bank Account" THEN BEGIN
+                                   BankAcc."No." := GenJnlBatch."Bal. Account No.";
+                                   PAGE.RUN(PAGE::"Positive Pay Export",BankAcc);
+                                 END;
+                               END;
+                                }
+      { 1020001 ;2   ;Action    ;
+                      Name=GenerateEFT;
+                      CaptionML=ENU=Generate EFT File;
+                      ToolTipML=ENU=Generate a file based on the exported payment journal lines. A window showing the file content opens from where you complete the electronic funds transfer.;
+                      ApplicationArea=#Basic,#Suite;
+                      Enabled=NOT (AMCFormat = TRUE);
+                      Image=ExportFile;
+                      OnAction=VAR
+                                 GenJournalBatch@1020000 : Record 232;
+                                 GenerateEFTFiles@1020001 : Page 10810;
+                               BEGIN
+                                 GenJournalBatch.GET("Journal Template Name",CurrentJnlBatchName);
+                                 GenerateEFTFiles.SetBalanceAccount(GenJournalBatch."Bal. Account No.");
+                                 GenerateEFTFiles.RUN;
+                               END;
+                                }
+      { 43      ;1   ;ActionGroup;
+                      CaptionML=ENU=P&osting;
+                      Image=Post }
+      { 48      ;2   ;Action    ;
+                      ShortCutKey=Ctrl+F11;
+                      CaptionML=ENU=Reconcile;
+                      ToolTipML=ENU=View the balances on bank accounts that are marked for reconciliation, usually liquid accounts.;
+                      ApplicationArea=#Basic,#Suite;
+                      Promoted=Yes;
+                      Image=Reconcile;
+                      PromotedCategory=Category4;
+                      OnAction=BEGIN
+                                 GLReconcile.SetGenJnlLine(Rec);
+                                 GLReconcile.RUN;
+                               END;
+                                }
+      { 78      ;2   ;Action    ;
+                      Name=PreCheck;
+                      CaptionML=ENU=Vendor Pre-Payment Journal;
+                      ToolTipML=ENU=View journal line entries, payment discounts, discount tolerance amounts, payment tolerance, and any errors associated with the entries. You can use the results of the report to review payment journal lines and to review the results of posting before you actually post.;
+                      ApplicationArea=#Basic,#Suite;
+                      Image=PreviewChecks;
+                      OnAction=VAR
+                                 GenJournalBatch@1000 : Record 232;
+                               BEGIN
+                                 GenJournalBatch.INIT;
+                                 GenJournalBatch.SETRANGE("Journal Template Name","Journal Template Name");
+                                 GenJournalBatch.SETRANGE(Name,"Journal Batch Name");
+                                 REPORT.RUN(REPORT::"Vendor Pre-Payment Journal",TRUE,FALSE,GenJournalBatch);
+                               END;
+                                }
+      { 45      ;2   ;Action    ;
+                      Ellipsis=Yes;
+                      CaptionML=ENU=Test Report;
+                      ToolTipML=ENU=View a test report so that you can find and correct any errors before you perform the actual posting of the journal or document.;
+                      ApplicationArea=#Basic,#Suite;
+                      Image=TestReport;
+                      OnAction=BEGIN
+                                 ReportPrint.PrintGenJnlLine(Rec);
+                               END;
+                                }
+      { 46      ;2   ;Action    ;
+                      Name=Post;
+                      ShortCutKey=F9;
+                      CaptionML=ENU=P&ost;
+                      ToolTipML=ENU=Finalize the document or journal by posting the amounts and quantities to the related accounts in your company books.;
+                      ApplicationArea=#Basic,#Suite;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=PostOrder;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 CODEUNIT.RUN(CODEUNIT::"Gen. Jnl.-Post",Rec);
+                                 CurrentJnlBatchName := GETRANGEMAX("Journal Batch Name");
+                                 CurrPage.UPDATE(FALSE);
+                               END;
+                                }
+      { 32      ;2   ;Action    ;
+                      Name=Preview;
+                      CaptionML=ENU=Preview Posting;
+                      ToolTipML=ENU=Review the different types of entries that will be created when you post the document or journal.;
+                      ApplicationArea=#Basic,#Suite;
+                      Image=ViewPostedOrder;
+                      OnAction=VAR
+                                 GenJnlPost@1001 : Codeunit 231;
+                               BEGIN
+                                 GenJnlPost.Preview(Rec);
+                               END;
+                                }
+      { 47      ;2   ;Action    ;
+                      ShortCutKey=Shift+F9;
+                      CaptionML=ENU=Post and &Print;
+                      ToolTipML=ENU=Finalize and prepare to print the document or journal. The values and quantities are posted to the related accounts. A report request window where you can specify what to include on the print-out.;
+                      ApplicationArea=#Basic,#Suite;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=PostPrint;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 CODEUNIT.RUN(CODEUNIT::"Gen. Jnl.-Post+Print",Rec);
+                                 CurrentJnlBatchName := GETRANGEMAX("Journal Batch Name");
+                                 CurrPage.UPDATE(FALSE);
+                               END;
+                                }
+      { 36      ;1   ;ActionGroup;
+                      CaptionML=ENU=Request Approval }
+      { 86      ;2   ;ActionGroup;
+                      Name=SendApprovalRequest;
+                      CaptionML=ENU=Send Approval Request;
+                      Image=SendApprovalRequest }
+      { 76      ;3   ;Action    ;
+                      Name=SendApprovalRequestJournalBatch;
+                      CaptionML=ENU=Journal Batch;
+                      ToolTipML=ENU=Send all journal lines for approval, also those that you may not see because of filters.;
+                      ApplicationArea=#Basic,#Suite;
+                      Enabled=NOT OpenApprovalEntriesOnBatchOrAnyJnlLineExist AND CanRequestFlowApprovalForBatchAndAllLines;
+                      Image=SendApprovalRequest;
+                      OnAction=VAR
+                                 ApprovalsMgmt@1000 : Codeunit 1535;
+                               BEGIN
+                                 ApprovalsMgmt.TrySendJournalBatchApprovalRequest(Rec);
+                                 SetControlAppearanceFromBatch;
+                                 SetControlAppearance;
+                               END;
+                                }
+      { 74      ;3   ;Action    ;
+                      Name=SendApprovalRequestJournalLine;
+                      CaptionML=ENU=Selected Journal Lines;
+                      ToolTipML=ENU=Send selected journal lines for approval.;
+                      ApplicationArea=#Basic,#Suite;
+                      Enabled=NOT OpenApprovalEntriesOnBatchOrCurrJnlLineExist AND CanRequestFlowApprovalForBatchAndCurrentLine;
+                      Image=SendApprovalRequest;
+                      OnAction=VAR
+                                 GenJournalLine@1001 : Record 81;
+                                 ApprovalsMgmt@1000 : Codeunit 1535;
+                               BEGIN
+                                 GetCurrentlySelectedLines(GenJournalLine);
+                                 ApprovalsMgmt.TrySendJournalLineApprovalRequests(GenJournalLine);
+                               END;
+                                }
+      { 52      ;2   ;ActionGroup;
+                      Name=CancelApprovalRequest;
+                      CaptionML=ENU=Cancel Approval Request;
+                      Image=Cancel }
+      { 50      ;3   ;Action    ;
+                      Name=CancelApprovalRequestJournalBatch;
+                      CaptionML=ENU=Journal Batch;
+                      ToolTipML=ENU=Cancel sending all journal lines for approval, also those that you may not see because of filters.;
+                      ApplicationArea=#Basic,#Suite;
+                      Enabled=CanCancelApprovalForJnlBatch OR CanCancelFlowApprovalForBatch;
+                      Image=CancelApprovalRequest;
+                      OnAction=VAR
+                                 ApprovalsMgmt@1000 : Codeunit 1535;
+                               BEGIN
+                                 ApprovalsMgmt.TryCancelJournalBatchApprovalRequest(Rec);
+                                 SetControlAppearanceFromBatch;
+                                 SetControlAppearance;
+                               END;
+                                }
+      { 96      ;3   ;Action    ;
+                      Name=CancelApprovalRequestJournalLine;
+                      CaptionML=ENU=Selected Journal Lines;
+                      ToolTipML=ENU=Cancel sending selected journal lines for approval.;
+                      ApplicationArea=#Basic,#Suite;
+                      Enabled=CanCancelApprovalForJnlLine OR CanCancelFlowApprovalForLine;
+                      Image=CancelApprovalRequest;
+                      OnAction=VAR
+                                 GenJournalLine@1001 : Record 81;
+                                 ApprovalsMgmt@1000 : Codeunit 1535;
+                               BEGIN
+                                 GetCurrentlySelectedLines(GenJournalLine);
+                                 ApprovalsMgmt.TryCancelJournalLineApprovalRequests(GenJournalLine);
+                               END;
+                                }
+      { 114     ;2   ;Action    ;
+                      Name=CreateFlow;
+                      CaptionML=ENU=Create a Flow;
+                      ToolTipML=ENU=Create a new Flow from a list of relevant Flow templates.;
+                      ApplicationArea=#Basic,#Suite;
+                      Visible=IsSaaS;
+                      Image=Flow;
+                      OnAction=VAR
+                                 FlowServiceManagement@1000 : Codeunit 6400;
+                                 FlowTemplateSelector@1001 : Page 6400;
+                               BEGIN
+                                 // Opens page 6400 where the user can use filtered templates to create new flows.
+                                 FlowTemplateSelector.SetSearchText(FlowServiceManagement.GetJournalTemplateFilter);
+                                 FlowTemplateSelector.RUN;
+                               END;
+                                }
+      { 116     ;2   ;Action    ;
+                      Name=SeeFlows;
+                      CaptionML=ENU=See my Flows;
+                      ToolTipML=ENU=View and configure Flows that you created.;
+                      ApplicationArea=#Basic,#Suite;
+                      RunObject=Page 6401;
+                      Image=Flow }
+      { 98      ;1   ;ActionGroup;
+                      CaptionML=ENU=Workflow }
+      { 90      ;2   ;Action    ;
+                      Name=CreateApprovalWorkflow;
+                      CaptionML=ENU=Create Approval Workflow;
+                      ToolTipML=ENU=Set up an approval workflow for payment journal lines, by going through a few pages that will guide you.;
+                      ApplicationArea=#Suite;
+                      Enabled=NOT EnabledApprovalWorkflowsExist;
+                      Image=CreateWorkflow;
+                      OnAction=VAR
+                                 TempApprovalWorkflowWizard@1001 : TEMPORARY Record 1804;
+                               BEGIN
+                                 TempApprovalWorkflowWizard."Journal Batch Name" := "Journal Batch Name";
+                                 TempApprovalWorkflowWizard."Journal Template Name" := "Journal Template Name";
+                                 TempApprovalWorkflowWizard."For All Batches" := FALSE;
+                                 TempApprovalWorkflowWizard.INSERT;
+
+                                 PAGE.RUNMODAL(PAGE::"Pmt. App. Workflow Setup Wzrd.",TempApprovalWorkflowWizard);
+                               END;
+                                }
+      { 102     ;2   ;Action    ;
+                      Name=ManageApprovalWorkflows;
+                      CaptionML=ENU=Manage Approval Workflows;
+                      ToolTipML=ENU=View or edit existing approval workflows for payment journal lines.;
+                      ApplicationArea=#Suite;
+                      Enabled=EnabledApprovalWorkflowsExist;
+                      Image=WorkflowSetup;
+                      OnAction=VAR
+                                 WorkflowManagement@1000 : Codeunit 1501;
+                               BEGIN
+                                 WorkflowManagement.NavigateToWorkflows(DATABASE::"Gen. Journal Line",EventFilter);
+                               END;
+                                }
+      { 72      ;1   ;ActionGroup;
+                      CaptionML=ENU=Approval }
+      { 70      ;2   ;Action    ;
+                      Name=Approve;
+                      CaptionML=ENU=Approve;
+                      ToolTipML=ENU=Approve the requested changes.;
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      Visible=OpenApprovalEntriesExistForCurrUser;
+                      PromotedIsBig=Yes;
+                      Image=Approve;
+                      PromotedCategory=Category6;
+                      OnAction=VAR
+                                 ApprovalsMgmt@1000 : Codeunit 1535;
+                               BEGIN
+                                 ApprovalsMgmt.ApproveGenJournalLineRequest(Rec);
+                               END;
+                                }
+      { 62      ;2   ;Action    ;
+                      Name=Reject;
+                      CaptionML=ENU=Reject;
+                      ToolTipML=ENU=Reject the approval request.;
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      Visible=OpenApprovalEntriesExistForCurrUser;
+                      PromotedIsBig=Yes;
+                      Image=Reject;
+                      PromotedCategory=Category6;
+                      OnAction=VAR
+                                 ApprovalsMgmt@1000 : Codeunit 1535;
+                               BEGIN
+                                 ApprovalsMgmt.RejectGenJournalLineRequest(Rec);
+                               END;
+                                }
+      { 60      ;2   ;Action    ;
+                      Name=Delegate;
+                      CaptionML=ENU=Delegate;
+                      ToolTipML=ENU=Delegate the approval to a substitute approver.;
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      Visible=OpenApprovalEntriesExistForCurrUser;
+                      Image=Delegate;
+                      PromotedCategory=Category6;
+                      OnAction=VAR
+                                 ApprovalsMgmt@1000 : Codeunit 1535;
+                               BEGIN
+                                 ApprovalsMgmt.DelegateGenJournalLineRequest(Rec);
+                               END;
+                                }
+      { 56      ;2   ;Action    ;
+                      Name=Comment;
+                      CaptionML=ENU=Comments;
+                      ToolTipML=ENU=View or add comments for the record.;
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      Visible=OpenApprovalEntriesExistForCurrUser;
+                      Image=ViewComments;
+                      PromotedCategory=Category6;
+                      OnAction=VAR
+                                 GenJournalBatch@1001 : Record 232;
+                                 ApprovalsMgmt@1000 : Codeunit 1535;
+                               BEGIN
+                                 IF OpenApprovalEntriesOnJnlLineExist THEN
+                                   ApprovalsMgmt.GetApprovalComment(Rec)
+                                 ELSE
+                                   IF OpenApprovalEntriesOnJnlBatchExist THEN
+                                     IF GenJournalBatch.GET("Journal Template Name","Journal Batch Name") THEN
+                                       ApprovalsMgmt.GetApprovalComment(GenJournalBatch);
+                               END;
+                                }
+      { 109     ;1   ;ActionGroup;
+                      CaptionML=ENU=Page }
+      { 108     ;2   ;Action    ;
+                      Name=EditInExcel;
+                      CaptionML=ENU=Edit in Excel;
+                      ToolTipML=ENU=Send the data in the journal to an Excel file for analysis or editing.;
+                      ApplicationArea=#Basic,#Suite;
+                      Promoted=Yes;
+                      Visible=IsSaasExcelAddinEnabled;
+                      PromotedIsBig=Yes;
+                      Image=Excel;
+                      PromotedCategory=Category7;
+                      PromotedOnly=Yes;
+                      OnAction=VAR
+                                 ODataUtility@1000 : Codeunit 6710;
+                               BEGIN
+                                 ODataUtility.EditJournalWorksheetInExcel(CurrPage.CAPTION,CurrPage.OBJECTID(FALSE),"Journal Batch Name","Journal Template Name");
+                               END;
+                                }
+    }
+  }
+  CONTROLS
+  {
+    { 1900000001;0;Container;
+                ContainerType=ContentArea }
+
+    { 33  ;1   ;Field     ;
+                Lookup=Yes;
+                CaptionML=ENU=Batch Name;
+                ToolTipML=ENU=Specifies the name of the journal batch, a personalized journal layout, that the journal is based on.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=CurrentJnlBatchName;
+                OnValidate=BEGIN
+                             GenJnlManagement.CheckName(CurrentJnlBatchName,Rec);
+                             CurrentJnlBatchNameOnAfterVali;
+                           END;
+
+                OnLookup=BEGIN
+                           CurrPage.SAVERECORD;
+                           GenJnlManagement.LookupName(CurrentJnlBatchName,Rec);
+                           CurrPage.UPDATE(FALSE);
+                         END;
+                          }
+
+    { 1   ;1   ;Group     ;
+                GroupType=Repeater }
+
+    { 2   ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the posting date for the entry.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Posting Date";
+                Style=Attention;
+                StyleExpr=HasPmtFileErr }
+
+    { 35  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the date when the related document was created.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Document Date";
+                Style=Attention;
+                StyleExpr=HasPmtFileErr }
+
+    { 4   ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the type of document that the entry on the journal line is.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Document Type";
+                Style=Attention;
+                StyleExpr=HasPmtFileErr }
+
+    { 6   ;2   ;Field     ;
+                ToolTipML=ENU=Specifies a document number for the journal line.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Document No.";
+                Style=Attention;
+                StyleExpr=HasPmtFileErr }
+
+    { 9   ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the number of the incoming document that this general journal line is created for.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Incoming Document Entry No.";
+                Visible=FALSE;
+                OnAssistEdit=BEGIN
+                               IF "Incoming Document Entry No." > 0 THEN
+                                 HYPERLINK(GetIncomingDocumentURL);
+                             END;
+                              }
+
+    { 83  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies a document number that refers to the customer's or vendor's numbering system.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="External Document No." }
+
+    { 21  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the external document number that will be exported in the payment file.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Applies-to Ext. Doc. No.";
+                Visible=FALSE }
+
+    { 8   ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the type of account that the entry on the journal line will be posted to.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Account Type";
+                OnValidate=BEGIN
+                             GenJnlManagement.GetAccounts(Rec,AccName,BalAccName);
+                             EnableApplyEntriesAction;
+                           END;
+                            }
+
+    { 10  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the account number that the entry on the journal line will be posted to.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Account No.";
+                Style=Attention;
+                StyleExpr=HasPmtFileErr;
+                OnValidate=BEGIN
+                             GenJnlManagement.GetAccounts(Rec,AccName,BalAccName);
+                             ShowShortcutDimCode(ShortcutDimCode);
+                           END;
+
+                ShowMandatory=True }
+
+    { 13  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the bank account that the amount will be transferred to after it has been exported from the payment journal.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Recipient Bank Account";
+                ShowMandatory=RecipientBankAccountMandatory }
+
+    { 11  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the message exported to the payment file when you use the Export Payments to File function in the Payment Journal window.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Message to Recipient";
+                Visible=FALSE }
+
+    { 12  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies a description of the entry.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=Description;
+                Style=Attention;
+                StyleExpr=HasPmtFileErr }
+
+    { 53  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the salesperson or purchaser who is linked to the journal line.;
+                ApplicationArea=#Suite;
+                SourceExpr="Salespers./Purch. Code";
+                Visible=FALSE }
+
+    { 95  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the number of the campaign that the journal line is linked to.;
+                ApplicationArea=#RelationshipMgmt;
+                SourceExpr="Campaign No.";
+                Visible=FALSE }
+
+    { 55  ;2   ;Field     ;
+                AssistEdit=Yes;
+                ToolTipML=ENU=Specifies the code of the currency for the amounts on the journal line.;
+                ApplicationArea=#Suite;
+                SourceExpr="Currency Code";
+                OnAssistEdit=BEGIN
+                               ChangeExchangeRate.SetParameter("Currency Code","Currency Factor","Posting Date");
+                               IF ChangeExchangeRate.RUNMODAL = ACTION::OK THEN
+                                 VALIDATE("Currency Factor",ChangeExchangeRate.GetParameter);
+
+                               CLEAR(ChangeExchangeRate);
+                             END;
+                              }
+
+    { 77  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the type of transaction.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Gen. Posting Type";
+                Visible=FALSE }
+
+    { 79  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the vendor's or customer's trade type to link transactions made for this business partner with the appropriate general ledger account according to the general posting setup.;
+                ApplicationArea=#Suite;
+                SourceExpr="Gen. Bus. Posting Group";
+                Visible=FALSE }
+
+    { 81  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the item's product type to link transactions made for this item with the appropriate general ledger account according to the general posting setup.;
+                ApplicationArea=#Suite;
+                SourceExpr="Gen. Prod. Posting Group";
+                Visible=FALSE }
+
+    { 85  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the Tax specification of the involved customer or vendor to link transactions made for this record with the appropriate general ledger account according to the Tax posting setup.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="VAT Bus. Posting Group";
+                Visible=FALSE }
+
+    { 87  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the Tax specification of the involved item or resource to link transactions made for this record with the appropriate general ledger account according to the Tax posting setup.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="VAT Prod. Posting Group";
+                Visible=FALSE }
+
+    { 100 ;2   ;Field     ;
+                ToolTipML=ENU=Specifies how to make payment, such as with bank transfer, cash, or check.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Payment Method Code";
+                ShowMandatory=True }
+
+    { 110 ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the payment of the purchase invoice.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Payment Reference" }
+
+    { 115 ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the vendor who sent the purchase invoice.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Creditor No.";
+                Visible=FALSE }
+
+    { 14  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the total amount (including tax) that the journal line consists of.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=Amount;
+                Visible=AmountVisible;
+                Style=Attention;
+                StyleExpr=HasPmtFileErr;
+                ShowMandatory=True }
+
+    { 111 ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the total amount in local currency (including Tax) that the journal line consists of.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Amount (LCY)";
+                Visible=FALSE }
+
+    { 1000;2   ;Field     ;
+                ToolTipML=ENU=Specifies the total of the ledger entries that represent debits.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Debit Amount";
+                Visible=DebitCreditVisible }
+
+    { 1001;2   ;Field     ;
+                ToolTipML=ENU=Specifies the total of the ledger entries that represent credits.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Credit Amount";
+                Visible=DebitCreditVisible }
+
+    { 97  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the amount of Tax that is included in the total amount.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="VAT Amount";
+                Visible=FALSE }
+
+    { 101 ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the difference between the calculated Tax amount and a Tax amount that you have entered manually.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="VAT Difference";
+                Visible=FALSE }
+
+    { 99  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the amount of Bal. Tax included in the total amount.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Bal. VAT Amount";
+                Visible=FALSE }
+
+    { 103 ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the difference between the calculate tax amount and the tax amount that you have entered manually.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Bal. VAT Difference";
+                Visible=FALSE }
+
+    { 61  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the type of account that a balancing entry is posted to, such as BANK for a cash account.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Bal. Account Type";
+                OnValidate=BEGIN
+                             EnableApplyEntriesAction;
+                           END;
+                            }
+
+    { 16  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the number of the general ledger, customer, vendor, or bank account that the balancing entry is posted to, such as a cash account for cash purchases.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Bal. Account No.";
+                OnValidate=BEGIN
+                             GenJnlManagement.GetAccounts(Rec,AccName,BalAccName);
+                             ShowShortcutDimCode(ShortcutDimCode);
+                           END;
+                            }
+
+    { 71  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the general posting type associated with the balancing account that will be used when you post the entry on the journal line.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Bal. Gen. Posting Type";
+                Visible=FALSE }
+
+    { 73  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the general business posting group code associated with the balancing account that will be used when you post the entry.;
+                ApplicationArea=#Suite;
+                SourceExpr="Bal. Gen. Bus. Posting Group";
+                Visible=FALSE }
+
+    { 75  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the general product posting group code associated with the balancing account that will be used when you post the entry.;
+                ApplicationArea=#Suite;
+                SourceExpr="Bal. Gen. Prod. Posting Group";
+                Visible=FALSE }
+
+    { 89  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the code of the Tax business posting group that will be used when you post the entry on the journal line.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Bal. VAT Bus. Posting Group";
+                Visible=FALSE }
+
+    { 91  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the code of the Tax product posting group that will be used when you post the entry on the journal line.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Bal. VAT Prod. Posting Group";
+                Visible=FALSE }
+
+    { 49  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the code for Shortcut Dimension 1, which is one of two global dimension codes that you set up in the General Ledger Setup window.;
+                ApplicationArea=#Dimensions;
+                SourceExpr="Shortcut Dimension 1 Code";
+                Visible=FALSE }
+
+    { 51  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the code for Shortcut Dimension 2, which is one of two global dimension codes that you set up in the General Ledger Setup window.;
+                ApplicationArea=#Dimensions;
+                SourceExpr="Shortcut Dimension 2 Code";
+                Visible=FALSE }
+
+    { 300 ;2   ;Field     ;
+                ApplicationArea=#Suite;
+                SourceExpr=ShortcutDimCode[3];
+                CaptionClass='1,2,3';
+                TableRelation="Dimension Value".Code WHERE (Global Dimension No.=CONST(3),
+                                                            Dimension Value Type=CONST(Standard),
+                                                            Blocked=CONST(No));
+                Visible=FALSE;
+                OnValidate=BEGIN
+                             ValidateShortcutDimCode(3,ShortcutDimCode[3]);
+                           END;
+                            }
+
+    { 302 ;2   ;Field     ;
+                ApplicationArea=#Suite;
+                SourceExpr=ShortcutDimCode[4];
+                CaptionClass='1,2,4';
+                TableRelation="Dimension Value".Code WHERE (Global Dimension No.=CONST(4),
+                                                            Dimension Value Type=CONST(Standard),
+                                                            Blocked=CONST(No));
+                Visible=FALSE;
+                OnValidate=BEGIN
+                             ValidateShortcutDimCode(4,ShortcutDimCode[4]);
+                           END;
+                            }
+
+    { 304 ;2   ;Field     ;
+                ApplicationArea=#Suite;
+                SourceExpr=ShortcutDimCode[5];
+                CaptionClass='1,2,5';
+                TableRelation="Dimension Value".Code WHERE (Global Dimension No.=CONST(5),
+                                                            Dimension Value Type=CONST(Standard),
+                                                            Blocked=CONST(No));
+                Visible=FALSE;
+                OnValidate=BEGIN
+                             ValidateShortcutDimCode(5,ShortcutDimCode[5]);
+                           END;
+                            }
+
+    { 306 ;2   ;Field     ;
+                ApplicationArea=#Suite;
+                SourceExpr=ShortcutDimCode[6];
+                CaptionClass='1,2,6';
+                TableRelation="Dimension Value".Code WHERE (Global Dimension No.=CONST(6),
+                                                            Dimension Value Type=CONST(Standard),
+                                                            Blocked=CONST(No));
+                Visible=FALSE;
+                OnValidate=BEGIN
+                             ValidateShortcutDimCode(6,ShortcutDimCode[6]);
+                           END;
+                            }
+
+    { 308 ;2   ;Field     ;
+                ApplicationArea=#Suite;
+                SourceExpr=ShortcutDimCode[7];
+                CaptionClass='1,2,7';
+                TableRelation="Dimension Value".Code WHERE (Global Dimension No.=CONST(7),
+                                                            Dimension Value Type=CONST(Standard),
+                                                            Blocked=CONST(No));
+                Visible=FALSE;
+                OnValidate=BEGIN
+                             ValidateShortcutDimCode(7,ShortcutDimCode[7]);
+                           END;
+                            }
+
+    { 310 ;2   ;Field     ;
+                ApplicationArea=#Suite;
+                SourceExpr=ShortcutDimCode[8];
+                CaptionClass='1,2,8';
+                TableRelation="Dimension Value".Code WHERE (Global Dimension No.=CONST(8),
+                                                            Dimension Value Type=CONST(Standard),
+                                                            Blocked=CONST(No));
+                Visible=FALSE;
+                OnValidate=BEGIN
+                             ValidateShortcutDimCode(8,ShortcutDimCode[8]);
+                           END;
+                            }
+
+    { 5   ;2   ;Field     ;
+                Name=Applied (Yes/No);
+                CaptionML=ENU=Applied (Yes/No);
+                ToolTipML=ENU=Specifies if the payment has been applied.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=IsApplied }
+
+    { 18  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the type of the posted document that this document or journal line will be applied to when you post, for example to register payment.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Applies-to Doc. Type" }
+
+    { 20  ;2   ;Field     ;
+                Name=AppliesToDocNo;
+                ToolTipML=ENU=Specifies the number of the posted document that this document or journal line will be applied to when you post, for example to register payment.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Applies-to Doc. No.";
+                StyleExpr=StyleTxt }
+
+    { 22  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the ID of entries that will be applied to when you choose the Apply Entries action.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Applies-to ID";
+                Visible=FALSE;
+                StyleExpr=StyleTxt }
+
+    { 105 ;2   ;Field     ;
+                Name=GetAppliesToDocDueDate;
+                CaptionML=ENU=Applies-to Doc. Due Date;
+                ToolTipML=ENU=Specifies the due date from the Applies-to Doc. on the journal line.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=GetAppliesToDocDueDate;
+                StyleExpr=StyleTxt }
+
+    { 67  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the code for the payment type to be used for the entry on the journal line.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Bank Payment Type" }
+
+    { 1030001;2;Field     ;
+                ToolTipML=ENU=Specifies an exchange indicator for the journal line. This is a required field. You can edit this field in the Purchase Journal window.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Foreign Exchange Indicator";
+                Visible=FALSE }
+
+    { 1030002;2;Field     ;
+                ToolTipML=ENU=Specifies an exchange reference indicator for the journal line. This is a required field. You can edit this field in the Purchase Journal and the Payment Journal window.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Foreign Exchange Ref.Indicator";
+                Visible=FALSE }
+
+    { 1030003;2;Field     ;
+                ToolTipML=ENU=Specifies a foreign exchange reference code. This is a required field. You can edit this field in the Purchase Journal window.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Foreign Exchange Reference";
+                Visible=FALSE }
+
+    { 1030004;2;Field     ;
+                ToolTipML=ENU=Specifies the financial institution that will initiate the payment transactions sent by the originator. Select an ID for the originator's Designated Financial Institution (DFI). This is a required field. You can edit this field in the Payment Journal window and the Purchase Journal window.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Origin. DFI ID Qualifier";
+                Visible=FALSE }
+
+    { 1030005;2;Field     ;
+                ToolTipML=ENU=Specifies the financial institution that will receive the payment transactions. Select an ID for the receiver's Designated Financial Institution (DFI). This is a required field. You can edit this field in the Payment Journal window and the Purchase Journal window.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Receiv. DFI ID Qualifier";
+                Visible=FALSE }
+
+    { 1030000;2;Field     ;
+                ToolTipML=ENU=Specifies a transaction type code for the general journal line. This code identifies the transaction type for the Electronic Funds Transfer (EFT).;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Transaction Type Code" }
+
+    { 1030006;2;Field     ;
+                ToolTipML=ENU=Specifies an Office of Foreign Assets Control (OFAC) gateway operator screening indicator. This is a required field. You can edit this field in the Payment Journal window and the Purchase Journal window.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Gateway Operator OFAC Scr.Inc";
+                Visible=FALSE }
+
+    { 1030007;2;Field     ;
+                ToolTipML=ENU=Specifies a secondary Office of Foreign Assets Control (OFAC) gateway operator screening indicator. This is a required field. You can edit this field in the Payment Journal window and the Purchase Journal window.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Secondary OFAC Scr.Indicator";
+                Visible=FALSE }
+
+    { 1030008;2;Field     ;
+                ToolTipML=ENU=Specifies a transaction code for the general journal line. This code identifies the transaction type for the Electronic Funds Transfer (EFT).;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Transaction Code";
+                Visible=FALSE }
+
+    { 1030009;2;Field     ;
+                ToolTipML=ENU=Specifies a company description for the journal line.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Company Entry Description";
+                Visible=FALSE }
+
+    { 1030010;2;Field     ;
+                ToolTipML=ENU=Specifies payment related information for the general journal line.;
+                SourceExpr="Payment Related Information 1";
+                Visible=FALSE }
+
+    { 1030011;2;Field     ;
+                ToolTipML=ENU=Specifies additional payment related information for the general journal line.;
+                SourceExpr="Payment Related Information 2";
+                Visible=FALSE }
+
+    { 59  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies whether a check has been printed for the amount on the payment journal line.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Check Printed" }
+
+    { 69  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies the reason code, a supplementary source code that enables you to trace the entry.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Reason Code";
+                Visible=FALSE }
+
+    { 1020000;2;Field     ;
+                ToolTipML=ENU=Specifies the number of the customer or vendor that the payment relates to.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Source Type";
+                Visible=FALSE }
+
+    { 1020002;2;Field     ;
+                ToolTipML=ENU=Specifies the number of the customer or vendor that the payment relates to.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Source No.";
+                Visible=FALSE }
+
+    { 3   ;2   ;Field     ;
+                ToolTipML=ENU=Specifies a comment related to registering a payment.;
+                ApplicationArea=#Comments;
+                SourceExpr=Comment;
+                Visible=FALSE }
+
+    { 290 ;2   ;Field     ;
+                ToolTipML=ENU=Specifies that the payment journal line was exported to a payment file.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Exported to Payment File";
+                Visible=FALSE }
+
+    { 28  ;2   ;Field     ;
+                Name=TotalExportedAmount;
+                DrillDown=Yes;
+                CaptionML=ENU=Total Exported Amount;
+                ToolTipML=ENU=Specifies the amount for the payment journal line that has been exported to payment files that are not canceled.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=TotalExportedAmount;
+                Visible=FALSE;
+                OnDrillDown=BEGIN
+                              DrillDownExportedAmount
+                            END;
+                             }
+
+    { 17  ;2   ;Field     ;
+                ToolTipML=ENU=Specifies that an error occurred when you used the Export Payments to File function in the Payment Journal window.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Has Payment Export Error";
+                Visible=FALSE }
+
+    { 24  ;1   ;Group      }
+
+    { 80  ;2   ;Group     ;
+                GroupType=FixedLayout }
+
+    { 82  ;3   ;Group     ;
+                GroupType=Group }
+
+    { 84  ;4   ;Field     ;
+                ToolTipML=ENU=Specifies the text that is displayed for overdue payments.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=OverdueWarningText;
+                Style=Unfavorable;
+                StyleExpr=TRUE }
+
+    { 1903561801;2;Group  ;
+                GroupType=FixedLayout }
+
+    { 1903866901;3;Group  ;
+                CaptionML=ENU=Account Name }
+
+    { 29  ;4   ;Field     ;
+                ToolTipML=ENU=Specifies the name of the account.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=AccName;
+                Editable=FALSE;
+                ShowCaption=No }
+
+    { 1902759701;3;Group  ;
+                CaptionML=ENU=Bal. Account Name }
+
+    { 31  ;4   ;Field     ;
+                CaptionML=ENU=Bal. Account Name;
+                ToolTipML=ENU=Specifies the name of the balancing account that has been entered on the journal line.;
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=BalAccName;
+                Editable=FALSE }
+
+    { 1900545401;3;Group  ;
+                CaptionML=ENU=Balance }
+
+    { 25  ;4   ;Field     ;
+                Name=Balance;
+                CaptionML=ENU=Balance;
+                ToolTipML=ENU=Specifies the balance that has accumulated in the payment journal on the line where the cursor is.;
+                ApplicationArea=#All;
+                SourceExpr=Balance + "Balance (LCY)" - xRec."Balance (LCY)";
+                AutoFormatType=1;
+                Visible=BalanceVisible;
+                Editable=FALSE }
+
+    { 1900295801;3;Group  ;
+                CaptionML=ENU=Total Balance }
+
+    { 27  ;4   ;Field     ;
+                Name=TotalBalance;
+                CaptionML=ENU=Total Balance;
+                ToolTipML=ENU=Specifies the total balance in the payment journal.;
+                ApplicationArea=#All;
+                SourceExpr=TotalBalance + "Balance (LCY)" - xRec."Balance (LCY)";
+                AutoFormatType=1;
+                Visible=TotalBalanceVisible;
+                Editable=FALSE }
+
+    { 1900000007;0;Container;
+                ContainerType=FactBoxArea }
+
+    { 30  ;1   ;Part      ;
+                Name=IncomingDocAttachFactBox;
+                ApplicationArea=#Basic,#Suite;
+                PagePartID=Page193;
+                PartType=Page;
+                ShowFilter=No }
+
+    { 7   ;1   ;Part      ;
+                CaptionML=ENU=Payment File Errors;
+                ApplicationArea=#Basic,#Suite;
+                SubPageLink=Journal Template Name=FIELD(Journal Template Name),
+                            Journal Batch Name=FIELD(Journal Batch Name),
+                            Journal Line No.=FIELD(Line No.);
+                PagePartID=Page1228;
+                PartType=Page }
+
+    { 1900919607;1;Part   ;
+                ApplicationArea=#Basic,#Suite;
+                SubPageLink=Dimension Set ID=FIELD(Dimension Set ID);
+                PagePartID=Page699;
+                Visible=FALSE;
+                PartType=Page }
+
+    { 88  ;1   ;Part      ;
+                Name=WorkflowStatusBatch;
+                CaptionML=ENU=Batch Workflows;
+                ApplicationArea=#Suite;
+                PagePartID=Page1528;
+                Visible=ShowWorkflowStatusOnBatch;
+                Enabled=FALSE;
+                Editable=FALSE;
+                PartType=Page;
+                ShowFilter=No }
+
+    { 44  ;1   ;Part      ;
+                Name=WorkflowStatusLine;
+                CaptionML=ENU=Line Workflows;
+                ApplicationArea=#Suite;
+                PagePartID=Page1528;
+                Visible=ShowWorkflowStatusOnLine;
+                Enabled=FALSE;
+                Editable=FALSE;
+                PartType=Page;
+                ShowFilter=No }
+
+    { 1900383207;1;Part   ;
+                Visible=FALSE;
+                PartType=System;
+                SystemPartID=RecordLinks }
+
+    { 1905767507;1;Part   ;
+                Visible=FALSE;
+                PartType=System;
+                SystemPartID=Notes }
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=Void Check %1?';
+      Text001@1001 : TextConst 'ENU=Void all printed checks?';
+      GeneratingPaymentsMsg@1050 : TextConst 'ENU=Generating Payment file...';
+      GenJnlLine@1003 : Record 81;
+      GenJnlLine2@1004 : Record 81;
+      GenJnlTemplate@1020002 : Record 80;
+      VoidTransmitElecPayments@1020003 : Report 10084;
+      GenJnlManagement@1007 : Codeunit 230;
+      ReportPrint@1008 : Codeunit 228;
+      DocPrint@1009 : Codeunit 229;
+      CheckManagement@1010 : Codeunit 367;
+      ChangeExchangeRate@1005 : Page 511;
+      GLReconcile@1002 : Page 345;
+      CurrentJnlBatchName@1011 : Code[10];
+      AccName@1012 : Text[50];
+      BalAccName@1013 : Text[50];
+      Balance@1014 : Decimal;
+      TotalBalance@1015 : Decimal;
+      ShowBalance@1016 : Boolean;
+      ShowTotalBalance@1017 : Boolean;
+      VoidWarningDisplayed@1020000 : Boolean;
+      HasPmtFileErr@1006 : Boolean;
+      ShortcutDimCode@1018 : ARRAY [8] OF Code[20];
+      ApplyEntriesActionEnabled@1031 : Boolean;
+      BalanceVisible@19073040 : Boolean INDATASET;
+      TotalBalanceVisible@19063333 : Boolean INDATASET;
+      StyleTxt@1106 : Text;
+      OverdueWarningText@1120 : Text;
+      CheckCannotVoidMsg@1020001 : TextConst 'ENU=Warning:  Checks cannot be financially voided when Force Doc. Balance is set to No in the Journal Template.';
+      EventFilter@1029 : Text;
+      OpenApprovalEntriesExistForCurrUser@1019 : Boolean;
+      OpenApprovalEntriesExistForCurrUserBatch@1032 : Boolean;
+      OpenApprovalEntriesOnJnlBatchExist@1024 : Boolean;
+      OpenApprovalEntriesOnJnlLineExist@1023 : Boolean;
+      OpenApprovalEntriesOnBatchOrCurrJnlLineExist@1022 : Boolean;
+      OpenApprovalEntriesOnBatchOrAnyJnlLineExist@1021 : Boolean;
+      ShowWorkflowStatusOnBatch@1020 : Boolean;
+      ShowWorkflowStatusOnLine@1025 : Boolean;
+      CanCancelApprovalForJnlBatch@1026 : Boolean;
+      CanCancelApprovalForJnlLine@1027 : Boolean;
+      EnabledApprovalWorkflowsExist@1028 : Boolean;
+      AMCFormat@1020004 : Boolean;
+      WrongBankPaymentTypeErr@1020005 : TextConst '@@@="%1=Bank Payment Type field caption, %2=Electronic Payment bank payment type, %3=Electronic Payment-IAT bank payment type";ENU=%1 type must be either %2 or %3.';
+      HasErrorsErr@1020006 : TextConst 'ENU=The file export has one or more errors.\\For each line to be exported, resolve the errors displayed to the right and then try to export again.';
+      NoEntriesToVoidErr@1020007 : TextConst 'ENU=There are no entries to void.';
+      LastRemittanceErr@1020008 : TextConst 'ENU=Last Remittance Advice No. must have a value in the bank account.';
+      NoExportNegativeErr@1020009 : TextConst 'ENU=You cannot export journal entries with negative amounts.';
+      UseForElecPaymentCheckedErr@1020010 : TextConst 'ENU=The Use for Electronic Payments check box must be selected on the vendor or customer bank account card.';
+      IsAllowPaymentExport@1030 : Boolean;
+      IsSaasExcelAddinEnabled@1033 : Boolean;
+      RecipientBankAccountMandatory@1034 : Boolean;
+      CanRequestFlowApprovalForBatch@1035 : Boolean;
+      CanRequestFlowApprovalForBatchAndAllLines@1036 : Boolean;
+      CanRequestFlowApprovalForBatchAndCurrentLine@1037 : Boolean;
+      CanCancelFlowApprovalForBatch@1038 : Boolean;
+      CanCancelFlowApprovalForLine@1039 : Boolean;
+      AmountVisible@1040 : Boolean;
+      IsSaaS@1042 : Boolean;
+      DebitCreditVisible@1041 : Boolean;
+      NoExportDiffCurrencyErr@1020011 : TextConst 'ENU=You cannot export journal entries if Currency Code is different in Gen. Journal Line and Bank Account.';
+      RecipientBankAccountEmptyErr@1020013 : TextConst 'ENU=Recipient Bank Account must be filled.';
+
+    LOCAL PROCEDURE CheckForPmtJnlErrors@5();
+    VAR
+      BankAccount@1000 : Record 270;
+      BankExportImportSetup@1001 : Record 1200;
+    BEGIN
+      IF HasPmtFileErr THEN
+        IF ("Bal. Account Type" = "Bal. Account Type"::"Bank Account") AND BankAccount.GET("Bal. Account No.") THEN
+          IF BankExportImportSetup.GET(BankAccount."Payment Export Format") THEN
+            IF BankExportImportSetup."Check Export Codeunit" > 0 THEN
+              CODEUNIT.RUN(BankExportImportSetup."Check Export Codeunit",Rec);
+    END;
+
+    LOCAL PROCEDURE UpdateBalance@1();
+    BEGIN
+      GenJnlManagement.CalcBalance(
+        Rec,xRec,Balance,TotalBalance,ShowBalance,ShowTotalBalance);
+      BalanceVisible := ShowBalance;
+      TotalBalanceVisible := ShowTotalBalance;
+    END;
+
+    LOCAL PROCEDURE EnableApplyEntriesAction@2();
+    BEGIN
+      ApplyEntriesActionEnabled :=
+        ("Account Type" IN ["Account Type"::Customer,"Account Type"::Vendor]) OR
+        ("Bal. Account Type" IN ["Bal. Account Type"::Customer,"Bal. Account Type"::Vendor]);
+    END;
+
+    LOCAL PROCEDURE CurrentJnlBatchNameOnAfterVali@19002411();
+    BEGIN
+      CurrPage.SAVERECORD;
+      GenJnlManagement.SetName(CurrentJnlBatchName,Rec);
+      SetControlAppearanceFromBatch;
+      CurrPage.UPDATE(FALSE);
+    END;
+
+    LOCAL PROCEDURE GetCurrentlySelectedLines@3(VAR GenJournalLine@1000 : Record 81) : Boolean;
+    BEGIN
+      CurrPage.SETSELECTIONFILTER(GenJournalLine);
+      EXIT(GenJournalLine.FINDSET);
+    END;
+
+    LOCAL PROCEDURE SetControlAppearanceFromBatch@4();
+    VAR
+      GenJournalBatch@1000 : Record 232;
+      ApprovalsMgmt@1002 : Codeunit 1535;
+      WorkflowWebhookManagement@1001 : Codeunit 1543;
+      CanRequestFlowApprovalForAllLines@1003 : Boolean;
+    BEGIN
+      IF ("Journal Template Name" <> '') AND ("Journal Batch Name" <> '') THEN
+        GenJournalBatch.GET("Journal Template Name","Journal Batch Name")
+      ELSE
+        IF NOT GenJournalBatch.GET(GETRANGEMAX("Journal Template Name"),CurrentJnlBatchName) THEN
+          EXIT;
+
+      CheckOpenApprovalEntries(GenJournalBatch.RECORDID);
+
+      CanCancelApprovalForJnlBatch := ApprovalsMgmt.CanCancelApprovalForRecord(GenJournalBatch.RECORDID);
+
+      WorkflowWebhookManagement.GetCanRequestAndCanCancelJournalBatch(
+        GenJournalBatch,CanRequestFlowApprovalForBatch,CanCancelFlowApprovalForBatch,CanRequestFlowApprovalForAllLines);
+      CanRequestFlowApprovalForBatchAndAllLines := CanRequestFlowApprovalForBatch AND CanRequestFlowApprovalForAllLines;
+    END;
+
+    LOCAL PROCEDURE CheckOpenApprovalEntries@7(BatchRecordId@1000 : RecordID);
+    VAR
+      ApprovalsMgmt@1001 : Codeunit 1535;
+    BEGIN
+      OpenApprovalEntriesExistForCurrUserBatch := ApprovalsMgmt.HasOpenApprovalEntriesForCurrentUser(BatchRecordId);
+
+      OpenApprovalEntriesOnJnlBatchExist := ApprovalsMgmt.HasOpenApprovalEntries(BatchRecordId);
+
+      OpenApprovalEntriesOnBatchOrAnyJnlLineExist :=
+        OpenApprovalEntriesOnJnlBatchExist OR
+        ApprovalsMgmt.HasAnyOpenJournalLineApprovalEntries("Journal Template Name","Journal Batch Name");
+    END;
+
+    LOCAL PROCEDURE SetControlAppearance@6();
+    VAR
+      ApprovalsMgmt@1002 : Codeunit 1535;
+      WorkflowWebhookManagement@1000 : Codeunit 1543;
+      CanRequestFlowApprovalForLine@1001 : Boolean;
+    BEGIN
+      OpenApprovalEntriesExistForCurrUser :=
+        OpenApprovalEntriesExistForCurrUserBatch OR ApprovalsMgmt.HasOpenApprovalEntriesForCurrentUser(RECORDID);
+
+      OpenApprovalEntriesOnJnlLineExist := ApprovalsMgmt.HasOpenApprovalEntries(RECORDID);
+      OpenApprovalEntriesOnBatchOrCurrJnlLineExist := OpenApprovalEntriesOnJnlBatchExist OR OpenApprovalEntriesOnJnlLineExist;
+
+      CanCancelApprovalForJnlLine := ApprovalsMgmt.CanCancelApprovalForRecord(RECORDID);
+
+      WorkflowWebhookManagement.GetCanRequestAndCanCancel(RECORDID,CanRequestFlowApprovalForLine,CanCancelFlowApprovalForLine);
+      CanRequestFlowApprovalForBatchAndCurrentLine := CanRequestFlowApprovalForBatch AND CanRequestFlowApprovalForLine;
+    END;
+
+    LOCAL PROCEDURE SetConrolVisibility@8();
+    VAR
+      GLSetup@1000 : Record 98;
+    BEGIN
+      GLSetup.GET;
+      AmountVisible := NOT (GLSetup."Show Amounts" = GLSetup."Show Amounts"::"Debit/Credit Only");
+      DebitCreditVisible := NOT (GLSetup."Show Amounts" = GLSetup."Show Amounts"::"Amount Only");
+    END;
+
+    LOCAL PROCEDURE SetAMCAppearance@1020000();
+    VAR
+      BankAccount@1020000 : Record 270;
+      GenJournalBatch@1020001 : Record 232;
+    BEGIN
+      AMCFormat := FALSE;
+      IF GenJournalBatch.GET("Journal Template Name",CurrentJnlBatchName) THEN
+        IF BankAccount.GET(GenJournalBatch."Bal. Account No.") THEN
+          IF GenJournalBatch."Bal. Account Type" = GenJournalBatch."Bal. Account Type"::"Bank Account" THEN
+            IF (BankAccount."Export Format" = 0) OR (BankAccount."Export Format" = BankAccount."Export Format"::Other) THEN
+              AMCFormat := TRUE;
+    END;
+
+    LOCAL PROCEDURE EntriesToVoid@1020001(GenJnlLine3@1020000 : Record 81;AMC@1020001 : Boolean) : Boolean;
+    BEGIN
+      GenJnlLine3.SETFILTER("Document Type",'Payment|Refund');
+      GenJnlLine3.SETFILTER("Bank Payment Type",'Electronic Payment|Electronic Payment-IAT');
+      IF AMC THEN
+        GenJnlLine3.SETRANGE("Exported to Payment File",TRUE)
+      ELSE BEGIN
+        GenJnlLine3.SETRANGE("Check Printed",TRUE);
+        GenJnlLine3.SETRANGE("Check Exported",TRUE);
+      END;
+      GenJnlLine3.SETRANGE("Check Transmitted",FALSE);
+      EXIT(GenJnlLine3.FINDFIRST);
+    END;
+
+    LOCAL PROCEDURE UseForElecPaymentChecked@1020002(GenJnlLine3@1020000 : Record 81) : Boolean;
+    VAR
+      CustomerBankAccount@1020001 : Record 287;
+      VendorBankAccount@1020002 : Record 288;
+    BEGIN
+      IF GenJnlLine3."Bal. Account Type" <> GenJnlLine3."Bal. Account Type"::"Bank Account" THEN
+        IF GenJnlLine3."Bal. Account Type" = GenJnlLine3."Bal. Account Type"::Vendor THEN BEGIN
+          VendorBankAccount.SETRANGE("Vendor No.",GenJnlLine3."Bal. Account No.");
+          VendorBankAccount.SETRANGE(Code,GenJnlLine3."Recipient Bank Account");
+          IF VendorBankAccount.FINDFIRST THEN
+            EXIT(VendorBankAccount."Use for Electronic Payments")
+        END ELSE
+          IF GenJnlLine3."Bal. Account Type" = GenJnlLine3."Bal. Account Type"::Customer THEN BEGIN
+            CustomerBankAccount.SETRANGE("Customer No.",GenJnlLine3."Bal. Account No.");
+            CustomerBankAccount.SETRANGE(Code,GenJnlLine3."Recipient Bank Account");
+            IF CustomerBankAccount.FINDFIRST THEN
+              EXIT(CustomerBankAccount."Use for Electronic Payments");
+          END ELSE
+            EXIT(TRUE)
+      ELSE
+        IF GenJnlLine3."Account Type" <> GenJnlLine3."Account Type"::"Bank Account" THEN
+          IF GenJnlLine3."Account Type" = GenJnlLine3."Account Type"::Vendor THEN BEGIN
+            VendorBankAccount.SETRANGE("Vendor No.",GenJnlLine3."Account No.");
+            VendorBankAccount.SETRANGE(Code,GenJnlLine3."Recipient Bank Account");
+            IF VendorBankAccount.FINDFIRST THEN
+              EXIT(VendorBankAccount."Use for Electronic Payments");
+          END ELSE
+            IF GenJnlLine3."Account Type" = GenJnlLine3."Account Type"::Customer THEN BEGIN
+              CustomerBankAccount.SETRANGE("Customer No.",GenJnlLine3."Account No.");
+              CustomerBankAccount.SETRANGE(Code,GenJnlLine3."Recipient Bank Account");
+              IF CustomerBankAccount.FINDFIRST THEN
+                EXIT(CustomerBankAccount."Use for Electronic Payments");
+            END ELSE
+              EXIT(TRUE);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

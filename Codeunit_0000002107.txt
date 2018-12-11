@@ -1,0 +1,239 @@
+OBJECT Codeunit 2107 O365 Sales Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:15 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      CustomerHasBeenBlockedMsg@1000 : TextConst 'ENU=The customer has been blocked for further business.';
+      IdentityManagement@1009 : Codeunit 9801;
+      BlockQst@1004 : TextConst 'ENU=The customer could not be deleted as there are one or more documents for the customer.\ \Do you want to block the customer for further business?';
+      BlockedErr@1001 : TextConst 'ENU=The customer could not be deleted as there are one or more documents for the customer.';
+      QbVisibleInvNameTxt@1057 : TextConst '@@@={LOCKED};ENU=QBVisibleForInv';
+      IsQbVisibleOption@1058 : 'Hidden,QBO,QBD,QBD and QBO';
+
+    PROCEDURE BlockOrDeleteCustomerAndDeleteContact@5(VAR Customer@1001 : Record 18);
+    VAR
+      CustContUpdate@1002 : Codeunit 5056;
+    BEGIN
+      IF GUIALLOWED THEN
+        IF Customer.HasAnyOpenOrPostedDocuments THEN BEGIN
+          IF Customer.IsBlocked THEN
+            ERROR(BlockedErr);
+          IF NOT CONFIRM(BlockQst,FALSE) THEN
+            EXIT;
+        END;
+      CustContUpdate.DeleteCustomerContacts(Customer);
+      IF Customer.HasAnyOpenOrPostedDocuments THEN BEGIN
+        Customer.VALIDATE(Blocked,Customer.Blocked::All);
+        Customer.MODIFY(TRUE);
+        IF GUIALLOWED THEN
+          MESSAGE(CustomerHasBeenBlockedMsg);
+      END ELSE
+        Customer.DELETE(TRUE);
+    END;
+
+    PROCEDURE SetItemDefaultValues@15(VAR Item@1006 : Record 27);
+    VAR
+      GenProductPostingGroup@1005 : Record 251;
+      VATProductPostingGroup@1004 : Record 324;
+      TaxSetup@1001 : Record 326;
+      TaxGroup@1003 : Record 321;
+    BEGIN
+      Item.Type := Item.Type::Service;
+      Item."Costing Method" := Item."Costing Method"::FIFO;
+
+      IF TaxSetup.GET THEN BEGIN
+        IF TaxSetup."Non-Taxable Tax Group Code" <> '' THEN
+          TaxGroup.SETFILTER(Code,'<>%1',TaxSetup."Non-Taxable Tax Group Code");
+        IF TaxGroup.FINDFIRST THEN
+          Item."Tax Group Code" := TaxGroup.Code;
+      END;
+
+      IF Item."Gen. Prod. Posting Group" = '' THEN
+        IF GenProductPostingGroup.FINDFIRST THEN
+          Item."Gen. Prod. Posting Group" := GenProductPostingGroup.Code;
+
+      IF Item."VAT Prod. Posting Group" = '' THEN
+        IF VATProductPostingGroup.FINDFIRST THEN
+          Item."VAT Prod. Posting Group" := VATProductPostingGroup.Code;
+
+      IF Item.MODIFY THEN;
+    END;
+
+    PROCEDURE GetO365DocumentBrickStyle@3(O365SalesDocument@1002 : Record 2103;VAR OutStandingStatusStyle@1000 : Text);
+    BEGIN
+      WITH O365SalesDocument DO BEGIN
+        OutStandingStatusStyle := '';
+
+        CASE TRUE OF
+          Canceled:
+            OutStandingStatusStyle := '';
+          IsOverduePostedInvoice:
+            OutStandingStatusStyle := 'Unfavorable';
+        END;
+      END;
+    END;
+
+    PROCEDURE InsertNewCountryCode@4(VAR O365CountryRegion@1000 : Record 2152) : Boolean;
+    VAR
+      CountryRegion@1001 : Record 9;
+    BEGIN
+      WITH O365CountryRegion DO BEGIN
+        IF (Code = '') AND (Name = '') THEN
+          EXIT(FALSE);
+        IF Name = '' THEN
+          VALIDATE(Name,COPYSTR(Code,1,MAXSTRLEN(Name)));
+        IF Code = '' THEN
+          VALIDATE(Code,COPYSTR(Name,1,MAXSTRLEN(Code)));
+
+        CountryRegion.INIT;
+        CountryRegion.VALIDATE(Code,Code);
+        CountryRegion.VALIDATE(Name,Name);
+        CountryRegion.VALIDATE("VAT Scheme",
+          COPYSTR("VAT Scheme",1,MAXSTRLEN(CountryRegion."VAT Scheme"))
+          );
+
+        CountryRegion.INSERT(TRUE); // Passing on the error if it fails
+        EXIT(TRUE);
+      END;
+    END;
+
+    PROCEDURE ModifyCountryCode@22(xO365CountryRegion@1003 : Record 2152;O365CountryRegion@1000 : Record 2152) : Boolean;
+    VAR
+      CountryRegion@1001 : Record 9;
+    BEGIN
+      IF NOT CountryRegion.GET(xO365CountryRegion.Code) THEN
+        EXIT(FALSE);
+
+      CountryRegion.VALIDATE(Name,O365CountryRegion.Name);
+      CountryRegion.VALIDATE("VAT Scheme",
+        COPYSTR(O365CountryRegion."VAT Scheme",1,MAXSTRLEN(CountryRegion."VAT Scheme"))
+        );
+
+      CountryRegion.MODIFY(TRUE); // Passing on the error if it fails
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE LookupCountryCodePhone@25() : Code[10];
+    VAR
+      O365CountryRegion@1001 : Record 2152;
+      O365CountryRegionList@1003 : Page 2152;
+    BEGIN
+      O365CountryRegionList.LOOKUPMODE(TRUE);
+      O365CountryRegionList.EDITABLE(FALSE);
+
+      IF O365CountryRegionList.RUNMODAL <> ACTION::LookupOK THEN
+        ERROR('');
+
+      O365CountryRegionList.GETRECORD(O365CountryRegion);
+
+      EXIT(O365CountryRegion.Code);
+    END;
+
+    [EventSubscriber(Codeunit,9170,OnBeforeOpenSettings)]
+    PROCEDURE OpenFullInvoicingSettingsPage@68(VAR Handled@1000 : Boolean);
+    BEGIN
+      IF Handled THEN
+        EXIT;
+
+      IF NOT IdentityManagement.IsInvAppId THEN
+        EXIT;
+
+      Handled := TRUE;
+      PAGE.RUNMODAL(PAGE::"BC O365 My Settings");
+    END;
+
+    PROCEDURE GetQuickBooksVisible@158() : Boolean;
+    VAR
+      QboVisible@1000 : Boolean;
+      QbdVisible@1001 : Boolean;
+    BEGIN
+      GetQboQbdVisibility(QboVisible,QbdVisible);
+      EXIT(QboVisible OR QbdVisible);
+    END;
+
+    PROCEDURE GetQboQbdVisibility@1056(VAR QboVisible@1009 : Boolean;VAR QbdVisible@1010 : Boolean);
+    VAR
+      QBOSyncProxy@1000 : Codeunit 1061;
+      QBDSyncProxy@1003 : Codeunit 1062;
+      QboVisibleKV@1002 : Boolean;
+      QbdVisibleKV@1001 : Boolean;
+      QboEnabled@1008 : Boolean;
+      QbdEnabled@1007 : Boolean;
+      DummyTitle@1004 : Text;
+      DummyDescription@1005 : Text;
+      DummyEmail@1006 : Text;
+    BEGIN
+      QBOSyncProxy.GetQBOSyncSettings(DummyTitle,DummyDescription,QboEnabled);
+      QBDSyncProxy.GetQBDSyncSettings(DummyTitle,DummyDescription,QbdEnabled,DummyEmail);
+
+      IF NOT TryGetQbVisibilityFromKeyVault(QboVisibleKV,QbdVisibleKV) THEN BEGIN
+        QboVisibleKV := TRUE;
+        QbdVisibleKV := TRUE;
+      END;
+
+      IF QboEnabled THEN
+        QboVisible := TRUE
+      ELSE
+        IF QboVisibleKV THEN
+          OnGetQuickBooksVisible(QboVisible);
+
+      IF QbdEnabled THEN
+        QbdVisible := TRUE
+      ELSE
+        IF QbdVisibleKV THEN
+          OnGetQuickBooksVisible(QbdVisible);
+    END;
+
+    LOCAL PROCEDURE TryGetQbVisibilityFromKeyVault@157(VAR QboVisibleKV@1007 : Boolean;VAR QbdVisibleKV@1006 : Boolean) : Boolean;
+    VAR
+      AzureKeyVaultManagement@1005 : Codeunit 2200;
+      QbVisibleInvSecret@1001 : Text;
+      IsVisibleInt@1000 : Integer;
+    BEGIN
+      IF NOT AzureKeyVaultManagement.GetAzureKeyVaultSecret(QbVisibleInvSecret,QbVisibleInvNameTxt) THEN
+        EXIT(FALSE);
+
+      IF (QbVisibleInvSecret <> '') AND EVALUATE(IsVisibleInt,QbVisibleInvSecret) THEN BEGIN
+        QboVisibleKV := FALSE;
+        QbdVisibleKV := FALSE;
+
+        CASE IsVisibleInt OF
+          IsQbVisibleOption::QBD:
+            QbdVisibleKV := TRUE;
+          IsQbVisibleOption::QBO:
+            QboVisibleKV := TRUE;
+          IsQbVisibleOption::"QBD and QBO":
+            BEGIN
+              QbdVisibleKV := TRUE;
+              QboVisibleKV := TRUE;
+            END;
+        END;
+
+        EXIT(TRUE);
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnGetQuickBooksVisible@155(VAR QuickBooksVisible@1000 : Boolean);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

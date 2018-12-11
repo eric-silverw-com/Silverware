@@ -1,0 +1,216 @@
+OBJECT Table 5377 Ext Txt ID Integration Record
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:14:52 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Ext Txt ID Integration Record;
+  }
+  FIELDS
+  {
+    { 1   ;   ;External ID         ;Text250       ;CaptionML=ENU=External ID }
+    { 3   ;   ;Integration ID      ;GUID          ;TableRelation="Integration Record"."Integration ID";
+                                                   CaptionML=ENU=Integration ID }
+    { 4   ;   ;Last Synch. Modified On;DateTime   ;CaptionML=ENU=Last Synch. Modified On }
+    { 5   ;   ;Last Synch. Ext Modified On;DateTime;
+                                                   CaptionML=ENU=Last Synch. Ext Modified On }
+    { 6   ;   ;Table ID            ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup("Integration Record"."Table ID" WHERE (Integration ID=FIELD(Integration ID)));
+                                                   CaptionML=ENU=Table ID }
+  }
+  KEYS
+  {
+    {    ;External ID,Integration ID              ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      IntegrationRecordNotFoundErr@1000 : TextConst '@@@="%1 = Record id";ENU=The integration record for entity %1 was not found.';
+      RecordIdAlreadyMappedErr@1001 : TextConst '@@@=%1 ID of the record, %2 ID of the already mapped record;ENU=Cannot couple %1 to this external record, because the record is already coupled to key: %2 in external table.';
+      CoupledRecordNotFoundErr@1002 : TextConst '@@@="%1 = the key of the external record, %2 is the NAV table that this key is linked with.";ENU=The coupling record for the key ''%1'' and table %2 was not found.';
+
+    [External]
+    PROCEDURE FindRecordIDFromID@3(SourceExternalID@1001 : Text[250];DestinationTableID@1004 : Integer;VAR DestinationRecordId@1002 : RecordID) : Boolean;
+    VAR
+      ExtTxtIDIntegrationRecord@1003 : Record 5377;
+      IntegrationRecord@1005 : Record 5151;
+    BEGIN
+      IF FindRowFromExternalID(SourceExternalID,DestinationTableID,ExtTxtIDIntegrationRecord) THEN
+        IF IntegrationRecord.FindByIntegrationId(ExtTxtIDIntegrationRecord."Integration ID") THEN BEGIN
+          DestinationRecordId := IntegrationRecord."Record ID";
+          EXIT(TRUE);
+        END;
+
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE FindRowFromRecordID@10(SourceRecordID@1000 : RecordID;VAR ExtTxtIDIntegrationRecord@1001 : Record 5377) : Boolean;
+    VAR
+      IntegrationRecord@1002 : Record 5151;
+    BEGIN
+      IF NOT IntegrationRecord.FindByRecordId(SourceRecordID) THEN
+        EXIT(FALSE);
+      EXIT(FindRowFromIntegrationID(IntegrationRecord."Integration ID",ExtTxtIDIntegrationRecord));
+    END;
+
+    LOCAL PROCEDURE FindRowFromExternalID@11(ExternalID@1001 : Text[250];DestinationTableID@1003 : Integer;VAR ExtTxtIDIntegrationRecord@1000 : Record 5377) : Boolean;
+    BEGIN
+      ExtTxtIDIntegrationRecord.SETRANGE("External ID",ExternalID);
+      ExtTxtIDIntegrationRecord.SETFILTER("Table ID",FORMAT(DestinationTableID));
+      EXIT(ExtTxtIDIntegrationRecord.FINDFIRST);
+    END;
+
+    [External]
+    PROCEDURE CoupleExternalIDToRecordID@1(ExternalID@1000 : Text[250];RecordID@1001 : RecordID);
+    VAR
+      ExtTxtIDIntegrationRecord@1003 : Record 5377;
+      IntegrationRecord@1004 : Record 5151;
+      ExtTxtIDIntegrationRecord2@1006 : Record 5377;
+      ErrExternalID@1005 : Text[250];
+    BEGIN
+      IF NOT IntegrationRecord.FindByRecordId(RecordID) THEN
+        ERROR(IntegrationRecordNotFoundErr,FORMAT(RecordID,0,1));
+
+      // Find coupling between External ID and TableNo
+      IF NOT FindRowFromExternalID(ExternalID,RecordID.TABLENO,ExtTxtIDIntegrationRecord) THEN
+        // Find rogue coupling beteen External ID and table 0
+        IF NOT FindRowFromExternalID(ExternalID,0,ExtTxtIDIntegrationRecord) THEN BEGIN
+          // Find other coupling to the record
+          IF ExtTxtIDIntegrationRecord2.FindIDFromRecordID(RecordID,ExternalID) THEN
+            ERROR(RecordIdAlreadyMappedErr,FORMAT(RecordID,0,1),ExternalID);
+
+          WITH ExtTxtIDIntegrationRecord DO BEGIN
+            RESET;
+            INIT;
+            "External ID" := ExternalID;
+            "Integration ID" := IntegrationRecord."Integration ID";
+            INSERT(TRUE);
+          END;
+          EXIT;
+        END;
+
+      // Update Integration ID
+      IF ExtTxtIDIntegrationRecord."Integration ID" <> IntegrationRecord."Integration ID" THEN BEGIN
+        IF ExtTxtIDIntegrationRecord2.FindIDFromRecordID(RecordID,ErrExternalID) THEN
+          ERROR(RecordIdAlreadyMappedErr,FORMAT(RecordID,0,1));
+        ExtTxtIDIntegrationRecord.RENAME(ExtTxtIDIntegrationRecord."External ID",IntegrationRecord."Integration ID");
+      END;
+    END;
+
+    [External]
+    PROCEDURE UpdateCoupledRecordForExternalId@15(OldExternalId@1000 : Text[250];NewExternalId@1004 : Text[250];TableNo@1002 : Integer);
+    VAR
+      ExtTxtIDIntegrationRecord@1003 : Record 5377;
+      ExtTxtIDIntegrationRecordNew@1001 : Record 5377;
+    BEGIN
+      ExtTxtIDIntegrationRecord.SETRANGE("External ID",OldExternalId);
+      ExtTxtIDIntegrationRecord.SETRANGE("Table ID",TableNo);
+      IF NOT ExtTxtIDIntegrationRecord.FINDFIRST THEN
+        ERROR(CoupledRecordNotFoundErr,OldExternalId,TableNo);
+
+      ExtTxtIDIntegrationRecordNew := ExtTxtIDIntegrationRecord;
+      ExtTxtIDIntegrationRecordNew."External ID" := NewExternalId;
+      ExtTxtIDIntegrationRecord.DELETEALL;
+      ExtTxtIDIntegrationRecordNew.INSERT;
+    END;
+
+    [External]
+    PROCEDURE SetLastSynchModifiedOns@8(SourceExternalID@1001 : Text[250];DestinationTableID@1005 : Integer;ExternalLastModifiedOn@1000 : DateTime;LastModifiedOn@1003 : DateTime);
+    VAR
+      ExtTxtIDIntegrationRecord@1004 : Record 5377;
+    BEGIN
+      IF NOT FindRowFromExternalID(SourceExternalID,DestinationTableID,ExtTxtIDIntegrationRecord) THEN
+        EXIT;
+
+      WITH ExtTxtIDIntegrationRecord DO BEGIN
+        "Last Synch. Ext Modified On" := ExternalLastModifiedOn;
+        "Last Synch. Modified On" := LastModifiedOn;
+        MODIFY(TRUE);
+      END;
+    END;
+
+    [External]
+    PROCEDURE FindIDFromRecordID@2(SourceRecordID@1001 : RecordID;VAR DestinationTextID@1002 : Text[250]) : Boolean;
+    VAR
+      ExtTxtIDIntegrationRecord@1004 : Record 5377;
+    BEGIN
+      IF NOT FindRowFromRecordID(SourceRecordID,ExtTxtIDIntegrationRecord) THEN
+        EXIT(FALSE);
+
+      DestinationTextID := ExtTxtIDIntegrationRecord."External ID";
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE FindRowFromIntegrationID@22(IntegrationID@1001 : GUID;VAR ExtTxtIDIntegrationRecord@1000 : Record 5377) : Boolean;
+    BEGIN
+      ExtTxtIDIntegrationRecord.SETCURRENTKEY("Integration ID");
+      ExtTxtIDIntegrationRecord.SETFILTER("Integration ID",IntegrationID);
+      EXIT(ExtTxtIDIntegrationRecord.FINDFIRST);
+    END;
+
+    [External]
+    PROCEDURE IsModifiedAfterLastSynchonizedExternalRecord@6(ExternalID@1000 : Text[250];DestinationTableID@1004 : Integer;CurrentModifiedOn@1002 : DateTime) : Boolean;
+    VAR
+      ExtTxtIDIntegrationRecord@1003 : Record 5377;
+    BEGIN
+      IF NOT FindRowFromExternalID(ExternalID,DestinationTableID,ExtTxtIDIntegrationRecord) THEN
+        EXIT(FALSE);
+
+      EXIT(ROUNDDATETIME(CurrentModifiedOn) > ROUNDDATETIME(ExtTxtIDIntegrationRecord."Last Synch. Ext Modified On"));
+    END;
+
+    [External]
+    PROCEDURE IsModifiedAfterLastSynchronizedRecord@7(RecordID@1001 : RecordID;CurrentModifiedOn@1000 : DateTime) : Boolean;
+    VAR
+      ExtTxtIDIntegrationRecord@1003 : Record 5377;
+    BEGIN
+      IF NOT FindRowFromRecordID(RecordID,ExtTxtIDIntegrationRecord) THEN
+        EXIT(FALSE);
+
+      EXIT(ROUNDDATETIME(CurrentModifiedOn) > ROUNDDATETIME(ExtTxtIDIntegrationRecord."Last Synch. Modified On"));
+    END;
+
+    [External]
+    PROCEDURE InsertIntegrationRecordIfNotPresent@9(RecordRef@1000 : RecordRef);
+    VAR
+      IntegrationRecord@1001 : Record 5151;
+    BEGIN
+      IntegrationRecord.SETRANGE("Record ID",RecordRef.RECORDID);
+      IF NOT IntegrationRecord.FINDFIRST THEN
+        InsertIntegrationRecord(RecordRef);
+    END;
+
+    [External]
+    PROCEDURE InsertIntegrationRecord@4(RecordRef@1000 : RecordRef);
+    VAR
+      IntegrationRecord@1001 : Record 5151;
+    BEGIN
+      IntegrationRecord.INIT;
+      IntegrationRecord."Integration ID" := CREATEGUID;
+      IntegrationRecord."Record ID" := RecordRef.RECORDID;
+      IntegrationRecord."Table ID" := RecordRef.NUMBER;
+      IntegrationRecord."Modified On" := CURRENTDATETIME;
+      IntegrationRecord.INSERT;
+    END;
+
+    [External]
+    PROCEDURE DeleteEmptyExternalIntegrationRecord@12(DestinationTableId@1001 : Integer);
+    VAR
+      ExtTxtIDIntegrationRecord@1002 : Record 5377;
+    BEGIN
+      IF FindRowFromExternalID('',DestinationTableId,ExtTxtIDIntegrationRecord) THEN
+        ExtTxtIDIntegrationRecord.DELETE(TRUE);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

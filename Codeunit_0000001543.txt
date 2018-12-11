@@ -1,0 +1,420 @@
+OBJECT Codeunit 1543 Workflow Webhook Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/27/18;
+    Time=11:08:12 PM;
+    Version List=;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 467=imd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ResponseAlreadyReceivedErr@1000 : TextConst 'ENU=A response has already been received.';
+      ResponseNotExpectedErr@1003 : TextConst 'ENU=A response is not expected.';
+      UnsupportedRecordTypeErr@1002 : TextConst '@@@=Record type Customer is not supported by this workflow response.;ENU=Record type %1 is not supported.';
+      UserUnableToCancelErr@1004 : TextConst '@@@="%1 = NAV USERID";ENU=User %1 does not have the permission necessary to cancel the item.';
+      UserUnableToContinueErr@1005 : TextConst '@@@="%1 = NAV USERID";ENU=User %1 does not have the permission necessary to continue the item.';
+      UserUnableToDeleteErr@1007 : TextConst '@@@="%1 = NAV USERID";ENU=User %1 does not have the permission necessary to delete the item.';
+      UserUnableToRejectErr@1006 : TextConst '@@@="%1 = NAV USERID";ENU=User %1 does not have the permission necessary to reject the item.';
+      WorkflowStepInstanceIdNotFoundErr@1001 : TextConst '@@@="%1=Id value of a record.";ENU=The workflow step instance id %1 was not found.';
+
+    [Integration(DEFAULT,FALSE)]
+    LOCAL PROCEDURE OnCancelWorkflow@2(WorkflowWebhookEntry@1000 : Record 467);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnContinueWorkflow@1(WorkflowWebhookEntry@1000 : Record 467);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnRejectWorkflow@3(WorkflowWebhookEntry@1000 : Record 467);
+    BEGIN
+    END;
+
+    [External]
+    PROCEDURE CanCancel@11(WorkflowWebhookEntry@1000 : Record 467) : Boolean;
+    VAR
+      UserSetup@1001 : Record 91;
+    BEGIN
+      IF WorkflowWebhookEntry.Response <> WorkflowWebhookEntry.Response::Pending THEN
+        EXIT(FALSE);
+
+      IF UserSetup.GET(USERID) THEN
+        IF UserSetup."Approval Administrator" THEN
+          EXIT(TRUE);
+
+      EXIT(WorkflowWebhookEntry."Initiated By User ID" = USERID);
+    END;
+
+    [External]
+    PROCEDURE CanRequestApproval@23(RecordId@1000 : RecordID) : Boolean;
+    VAR
+      WorkflowWebhookEntry@1001 : Record 467;
+    BEGIN
+      // Checks if the given record can have an approval request made, based on whether or not there's already a pending approval for it.
+      EXIT(NOT FindWorkflowWebhookEntryByRecordIdAndResponse(WorkflowWebhookEntry,RecordId,WorkflowWebhookEntry.Response::Pending));
+    END;
+
+    [External]
+    PROCEDURE GetCanRequestAndCanCancel@16(RecordId@1000 : RecordID;VAR CanRequestApprovalForFlow@1001 : Boolean;VAR CanCancelApprovalForFlow@1002 : Boolean);
+    VAR
+      WorkflowWebhookEntry@1003 : Record 467;
+    BEGIN
+      IF FindWorkflowWebhookEntryByRecordIdAndResponse(WorkflowWebhookEntry,RecordId,WorkflowWebhookEntry.Response::Pending) THEN BEGIN
+        CanCancelApprovalForFlow := CanCancel(WorkflowWebhookEntry);
+        CanRequestApprovalForFlow := FALSE;
+      END ELSE BEGIN
+        CanCancelApprovalForFlow := FALSE;
+        CanRequestApprovalForFlow := TRUE;
+      END;
+    END;
+
+    [External]
+    PROCEDURE GetCanRequestAndCanCancelJournalBatch@22(GenJournalBatch@1000 : Record 232;VAR CanRequestBatchApproval@1001 : Boolean;VAR CanCancelBatchApproval@1002 : Boolean;VAR CanRequestLineApprovals@1003 : Boolean);
+    VAR
+      GenJournalLine@1004 : Record 81;
+    BEGIN
+      // Helper method to check the General Journal Batch and all its lines for ability to request/cancel approval.
+      // Journal pages' ribbon buttons only let users request approval for the batch or its individual lines, but not both.
+
+      GetCanRequestAndCanCancel(GenJournalBatch.RECORDID,CanRequestBatchApproval,CanCancelBatchApproval);
+
+      GenJournalLine.SETRANGE("Journal Template Name",GenJournalBatch."Journal Template Name");
+      GenJournalLine.SETRANGE("Journal Batch Name",GenJournalBatch.Name);
+      IF GenJournalLine.ISEMPTY THEN BEGIN
+        CanRequestLineApprovals := TRUE;
+        EXIT;
+      END;
+
+      GenJournalLine.FINDSET;
+      REPEAT
+        IF NOT CanRequestApproval(GenJournalLine.RECORDID) THEN BEGIN
+          CanRequestLineApprovals := FALSE;
+          EXIT;
+        END;
+      UNTIL GenJournalLine.NEXT = 0;
+
+      CanRequestLineApprovals := TRUE;
+    END;
+
+    [External]
+    PROCEDURE Cancel@6(VAR WorkflowWebhookEntry@1000 : Record 467);
+    BEGIN
+      VerifyResponseExpected(WorkflowWebhookEntry);
+
+      IF NOT CanCancel(WorkflowWebhookEntry) THEN
+        ERROR(UserUnableToCancelErr,USERID);
+
+      WorkflowWebhookEntry.VALIDATE(Response,WorkflowWebhookEntry.Response::Cancel);
+      WorkflowWebhookEntry.MODIFY(TRUE);
+
+      OnCancelWorkflow(WorkflowWebhookEntry);
+    END;
+
+    [External]
+    PROCEDURE CancelByStepInstanceId@20(Id@1000 : GUID);
+    VAR
+      WorkflowWebhookEntry@1001 : Record 467;
+    BEGIN
+      IF NOT FindWorkflowWebhookEntryByStepInstance(WorkflowWebhookEntry,Id) THEN
+        ERROR(WorkflowStepInstanceIdNotFoundErr,Id);
+
+      Cancel(WorkflowWebhookEntry);
+    END;
+
+    [External]
+    PROCEDURE CanContinue@13(WorkflowWebhookEntry@1000 : Record 467) : Boolean;
+    BEGIN
+      EXIT(CanAct(WorkflowWebhookEntry));
+    END;
+
+    [External]
+    PROCEDURE CanReject@26(WorkflowWebhookEntry@1000 : Record 467) : Boolean;
+    BEGIN
+      EXIT(CanAct(WorkflowWebhookEntry));
+    END;
+
+    [External]
+    PROCEDURE Continue@5(VAR WorkflowWebhookEntry@1000 : Record 467);
+    BEGIN
+      VerifyResponseExpected(WorkflowWebhookEntry);
+
+      IF NOT CanContinue(WorkflowWebhookEntry) THEN
+        ERROR(UserUnableToContinueErr,USERID);
+
+      WorkflowWebhookEntry.VALIDATE(Response,WorkflowWebhookEntry.Response::Continue);
+      WorkflowWebhookEntry.MODIFY(TRUE);
+
+      OnContinueWorkflow(WorkflowWebhookEntry);
+    END;
+
+    [External]
+    PROCEDURE ContinueByStepInstanceId@24(Id@1000 : GUID);
+    VAR
+      WorkflowWebhookEntry@1001 : Record 467;
+    BEGIN
+      IF NOT FindWorkflowWebhookEntryByStepInstance(WorkflowWebhookEntry,Id) THEN
+        ERROR(WorkflowStepInstanceIdNotFoundErr,Id);
+
+      Continue(WorkflowWebhookEntry);
+    END;
+
+    [External]
+    PROCEDURE GenerateRequest@8(RecRef@1000 : RecordRef;WorkflowStepInstance@1001 : Record 1504);
+    VAR
+      WorkflowWebhookEntry@1002 : Record 467;
+    BEGIN
+      CreateWorkflowWebhookEntry(RecRef,WorkflowStepInstance,WorkflowWebhookEntry);
+
+      SendWebhookNotificaton(WorkflowStepInstance);
+    END;
+
+    [External]
+    PROCEDURE Reject@7(VAR WorkflowWebhookEntry@1000 : Record 467);
+    BEGIN
+      VerifyResponseExpected(WorkflowWebhookEntry);
+
+      IF NOT CanReject(WorkflowWebhookEntry) THEN
+        ERROR(UserUnableToRejectErr,USERID);
+
+      WorkflowWebhookEntry.VALIDATE(Response,WorkflowWebhookEntry.Response::Reject);
+      WorkflowWebhookEntry.MODIFY(TRUE);
+
+      OnRejectWorkflow(WorkflowWebhookEntry);
+    END;
+
+    [External]
+    PROCEDURE RejectByStepInstanceId@25(Id@1000 : GUID);
+    VAR
+      WorkflowWebhookEntry@1001 : Record 467;
+    BEGIN
+      IF NOT FindWorkflowWebhookEntryByStepInstance(WorkflowWebhookEntry,Id) THEN
+        ERROR(WorkflowStepInstanceIdNotFoundErr,Id);
+
+      Reject(WorkflowWebhookEntry);
+    END;
+
+    PROCEDURE SendWebhookNotificaton@17(WorkflowStepInstance@1002 : Record 1504);
+    VAR
+      WorkflowWebhookNotification@1001 : Codeunit 1545;
+      IsTaskSchedulerAllowed@1000 : Boolean;
+    BEGIN
+      WorkflowWebhookNotification.StartNotification(WorkflowStepInstance.ID);
+
+      IsTaskSchedulerAllowed := TRUE;
+      OnFindTaskSchedulerAllowed(IsTaskSchedulerAllowed);
+
+      IF IsTaskSchedulerAllowed THEN
+        TASKSCHEDULER.CREATETASK(CODEUNIT::"Workflow Webhook Notify Task",0,TRUE,
+          COMPANYNAME,0DT,WorkflowStepInstance.RECORDID)
+      ELSE
+        CODEUNIT.RUN(CODEUNIT::"Workflow Webhook Notify Task",WorkflowStepInstance);
+    END;
+
+    LOCAL PROCEDURE CanAct@21(WorkflowWebhookEntry@1000 : Record 467) : Boolean;
+    VAR
+      UserSetup@1002 : Record 91;
+      WorkflowStepArgument@1001 : Record 1523;
+    BEGIN
+      IF WorkflowWebhookEntry.Response <> WorkflowWebhookEntry.Response::Pending THEN
+        EXIT(FALSE);
+
+      IF ISNULLGUID(WorkflowWebhookEntry."Response Argument") THEN
+        EXIT(FALSE);
+
+      IF NOT WorkflowStepArgument.GET(WorkflowWebhookEntry."Response Argument") THEN
+        EXIT(FALSE);
+
+      CASE WorkflowStepArgument."Response Type" OF
+        WorkflowStepArgument."Response Type"::"User ID":
+          BEGIN
+            IF WorkflowStepArgument."Response User ID" <> USERID THEN
+              EXIT(FALSE);
+
+            UserSetup.INIT;
+            UserSetup.FILTERGROUP(-1);
+            UserSetup.SETFILTER("Approver ID",'%1',USERID);
+            UserSetup.SETFILTER(Substitute,'%1',USERID);
+            EXIT(UserSetup.FINDFIRST)
+          END
+        ELSE
+          EXIT(FALSE)
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateWorkflowWebhookEntry@9(RecRef@1000 : RecordRef;WorkflowStepInstance@1001 : Record 1504;VAR WorkflowWebhookEntry@1002 : Record 467);
+    VAR
+      Customer@1008 : Record 18;
+      GenJournalBatch@1006 : Record 232;
+      GenJournalLine@1007 : Record 81;
+      Item@1009 : Record 27;
+      PurchaseHeader@1003 : Record 38;
+      SalesHeader@1004 : Record 36;
+      Vendor@1010 : Record 23;
+      WorkflowStepArgument@1005 : Record 1523;
+    BEGIN
+      IF ISNULLGUID(WorkflowStepInstance.Argument) OR NOT WorkflowStepArgument.GET(WorkflowStepInstance.Argument) THEN
+        CLEAR(WorkflowStepArgument);
+
+      WorkflowWebhookEntry.INIT;
+      WorkflowWebhookEntry."Workflow Step Instance ID" := WorkflowStepInstance.ID;
+      WorkflowWebhookEntry."Initiated By User ID" := USERID;
+      WorkflowWebhookEntry.Response := GetInitialResponseValue(WorkflowStepInstance.ID,WorkflowStepInstance."Workflow Code",
+          WorkflowStepArgument);
+      WorkflowWebhookEntry."Response Argument" := WorkflowStepArgument.ID;
+      WorkflowWebhookEntry."Date-Time Initiated" := CURRENTDATETIME;
+      WorkflowWebhookEntry."Last Date-Time Modified" := WorkflowWebhookEntry."Date-Time Initiated";
+      WorkflowWebhookEntry."Record ID" := RecRef.RECORDID;
+
+      CASE RecRef.NUMBER OF
+        DATABASE::Customer:
+          BEGIN
+            RecRef.SETTABLE(Customer);
+            WorkflowWebhookEntry."Data ID" := Customer.Id;
+          END;
+        DATABASE::"Gen. Journal Batch":
+          BEGIN
+            RecRef.SETTABLE(GenJournalBatch);
+            WorkflowWebhookEntry."Data ID" := GenJournalBatch.Id;
+          END;
+        DATABASE::"Gen. Journal Line":
+          BEGIN
+            RecRef.SETTABLE(GenJournalLine);
+            WorkflowWebhookEntry."Data ID" := GenJournalLine.Id;
+          END;
+        DATABASE::Item:
+          BEGIN
+            RecRef.SETTABLE(Item);
+            WorkflowWebhookEntry."Data ID" := Item.Id;
+          END;
+        DATABASE::"Purchase Header":
+          BEGIN
+            RecRef.SETTABLE(PurchaseHeader);
+            WorkflowWebhookEntry."Data ID" := PurchaseHeader.Id;
+          END;
+        DATABASE::"Sales Header":
+          BEGIN
+            RecRef.SETTABLE(SalesHeader);
+            WorkflowWebhookEntry."Data ID" := SalesHeader.Id;
+          END;
+        DATABASE::Vendor:
+          BEGIN
+            RecRef.SETTABLE(Vendor);
+            WorkflowWebhookEntry."Data ID" := Vendor.Id;
+          END;
+        ELSE
+          ERROR(UnsupportedRecordTypeErr,RecRef.CAPTION);
+      END;
+
+      WorkflowWebhookEntry.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE GetInitialResponseValue@10(WorkflowStepInstanceID@1000 : GUID;WorkflowCode@1003 : Code[20];WorkflowStepArgument@1006 : Record 1523) : Integer;
+    VAR
+      DummyWorkflowWebhookEntry@1004 : Record 467;
+      WorkflowStepInstance@1001 : Record 1504;
+      WorkflowStep@1002 : Record 1502;
+      WorkflowWebhookEvents@1005 : Codeunit 1541;
+      ResponseTypeNotExpected@1007 : Option;
+    BEGIN
+      ResponseTypeNotExpected := WorkflowStepArgument."Response Type"::"Not Expected";
+
+      IF WorkflowStepArgument.ISEMPTY OR (WorkflowStepArgument."Response Type" <> ResponseTypeNotExpected) THEN BEGIN
+        WorkflowStepInstance.INIT;
+        WorkflowStepInstance.SETRANGE(ID,WorkflowStepInstanceID);
+        WorkflowStepInstance.SETRANGE("Workflow Code",WorkflowCode);
+
+        IF WorkflowStepInstance.FINDSET THEN BEGIN
+          REPEAT
+            IF WorkflowStep.GET(WorkflowStepInstance."Workflow Code",WorkflowStepInstance."Workflow Step ID") THEN BEGIN
+              IF WorkflowStep."Function Name" = WorkflowWebhookEvents.WorkflowWebhookResponseReceivedEventCode THEN
+                EXIT(DummyWorkflowWebhookEntry.Response::Pending);
+            END;
+          UNTIL WorkflowStepInstance.NEXT = 0;
+        END;
+      END;
+
+      EXIT(DummyWorkflowWebhookEntry.Response::NotExpected);
+    END;
+
+    LOCAL PROCEDURE FindWorkflowWebhookEntryByStepInstance@4(VAR WorkflowWebhookEntry@1001 : Record 467;Id@1000 : GUID) : Boolean;
+    BEGIN
+      WorkflowWebhookEntry.SETCURRENTKEY("Workflow Step Instance ID");
+      WorkflowWebhookEntry.SETRANGE("Workflow Step Instance ID",Id);
+
+      EXIT(WorkflowWebhookEntry.FINDFIRST);
+    END;
+
+    PROCEDURE FindWorkflowWebhookEntryByRecordIdAndResponse@15(VAR WorkflowWebhookEntry@1002 : Record 467;RecordId@1000 : RecordID;ResponseStatus@1001 : Option) : Boolean;
+    BEGIN
+      WorkflowWebhookEntry.SETRANGE("Record ID",RecordId);
+      WorkflowWebhookEntry.SETRANGE(Response,ResponseStatus);
+
+      EXIT(WorkflowWebhookEntry.FINDFIRST);
+    END;
+
+    PROCEDURE FindAndCancel@18(RecordId@1000 : RecordID);
+    VAR
+      WorkflowWebhookEntry@1002 : Record 467;
+    BEGIN
+      // Searches for and then cancels the webhook entry with the given ID, if possible.
+      // (Used by the various Cancel ribbon buttons.)
+      IF FindWorkflowWebhookEntryByRecordIdAndResponse(WorkflowWebhookEntry,RecordId,WorkflowWebhookEntry.Response::Pending) AND
+         CanCancel(WorkflowWebhookEntry)
+      THEN
+        Cancel(WorkflowWebhookEntry);
+    END;
+
+    PROCEDURE DeleteWorkflowWebhookEntries@27(RecordId@1000 : RecordID);
+    VAR
+      WorkflowWebhookEntry@1002 : Record 467;
+    BEGIN
+      IF FindWorkflowWebhookEntryByRecordIdAndResponse(WorkflowWebhookEntry,RecordId,WorkflowWebhookEntry.Response::Pending) THEN BEGIN
+        VerifyResponseExpected(WorkflowWebhookEntry);
+
+        IF NOT CanCancel(WorkflowWebhookEntry) THEN
+          ERROR(UserUnableToDeleteErr,USERID);
+
+        WorkflowWebhookEntry.SETRANGE("Record ID",RecordId);
+        IF WorkflowWebhookEntry.FINDFIRST THEN
+          WorkflowWebhookEntry.DELETEALL;
+      END;
+    END;
+
+    PROCEDURE RenameRecord@19(OldRecordId@1000 : RecordID;NewRecordId@1001 : RecordID);
+    VAR
+      WorkflowWebhookEntry@1002 : Record 467;
+    BEGIN
+      WorkflowWebhookEntry.SETRANGE("Record ID",OldRecordId);
+      IF WorkflowWebhookEntry.FINDFIRST THEN
+        WorkflowWebhookEntry.MODIFYALL("Record ID",NewRecordId,TRUE);
+    END;
+
+    LOCAL PROCEDURE VerifyResponseExpected@12(WorkflowWebhookEntry@1000 : Record 467);
+    BEGIN
+      IF WorkflowWebhookEntry.Response = WorkflowWebhookEntry.Response::NotExpected THEN
+        ERROR(ResponseNotExpectedErr);
+
+      IF WorkflowWebhookEntry.Response <> WorkflowWebhookEntry.Response::Pending THEN
+        ERROR(ResponseAlreadyReceivedErr);
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnFindTaskSchedulerAllowed@14(VAR IsTaskSchedulingAllowed@1000 : Boolean);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+
