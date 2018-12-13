@@ -2,9 +2,9 @@ OBJECT Codeunit 367 CheckManagement
 {
   OBJECT-PROPERTIES
   {
-    Date=11/27/18;
-    Time=11:07:53 PM;
-    Version List=;
+    Date=09/19/18;
+    Time=12:00:00 PM;
+    Version List=NAVW113.00,NAVNA13.00;
   }
   PROPERTIES
   {
@@ -19,8 +19,8 @@ OBJECT Codeunit 367 CheckManagement
   CODE
   {
     VAR
-      CheckAlreadyExistsErr@1000 : TextConst '@@@="%1=The check number., %2=The Bank Account table name.";ENU=Check %1 already exists for this %2.';
-      VoidingCheckMsg@1001 : TextConst '@@@="%1=The check number being voided.";ENU=Voiding check %1.';
+      CheckAlreadyExistsErr@1000 : TextConst '@@@="%1=The check number., %2=The Bank Account table name.";ENU=Check %1 already exists for this %2.;ESM=Ya existe el cheque %1 en este %2.;FRC=Le chŠque %1 existe d‚j… pour ce %2.;ENC=Cheque %1 already exists for this %2.';
+      VoidingCheckMsg@1001 : TextConst '@@@="%1=The check number being voided.";ENU=Voiding check %1.;ESM=Anulando el cheque %1.;FRC=Annulation du chŠque %1.;ENC=Voiding cheque %1.';
       GenJnlLine2@1002 : Record 81;
       BankAcc@1003 : Record 270;
       BankAccLedgEntry2@1004 : Record 271;
@@ -33,11 +33,11 @@ OBJECT Codeunit 367 CheckManagement
       GenJnlPostLine@1014 : Codeunit 12;
       UpdateAnalysisView@1018 : Codeunit 410;
       NextCheckEntryNo@1016 : Integer;
-      VoidingCheckErr@1017 : TextConst 'ENU=You cannot Financially Void checks posted in a non-balancing transaction.';
+      VoidingCheckErr@1017 : TextConst 'ENU=You cannot Financially Void checks posted in a non-balancing transaction.;ESM=No puede anular cheques registrados desde un movimiento que no se puede saldar.;FRC=Vous ne pouvez pas financiŠrement annuler les chŠques enregistr‚s … partir d''un modŠle feuille avec l''option Forcer ‚qu. nø doc. param‚tr‚ sur Non.;ENC=You cannot Financially Void cheques posted in a non-balancing transaction.';
       AppliesIDCounter@1019 : Integer;
-      PaymentOrRefundErr@1008 : TextConst '@@@="%1=Document Type for the payment., %2=Payment Document Type., %3=Refund Document Type.";ENU=%1 must be either %2 or %3.';
-      BankAccountTypeErr@1015 : TextConst '@@@="%1=Account type., %2=Balancing Account type.";ENU=Either the %1 or the %2 must refer to a Bank Account.';
-      NoAppliedEntryErr@1007 : TextConst 'ENU=Cannot find an applied entry within the specified filter.';
+      PaymentOrRefundErr@1008 : TextConst '@@@="%1=Document Type for the payment., %2=Payment Document Type., %3=Refund Document Type.";ENU=%1 must be either %2 or %3.;ESM=%1 debe ser %2 o %3.;FRC=%1 doit ˆtre %2 ou %3.;ENC=%1 must be either %2 or %3.';
+      BankAccountTypeErr@1015 : TextConst '@@@="%1=Account type., %2=Balancing Account type.";ENU=Either the %1 or the %2 must refer to a Bank Account.;ESM=%1 o %2 deben hacer referencia a una cuenta bancaria.;FRC=%1 ou %2 doit faire r‚f‚rence … un compte bancaire.;ENC=Either the %1 or the %2 must refer to a Bank Account.';
+      NoAppliedEntryErr@1007 : TextConst 'ENU=Cannot find an applied entry within the specified filter.;ESM=No se encuentra un movimiento liquidado dentro del filtro especificado.;FRC=Impossible de trouver une ‚criture affect‚e dans le filtre sp‚cifi‚.;ENC=Cannot find an applied entry within the specified filter.';
 
     [External]
     PROCEDURE InsertCheck@3(VAR CheckLedgEntry@1000 : Record 272;RecordIdToPrint@1001 : RecordID);
@@ -161,6 +161,7 @@ OBJECT Codeunit 367 CheckManagement
     PROCEDURE FinancialVoidCheck@5(VAR CheckLedgEntry@1000 : Record 272);
     VAR
       VATPostingSetup@1002 : Record 325;
+      Currency@1009 : Record 4;
       ConfirmFinancialVoid@1008 : Page 695;
       AmountToVoid@1003 : Decimal;
       CheckAmountLCY@1004 : Decimal;
@@ -262,7 +263,6 @@ OBJECT Codeunit 367 CheckManagement
               SETRANGE("Posting Date",BankAccLedgEntry2."Posting Date");
               IF FINDSET THEN
                 REPEAT
-                  OnFinancialVoidCheckOnBeforePostCust(GenJnlLine2,CustLedgEntry);
                   CALCFIELDS("Original Amount");
                   SetGenJnlLine(
                     GenJnlLine2,-"Original Amount","Currency Code",CheckLedgEntry."Document No.",
@@ -291,7 +291,6 @@ OBJECT Codeunit 367 CheckManagement
               SETRANGE("Posting Date",BankAccLedgEntry2."Posting Date");
               IF FINDSET THEN
                 REPEAT
-                  OnFinancialVoidCheckOnBeforePostVend(GenJnlLine2,VendorLedgEntry);
                   CALCFIELDS("Original Amount");
                   SetGenJnlLine(
                     GenJnlLine2,-"Original Amount","Currency Code",CheckLedgEntry."Document No.",
@@ -357,9 +356,31 @@ OBJECT Codeunit 367 CheckManagement
         BankAccLedgEntry2.MODIFY;
       END;
 
-      // rounding error from currency conversion
-      IF CheckAmountLCY + BalanceAmountLCY <> 0 THEN
-        PostRoundingAmount(BankAcc,CheckLedgEntry,ConfirmFinancialVoid.GetVoidDate,-(CheckAmountLCY + BalanceAmountLCY));
+      IF CheckAmountLCY + BalanceAmountLCY <> 0 THEN BEGIN  // rounding error from currency conversion
+        Currency.GET(BankAcc."Currency Code");
+        GenJnlLine2.INIT;
+        GenJnlLine2."System-Created Entry" := TRUE;
+        GenJnlLine2."Financial Void" := TRUE;
+        GenJnlLine2."Document No." := CheckLedgEntry."Document No.";
+        GenJnlLine2."Document Type" :=  GetVoidingDocumentType(CheckLedgEntry."Document Type");
+        GenJnlLine2."Account Type" := GenJnlLine2."Account Type"::"G/L Account";
+        GenJnlLine2."Posting Date" := ConfirmFinancialVoid.GetVoidDate;
+        IF -(CheckAmountLCY + BalanceAmountLCY) > 0 THEN
+          GenJnlLine2.VALIDATE("Account No.",Currency.GetConvLCYRoundingDebitAccount)
+        ELSE
+          GenJnlLine2.VALIDATE("Account No.",Currency.GetConvLCYRoundingCreditAccount);
+        GenJnlLine2.VALIDATE("Currency Code",BankAcc."Currency Code");
+        GenJnlLine2.Description := STRSUBSTNO(VoidingCheckMsg,CheckLedgEntry."Check No.");
+        GenJnlLine2."Source Code" := SourceCodeSetup."Financially Voided Check";
+        GenJnlLine2."Allow Zero-Amount Posting" := TRUE;
+        GenJnlLine2.VALIDATE(Amount,0);
+        GenJnlLine2."Amount (LCY)" := -(CheckAmountLCY + BalanceAmountLCY);
+        GenJnlLine2."VAT Base Amount (LCY)" := -(CheckAmountLCY + BalanceAmountLCY);
+        GenJnlLine2."Shortcut Dimension 1 Code" := BankAccLedgEntry2."Global Dimension 1 Code";
+        GenJnlLine2."Shortcut Dimension 2 Code" := BankAccLedgEntry2."Global Dimension 2 Code";
+        GenJnlLine2."Dimension Set ID" := BankAccLedgEntry2."Dimension Set ID";
+        GenJnlPostLine.RunWithCheck(GenJnlLine2);
+      END;
 
       MarkCheckEntriesVoid(CheckLedgEntry,ConfirmFinancialVoid.GetVoidDate);
       COMMIT;
@@ -648,36 +669,6 @@ OBJECT Codeunit 367 CheckManagement
       END;
     END;
 
-    LOCAL PROCEDURE PostRoundingAmount@20(BankAcc@1001 : Record 270;CheckLedgEntry@1003 : Record 272;PostingDate@1004 : Date;RoundingAmount@1005 : Decimal);
-    VAR
-      GenJnlLine2@1000 : Record 81;
-      Currency@1002 : Record 4;
-    BEGIN
-      Currency.GET(BankAcc."Currency Code");
-      GenJnlLine2.INIT;
-      GenJnlLine2."System-Created Entry" := TRUE;
-      GenJnlLine2."Financial Void" := TRUE;
-      GenJnlLine2."Document No." := CheckLedgEntry."Document No.";
-      GenJnlLine2."Document Type" := GetVoidingDocumentType(CheckLedgEntry."Document Type");
-      GenJnlLine2."Account Type" := GenJnlLine2."Account Type"::"G/L Account";
-      GenJnlLine2."Posting Date" := PostingDate;
-      IF RoundingAmount > 0 THEN
-        GenJnlLine2.VALIDATE("Account No.",Currency.GetConvLCYRoundingDebitAccount)
-      ELSE
-        GenJnlLine2.VALIDATE("Account No.",Currency.GetConvLCYRoundingCreditAccount);
-      GenJnlLine2.VALIDATE("Currency Code",BankAcc."Currency Code");
-      GenJnlLine2.Description := STRSUBSTNO(VoidingCheckMsg,CheckLedgEntry."Check No.");
-      GenJnlLine2."Source Code" := SourceCodeSetup."Financially Voided Check";
-      GenJnlLine2."Allow Zero-Amount Posting" := TRUE;
-      GenJnlLine2.VALIDATE(Amount,0);
-      GenJnlLine2."Amount (LCY)" := RoundingAmount;
-      GenJnlLine2."VAT Base Amount (LCY)" := RoundingAmount;
-      GenJnlLine2."Shortcut Dimension 1 Code" := BankAccLedgEntry2."Global Dimension 1 Code";
-      GenJnlLine2."Shortcut Dimension 2 Code" := BankAccLedgEntry2."Global Dimension 2 Code";
-      GenJnlLine2."Dimension Set ID" := BankAccLedgEntry2."Dimension Set ID";
-      GenJnlPostLine.RunWithCheck(GenJnlLine2);
-    END;
-
     [EventSubscriber(Table,81,OnAfterDeleteEvent)]
     LOCAL PROCEDURE CleanRecordIDToPrintOnAfterDeleteEventGenJournalLine@17(VAR Rec@1000 : Record 81;RunTrigger@1001 : Boolean);
     VAR
@@ -713,16 +704,6 @@ OBJECT Codeunit 367 CheckManagement
 
     [Integration]
     LOCAL PROCEDURE OnBeforeVoidCheckGenJnlLine2Modify@18(VAR GenJournalLine2@1000 : Record 81;GenJournalLine@1001 : Record 81);
-    BEGIN
-    END;
-
-    [Integration]
-    LOCAL PROCEDURE OnFinancialVoidCheckOnBeforePostCust@19(VAR GenJournalLine@1000 : Record 81;VAR CustLedgerEntry@1001 : Record 21);
-    BEGIN
-    END;
-
-    [Integration]
-    LOCAL PROCEDURE OnFinancialVoidCheckOnBeforePostVend@21(VAR GenJournalLine@1000 : Record 81;VAR VendorLedgerEntry@1001 : Record 25);
     BEGIN
     END;
 

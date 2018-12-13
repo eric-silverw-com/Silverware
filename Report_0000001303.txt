@@ -2,13 +2,16 @@ OBJECT Report 1303 Standard Sales - Draft Invoice
 {
   OBJECT-PROPERTIES
   {
-    Date=11/27/18;
-    Time=11:13:05 PM;
-    Version List=;
+    Date=09/19/18;
+    Time=12:00:00 PM;
+    Version List=NAVW113.00,NAVNA13.00;
   }
   PROPERTIES
   {
-    CaptionML=ENU=Draft Invoice;
+    CaptionML=[ENU=Draft Invoice;
+               ESM=Borrador de factura;
+               FRC=Facture provisoire;
+               ENC=Draft Invoice];
     OnInitReport=BEGIN
                    GLSetup.GET;
                    CompanyInfo.SETAUTOCALCFIELDS(Picture);
@@ -36,7 +39,10 @@ OBJECT Report 1303 Standard Sales - Draft Invoice
                DataItemTable=Table36;
                DataItemTableView=SORTING(Document Type,No.)
                                  WHERE(Document Type=CONST(Invoice));
-               ReqFilterHeadingML=ENU=Draft Invoice;
+               ReqFilterHeadingML=[ENU=Draft Invoice;
+                                   ESM=Borrador de factura;
+                                   FRC=Facture provisoire;
+                                   ENC=Draft Invoice];
                OnPreDataItem=BEGIN
                                FirstLineHasBeenOutput := FALSE;
                              END;
@@ -44,12 +50,10 @@ OBJECT Report 1303 Standard Sales - Draft Invoice
                OnAfterGetRecord=VAR
                                   CurrencyExchangeRate@1000 : Record 330;
                                   PaymentServiceSetup@1003 : Record 1060;
-                                  SalesReceivablesSetup@1006 : Record 311;
                                   O365PaymentInstructions@1005 : Record 2155;
                                   ArchiveManagement@1001 : Codeunit 5063;
                                   SalesPost@1002 : Codeunit 80;
                                   IdentityManagement@1004 : Codeunit 9801;
-                                  NoSeriesManagement@1007 : Codeunit 396;
                                 BEGIN
                                   FirstLineHasBeenOutput := FALSE;
                                   CLEAR(Line);
@@ -59,7 +63,8 @@ OBJECT Report 1303 Standard Sales - Draft Invoice
                                   SalesPost.GetSalesLines(Header,Line,0);
                                   OnAfterSalesPostGetSalesLines(Header,Line);
 
-                                  Line.CalcSalesTaxLines(Header,Line);
+                                  Line.CalcVATAmountLines(0,Header,Line,VATAmountLine);
+                                  Line.UpdateVATOnLines(0,Header,Line,VATAmountLine);
 
                                   IF IdentityManagement.IsInvAppId THEN
                                     "Language Code" := Language.GetUserLanguage;
@@ -81,12 +86,10 @@ OBJECT Report 1303 Standard Sales - Draft Invoice
                                   InvoiceNoText := InvNoLbl;
                                   BodyContentText := BodyLbl;
                                   ChecksPayableText := STRSUBSTNO(ChecksPayableLbl,CompanyInfo.Name);
-
                                   IF IdentityManagement.IsInvAppId THEN BEGIN
-                                    IF SalesReceivablesSetup.GET THEN
-                                      IF SalesReceivablesSetup."Posted Invoice Nos." <> '' THEN
-                                        NextInvoiceNo := NoSeriesManagement.ClearStateAndGetNextNo(SalesReceivablesSetup."Posted Invoice Nos.");
-                                    InvoiceNoText := ExpectedlInvNoLbl;
+                                    DocumentTitleText := RealInvoiceLbl;
+                                    YourDocumentTitleText := STRSUBSTNO(YourDocLbl,RealInvoiceLbl);
+                                    InvoiceNoText := RealInvNoLbl;
                                     BodyContentText := RealBodyLbl;
                                   END;
 
@@ -342,7 +345,7 @@ OBJECT Report 1303 Standard Sales - Draft Invoice
                SourceExpr=InvoiceNoText }
 
     { 183 ;1   ;Column  ;InvoiceNoPosition_Lbl;
-               SourceExpr=NextInvoiceNo }
+               SourceExpr=InvoiceNoPositionLbl }
 
     { 84  ;1   ;Column  ;PricesIncludingVAT  ;
                SourceExpr="Prices Including VAT" }
@@ -486,7 +489,6 @@ OBJECT Report 1303 Standard Sales - Draft Invoice
                                IF NOT MoreLines THEN
                                  CurrReport.BREAK;
                                SETRANGE("Line No.",0,"Line No.");
-                               CurrReport.CREATETOTALS("Line Amount",Amount,"Amount Including VAT","Inv. Discount Amount");
                                TransHeaderAmount := 0;
                                PrevLineAmount := 0;
                                FirstLineHasBeenOutput := FALSE;
@@ -664,11 +666,6 @@ OBJECT Report 1303 Standard Sales - Draft Invoice
                DataItemTable=Table290;
                DataItemTableView=SORTING(VAT Identifier,VAT Calculation Type,Tax Group Code,Use Tax,Positive);
                OnPreDataItem=BEGIN
-                               CurrReport.CREATETOTALS(
-                                 "Line Amount","Inv. Disc. Base Amount",
-                                 "Invoice Discount Amount","VAT Base","VAT Amount",
-                                 VATBaseLCY,VATAmountLCY);
-
                                TotalVATBaseLCY := 0;
                                TotalVATAmountLCY := 0;
                              END;
@@ -931,12 +928,21 @@ OBJECT Report 1303 Standard Sales - Draft Invoice
                   ContainerType=ContentArea }
 
       { 6   ;1   ;Group     ;
-                  CaptionML=ENU=Options }
+                  CaptionML=[ENU=Options;
+                             ESM=Opciones;
+                             FRC=Options;
+                             ENC=Options] }
 
       { 1   ;2   ;Field     ;
                   Name=ArchiveDocument;
-                  CaptionML=ENU=Archive Document;
-                  ToolTipML=ENU=Specifies if the document is archived after you print it.;
+                  CaptionML=[ENU=Archive Document;
+                             ESM=Archivar documento;
+                             FRC=Archiver document;
+                             ENC=Archive Document];
+                  ToolTipML=[ENU=Specifies if the document is archived after you print it.;
+                             ESM=Especifica si el documento se archiva despu‚s de imprimirlo.;
+                             FRC=Indique si le document est archiv‚ aprŠs son impression.;
+                             ENC=Specifies if the document is archived after you print it.];
                   ApplicationArea=#Basic,#Suite;
                   SourceExpr=ArchiveDocument }
 
@@ -948,39 +954,41 @@ OBJECT Report 1303 Standard Sales - Draft Invoice
   CODE
   {
     VAR
-      SalesConfirmationLbl@1004 : TextConst 'ENU=Draft Invoice';
-      YourDocLbl@1069 : TextConst '@@@=Your Draft Invoice or Your Invoice;ENU=Your %1';
-      SalespersonLbl@1003 : TextConst 'ENU=Sales person';
-      CompanyInfoBankAccNoLbl@1045 : TextConst 'ENU=Account No.';
-      CompanyInfoBankNameLbl@1046 : TextConst 'ENU=Bank';
-      CompanyInfoGiroNoLbl@1049 : TextConst 'ENU=Giro No.';
-      CompanyInfoPhoneNoLbl@1050 : TextConst 'ENU=Phone No.';
-      CopyLbl@1059 : TextConst 'ENU=Copy';
-      EMailLbl@1068 : TextConst 'ENU=Email';
-      HomePageLbl@1070 : TextConst 'ENU=Home Page';
-      InvDiscBaseAmtLbl@1071 : TextConst 'ENU=Invoice Discount Base Amount';
-      InvDiscountAmtLbl@1072 : TextConst 'ENU=Invoice Discount';
-      InvNoLbl@1073 : TextConst 'ENU=Draft Invoice No.';
-      LineAmtAfterInvDiscLbl@1074 : TextConst 'ENU=Payment Discount on Tax';
-      LocalCurrencyLbl@1076 : TextConst 'ENU=Local Currency';
-      PageLbl@1077 : TextConst 'ENU=Page';
-      PaymentTermsDescLbl@1078 : TextConst 'ENU=Payment Terms';
-      PaymentMethodDescLbl@1040 : TextConst 'ENU=Payment Method';
-      PostedShipmentDateLbl@1079 : TextConst 'ENU=Shipment Date';
-      SalesInvLineDiscLbl@1081 : TextConst 'ENU=Discount %';
-      ShipmentLbl@1084 : TextConst 'ENU=Shipment';
-      ShiptoAddrLbl@1085 : TextConst 'ENU=Ship-to Address';
-      ShptMethodDescLbl@1086 : TextConst 'ENU=Shipment Method';
-      SubtotalLbl@1087 : TextConst 'ENU=Subtotal';
-      TotalLbl@1088 : TextConst 'ENU=Total';
-      VATAmtSpecificationLbl@1037 : TextConst 'ENU=Tax Amount Specification';
-      VATAmtLbl@1091 : TextConst 'ENU=Tax Amount';
-      VATAmountLCYLbl@1027 : TextConst 'ENU=Tax Amount ($)';
-      VATBaseLbl@1093 : TextConst 'ENU=Tax Base';
-      VATBaseLCYLbl@1032 : TextConst 'ENU=Tax Base ($)';
-      VATClausesLbl@1094 : TextConst 'ENU=Tax Clause';
-      VATIdentifierLbl@1095 : TextConst 'ENU=Tax Identifier';
-      VATPercentageLbl@1096 : TextConst 'ENU=Tax %';
+      SalesConfirmationLbl@1004 : TextConst 'ENU=Draft Invoice;ESM=Borrador de factura;FRC=Facture provisoire;ENC=Draft Invoice';
+      RealInvoiceLbl@1075 : TextConst 'ENU=Invoice;ESM=Factura;FRC=Facture;ENC=Invoice';
+      YourDocLbl@1069 : TextConst '@@@=Your Draft Invoice or Your Invoice;ENU=Your %1;ESM=Su %1;FRC=Votre %1;ENC=Your %1';
+      SalespersonLbl@1003 : TextConst 'ENU=Sales person;ESM=Vendedor;FRC=Vendeur;ENC=Sales person';
+      CompanyInfoBankAccNoLbl@1045 : TextConst 'ENU=Account No.;ESM=N.§ de cuenta;FRC=Nø compte;ENC=Account No.';
+      CompanyInfoBankNameLbl@1046 : TextConst 'ENU=Bank;ESM=Banco;FRC=Banque;ENC=Bank';
+      CompanyInfoGiroNoLbl@1049 : TextConst 'ENU=Giro No.;ESM=N§ giro postal;FRC=Nø CCP;ENC=Giro No.';
+      CompanyInfoPhoneNoLbl@1050 : TextConst 'ENU=Phone No.;ESM=N.§ tel‚fono;FRC=Nø t‚l‚phone;ENC=Phone No.';
+      CopyLbl@1059 : TextConst 'ENU=Copy;ESM=Copiar;FRC=Copier;ENC=Copy';
+      EMailLbl@1068 : TextConst 'ENU=Email;ESM=Correo electr¢nico;FRC=Courriel;ENC=Email';
+      HomePageLbl@1070 : TextConst 'ENU=Home Page;ESM=P gina Web;FRC=Page d''accueil;ENC=Home Page';
+      InvDiscBaseAmtLbl@1071 : TextConst 'ENU=Invoice Discount Base Amount;ESM=Importe base descuento factura;FRC=Montant base escompte facture;ENC=Invoice Discount Base Amount';
+      InvDiscountAmtLbl@1072 : TextConst 'ENU=Invoice Discount;ESM=Descuento en factura;FRC=Escompte facture;ENC=Invoice Discount';
+      InvNoLbl@1073 : TextConst 'ENU=Draft Invoice No.;ESM=N.§ de borrador de factura;FRC=Nø facture provisoire;ENC=Draft Invoice No.';
+      RealInvNoLbl@1092 : TextConst 'ENU=Invoice No.;ESM=N.§ de factura;FRC=Nø facture;ENC=Invoice No.';
+      LineAmtAfterInvDiscLbl@1074 : TextConst 'ENU=Payment Discount on Tax;ESM=Descuento P.P. sobre IVA;FRC=Escompte de paiement sur TVA;ENC=Payment Discount on Tax';
+      LocalCurrencyLbl@1076 : TextConst 'ENU=Local Currency;ESM=Divisa local;FRC=Devise locale;ENC=Local Currency';
+      PageLbl@1077 : TextConst 'ENU=Page;ESM=P g.;FRC=Page;ENC=Page';
+      PaymentTermsDescLbl@1078 : TextConst 'ENU=Payment Terms;ESM=T‚rminos pago;FRC=Modalit‚s de paiement;ENC=Payment Terms';
+      PaymentMethodDescLbl@1040 : TextConst 'ENU=Payment Method;ESM=Forma pago;FRC=Mode de rŠglement;ENC=Payment Method';
+      PostedShipmentDateLbl@1079 : TextConst 'ENU=Shipment Date;ESM=Fecha env¡o;FRC=Date de livraison;ENC=Shipment Date';
+      SalesInvLineDiscLbl@1081 : TextConst 'ENU=Discount %;ESM=% Descuento;FRC=% escompte;ENC=Discount %';
+      ShipmentLbl@1084 : TextConst 'ENU=Shipment;ESM=Env¡o;FRC=Livraison;ENC=Shipment';
+      ShiptoAddrLbl@1085 : TextConst 'ENU=Ship-to Address;ESM=Direcci¢n de env¡o;FRC=Adresse de livraison destinataire;ENC=Ship-to Address';
+      ShptMethodDescLbl@1086 : TextConst 'ENU=Shipment Method;ESM=M‚todo de env¡o;FRC=M‚thode de livraison;ENC=Shipment Method';
+      SubtotalLbl@1087 : TextConst 'ENU=Subtotal;ESM=Subtotal;FRC=Sous-total;ENC=Subtotal';
+      TotalLbl@1088 : TextConst 'ENU=Total;ESM=Total;FRC=Total;ENC=Total';
+      VATAmtSpecificationLbl@1037 : TextConst 'ENU=Tax Amount Specification;ESM=Especificaci¢n importe IVA;FRC=D‚tail montant TVA;ENC=Tax Amount Specification';
+      VATAmtLbl@1091 : TextConst 'ENU=Tax Amount;ESM=Importe IVA;FRC=Montant TVA;ENC=Tax Amount';
+      VATAmountLCYLbl@1027 : TextConst 'ENU=Tax Amount ($);ESM=Importe IVA ($);FRC=Montant TVA $;ENC=Tax Amount ($)';
+      VATBaseLbl@1093 : TextConst 'ENU=Tax Base;ESM=Base IVA;FRC=Base TVA;ENC=Tax Base';
+      VATBaseLCYLbl@1032 : TextConst 'ENU=Tax Base ($);ESM=Base IVA ($);FRC=Base TVA ($);ENC=Tax Base ($)';
+      VATClausesLbl@1094 : TextConst 'ENU=Tax Clause;ESM=Cl usula de IVA;FRC=Clause TVA;ENC=Tax Clause';
+      VATIdentifierLbl@1095 : TextConst 'ENU=Tax Identifier;ESM=Identific. IVA;FRC=Identificateur TVA;ENC=Tax Identifier';
+      VATPercentageLbl@1096 : TextConst 'ENU=Tax %;ESM=% IVA;FRC=% TVA;ENC=Tax %';
       TempBlobWorkDescription@1002 : Record 99008535;
       TempBlobCompanyLogo@1200 : TEMPORARY Record 99008535;
       GLSetup@1007 : Record 98;
@@ -1025,41 +1033,40 @@ OBJECT Report 1303 Standard Sales - Draft Invoice
       FirstLineHasBeenOutput@1089 : Boolean;
       CalculatedExchRate@1013 : Decimal;
       ExchangeRateText@1014 : Text;
-      ExchangeRateTxt@1015 : TextConst '@@@=%1 and %2 are both amounts.;ENU=Exchange rate: %1/%2';
+      ExchangeRateTxt@1015 : TextConst '@@@=%1 and %2 are both amounts.;ENU=Exchange rate: %1/%2;ESM=Tipo cambio: %1/%2;FRC=Taux de change : %1/%2;ENC=Exchange rate: %1/%2';
       VATBaseLCY@1018 : Decimal;
       VATAmountLCY@1024 : Decimal;
       TotalVATBaseLCY@1052 : Decimal;
       TotalVATAmountLCY@1047 : Decimal;
       PrevLineAmount@1033 : Decimal;
-      NoFilterSetErr@1043 : TextConst 'ENU=You must specify one or more filters to avoid accidently printing all documents.';
+      NoFilterSetErr@1043 : TextConst 'ENU=You must specify one or more filters to avoid accidently printing all documents.;ESM=Debe especificar uno o varios filtros para evitar imprimir accidentalmente todos los documentos.;FRC=Vous devez sp‚cifier un ou plusieurs filtres pour ‚viter d''imprimer accidentellement tous les documents.;ENC=You must specify one or more filters to avoid accidently printing all documents.';
       PmtDiscText@1051 : Text;
       PaymentInstructionsTxt@1101 : Text;
       YourDocumentTitleText@1080 : Text;
-      FromLbl@1082 : TextConst 'ENU=From';
-      BilledToLbl@1083 : TextConst 'ENU=Billed to';
-      ChecksPayableLbl@1090 : TextConst '@@@="%1 = company name";ENU=Please make checks payable to %1';
-      QuestionsLbl@1102 : TextConst 'ENU=Questions?';
-      ThanksLbl@1100 : TextConst 'ENU=Thank You!';
-      GreetingLbl@1057 : TextConst 'ENU=Hello';
-      ClosingLbl@1056 : TextConst 'ENU=Sincerely';
-      PmtDiscTxt@1055 : TextConst '@@@="%1 = Discount Due Date %2 = value of Payment Discount % ";ENU=If we receive the payment before %1, you are eligible for a %2% payment discount.';
-      BodyLbl@1054 : TextConst 'ENU=Thank you for your business. Your draft invoice is attached to this message.';
-      RealBodyLbl@1098 : TextConst 'ENU=Thank you for your business. Your invoice is attached to this message.';
+      FromLbl@1082 : TextConst 'ENU=From;ESM=Desde;FRC=De;ENC=From';
+      BilledToLbl@1083 : TextConst 'ENU=Billed to;ESM=Facturado a;FRC=Factur‚ …;ENC=Billed to';
+      ChecksPayableLbl@1090 : TextConst '@@@="%1 = company name";ENU=Please make checks payable to %1;ESM=Emita los cheques a pagar a %1;FRC=Les chŠques peuvent ˆtre pay‚s … %1;ENC=Please make cheques payable to %1';
+      QuestionsLbl@1102 : TextConst 'ENU=Questions?;ESM=¨Tiene alguna pregunta?;FRC=Vous avez des questionsÿ?;ENC=Questions?';
+      ThanksLbl@1100 : TextConst 'ENU=Thank You!;ESM=­Gracias!;FRC=Merciÿ!;ENC=Thank You!';
+      GreetingLbl@1057 : TextConst 'ENU=Hello;ESM=Hola;FRC=Bonjour;ENC=Hello';
+      ClosingLbl@1056 : TextConst 'ENU=Sincerely;ESM=Un saludo,;FRC=Cordialement;ENC=Sincerely';
+      PmtDiscTxt@1055 : TextConst '@@@="%1 = Discount Due Date %2 = value of Payment Discount % ";ENU=If we receive the payment before %1, you are eligible for a %2% payment discount.;ESM=Si el pago se recibe antes del %1, tiene derecho a un descuento por pronto pago del %2 %.;FRC=Si nous recevons le paiement avant le %1, vous pouvez b‚n‚ficier d''un escompte de paiement de %2%.;ENC=If we receive the payment before %1, you are eligible for a %2% payment discount.';
+      BodyLbl@1054 : TextConst 'ENU=Thank you for your business. Your draft invoice is attached to this message.;ESM=Gracias por confiar en nosotros. Su borrador de factura est  adjunto a este mensaje.;FRC=Merci de votre collaboration. Votre facture provisoire est jointe … ce message.;ENC=Thank you for your business. Your draft invoice is attached to this message.';
+      RealBodyLbl@1098 : TextConst 'ENU=Thank you for your business. Your invoice is attached to this message.;ESM=Gracias por su confiar en nosotros. Su factura est  adjunta a este mensaje.;FRC=Merci de votre collaboration. Votre facture est jointe … ce message.;ENC=Thank you for your business. Your invoice is attached to this message.';
       DocumentTitleText@1121 : Text;
       InvoiceNoText@1122 : Text;
       BodyContentText@1123 : Text;
-      QtyLbl@1067 : TextConst '@@@=Short form of Quantity;ENU=Qty';
-      PriceLbl@1066 : TextConst 'ENU=Price';
-      PricePerLbl@1060 : TextConst 'ENU=Price per';
-      AmtSubjecttoSalesTaxLbl@1020001 : TextConst 'ENU=Amount Subject to Sales Tax';
-      AmtExemptfromSalesTaxLbl@1020000 : TextConst 'ENU=Amount Exempt from Sales Tax';
-      TotalTaxLbl@1020003 : TextConst 'ENU=Total Tax';
-      UnitLbl@1020004 : TextConst 'ENU=Unit';
-      UnitPriceLbl@1020005 : TextConst 'ENU=Unit Price';
-      LineAmountLbl@1020006 : TextConst 'ENU=Line Amount';
-      SalespersonLbl2@1020002 : TextConst 'ENU=Salesperson';
-      NextInvoiceNo@1044 : Text;
-      ExpectedlInvNoLbl@1097 : TextConst 'ENU=Expected Invoice No.';
+      QtyLbl@1067 : TextConst '@@@=Short form of Quantity;ENU=Qty;ESM=Cant.;FRC=Qt‚;ENC=Qty';
+      PriceLbl@1066 : TextConst 'ENU=Price;ESM=Precio;FRC=Prix;ENC=Price';
+      PricePerLbl@1060 : TextConst 'ENU=Price per;ESM=Precio por;FRC=Prix par;ENC=Price per';
+      AmtSubjecttoSalesTaxLbl@1020001 : TextConst 'ENU=Amount Subject to Sales Tax;ESM=Importe sujeto a impuestos de ventas;FRC=Montant assujetti … la taxe de vente;ENC=Amount Subject to Sales Tax';
+      AmtExemptfromSalesTaxLbl@1020000 : TextConst 'ENU=Amount Exempt from Sales Tax;ESM=Importe exento de impuestos de ventas;FRC=Montant exon‚r‚ de la taxe de vente;ENC=Amount Exempt from Sales Tax';
+      TotalTaxLbl@1020003 : TextConst 'ENU=Total Tax;ESM=Total impto.;FRC=Taxe totale;ENC=Total Tax';
+      UnitLbl@1020004 : TextConst 'ENU=Unit;ESM=Unidad;FRC=Unit‚;ENC=Unit';
+      UnitPriceLbl@1020005 : TextConst 'ENU=Unit Price;ESM=Precio unitario;FRC=Prix unitaire;ENC=Unit Price';
+      LineAmountLbl@1020006 : TextConst 'ENU=Line Amount;ESM=Importe l¡nea;FRC=Montant ligne;ENC=Line Amount';
+      SalespersonLbl2@1020002 : TextConst 'ENU=Salesperson;ESM=Vendedor;FRC=Vendeur;ENC=Salesperson';
+      InvoiceNoPositionLbl@1097 : TextConst '@@@=Locked;ENU=######;ESM=######;FRC=######;ENC=######';
 
     LOCAL PROCEDURE FormatDocumentFields@2(SalesHeader@1000 : Record 36);
     BEGIN
