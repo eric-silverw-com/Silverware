@@ -1,0 +1,526 @@
+OBJECT Codeunit 14103543 DimMgt Upd. Ledger Dimensions
+{
+  OBJECT-PROPERTIES
+  {
+    Date=01/25/16;
+    Time=[ 6:16:29 PM];
+    Modified=Yes;
+    Version List=VLDM4.06;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 15=rim,
+                TableData 17=rimd,
+                TableData 18=rim,
+                TableData 21=rim,
+                TableData 23=rim,
+                TableData 25=rim,
+                TableData 27=rim,
+                TableData 32=rim,
+                TableData 36=rim,
+                TableData 37=rim,
+                TableData 38=rim,
+                TableData 39=rim,
+                TableData 49=rim,
+                TableData 81=rim,
+                TableData 110=rim,
+                TableData 111=rim,
+                TableData 112=rim,
+                TableData 113=rim,
+                TableData 114=rim,
+                TableData 115=rim,
+                TableData 120=rim,
+                TableData 121=rim,
+                TableData 122=rim,
+                TableData 123=rim,
+                TableData 124=rim,
+                TableData 125=rim,
+                TableData 156=rim,
+                TableData 167=rim,
+                TableData 169=rim,
+                TableData 203=rimd,
+                TableData 270=rim,
+                TableData 271=rim,
+                TableData 379=rim,
+                TableData 380=rim,
+                TableData 900=rim,
+                TableData 901=rim,
+                TableData 910=rim,
+                TableData 911=rim,
+                TableData 5600=rim,
+                TableData 5601=rim,
+                TableData 5625=rim,
+                TableData 5629=rim,
+                TableData 5744=rim,
+                TableData 5745=rim,
+                TableData 5746=rim,
+                TableData 5747=rim,
+                TableData 5802=rim,
+                TableData 5900=rim,
+                TableData 5901=rim,
+                TableData 5902=rim,
+                TableData 5907=rim,
+                TableData 5908=rim,
+                TableData 5989=rim,
+                TableData 5990=rim,
+                TableData 5991=rim,
+                TableData 5992=rim,
+                TableData 5993=rim,
+                TableData 5994=rim,
+                TableData 5995=rim,
+                TableData 6650=rim,
+                TableData 6651=rim,
+                TableData 6660=rim,
+                TableData 6661=rim,
+                TableData 14103540=rim,
+                TableData 14103541=rim,
+                TableData 14103542=rim;
+    OnRun=VAR
+            TextFile@1000000001 : File;
+            TextStream@1000000000 : InStream;
+          BEGIN
+
+            // Gather Filename, Sheet, Template, Batch info
+            CLEAR(JnlImportFileRTC);
+            JnlImportFileRTC.SetFields(UploadedFileName, SheetName, Template, Batch, 'GENERAL');
+            JnlImportFileRTC.LOOKUPMODE := TRUE;
+            IF JnlImportFileRTC.RUNMODAL = ACTION::LookupOK THEN BEGIN
+              JnlImportFileRTC.GetFields(UploadedFileName, SheetName, Template, Batch);
+              FileName := UploadedFileName;
+            END;
+
+            IF FileName = '' THEN
+              ERROR(Text008 + '  ' + Text007);
+
+            IF STRPOS(COPYSTR(FileName, FindExtension(FileName)), 'xls') <> 0 THEN BEGIN
+              ImportFromExcel(FileName);
+              ExcelFile := TRUE;
+            END ELSE BEGIN
+              // Import Text Files
+              CLEAR(TextFile);
+              TextFile.OPEN(FileName);
+              TextFile.CREATEINSTREAM(TextStream);
+              XMLPORT.IMPORT(XMLPORT::XMLport14103520, TextStream);
+              TextFile.CLOSE;
+            END;
+
+            CorrectDimensions;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      GLSetup@1000000031 : Record 98;
+      GenJournalLine@1000000028 : Record 81;
+      ExcelBuf@1000000025 : Record 370;
+      ExcelBuf1@1000000024 : Record 370;
+      FieldsRec@1000000023 : Record 2000000041;
+      JnlImportFileRTC@1000000021 : Page 14103547;
+      GenRecRef@1000000019 : RecordRef;
+      GenFieldRef@1000000018 : FieldRef;
+      LineNo@1000000016 : Integer;
+      NoFields@1000000015 : Integer;
+      i@1000000014 : Integer;
+      CurField@1000000013 : Integer;
+      Template@1000000012 : Code[10];
+      Batch@1000000011 : Code[10];
+      Headers@1000000008 : ARRAY [100] OF Text[250];
+      DataFields@1000000007 : ARRAY [100] OF Text[250];
+      SheetName@1000000006 : Text[250];
+      UploadedFileName@1000000005 : Text[1024];
+      FileName@1000000004 : Text[250];
+      ExcelFile@1000000003 : Boolean;
+      Record_Ref@1000000000 : RecordRef;
+      Text001@1000000041 : TextConst 'ENU=ERROR:  Field %1 not found!  You must have the names of the columns match the Field Name in the Dynamics NAV journal exactly.';
+      Text002@1000000040 : TextConst 'ENU=In column %1 you have the value %2 \however you can only have these exact values:\\ %3';
+      Text003@1000000039 : TextConst 'ENU=ERROR: Template Name and Batch Name can not be Blank';
+      Text004@1000000038 : TextConst 'ENU=Imported Successfully.';
+      Text005@1000000037 : TextConst 'ENU=Import from Excel or Txt/CSV file';
+      Text006@1000000036 : TextConst 'ENU=Analyzing Data...\\;ESM=Analizar Datos...\\;FRC=Analyse des donn‚es...\\;ENC=Analysing Data...\\';
+      Text007@1000000035 : TextConst 'ENU=Import Aborted.';
+      Text008@1000000034 : TextConst 'ENU="A filename must be provided.  "';
+      Text010@1000000033 : TextConst 'ENU=http://support.dynamicsnavaddons.com/%1/%2';
+      Text011@1000000032 : TextConst 'ENU=The dimension value %1 does not exist. Do you want to create dimension value %1';
+      LineNo1@1000000042 : Integer;
+
+    PROCEDURE ImportFromExcel@1000000011(ExcelFileName@1000000000 : Text[250]);
+    BEGIN
+      ExcelBuf.LOCKTABLE;
+      ExcelBuf.DELETEALL;
+      ExcelBuf.OpenBook(ExcelFileName, SheetName);
+      ExcelBuf.ReadSheet;
+    END;
+
+    PROCEDURE FindExtension@1000000005(FileName@1000000000 : Text[250]) : Integer;
+    VAR
+      Len@1000000002 : Integer;
+      Pos@1000000003 : Integer;
+    BEGIN
+      Len := STRLEN(FileName);
+      i := 1;
+      WHILE i <= Len DO BEGIN
+        IF COPYSTR(FileName, i, 1) = '.' THEN
+          Pos := i;
+        i += 1;
+      END;
+      EXIT(Pos);
+    END;
+
+    PROCEDURE UpdateDimensionValues@1000000000(RecRef@1000000006 : RecordRef;DimSetEntryID@1000000001 : Integer;DimCode@1000000002 : Code[20];DimValue@1000000004 : Code[20]);
+    VAR
+      DimSetEntry@1000000000 : Record 480;
+      DimSetEntryRec@1000000003 : Record 480;
+    BEGIN
+      //CAN_SS>>
+      IF RecRef.FIND('-') THEN REPEAT
+        IF NOT DimSetEntry.GET(DimSetEntryID,DimCode) THEN BEGIN
+           DimSetEntryRec.INIT;
+           DimSetEntryRec."Dimension Set ID" :=DimSetEntryID;
+           DimSetEntryRec."Dimension Code" := DimCode;
+           DimSetEntryRec."Dimension Value Code" := DimValue;
+           DimSetEntryRec."Dimension Value ID" :=GetDimValueID(DimCode,DimValue);
+           DimSetEntryRec.INSERT;
+        END;
+      UNTIL RecRef.NEXT=0;
+      //CAN_SS<<
+    END;
+
+    PROCEDURE GetDimValueID@1000000004(DimCode@1000000000 : Code[20];DimValue@1000000001 : Code[20]) : Integer;
+    VAR
+      DimensionValue@1000000002 : Record 349;
+    BEGIN
+      //CAN_SS>>
+      IF DimensionValue.GET(DimCode,DimValue) THEN
+       EXIT(DimensionValue."Dimension Value ID")
+      //CAN_SS<<
+    END;
+
+    LOCAL PROCEDURE ValidateDimValue@1000000007(DimValueCode@1000000000 : Code[20];ExcelBufCode@1000000001 : Code[20]) : Boolean;
+    VAR
+      DimMgt@1000000002 : Codeunit 408;
+      DimValue@1000000003 : Record 349;
+    BEGIN
+      //CAN_BB>>
+      IF NOT DimMgt.CheckDimValue(DimValueCode,ExcelBufCode) THEN
+      BEGIN
+        IF CONFIRM(Text011,TRUE,ExcelBufCode) THEN
+        BEGIN
+           DimValue.INIT;
+           DimValue."Dimension Code" := DimValueCode;
+           DimValue.Code := ExcelBufCode;
+           DimValue.Name := ExcelBufCode;
+           DimValue."Dimension Value Type" := DimValue."Dimension Value Type"::Standard;
+           DimValue.Indentation := 0;
+           DimValue.INSERT(TRUE);
+           EXIT(TRUE)
+        END
+        ELSE
+           EXIT(FALSE);
+      END;
+      //CAN_BB<<
+    END;
+
+    PROCEDURE CorrectDimensions@1000000008();
+    VAR
+      Dimension@1000000025 : Record 348;
+      FindDimension@1000000024 : Record 348;
+      Window@1000000022 : Dialog;
+      DateVar@1000000021 : Date;
+      DateTimeVar@1000000020 : DateTime;
+      DateFormulaVar@1000000019 : DateFormula;
+      FieldType@1000000018 : Text[30];
+      TotalRecNo@1000000017 : Integer;
+      RecNo@1000000016 : Integer;
+      j@1000000015 : Integer;
+      NoOption@1000000014 : Integer;
+      OptionNo@1000000013 : Integer;
+      RowNo@1000000012 : Integer;
+      IsDim@1000000011 : Boolean;
+      MoveToNext@1000000010 : Boolean;
+      TableID@1000000009 : ARRAY [10] OF Integer;
+      No@1000000008 : ARRAY [10] OF Code[20];
+      ShortDim@1000000007 : Integer;
+      DimMgt@1000000006 : Codeunit 408;
+      DimSetID@1000000005 : Integer;
+      TempDimSetEntry@1000000004 : TEMPORARY Record 480;
+      DimValue@1000000003 : Record 349;
+      DimSetEntry@1000000002 : Record 480;
+      GLCaption@1000000001 : Text[50];
+      FRCaption@1000000000 : Text[50];
+      TableNo@1000000026 : Integer;
+      GLEntry@1000000027 : Record 17;
+      ResLedgerEntryRec@1000000028 : Record 203;
+    BEGIN
+
+      Window.OPEN(Text006 + '@1@@@@@@@@@@@@@@@@@@@@@@@@@\');
+      //TempDimSetEntry.DELETEALL;//CAN_SS
+
+      NoFields := ExcelBuf.COUNT;
+      IF GLSetup.GET THEN;
+
+      ExcelBuf.RESET;
+      ExcelBuf.SETFILTER("Row No.", '2..'); // read the Header with the field descriptions
+
+      TotalRecNo := ExcelBuf.COUNT;
+
+      IF ExcelBuf.FINDSET THEN
+      REPEAT
+
+        IF ExcelBuf."Column No." > 1 THEN
+           ExcelBuf.NEXT(-1);
+
+        RecNo += 1;
+        //Window.UPDATE(1, ROUND(RecNo / TotalRecNo * 10000, 1));
+
+        //IF ExcelBuf."Column No." = 1 THEN
+          //MESSAGE(ExcelBuf."Cell Value as Text");
+
+        CLEAR(TableNo);
+        EVALUATE(TableNo, ExcelBuf."Cell Value as Text");
+
+        GenRecRef.OPEN(TableNo);
+
+        CLEAR(LineNo1);
+        IF ExcelBuf.NEXT <> 0 THEN
+        BEGIN
+          TotalRecNo -= 1;
+          EVALUATE(LineNo1, ExcelBuf."Cell Value as Text");
+        END;
+
+        GenFieldRef := GenRecRef.FIELD(1); // EntryNo
+        GenFieldRef.SETRANGE(LineNo1);
+        IF GenRecRef.FINDFIRST THEN
+        BEGIN
+          IF ExcelBuf.NEXT <> 0 THEN
+            TotalRecNo -= 1;
+          //CAN_CR
+          FieldsRec.RESET;
+          FieldsRec.SETRANGE(TableNo, TableNo);
+          FOR CurField := 1 TO NoFields DO
+          BEGIN
+          // See what field it goes to
+          //SE- Bugfixing for General Journal >>
+          IF CurField = 1 THEN BEGIN
+            ExcelBuf1.RESET;
+            ExcelBuf1.SETFILTER("Row No.", '1'); // read the Header with the field descriptions
+            IF ExcelBuf1.FINDSET THEN
+              REPEAT
+                Headers[ExcelBuf1."Column No."] := ExcelBuf1."Cell Value as Text";
+              UNTIL ExcelBuf1.NEXT = 0;
+          END;
+
+          //SE- Bugfixing for General Journal <<
+          RowNo := ExcelBuf."Row No.";
+
+          WHILE(RowNo = ExcelBuf."Row No.") DO BEGIN
+
+            IsDim := FALSE;
+            ShortDim := 0;
+
+            FieldsRec.SETRANGE(FieldName);
+            FieldsRec.SETRANGE("Field Caption");
+            FieldsRec.SETRANGE("Field Caption", ExcelBuf."Cell Value as Text"); //Headers[ExcelBuf."Column No."]);
+            IF NOT FieldsRec.FINDFIRST THEN
+            BEGIN
+              FieldsRec.SETRANGE("Field Caption");
+              FieldsRec.SETRANGE(FieldName, ExcelBuf."Cell Value as Text"); //Headers[ExcelBuf."Column No."]);
+            END;
+
+            IF FieldsRec.FINDFIRST THEN
+            BEGIN
+              FindDimension.RESET;
+              FindDimension.FINDFIRST;
+              REPEAT
+                IF (ExcelBuf."Cell Value as Text" = 'Global Dimension 1 Code') THEN
+                BEGIN
+                  IF (UPPERCASE(GLSetup."Global Dimension 1 Code") = UPPERCASE(FindDimension.Code)) OR
+                     (UPPERCASE(GLSetup."Global Dimension 1 Code") = UPPERCASE(FindDimension."Code Caption"))
+                  THEN BEGIN
+                    IsDim := TRUE;
+                    Dimension := FindDimension;
+                  END;
+                END;
+                IF (ExcelBuf."Cell Value as Text" = 'Global Dimension 2 Code') THEN
+                BEGIN
+                  IF  (UPPERCASE(GLSetup."Global Dimension 2 Code") = UPPERCASE(FindDimension.Code)) OR
+                     (UPPERCASE(GLSetup."Global Dimension 2 Code") = UPPERCASE(FindDimension."Code Caption"))
+                  THEN BEGIN
+                    IsDim := TRUE;
+                    Dimension := FindDimension;
+                  END
+                END
+                ELSE
+                  IF (UPPERCASE(ExcelBuf."Cell Value as Text") = UPPERCASE(FindDimension.Code)) OR
+                    (UPPERCASE(ExcelBuf."Cell Value as Text") = UPPERCASE(FindDimension."Code Caption"))
+                  THEN BEGIN
+                    IsDim := TRUE;
+                    Dimension := FindDimension;
+                  END;
+              UNTIL IsDim OR (FindDimension.NEXT = 0);
+              ShortDim := 0;
+              IF IsDim THEN BEGIN
+                IF GLSetup."Global Dimension 1 Code" = Dimension.Code THEN BEGIN
+                  //Headers[ExcelBuf."Column No."] := 'Shortcut Dimension 1 Code';
+                  Headers[ExcelBuf."Column No."] := 'Global Dimension 1 Code';
+                  ShortDim := 1;
+                END ELSE IF GLSetup."Global Dimension 2 Code" = Dimension.Code THEN BEGIN
+                  //Headers[ExcelBuf."Column No."] := 'Shortcut Dimension 2 Code';
+                  Headers[ExcelBuf."Column No."] := 'Global Dimension 2 Code';
+                  ShortDim := 2;
+                END ELSE IF GLSetup."Shortcut Dimension 3 Code" = Dimension.Code THEN BEGIN
+                  ShortDim := 3;
+                END ELSE IF GLSetup."Shortcut Dimension 4 Code" = Dimension.Code THEN BEGIN
+                  ShortDim := 4;
+                END ELSE IF GLSetup."Shortcut Dimension 5 Code" = Dimension.Code THEN BEGIN
+                  ShortDim := 5;
+                END ELSE IF GLSetup."Shortcut Dimension 6 Code" = Dimension.Code THEN BEGIN
+                  ShortDim := 6;
+                END ELSE IF GLSetup."Shortcut Dimension 7 Code" = Dimension.Code THEN BEGIN
+                  ShortDim := 7;
+                END ELSE IF GLSetup."Shortcut Dimension 8 Code" = Dimension.Code THEN BEGIN
+                  ShortDim := 8;
+                END;
+
+                FieldsRec.SETRANGE(FieldName);
+                FieldsRec.SETRANGE("Field Caption");
+                FieldsRec.SETRANGE("Field Caption", ExcelBuf."Cell Value as Text");
+                IF NOT FieldsRec.FINDFIRST THEN
+                BEGIN
+                  FieldsRec.SETRANGE("Field Caption");
+                  FieldsRec.SETRANGE(FieldName, ExcelBuf."Cell Value as Text"); //Headers[ExcelBuf."Column No."]);
+                END;
+
+              END ELSE
+                ERROR(Text001, Headers[ExcelBuf."Column No."]);
+            END;
+
+            IF IsDim OR (ShortDim > 0) THEN BEGIN
+              IF (DELCHR(ExcelBuf."Cell Value as Text", '<>') <> '') THEN BEGIN
+                IF ExcelBuf.NEXT <> 0 THEN
+                  TotalRecNo -= 1;
+
+                TempDimSetEntry.INIT;
+                TempDimSetEntry.VALIDATE("Dimension Code", Dimension.Code);
+                //CAN_BB >>
+                IF ValidateDimValue(Dimension.Code,ExcelBuf."Cell Value as Text") THEN
+                   UpdateDimensionValues(GenRecRef,DimMgt.GetDimensionSetID(TempDimSetEntry),TempDimSetEntry."Dimension Code",TempDimSetEntry."Dimension Value Code");//CAN_SS
+                //CAN_BB <<
+
+                TempDimSetEntry.VALIDATE("Dimension Value Code", ExcelBuf."Cell Value as Text");
+                IF NOT TempDimSetEntry.INSERT THEN
+                  TempDimSetEntry.MODIFY;
+              END;
+            END ELSE
+              BEGIN
+                GenFieldRef := GenRecRef.FIELD(FieldsRec."No.");
+                FieldType := FORMAT(GenFieldRef.TYPE);
+                IF (FieldsRec."Field Caption" = GLEntry.FIELDCAPTION("Global Dimension 1 Code")) OR
+                   (FieldsRec."Field Caption" = GLEntry.FIELDCAPTION("Global Dimension 2 Code")) //OR
+                THEN BEGIN
+                  ExcelBuf."Cell Value as Text" :=
+                    DELCHR(ExcelBuf."Cell Value as Text",'=',',');
+                  ExcelBuf."Cell Value as Text" :=
+                    DELCHR(ExcelBuf."Cell Value as Text",'=','.');
+                END;
+                GenFieldRef.VALIDATE(ExcelBuf."Cell Value as Text");
+
+                IF (FieldsRec."Field Caption" = GLEntry.FIELDCAPTION("Global Dimension 1 Code")) OR
+                   (FieldsRec."Field Caption" = GLEntry.FIELDCAPTION("Global Dimension 2 Code")) //OR
+                THEN
+                BEGIN
+                  GenFieldRef := GenRecRef.FIELD(GenJournalLine.FIELDNO("Dimension Set ID"));
+                  DimSetID := GenFieldRef.VALUE;
+                  IF DimSetID > 0 THEN
+                  BEGIN
+                    DimSetEntry.RESET;
+                    DimSetEntry.SETRANGE("Dimension Set ID", DimSetID);
+                    IF DimSetEntry.FINDSET THEN
+                      REPEAT
+                        TempDimSetEntry.INIT;
+                        TempDimSetEntry.VALIDATE("Dimension Code", DimSetEntry."Dimension Code");
+                        TempDimSetEntry.VALIDATE("Dimension Value Code", DimSetEntry."Dimension Value Code");
+                        TempDimSetEntry.INSERT; //Subhash
+                      UNTIL DimSetEntry.NEXT = 0;
+                  END;
+                END;
+              END;
+
+              //END;
+
+              GenFieldRef := GenRecRef.FIELD(GLEntry.FIELDNO("Dimension Set ID"));
+              GenFieldRef.VALUE(DimMgt.GetDimensionSetID(TempDimSetEntry));
+
+              TempDimSetEntry.RESET;
+              TempDimSetEntry.SETRANGE("Dimension Code", GLSetup."Global Dimension 1 Code");
+              IF TempDimSetEntry.FINDSET THEN BEGIN
+                CASE TableNo OF
+                17:
+                   GenFieldRef := GenRecRef.FIELD(GLEntry.FIELDNO("Global Dimension 1 Code"));
+                203:
+                   GenFieldRef := GenRecRef.FIELD(ResLedgerEntryRec.FIELDNO("Global Dimension 1 Code"));
+                END;
+
+                //GenFieldRef := GenRecRef.FIELD(GLEntry.FIELDNO("Global Dimension 1 Code"));
+                GenFieldRef.VALUE(TempDimSetEntry."Dimension Value Code");
+                GenRecRef.MODIFY;
+                UpdateDimensionValues(GenRecRef,DimMgt.GetDimensionSetID(TempDimSetEntry),TempDimSetEntry."Dimension Code",TempDimSetEntry."Dimension Value Code");//CAN_SS
+              END;
+
+              TempDimSetEntry.RESET;
+              TempDimSetEntry.SETRANGE("Dimension Code", GLSetup."Global Dimension 2 Code");
+              IF TempDimSetEntry.FINDSET THEN BEGIN
+                CASE TableNo OF
+                17:
+                   GenFieldRef := GenRecRef.FIELD(GLEntry.FIELDNO("Global Dimension 2 Code"));
+                203:
+                   GenFieldRef := GenRecRef.FIELD(ResLedgerEntryRec.FIELDNO("Global Dimension 2 Code"));
+                END;
+
+                //GenFieldRef := GenRecRef.FIELD(GLEntry.FIELDNO("Global Dimension 2 Code"));
+                //GenFieldRef.VALUE(TempDimSetEntry."Dimension Value Code");  SG..
+                GenFieldRef.VALIDATE(TempDimSetEntry."Dimension Value Code");
+                GenRecRef.MODIFY;
+
+                UpdateDimensionValues(GenRecRef,DimMgt.GetDimensionSetID(TempDimSetEntry),TempDimSetEntry."Dimension Code",TempDimSetEntry."Dimension Value Code");//CAN_SS
+              END;
+
+              IF ExcelBuf.NEXT <> 0 THEN
+              BEGIN
+                //RowNo := ExcelBuf."Row No.";
+                IF ExcelBuf."Column No." = 1 THEN // this is a new row, need to create a new Gen. Journal Line
+                  CurField := NoFields;
+                TotalRecNo -= 1;
+              END
+              ELSE
+              BEGIN
+                GenRecRef.MODIFY(TRUE);//CAN_SS
+                GenRecRef.RESET;
+                GenRecRef.CLOSE;
+
+                TempDimSetEntry.RESET;
+                TempDimSetEntry.DELETEALL;
+                LineNo += 10000;
+                Window.CLOSE;
+                EXIT;
+              END;
+            END;
+            GenRecRef.MODIFY;
+            GenRecRef.RESET;
+            GenRecRef.CLOSE;
+
+            TempDimSetEntry.RESET;
+            TempDimSetEntry.DELETEALL;
+            LineNo += 10000;
+          END;
+        END;
+      UNTIL ExcelBuf.NEXT = 0;
+
+      Window.CLOSE;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

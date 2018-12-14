@@ -4,7 +4,7 @@ OBJECT Codeunit 7150 Update Item Analysis View
   {
     Date=09/19/18;
     Time=12:00:00 PM;
-    Version List=NAVW113.00;
+    Version List=NAVW113.00,VLDM4.00;
   }
   PROPERTIES
   {
@@ -14,6 +14,7 @@ OBJECT Codeunit 7150 Update Item Analysis View
                 TableData 7154=rimd,
                 TableData 7156=rimd;
     OnRun=BEGIN
+            MaxNumber := 2147483647; //VLDM4.05
             IF Code <> '' THEN BEGIN
               InitLastEntryNo;
               LOCKTABLE;
@@ -63,6 +64,13 @@ OBJECT Codeunit 7150 Update Item Analysis View
       LastValueEntryNo@1033 : Integer;
       LastItemBudgetEntryNo@1029 : Integer;
       LastEntryNoIsInitialized@1037 : Boolean;
+      MaxNumber@14103540 : Integer;
+      VLUpdateFromBeginning@14103541 : Boolean;
+      VLStartValueEntry@14103542 : Integer;
+      VLStartBudgetEntry@14103543 : Integer;
+      VLText000@14103544 : TextConst 'ENU="Do you want to delete all Analysis View Entries and Analysis View Budget Entries and update from the beginning? "';
+      VLText001@14103545 : TextConst 'ENU="Do you want to delete all Analysis View Entries and Analysis View Budget Entries? "';
+      VLText002@14103546 : TextConst 'ENU=Do you want to update Analysis View Entries from the beginning?';
 
     [External]
     PROCEDURE InitLastEntryNo@20();
@@ -71,9 +79,25 @@ OBJECT Codeunit 7150 Update Item Analysis View
       ItemBudgetEntry.RESET;
       IF LastEntryNoIsInitialized THEN
         EXIT;
+
+      //VLDM4.05>>
+      IF VLUpdateFromBeginning THEN
+        ValueEntry.SETRANGE("Entry No.",VLStartValueEntry,MaxNumber)
+        ELSE
+        ValueEntry.SETRANGE("Entry No.",ItemAnalysisView."Last Entry No." + 1,MaxNumber);
+      //VLDM4.05<<
+
       WITH ValueEntry DO
         IF FINDLAST THEN
           LastValueEntryNo := "Entry No.";
+
+      //VLDM4.05>>
+      IF VLUpdateFromBeginning THEN
+        ItemBudgetEntry.SETRANGE("Entry No.",VLStartBudgetEntry,LastItemBudgetEntryNo)
+        ELSE
+        ItemBudgetEntry.SETRANGE("Entry No.",ItemAnalysisView."Last Budget Entry No." + 1,LastItemBudgetEntryNo);
+      //VLDM4.05<<
+
       WITH ItemBudgetEntry DO
         IF FINDLAST THEN
           LastItemBudgetEntryNo := "Entry No.";
@@ -107,6 +131,7 @@ OBJECT Codeunit 7150 Update Item Analysis View
     [External]
     PROCEDURE Update@23(VAR NewItemAnalysisView@1000 : Record 7152;Which@1001 : 'Ledger Entries,Budget Entries,Both';ShowWindow@1002 : Boolean);
     BEGIN
+      MaxNumber := 2147483647; //VLDM4.05
       NewItemAnalysisView.LOCKTABLE;
       NewItemAnalysisView.FIND;
       UpdateOne(NewItemAnalysisView,Which,ShowWindow);
@@ -126,6 +151,13 @@ OBJECT Codeunit 7150 Update Item Analysis View
         IF LastValueEntryNo > ItemAnalysisView."Last Entry No." THEN BEGIN
           IF ShowProgressWindow THEN
             UpdateWindowHeader(DATABASE::"Item Analysis View Entry",ValueEntry."Entry No.");
+          //VLDM4.05>>
+          IF VLUpdateFromBeginning THEN
+            ValueEntry.SETRANGE("Entry No.",VLStartValueEntry,LastValueEntryNo)
+          ELSE
+          ValueEntry.SETRANGE("Entry No.",ItemAnalysisView."Last Entry No." + 1,LastValueEntryNo);
+          //VLDM4.05<<
+
           UpdateEntries;
           ItemAnalysisView."Last Entry No." := LastValueEntryNo;
           Updated := TRUE;
@@ -141,6 +173,11 @@ OBJECT Codeunit 7150 Update Item Analysis View
           ItemBudgetEntry.RESET;
           ItemBudgetEntry.SETRANGE("Analysis Area",ItemAnalysisView."Analysis Area");
           ItemBudgetEntry.SETRANGE("Entry No.",ItemAnalysisView."Last Budget Entry No." + 1,LastItemBudgetEntryNo);
+          //VLDM4.05>>
+          IF VLUpdateFromBeginning THEN
+            UpdateBudgetEntries(VLStartBudgetEntry)
+          ELSE
+          //VLDM4.05<<
           UpdateBudgetEntries(ItemAnalysisView."Last Budget Entry No." + 1);
           ItemAnalysisView."Last Budget Entry No." := LastItemBudgetEntryNo;
           Updated := TRUE;
@@ -561,7 +598,95 @@ OBJECT Codeunit 7150 Update Item Analysis View
       EXIT(InFilters);
     END;
 
+    PROCEDURE DeleteallEntriesAndUpdate@14103480(VAR Rec@14103540 : Record 7152;DeleteEntries@14103541 : Boolean);
     BEGIN
+      //VLDM4.05>>
+      IF Rec.Code = '' THEN
+        EXIT;
+      IF DeleteEntries THEN BEGIN
+        IF NOT CONFIRM(VLText000,TRUE) THEN
+          EXIT;
+        DeleteAllEntries(Rec, FALSE);
+        ItemAnalysisViewEntry.RESET;
+      END ELSE BEGIN
+        IF NOT CONFIRM(VLText002, TRUE) THEN
+          EXIT;
+        MaxNumber := 2147483647;
+
+        ItemAnalysisViewEntry.SETRANGE("Analysis Area", Rec."Analysis Area");
+        ItemAnalysisViewEntry.SETRANGE("Analysis View Code", Rec.Code);
+        IF ItemAnalysisViewEntry.FINDSET THEN
+          ItemAnalysisViewEntry.DELETEALL;
+
+        ItemAnalysisViewBudgetEntry.SETRANGE("Analysis Area", Rec."Analysis Area");
+        ItemAnalysisViewBudgetEntry.SETRANGE("Analysis View Code", Rec.Code);
+        IF ItemAnalysisViewBudgetEntry.FINDSET THEN
+          ItemAnalysisViewBudgetEntry.DELETEALL;
+
+        ValueEntry.RESET;
+        IF ValueEntry.FINDFIRST THEN
+          VLStartValueEntry := ValueEntry."Entry No."
+        ELSE
+          VLStartValueEntry := 1;
+
+        ItemAnalysisViewBudgetEntry.RESET;
+        IF ItemAnalysisViewBudgetEntry.FINDFIRST THEN
+          VLStartBudgetEntry := ItemAnalysisViewBudgetEntry."Entry No."
+        ELSE
+          VLStartBudgetEntry := 1;
+      END;
+
+      // UpdateBudgetEntries deletes the AnalysisViewBudgetEntry
+      VLUpdateFromBeginning := TRUE;
+      Rec."Last Entry No.":=0;
+      Rec.MODIFY;
+      InitLastEntryNo;
+
+      UpdateOne(Rec,2,TRUE);
+      //VLDM4.05<<
+    END;
+
+    PROCEDURE DeleteAllEntries@14103481(VAR Rec@14103482 : Record 7152;DeleteOnly@14103483 : Boolean);
+    BEGIN
+      //VLDM4.05>>
+      MaxNumber := 2147483647;
+
+      IF Rec.Code = '' THEN
+        EXIT;
+      IF DeleteOnly THEN
+        IF NOT CONFIRM(VLText001, TRUE) THEN
+          EXIT;
+
+      Rec.MODIFY;
+
+      ValueEntry.RESET;
+      IF ValueEntry.FINDFIRST THEN
+        VLStartValueEntry := ValueEntry."Entry No."
+      ELSE
+        VLStartValueEntry := 1;
+
+      ItemAnalysisViewEntry.SETRANGE("Analysis Area", Rec."Analysis Area");
+      ItemAnalysisViewEntry.SETRANGE("Analysis View Code", Rec.Code);
+      ItemAnalysisViewEntry.DELETEALL;
+
+      ItemAnalysisViewBudgetEntry.RESET;
+      IF ItemAnalysisViewBudgetEntry.FINDFIRST THEN
+        VLStartBudgetEntry := ItemAnalysisViewBudgetEntry."Entry No."
+      ELSE
+        VLStartBudgetEntry := 1;
+
+      ItemAnalysisViewBudgetEntry.SETRANGE("Analysis Area", Rec."Analysis Area");
+      ItemAnalysisViewBudgetEntry.SETRANGE("Analysis View Code", Rec.Code);
+      ItemAnalysisViewBudgetEntry.DELETEALL;
+      //VLDM4.05<<
+    END;
+
+    BEGIN
+    {
+      Version        Date          Description
+      ********************************************************
+      VLDM4.05    15th june 2015    Added DM specific modification
+    }
     END.
   }
 }
