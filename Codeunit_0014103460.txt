@@ -1,0 +1,2482 @@
+OBJECT Codeunit 14103460 EasyPDF Customization
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08/08/18;
+    Time=[ 3:46:28 PM];
+    Modified=Yes;
+    Version List=EZP2.34.02;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      CustomerRec@1000000001 : Record 18;
+      GeneralJournalLineRec@1000000030 : Record 81;
+      IssuedReminderRec@1000000008 : Record 297;
+      IssuedFinanceChargeMemoRec@1000000009 : Record 304;
+      PostedInvoiceRec@1000000002 : Record 112;
+      PostedPurchaseInvoiceRec@1000000004 : Record 122;
+      PostedPurchaseReceiptRec@1000000012 : Record 120;
+      PostedSalesReturnReceiptRec@1000000013 : Record 6660;
+      PostedSalesShipmentRec@1000000007 : Record 110;
+      PurchaseHeaderRec@1000000005 : Record 38;
+      SalesHeaderRec@1000000003 : Record 36;
+      SalesCreditMemoRec@1000000000 : Record 114;
+      SalespersonRec@1000000011 : Record 13;
+      ServiceCrMemoHeaderRec@1000000023 : Record 5994;
+      ServiceHeaderRec@1000000024 : Record 5900;
+      ServiceInvoiceHeaderRec@1000000022 : Record 5992;
+      ServiceShipmentHeaderRec@1000000025 : Record 5990;
+      ShiptoAddressRec@1000000010 : Record 222;
+      VendorLedgerEntryRec@1000000018 : Record 25;
+      VendorRec@1000000006 : Record 23;
+      EFTPayeeType@1000000029 : 'Vendor,Customer';
+      EasyPDFSetup@1000000014 : Record 14103460;
+      EasyPDFDocument@1000000015 : Record 14103461;
+      EasyPDFQueue@1000000016 : Record 14103463;
+      EasyPDFAddress@1000000019 : Record 14103464;
+      EasyPDFAttachment@1000000033 : Record 14103466;
+      EasyPDFPrinter@1000000027 : Codeunit 14103462;
+      EasyPDF@1000000017 : Codeunit 37062300;
+      PrimaryKey@1000000028 : Text;
+      LastDocumentCode@1000000031 : Code[50];
+      LastDocumentNo@1000000032 : Code[20];
+      LastBatchId@1000000026 : Text;
+      ERR001@1000000020 : TextConst 'ENU=The Easy PDF entry in the Client Add-in table is missing.  Unable to continue.';
+      GlobalReportParameters@1000000021 : Text;
+      CurrentLanguageCode@1000000034 : Code[10];
+      QINITSETUPFORUSER@1000000035 : TextConst 'ENU=Do you wish to initialize Easy PDF Setup for %1?';
+      TINITSETUPCANCELED@1000000036 : TextConst 'ENU=Easy PDF initialization canceled by user.';
+
+    PROCEDURE InitializeRecord@1000000002(DocumentCode@1000000000 : Code[50];DocumentNo@1000000001 : Code[20];BatchId@1000000003 : Text[80];PrimaryKeyString@1000000005 : Text[250]) : Boolean;
+    VAR
+      result@1000000002 : Boolean;
+      LineNo@1000000004 : Integer;
+    BEGIN
+
+      //
+      // This function initializes the record to be printed.
+      // There must be a corresponding entry in the case statement for each Easy PDF Document definition.
+      //
+      // Once initialized the record is subsequently referenced in the functions below
+      //
+
+      // If already initialized do nothing succesfully
+
+      IF (DocumentCode = LastDocumentCode) AND
+         (DocumentNo = LastDocumentNo) AND
+         (PrimaryKeyString = PrimaryKey) AND
+         (BatchId = LastBatchId) THEN
+        EXIT(TRUE);
+
+      PrimaryKey := PrimaryKeyString;
+      LastDocumentCode := DocumentCode;
+      LastDocumentNo := DocumentNo;
+      LastBatchId := BatchId;
+
+      //
+
+      result := FALSE;
+
+      CLEAR(VendorRec);
+      CLEAR(CustomerRec);
+      CLEAR(ShiptoAddressRec);
+      CLEAR(GlobalReportParameters);
+
+      EasyPDF.GetSetup(EasyPDFSetup);
+      EasyPDF.GetDocumentSetup(EasyPDFDocument, DocumentCode);
+
+      CASE DocumentCode OF
+
+        'CUSTOMER STATEMENT' :
+          BEGIN
+            CustomerRec.SETRANGE("No.",DocumentNo);
+            result := CustomerRec.FIND('-');
+          END;
+
+        'ISSUED REMINDER' :
+          BEGIN
+            IssuedReminderRec.RESET;
+            IssuedReminderRec.SETRANGE("No.",DocumentNo);
+            IF IssuedReminderRec.FIND('-') THEN
+              result := CustomerRec.GET(IssuedReminderRec."Customer No.");
+          END;
+
+        'ISSUED FINANCE CHARGE MEMO' :
+          BEGIN
+            IssuedFinanceChargeMemoRec.RESET;
+            IssuedFinanceChargeMemoRec.SETRANGE("No.",DocumentNo);
+            IF IssuedFinanceChargeMemoRec.FIND('-') THEN
+              result := CustomerRec.GET(IssuedFinanceChargeMemoRec."Customer No.");
+          END;
+
+        'POSTED PURCHASE INVOICE' :
+          BEGIN
+            PostedPurchaseInvoiceRec.RESET;
+            PostedPurchaseInvoiceRec.SETRANGE("No.",DocumentNo);
+            IF PostedPurchaseInvoiceRec.FIND('-') THEN
+            BEGIN
+              result := VendorRec.GET(PostedPurchaseInvoiceRec."Buy-from Vendor No.");
+              IF EasyPDFDocument."Send-to Vendor Type" = EasyPDFDocument."Send-to Vendor Type"::"Pay-to" THEN
+                result := VendorRec.GET(PostedPurchaseInvoiceRec."Pay-to Vendor No.");
+              IF PostedPurchaseInvoiceRec."Ship-to Code" <> '' THEN
+                IF ShiptoAddressRec.GET(PostedPurchaseInvoiceRec."Sell-to Customer No.",
+                                        PostedPurchaseInvoiceRec."Ship-to Code") THEN ;
+            END;
+          END;
+
+        'POSTED PURCHASE RECEIPT' :
+          BEGIN
+            PostedPurchaseReceiptRec.RESET;
+            PostedPurchaseReceiptRec.SETRANGE("No.",DocumentNo);
+            IF PostedPurchaseReceiptRec.FIND('-') THEN
+            BEGIN
+              result := VendorRec.GET(PostedPurchaseReceiptRec."Buy-from Vendor No.");
+              IF EasyPDFDocument."Send-to Vendor Type" = EasyPDFDocument."Send-to Vendor Type"::"Pay-to" THEN
+                result := VendorRec.GET(PostedPurchaseReceiptRec."Pay-to Vendor No.");
+              IF PostedPurchaseReceiptRec."Ship-to Code" <> '' THEN
+                IF ShiptoAddressRec.GET(PostedPurchaseReceiptRec."Sell-to Customer No.",
+                                        PostedPurchaseReceiptRec."Ship-to Code") THEN ;
+            END;
+          END;
+
+        'POSTED SALES CREDIT MEMO' :
+          BEGIN
+            SalesCreditMemoRec.RESET;
+            SalesCreditMemoRec.SETRANGE("No.",DocumentNo);
+            IF SalesCreditMemoRec.FIND('-') THEN
+            BEGIN
+              result := CustomerRec.GET(SalesCreditMemoRec."Bill-to Customer No.");
+              IF EasyPDFDocument."Send-to Customer Type" = EasyPDFDocument."Send-to Customer Type"::"Sell-to" THEN
+                result := CustomerRec.GET(SalesCreditMemoRec."Sell-to Customer No.");
+              IF SalesCreditMemoRec."Ship-to Code" <> '' THEN
+                IF ShiptoAddressRec.GET(SalesCreditMemoRec."Sell-to Customer No.",
+                                        SalesCreditMemoRec."Ship-to Code") THEN ;
+            END;
+          END;
+
+        'POSTED SALES INVOICE' :
+          BEGIN
+            PostedInvoiceRec.RESET;
+            PostedInvoiceRec.SETRANGE("No.",DocumentNo);
+            IF PostedInvoiceRec.FIND('-') THEN
+            BEGIN
+              result := CustomerRec.GET(PostedInvoiceRec."Bill-to Customer No.");
+              IF EasyPDFDocument."Send-to Customer Type" = EasyPDFDocument."Send-to Customer Type"::"Sell-to" THEN
+                result := CustomerRec.GET(PostedInvoiceRec."Sell-to Customer No.");
+              IF PostedInvoiceRec."Ship-to Code" <> '' THEN
+                IF ShiptoAddressRec.GET(PostedInvoiceRec."Sell-to Customer No.",
+                                        PostedInvoiceRec."Ship-to Code") THEN ;
+            END;
+          END;
+
+        'POSTED SALES RETURN RECEIPT' :
+          BEGIN
+            PostedSalesReturnReceiptRec.RESET;
+            PostedSalesReturnReceiptRec.SETRANGE("No.",DocumentNo);
+            IF PostedSalesReturnReceiptRec.FIND('-') THEN
+            BEGIN
+              result := CustomerRec.GET(PostedSalesReturnReceiptRec."Bill-to Customer No.");
+              IF EasyPDFDocument."Send-to Customer Type" = EasyPDFDocument."Send-to Customer Type"::"Sell-to" THEN
+                result := CustomerRec.GET(PostedSalesReturnReceiptRec."Sell-to Customer No.");
+              IF PostedSalesReturnReceiptRec."Ship-to Code" <> '' THEN
+                IF ShiptoAddressRec.GET(PostedSalesReturnReceiptRec."Sell-to Customer No.",
+                                        PostedSalesReturnReceiptRec."Ship-to Code") THEN ;
+            END;
+          END;
+
+        'POSTED SALES SHIPMENT' :
+          BEGIN
+            PostedSalesShipmentRec.RESET;
+            PostedSalesShipmentRec.SETRANGE("No.",DocumentNo);
+            IF PostedSalesShipmentRec.FIND('-') THEN
+            BEGIN
+              result := CustomerRec.GET(PostedSalesShipmentRec."Bill-to Customer No.");
+              IF EasyPDFDocument."Send-to Customer Type" = EasyPDFDocument."Send-to Customer Type"::"Sell-to" THEN
+                result := CustomerRec.GET(PostedSalesShipmentRec."Sell-to Customer No.");
+              IF PostedSalesShipmentRec."Ship-to Code" <> '' THEN
+                IF ShiptoAddressRec.GET(PostedSalesShipmentRec."Sell-to Customer No.",
+                                        PostedSalesShipmentRec."Ship-to Code") THEN ;
+            END;
+          END;
+
+        'POSTED SERVICE CREDIT MEMO' :
+          BEGIN
+            ServiceCrMemoHeaderRec.RESET;
+            ServiceCrMemoHeaderRec.SETRANGE("No.",DocumentNo);
+            IF ServiceCrMemoHeaderRec.FIND('-') THEN
+            BEGIN
+              result := CustomerRec.GET(ServiceCrMemoHeaderRec."Bill-to Customer No.");
+              IF ServiceCrMemoHeaderRec."Ship-to Code" <> '' THEN
+                IF ShiptoAddressRec.GET(ServiceCrMemoHeaderRec."Customer No.",
+                                        ServiceCrMemoHeaderRec."Ship-to Code") THEN ;
+            END;
+          END;
+
+        'POSTED SERVICE INVOICE' :
+          BEGIN
+            ServiceInvoiceHeaderRec.RESET;
+            ServiceInvoiceHeaderRec.SETRANGE("No.",DocumentNo);
+            IF ServiceInvoiceHeaderRec.FIND('-') THEN
+            BEGIN
+              result := CustomerRec.GET(ServiceInvoiceHeaderRec."Bill-to Customer No.");
+              IF ServiceInvoiceHeaderRec."Ship-to Code" <> '' THEN
+                IF ShiptoAddressRec.GET(ServiceInvoiceHeaderRec."Customer No.",
+                                        ServiceInvoiceHeaderRec."Ship-to Code") THEN ;
+            END;
+          END;
+
+        'POSTED SERVICE SHIPMENT' :
+          BEGIN
+            ServiceShipmentHeaderRec.RESET;
+            ServiceShipmentHeaderRec.SETRANGE("No.",DocumentNo);
+            IF ServiceShipmentHeaderRec.FIND('-') THEN
+            BEGIN
+              result := CustomerRec.GET(ServiceShipmentHeaderRec."Bill-to Customer No.");
+              IF ServiceShipmentHeaderRec."Ship-to Code" <> '' THEN
+                IF ShiptoAddressRec.GET(ServiceShipmentHeaderRec."Customer No.",
+                                        ServiceShipmentHeaderRec."Ship-to Code") THEN ;
+            END;
+          END;
+
+        'PURCHASE ORDER', 'PURCHASE QUOTE', 'BLANKET PURCHASE ORDER' :
+          BEGIN
+            PurchaseHeaderRec.RESET;
+            PurchaseHeaderRec.SETRANGE("No.",DocumentNo);
+            CASE DocumentCode OF
+            'PURCHASE ORDER' : PurchaseHeaderRec.SETRANGE("Document Type",PurchaseHeaderRec."Document Type"::Order);
+            'PURCHASE QUOTE' : PurchaseHeaderRec.SETRANGE("Document Type",PurchaseHeaderRec."Document Type"::Quote);
+            'BLANKET PURCHASE ORDER' : PurchaseHeaderRec.SETRANGE("Document Type",PurchaseHeaderRec."Document Type"::"Blanket Order");
+            END;
+            IF PurchaseHeaderRec.FIND('-') THEN
+            BEGIN
+              result := VendorRec.GET(PurchaseHeaderRec."Buy-from Vendor No.");
+              IF EasyPDFDocument."Send-to Vendor Type" = EasyPDFDocument."Send-to Vendor Type"::"Pay-to" THEN
+                result := VendorRec.GET(PurchaseHeaderRec."Pay-to Vendor No.");
+              IF PurchaseHeaderRec."Ship-to Code" <> '' THEN
+                IF ShiptoAddressRec.GET(PurchaseHeaderRec."Sell-to Customer No.",
+                                        PurchaseHeaderRec."Ship-to Code") THEN ;
+            END;
+          END;
+
+        'REMITTANCE ADVICE' :
+          BEGIN
+            IF PrimaryKey = '' THEN
+              EXIT(result);
+            CLEAR(GeneralJournalLineRec);
+            EVALUATE(LineNo, SELECTSTR(3,PrimaryKey));
+            GeneralJournalLineRec.SETRANGE("Journal Template Name", SELECTSTR(1,PrimaryKey));
+            GeneralJournalLineRec.SETRANGE("Journal Batch Name", SELECTSTR(2,PrimaryKey));
+            GeneralJournalLineRec.SETRANGE("Line No.", LineNo);
+            IF GeneralJournalLineRec.FIND('-') THEN
+            BEGIN
+              IF GeneralJournalLineRec."Account Type" = GeneralJournalLineRec."Account Type"::Vendor THEN BEGIN
+                EFTPayeeType := EFTPayeeType::Vendor;
+                result := VendorRec.GET(GeneralJournalLineRec."Account No.");
+              END ELSE IF GeneralJournalLineRec."Account Type" = GeneralJournalLineRec."Account Type"::Customer THEN BEGIN
+                EFTPayeeType := EFTPayeeType::Customer;
+                result := CustomerRec.GET(GeneralJournalLineRec."Account No.");
+              END;
+            END;
+          END;
+
+        'SALES ORDER', 'SALES QUOTE', 'SALES RETURN ORDER', 'BLANKET SALES ORDER' :
+          BEGIN
+            SalesHeaderRec.RESET;
+            SalesHeaderRec.SETRANGE("No.",DocumentNo);
+            CASE DocumentCode OF
+            'SALES ORDER' : SalesHeaderRec.SETRANGE("Document Type",SalesHeaderRec."Document Type"::Order);
+            'SALES QUOTE' : SalesHeaderRec.SETRANGE("Document Type",SalesHeaderRec."Document Type"::Quote);
+            'SALES RETURN ORDER' : SalesHeaderRec.SETRANGE("Document Type",SalesHeaderRec."Document Type"::"Return Order");
+            'BLANKET SALES ORDER' : SalesHeaderRec.SETRANGE("Document Type",SalesHeaderRec."Document Type"::"Blanket Order");
+            END;
+            IF SalesHeaderRec.FIND('-') THEN
+            BEGIN
+              result := CustomerRec.GET(SalesHeaderRec."Bill-to Customer No.");
+              IF EasyPDFDocument."Send-to Customer Type" = EasyPDFDocument."Send-to Customer Type"::"Sell-to" THEN
+                result := CustomerRec.GET(SalesHeaderRec."Sell-to Customer No.");
+              IF SalesHeaderRec."Ship-to Code" <> '' THEN
+                IF ShiptoAddressRec.GET(SalesHeaderRec."Sell-to Customer No.",
+                                        SalesHeaderRec."Ship-to Code") THEN ;
+            END;
+          END;
+
+        'SERVICE ORDER', 'SERVICE QUOTE' :
+          BEGIN
+            ServiceHeaderRec.RESET;
+            ServiceHeaderRec.SETRANGE("No.",DocumentNo);
+            CASE DocumentCode OF
+            'SERVICE ORDER' : ServiceHeaderRec.SETRANGE("Document Type",ServiceHeaderRec."Document Type"::Order);
+            'SERVICE QUOTE' : ServiceHeaderRec.SETRANGE("Document Type",ServiceHeaderRec."Document Type"::Quote);
+            END;
+            IF ServiceHeaderRec.FIND('-') THEN
+            BEGIN
+              result := CustomerRec.GET(ServiceHeaderRec."Bill-to Customer No.");
+              IF ServiceHeaderRec."Ship-to Code" <> '' THEN
+                IF ShiptoAddressRec.GET(ServiceHeaderRec."Customer No.",
+                                        ServiceHeaderRec."Ship-to Code") THEN ;
+            END;
+          END;
+
+        'VENDOR PAYMENT RECEIPT' :
+        BEGIN
+          VendorLedgerEntryRec.RESET;
+          IF VendorLedgerEntryRec.GET(PrimaryKey) THEN
+          BEGIN
+            VendorLedgerEntryRec.SETRANGE("Entry No.", VendorLedgerEntryRec."Entry No.");
+            result := VendorRec.GET(VendorLedgerEntryRec."Vendor No.");
+          END
+        END;
+
+      END;
+
+      IF (result AND (BatchId <> '')) THEN // retrieve the corresponding queue entry
+      BEGIN
+        EasyPDFQueue.RESET;
+        EasyPDFQueue.SETRANGE(BatchId, BatchId);
+        EasyPDFQueue.SETRANGE(DocCode, DocumentCode);
+        EasyPDFQueue.SETRANGE(DocNo, DocumentNo);
+        IF PrimaryKey <> '' THEN
+          EasyPDFQueue.SETRANGE(PrimaryKey, PrimaryKey);
+        IF EasyPDFQueue.FIND('-') THEN ;
+      END;
+
+      EXIT(result);
+    END;
+
+    PROCEDURE SetPrimaryKey@1000000050(PrimaryKeyString@1000000000 : Text[250]);
+    BEGIN
+
+      PrimaryKey := PrimaryKeyString;
+    END;
+
+    PROCEDURE GetPreferredMethod@1000000000(DocumentCode@1000000000 : Code[50];DocumentNo@1000000001 : Code[20];VAR PreferredMethod@1000000002 : Integer);
+    BEGIN
+
+      //
+      // This function determines the preferred method of communication based upon the customer/vendor/contact card
+      // It should return a preferred method (0=Print, 1=E-Mail, 2=Fax, 3=No Action) for each defined document type.
+      //
+
+      // Default is hardcopy (Print = 0)
+      PreferredMethod := 0;
+
+      CASE DocumentCode OF
+
+        'BLANKET SALES ORDER',
+        'CUSTOMER STATEMENT',
+        'ISSUED REMINDER',
+        'ISSUED FINANCE CHARGE MEMO',
+        'POSTED SALES CREDIT MEMO',
+        'POSTED SALES INVOICE',
+        'POSTED SALES RETURN RECEIPT',
+        'POSTED SALES SHIPMENT',
+        'POSTED SERVICE CREDIT MEMO',
+        'POSTED SERVICE INVOICE',
+        'POSTED SERVICE SHIPMENT',
+        'SALES ORDER',
+        'SALES QUOTE',
+        'SALES RETURN ORDER',
+        'SERVICE ORDER',
+        'SERVICE QUOTE' :
+          PreferredMethod := CustomerRec."Preferred Communication Method";
+
+        'BLANKET PURCHASE ORDER',
+        'POSTED PURCHASE INVOICE',
+        'POSTED PURCHASE RECEIPT',
+        'PURCHASE ORDER',
+        'PURCHASE QUOTE',
+        'VENDOR PAYMENT RECEIPT' :
+          PreferredMethod := VendorRec."Preferred Communication Method";
+
+        'REMITTANCE ADVICE' :
+          IF EFTPayeeType = EFTPayeeType::Customer THEN
+            PreferredMethod := CustomerRec."Preferred Communication Method"
+          ELSE
+            PreferredMethod := VendorRec."Preferred Communication Method";
+
+      END;
+    END;
+
+    PROCEDURE GetPreferredLanguage@1000000018(DocumentCode@1000000002 : Code[50];DocumentNo@1000000001 : Code[20];VAR PreferredLanguage@1000000000 : Code[10]);
+    BEGIN
+
+      //
+      // This function determines the preferred language based upon the customer/vendor/contact card/ship-to
+      //
+
+      CASE DocumentCode OF
+
+        'BLANKET SALES ORDER',
+        'CUSTOMER STATEMENT',
+        'ISSUED REMINDER',
+        'ISSUED FINANCE CHARGE MEMO',
+        'POSTED SALES CREDIT MEMO',
+        'POSTED SALES INVOICE',
+        'POSTED SALES RETURN RECEIPT',
+        'POSTED SALES SHIPMENT',
+        'POSTED SERVICE CREDIT MEMO',
+        'POSTED SERVICE INVOICE',
+        'POSTED SERVICE SHIPMENT',
+        'SALES ORDER',
+        'SALES QUOTE',
+        'SALES RETURN ORDER',
+        'SERVICE ORDER',
+        'SERVICE QUOTE' :
+          PreferredLanguage := CustomerRec."Language Code";
+
+        'BLANKET PURCHASE ORDER',
+        'POSTED PURCHASE INVOICE',
+        'POSTED PURCHASE RECEIPT',
+        'PURCHASE ORDER',
+        'PURCHASE QUOTE',
+        'VENDOR PAYMENT RECEIPT' :
+          PreferredLanguage := VendorRec."Language Code";
+
+        'REMITTANCE ADVICE' :
+          IF EFTPayeeType = EFTPayeeType::Customer THEN
+            PreferredLanguage := CustomerRec."Language Code"
+          ELSE
+            PreferredLanguage := VendorRec."Language Code";
+
+      END;
+
+      // If nothing defined - use default
+      IF PreferredLanguage = '' THEN
+        PreferredLanguage := EasyPDFSetup.PreferredLanguageCode;
+    END;
+
+    PROCEDURE GetRecipientDetails@1000000017(DocumentCode@1000000000 : Code[50];DocumentNo@1000000002 : Code[20];VAR RecipientType@1000000008 : Integer;VAR RecipientNo@1000000009 : Code[20];VAR RecipientName@1000000010 : Text[50]);
+    VAR
+      CUSTOMER@1000000003 : Integer;
+      VENDOR@1000000004 : Integer;
+      CONTACT@1000000005 : Integer;
+    BEGIN
+
+      //
+      // Return details of the recipient (customer, vendor, contact)
+      //
+
+      CUSTOMER := 0;
+      VENDOR   := 1;
+      CONTACT  := 2;
+
+      IF NOT InitializeRecord(DocumentCode, DocumentNo, '', PrimaryKey) THEN
+        EXIT;
+
+      CASE DocumentCode OF
+
+        'BLANKET SALES ORDER',
+        'CUSTOMER STATEMENT',
+        'ISSUED REMINDER',
+        'ISSUED FINANCE CHARGE MEMO',
+        'POSTED SALES CREDIT MEMO',
+        'POSTED SALES INVOICE',
+        'POSTED SALES RETURN RECEIPT',
+        'POSTED SALES SHIPMENT',
+        'POSTED SERVICE CREDIT MEMO',
+        'POSTED SERVICE INVOICE',
+        'POSTED SERVICE SHIPMENT',
+        'SALES ORDER',
+        'SALES QUOTE',
+        'SALES RETURN ORDER',
+        'SERVICE ORDER',
+        'SERVICE QUOTE' :
+          BEGIN
+            RecipientType := CUSTOMER;
+            RecipientNo   := CustomerRec."No.";
+            RecipientName := CustomerRec.Name;
+          END;
+
+        'BLANKET PURCHASE ORDER',
+        'POSTED PURCHASE INVOICE',
+        'POSTED PURCHASE RECEIPT',
+        'PURCHASE ORDER',
+        'PURCHASE QUOTE',
+        'VENDOR PAYMENT RECEIPT' :
+          BEGIN
+            RecipientType := VENDOR;
+            RecipientNo   := VendorRec."No.";
+            RecipientName := VendorRec.Name;
+           END;
+
+        'REMITTANCE ADVICE' :
+          IF EFTPayeeType = EFTPayeeType::Customer THEN
+          BEGIN
+            RecipientType := CUSTOMER;
+            RecipientNo   := CustomerRec."No.";
+            RecipientName := CustomerRec.Name;
+          END ELSE BEGIN
+            RecipientType := VENDOR;
+            RecipientNo   := VendorRec."No.";
+            RecipientName := VendorRec.Name;
+          END;
+
+      END;
+    END;
+
+    PROCEDURE GetEmailRecipients@1000000016(DocumentCode@1000000000 : Code[50];DocumentNo@1000000002 : Code[20];VAR EmailTo@1000000001 : Text[250];VAR EmailCc@1000000006 : Text[250];VAR EmailBcc@1000000007 : Text[250]);
+    VAR
+      CUSTOMER@1000000003 : Integer;
+      VENDOR@1000000004 : Integer;
+      CONTACT@1000000005 : Integer;
+      SHIPTO@1000000010 : Integer;
+      REPORT@1000000009 : Integer;
+      ShiptoAddressing@1000000008 : ',Exclusively,AddTo,AddCc,AddBcc';
+    BEGIN
+
+      //
+      // This function assigns email addresses to the To,Cc,Bcc variables based upon the document type.
+      // A default implementation is included however you may change this implementation to add
+      // whatever logic you deem necessary.
+      //
+      // The email addresses should be fully qualified addresses separated by a semicolon ';'
+      // e.g., person1@company.com;person2@company.com;  (a trailing semicolon is acceptable)
+      //
+      // No further error checking is performed on the email addresses so you must include such logic in
+      // this function if necessary.
+      //
+
+      CUSTOMER := 0;
+      VENDOR   := 1;
+      CONTACT  := 2;
+      SHIPTO   := 3;
+      REPORT   := 4;
+
+      EmailTo  := '';
+      EmailCc  := '';
+      EmailBcc := '';
+
+      IF NOT InitializeRecord(DocumentCode, DocumentNo, '', PrimaryKey) THEN
+        EXIT;
+
+      CASE DocumentCode OF
+
+        'BLANKET SALES ORDER',
+        'CUSTOMER STATEMENT',
+        'ISSUED REMINDER',
+        'ISSUED FINANCE CHARGE MEMO',
+        'POSTED SALES CREDIT MEMO',
+        'POSTED SALES INVOICE',
+        'POSTED SALES RETURN RECEIPT',
+        'POSTED SALES SHIPMENT',
+        'POSTED SERVICE CREDIT MEMO',
+        'POSTED SERVICE INVOICE',
+        'POSTED SERVICE SHIPMENT',
+        'SALES ORDER',
+        'SALES QUOTE',
+        'SALES RETURN ORDER',
+        'SERVICE ORDER',
+        'SERVICE QUOTE' :
+          BEGIN
+            IF NOT GetAddresses(CUSTOMER, CustomerRec."No.", DocumentCode, EmailTo, EmailCc, EmailBcc) OR (EmailTo = '') THEN
+              IF CustomerRec."E-Mail" <> '' THEN
+                EmailTo := CustomerRec."E-Mail";
+          END;
+
+        'BLANKET PURCHASE ORDER',
+        'POSTED PURCHASE INVOICE',
+        'POSTED PURCHASE RECEIPT',
+        'PURCHASE ORDER',
+        'PURCHASE QUOTE',
+        'VENDOR PAYMENT RECEIPT' :
+          BEGIN
+            IF NOT GetAddresses(VENDOR, VendorRec."No.", DocumentCode, EmailTo, EmailCc, EmailBcc) OR (EmailTo = '') THEN
+              IF VendorRec."E-Mail" <> '' THEN
+                EmailTo := VendorRec."E-Mail";
+          END;
+
+        'REMITTANCE ADVICE' :
+          BEGIN
+            IF EFTPayeeType = EFTPayeeType::Customer THEN
+              IF NOT GetAddresses(CUSTOMER, CustomerRec."No.", DocumentCode, EmailTo, EmailCc, EmailBcc) OR (EmailTo = '') THEN
+                IF CustomerRec."E-Mail" <> '' THEN
+                  EmailTo := CustomerRec."E-Mail";
+            IF EFTPayeeType = EFTPayeeType::Vendor THEN
+              IF NOT GetAddresses(VENDOR, VendorRec."No.", DocumentCode, EmailTo, EmailCc, EmailBcc) OR (EmailTo = '') THEN
+                IF VendorRec."E-Mail" <> '' THEN
+                  EmailTo := VendorRec."E-Mail";
+          END;
+
+        ELSE
+          BEGIN
+            IF EasyPDFDocument."Document Type" = EasyPDFDocument."Document Type"::Report THEN
+              GetAddresses(REPORT, '', DocumentCode, EmailTo, EmailCc, EmailBcc);
+          END;
+
+      END;
+
+      //
+      // Handle Ship-to addressing
+      //
+      IF ShiptoAddressRec."E-Mail" <> '' THEN
+      BEGIN
+        EasyPDF.GetDocumentSetup(EasyPDFDocument, DocumentCode);
+        CASE EasyPDFDocument.ShiptoAddressing OF
+          0: ;  // not defined - do nothing
+          1:    // Send exclusively to the ship-to
+            BEGIN
+              EmailTo := ShiptoAddressRec."E-Mail";
+              EmailCc := '';
+              EmailBcc := '';
+            END;
+          2:    // Add to the To field
+            BEGIN
+              IF STRLEN(EmailTo+ShiptoAddressRec."E-Mail") < 250 THEN
+                EmailTo := EmailTo + ';' + ShiptoAddressRec."E-Mail";
+              IF STRPOS(EmailTo,';') = 1 THEN EmailTo := COPYSTR(EmailTo,2);
+            END;
+          3:    // Add to the Cc field
+            BEGIN
+              IF STRLEN(EmailCc+ShiptoAddressRec."E-Mail") < 250 THEN
+                EmailCc := EmailCc + ';' + ShiptoAddressRec."E-Mail";
+              IF STRPOS(EmailCc,';') = 1 THEN EmailCc := COPYSTR(EmailCc,2);
+            END;
+          4:    // Add to the Bcc field
+            BEGIN
+              IF STRLEN(EmailBcc+ShiptoAddressRec."E-Mail") < 250 THEN
+                EmailBcc := EmailBcc + ';' + ShiptoAddressRec."E-Mail";
+              IF STRPOS(EmailBcc,';') = 1 THEN EmailBcc := COPYSTR(EmailBcc,2);
+            END;
+        END;
+      END;
+    END;
+
+    PROCEDURE GetAddresses@1000000013(OwnerType@1000000000 : 'Customer,Vendor,Contact,Shipto,Report';OwnerNo@1000000001 : Code[20];DocumentCode@1000000005 : Code[50];VAR EmailTo@1000000002 : Text[250];VAR EmailCc@1000000003 : Text[250];VAR EmailBcc@1000000004 : Text[250]) : Boolean;
+    VAR
+      Result@1000000006 : Boolean;
+      Separator@1000000007 : Text[10];
+      DocumentOption@1000000008 : Integer;
+    BEGIN
+
+      //
+      // This function retrieves the email addresses from the Easy PDF Address table for the given document type
+      //
+
+      Result := FALSE;
+      Separator := ';';
+
+      EmailTo := '';
+      EmailCc := '';
+      EmailBcc := '';
+
+      EasyPDFAddress.RESET;
+      EasyPDFAddress.SETRANGE(OwnerType, OwnerType);
+      EasyPDFAddress.SETRANGE(OwnerNo, OwnerNo);
+      EasyPDFAddress.SETRANGE(DocumentCode, DocumentCode);
+      EasyPDFAddress.SETFILTER(AddressType, '<>Fax');
+
+      IF EasyPDFAddress.FIND('-') THEN
+      BEGIN
+        Result := TRUE;
+        REPEAT
+          CASE EasyPDFAddress.AddressType OF
+            EasyPDFAddress.AddressType::"To" :
+              BEGIN
+                IF STRLEN(EmailTo+EasyPDFAddress.Address) < 250 THEN
+                BEGIN
+                  IF STRLEN(EmailTo) > 0  THEN EmailTo := EmailTo + Separator;
+                  EmailTo := EmailTo + EasyPDFAddress.Address;
+                END;
+              END;
+            EasyPDFAddress.AddressType::Cc :
+              BEGIN
+                IF STRLEN(EmailTo+EasyPDFAddress.Address) < 250 THEN
+                BEGIN
+                  IF STRLEN(EmailCc) > 0  THEN EmailCc += Separator;
+                  EmailCc += EasyPDFAddress.Address;
+                END;
+              END;
+            EasyPDFAddress.AddressType::Bcc :
+              BEGIN
+                IF STRLEN(EmailTo+EasyPDFAddress.Address) < 250 THEN
+                BEGIN
+                  IF STRLEN(EmailBcc) > 0  THEN EmailBcc += Separator;
+                  EmailBcc += EasyPDFAddress.Address;
+                END;
+              END;
+          END;
+        UNTIL EasyPDFAddress.NEXT = 0;
+      END;
+
+      EXIT(Result);
+    END;
+
+    PROCEDURE GetRecordVariables@1000000019(DocumentCode@1000000000 : Code[50];VAR RecRef@1000000002 : RecordRef;VAR FieldRec@1000000004 : Record 2000000041);
+    VAR
+      RID@1000000003 : RecordID;
+      TXT@1000000005 : Text[250];
+    BEGIN
+
+      //
+      // This function assigns values to the RECORDREF and FIELD parameters passed in.
+      // These variables are used to perform token substitutions in the email subject, body and
+      // email attachment filenames.
+      //
+
+      CASE DocumentCode OF
+
+        'CUSTOMER STATEMENT' :
+          BEGIN
+            RecRef.GETTABLE(CustomerRec);
+            FieldRec.SETRANGE(TableNo,DATABASE::Customer);
+          END;
+
+        'ISSUED REMINDER' :
+          BEGIN
+            RecRef.GETTABLE(IssuedReminderRec);
+            FieldRec.SETRANGE(TableNo,DATABASE::"Issued Reminder Header");
+          END;
+
+        'ISSUED FINANCE CHARGE MEMO' :
+          BEGIN
+            RecRef.GETTABLE(IssuedFinanceChargeMemoRec);
+            FieldRec.SETRANGE(TableNo,DATABASE::"Issued Fin. Charge Memo Header");
+          END;
+
+        'POSTED PURCHASE INVOICE' :
+          BEGIN
+            RecRef.GETTABLE(PostedPurchaseInvoiceRec);
+            FieldRec.SETRANGE(TableNo,DATABASE::"Purch. Inv. Header");
+          END;
+
+        'POSTED PURCHASE RECEIPT' :
+          BEGIN
+            RecRef.GETTABLE(PostedPurchaseReceiptRec);
+            FieldRec.SETRANGE(TableNo,DATABASE::"Purch. Rcpt. Header");
+          END;
+
+        'POSTED SALES CREDIT MEMO' :
+          BEGIN
+            RecRef.GETTABLE(SalesCreditMemoRec);
+            FieldRec.SETRANGE(TableNo,DATABASE::"Sales Cr.Memo Header");
+          END;
+
+        'POSTED SALES INVOICE' :
+          BEGIN
+            RecRef.GETTABLE(PostedInvoiceRec);
+            FieldRec.SETRANGE(TableNo,DATABASE::"Sales Invoice Header");
+          END;
+
+        'POSTED SALES RETURN RECEIPT' :
+          BEGIN
+            RecRef.GETTABLE(PostedSalesReturnReceiptRec);
+            FieldRec.SETRANGE(TableNo,DATABASE::"Return Receipt Header");
+          END;
+
+        'POSTED SALES SHIPMENT' :
+          BEGIN
+            RecRef.GETTABLE(PostedSalesShipmentRec);
+            FieldRec.SETRANGE(TableNo,DATABASE::"Sales Shipment Header");
+          END;
+
+        'POSTED SERVICE CREDIT MEMO' :
+          BEGIN
+            RecRef.GETTABLE(ServiceCrMemoHeaderRec);
+            FieldRec.SETRANGE(TableNo,DATABASE::"Service Cr.Memo Header");
+          END;
+
+        'POSTED SERVICE INVOICE' :
+          BEGIN
+            RecRef.GETTABLE(ServiceInvoiceHeaderRec);
+            FieldRec.SETRANGE(TableNo,DATABASE::"Service Invoice Header");
+          END;
+
+        'POSTED SERVICE SHIPMENT' :
+          BEGIN
+            RecRef.GETTABLE(ServiceShipmentHeaderRec);
+            FieldRec.SETRANGE(TableNo,DATABASE::"Service Shipment Header");
+          END;
+
+        'PURCHASE ORDER', 'PURCHASE QUOTE', 'BLANKET PURCHASE ORDER' :
+          BEGIN
+            RecRef.GETTABLE(PurchaseHeaderRec);
+            FieldRec.SETRANGE(TableNo,DATABASE::"Purchase Header");
+          END;
+
+        'REMITTANCE ADVICE' :
+          BEGIN
+            RecRef.GETTABLE(GeneralJournalLineRec);
+            FieldRec.SETRANGE(TableNo,DATABASE::"Gen. Journal Line");
+          END;
+
+        'SALES ORDER', 'SALES QUOTE', 'SALES RETURN ORDER', 'BLANKET SALES ORDER' :
+          BEGIN
+            RecRef.GETTABLE(SalesHeaderRec);
+            FieldRec.SETRANGE(TableNo,DATABASE::"Sales Header");
+          END;
+
+        'SERVICE ORDER', 'SERVICE QUOTE' :
+          BEGIN
+            RecRef.GETTABLE(ServiceHeaderRec);
+            FieldRec.SETRANGE(TableNo,DATABASE::"Service Header");
+          END;
+
+        'VENDOR PAYMENT RECEIPT' :
+          BEGIN
+            RecRef.GETTABLE(VendorLedgerEntryRec);
+            FieldRec.SETRANGE(TableNo,DATABASE::"Vendor Ledger Entry");
+          END;
+
+      END;
+    END;
+
+    PROCEDURE GetFaxNumber@1000000001(DocumentCode@1000000000 : Code[50];DocumentNo@1000000001 : Code[20]) : Text[30];
+    VAR
+      i@1000000003 : Integer;
+      c@1000000004 : Char;
+      n@1000000005 : Integer;
+      fax@1000000006 : Text[30];
+      FaxNumber@1000000002 : Text[30];
+      EasyPDFAddress@1000000007 : Record 14103464;
+    BEGIN
+
+      //
+      // This function retrieves the fax number based upon the document type.
+      //
+      // A default implementation is included however you may change this implementation to add
+      // whatever logic you deem necessary.
+      //
+      // The fax number should be a fully defined telephone number with area code and preceeding '1'
+      // e.g., 18001234567 (no separation characters such as '-', '(', etc.)
+      //
+
+      FaxNumber := '';
+
+      EasyPDFAddress.RESET;
+      EasyPDFAddress.SETRANGE(AddressType, EasyPDFAddress.AddressType::Fax);
+
+      CASE DocumentCode OF
+
+        'CUSTOMER STATEMENT' :
+          BEGIN
+            EasyPDFAddress.SETRANGE(OwnerType, EasyPDFAddress.OwnerType::Customer);
+            EasyPDFAddress.SETRANGE(OwnerNo, DocumentNo);
+            EasyPDFAddress.SETRANGE(DocumentCode, DocumentCode);
+            IF EasyPDFAddress.FINDFIRST THEN
+              fax := EasyPDFAddress.Address
+            ELSE
+            IF CustomerRec."Fax No." <> '' THEN
+              fax := CustomerRec."Fax No.";
+          END;
+
+        'ISSUED REMINDER' :
+          BEGIN
+            EasyPDFAddress.SETRANGE(OwnerType, EasyPDFAddress.OwnerType::Customer);
+            EasyPDFAddress.SETRANGE(OwnerNo, IssuedReminderRec."Customer No.");
+            EasyPDFAddress.SETRANGE(DocumentCode, DocumentCode);
+            IF EasyPDFAddress.FINDFIRST THEN
+              fax := EasyPDFAddress.Address
+            ELSE
+            IF CustomerRec."Fax No." <> '' THEN
+              fax := CustomerRec."Fax No.";
+          END;
+
+        'ISSUED FINANCE CHARGE MEMO' :
+          BEGIN
+            EasyPDFAddress.SETRANGE(OwnerType, EasyPDFAddress.OwnerType::Customer);
+            EasyPDFAddress.SETRANGE(OwnerNo, IssuedFinanceChargeMemoRec."Customer No.");
+            EasyPDFAddress.SETRANGE(DocumentCode, DocumentCode);
+            IF EasyPDFAddress.FINDFIRST THEN
+              fax := EasyPDFAddress.Address
+            ELSE
+            IF CustomerRec."Fax No." <> '' THEN
+              fax := CustomerRec."Fax No.";
+          END;
+
+        'POSTED PURCHASE INVOICE' :
+          BEGIN
+            EasyPDFAddress.SETRANGE(OwnerType, EasyPDFAddress.OwnerType::Vendor);
+            EasyPDFAddress.SETRANGE(OwnerNo, PostedPurchaseInvoiceRec."Buy-from Vendor No.");
+            EasyPDFAddress.SETRANGE(DocumentCode, DocumentCode);
+            IF EasyPDFAddress.FINDFIRST THEN
+              fax := EasyPDFAddress.Address
+            ELSE
+            IF VendorRec."Fax No." <> '' THEN
+              fax := VendorRec."Fax No.";
+          END;
+
+        'POSTED PURCHASE RECEIPT' :
+          BEGIN
+            EasyPDFAddress.SETRANGE(OwnerType, EasyPDFAddress.OwnerType::Vendor);
+            EasyPDFAddress.SETRANGE(OwnerNo, PostedPurchaseReceiptRec."Buy-from Vendor No.");
+            EasyPDFAddress.SETRANGE(DocumentCode, DocumentCode);
+            IF EasyPDFAddress.FINDFIRST THEN
+              fax := EasyPDFAddress.Address
+            ELSE
+            IF VendorRec."Fax No." <> '' THEN
+              fax := VendorRec."Fax No.";
+          END;
+
+        'POSTED SALES CREDIT MEMO' :
+          BEGIN
+            EasyPDFAddress.SETRANGE(OwnerType, EasyPDFAddress.OwnerType::Customer);
+            EasyPDFAddress.SETRANGE(OwnerNo, SalesCreditMemoRec."Bill-to Customer No.");
+            EasyPDFAddress.SETRANGE(DocumentCode, DocumentCode);
+            IF EasyPDFAddress.FINDFIRST THEN
+              fax := EasyPDFAddress.Address
+            ELSE
+            IF CustomerRec."Fax No." <> '' THEN
+              fax := CustomerRec."Fax No.";
+          END;
+
+        'POSTED SALES INVOICE' :
+          BEGIN
+            EasyPDFAddress.SETRANGE(OwnerType, EasyPDFAddress.OwnerType::Customer);
+            EasyPDFAddress.SETRANGE(OwnerNo, PostedInvoiceRec."Bill-to Customer No.");
+            EasyPDFAddress.SETRANGE(DocumentCode, DocumentCode);
+            IF EasyPDFAddress.FINDFIRST THEN
+              fax := EasyPDFAddress.Address
+            ELSE
+            IF CustomerRec."Fax No." <> '' THEN
+              fax := CustomerRec."Fax No.";
+          END;
+
+        'POSTED SALES RETURN RECEIPT' :
+          BEGIN
+            EasyPDFAddress.SETRANGE(OwnerType, EasyPDFAddress.OwnerType::Customer);
+            EasyPDFAddress.SETRANGE(OwnerNo, PostedSalesReturnReceiptRec."Bill-to Customer No.");
+            EasyPDFAddress.SETRANGE(DocumentCode, DocumentCode);
+            IF EasyPDFAddress.FINDFIRST THEN
+              fax := EasyPDFAddress.Address
+            ELSE
+            IF CustomerRec."Fax No." <> '' THEN
+              fax := CustomerRec."Fax No.";
+          END;
+
+        'POSTED SALES SHIPMENT' :
+          BEGIN
+            EasyPDFAddress.SETRANGE(OwnerType, EasyPDFAddress.OwnerType::Customer);
+            EasyPDFAddress.SETRANGE(OwnerNo, PostedSalesShipmentRec."Bill-to Customer No.");
+            EasyPDFAddress.SETRANGE(DocumentCode, DocumentCode);
+            IF EasyPDFAddress.FINDFIRST THEN
+              fax := EasyPDFAddress.Address
+            ELSE
+            IF CustomerRec."Fax No." <> '' THEN
+              fax := CustomerRec."Fax No.";
+          END;
+
+        'POSTED SERVICE CREDIT MEMO' :
+          BEGIN
+            EasyPDFAddress.SETRANGE(OwnerType, EasyPDFAddress.OwnerType::Customer);
+            EasyPDFAddress.SETRANGE(OwnerNo, ServiceCrMemoHeaderRec."Bill-to Customer No.");
+            EasyPDFAddress.SETRANGE(DocumentCode, DocumentCode);
+            IF EasyPDFAddress.FINDFIRST THEN
+              fax := EasyPDFAddress.Address
+            ELSE
+            IF CustomerRec."Fax No." <> '' THEN
+              fax := CustomerRec."Fax No.";
+          END;
+
+        'POSTED SERVICE INVOICE' :
+          BEGIN
+            EasyPDFAddress.SETRANGE(OwnerType, EasyPDFAddress.OwnerType::Customer);
+            EasyPDFAddress.SETRANGE(OwnerNo, ServiceInvoiceHeaderRec."Bill-to Customer No.");
+            EasyPDFAddress.SETRANGE(DocumentCode, DocumentCode);
+            IF EasyPDFAddress.FINDFIRST THEN
+              fax := EasyPDFAddress.Address
+            ELSE
+            IF CustomerRec."Fax No." <> '' THEN
+              fax := CustomerRec."Fax No.";
+          END;
+
+        'POSTED SERVICE SHIPMENT' :
+          BEGIN
+            EasyPDFAddress.SETRANGE(OwnerType, EasyPDFAddress.OwnerType::Customer);
+            EasyPDFAddress.SETRANGE(OwnerNo, ServiceShipmentHeaderRec."Customer No.");
+            EasyPDFAddress.SETRANGE(DocumentCode, DocumentCode);
+            IF EasyPDFAddress.FINDFIRST THEN
+              fax := EasyPDFAddress.Address
+            ELSE
+            IF CustomerRec."Fax No." <> '' THEN
+              fax := CustomerRec."Fax No.";
+          END;
+
+        'PURCHASE ORDER', 'PURCHASE QUOTE', 'BLANKET PURCHASE ORDER' :
+          BEGIN
+            EasyPDFAddress.SETRANGE(OwnerType, EasyPDFAddress.OwnerType::Vendor);
+            EasyPDFAddress.SETRANGE(OwnerNo, PurchaseHeaderRec."Buy-from Vendor No.");
+            EasyPDFAddress.SETRANGE(DocumentCode, DocumentCode);
+            IF EasyPDFAddress.FINDFIRST THEN
+              fax := EasyPDFAddress.Address
+            ELSE
+            IF VendorRec."Fax No." <> '' THEN
+              fax := VendorRec."Fax No.";
+          END;
+
+        'REMITTANCE ADVICE' :
+          BEGIN
+            IF EFTPayeeType = EFTPayeeType::Customer THEN
+            BEGIN
+              fax := CustomerRec."Fax No.";
+              EasyPDFAddress.SETRANGE(OwnerType, EasyPDFAddress.OwnerType::Customer);
+            END ELSE BEGIN
+              fax := VendorRec."Fax No.";
+              EasyPDFAddress.SETRANGE(OwnerType, EasyPDFAddress.OwnerType::Vendor);
+            END;
+            EasyPDFAddress.SETRANGE(OwnerNo, DocumentNo);
+            EasyPDFAddress.SETRANGE(DocumentCode, DocumentCode);
+            IF EasyPDFAddress.FIND('-') THEN
+              fax := EasyPDFAddress.Address
+          END;
+
+        'SALES ORDER',  'SALES QUOTE', 'SALES RETURN ORDER', 'BLANKET SALES ORDER' :
+          BEGIN
+            EasyPDFAddress.SETRANGE(OwnerType, EasyPDFAddress.OwnerType::Customer);
+            EasyPDFAddress.SETRANGE(OwnerNo, SalesHeaderRec."Bill-to Customer No.");
+            EasyPDFAddress.SETRANGE(DocumentCode, DocumentCode);
+            IF EasyPDFAddress.FINDFIRST THEN
+              fax := EasyPDFAddress.Address
+            ELSE
+            IF CustomerRec."Fax No." <> '' THEN
+              fax := CustomerRec."Fax No.";
+          END;
+
+        'SERVICE ORDER', 'SERVICE QUOTE' :
+          BEGIN
+            EasyPDFAddress.SETRANGE(OwnerType, EasyPDFAddress.OwnerType::Customer);
+            EasyPDFAddress.SETRANGE(OwnerNo, ServiceHeaderRec."Customer No.");
+            EasyPDFAddress.SETRANGE(DocumentCode, DocumentCode);
+            IF EasyPDFAddress.FINDFIRST THEN
+              fax := EasyPDFAddress.Address
+            ELSE
+            IF CustomerRec."Fax No." <> '' THEN
+              fax := CustomerRec."Fax No.";
+          END;
+
+        'VENDOR PAYMENT RECEIPT' :
+          BEGIN
+            EasyPDFAddress.SETRANGE(OwnerType, EasyPDFAddress.OwnerType::Vendor);
+            EasyPDFAddress.SETRANGE(OwnerNo, VendorLedgerEntryRec."Vendor No.");
+            EasyPDFAddress.SETRANGE(DocumentCode, DocumentCode);
+            IF EasyPDFAddress.FINDFIRST THEN
+              fax := EasyPDFAddress.Address
+            ELSE
+            IF VendorRec."Fax No." <> '' THEN
+              fax := VendorRec."Fax No.";
+          END;
+
+      END;
+
+      // Parse the number to strip separators
+      IF STRLEN(fax) > 0 THEN BEGIN
+        n := STRLEN(fax);
+        FOR i:=1 TO n DO BEGIN
+          c := fax[i];
+          CASE c OF
+          '0','1','2','3','4','5','6','7','8','9' :
+              FaxNumber += FORMAT(c);
+          END;
+        END;
+      END;
+
+      EXIT(FaxNumber);
+    END;
+
+    PROCEDURE GetArchivedVersionNo@1000000021(DocumentCode@1000000000 : Code[50];DocumentNo@1000000001 : Code[20]) : Integer;
+    VAR
+      ArchivedVersionNo@1000000002 : Integer;
+    BEGIN
+
+      //
+      // Retrieve the archived version number from documents that support it
+      //
+
+      ArchivedVersionNo := 0;
+
+      CASE DocumentCode OF
+
+        'CUSTOMER STATEMENT',
+        'ISSUED REMINDER',
+        'ISSUED FINANCE CHARGE MEMO',
+        'POSTED SALES CREDIT MEMO',
+        'POSTED SALES INVOICE',
+        'POSTED SALES RETURN RECEIPT',
+        'POSTED SALES SHIPMENT',
+        'POSTED SERVICE CREDIT MEMO',
+        'POSTED SERVICE INVOICE',
+        'POSTED SERVICE SHIPMENT',
+        'POSTED PURCHASE INVOICE',
+        'POSTED PURCHASE RECEIPT',
+        'REMITTANCE ADVICE',
+        'SERVICE ORDER',
+        'SERVICE QUOTE',
+        'VENDOR PAYMENT RECEIPT' :
+          ;
+
+        'SALES QUOTE',
+        'SALES ORDER',
+        'SALES RETURN ORDER',
+        'BLANKET SALES ORDER' :
+          BEGIN
+            SalesHeaderRec.CALCFIELDS("No. of Archived Versions");
+            ArchivedVersionNo := SalesHeaderRec."No. of Archived Versions";
+          END;
+
+        'BLANKET PURCHASE ORDER',
+        'PURCHASE ORDER',
+        'PURCHASE QUOTE' :
+          BEGIN
+            PurchaseHeaderRec.CALCFIELDS("No. of Archived Versions");
+            ArchivedVersionNo := PurchaseHeaderRec."No. of Archived Versions";
+          END;
+
+      END;
+
+      EXIT(ArchivedVersionNo);
+    END;
+
+    PROCEDURE GetValue@1000000020(DocumentCode@1000000000 : Code[50];DocumentNo@1000000001 : Code[20]) : Decimal;
+    VAR
+      Value@1000000002 : Decimal;
+    BEGIN
+
+      //
+      // Retrieve the "Value" from the document -- for those documents that have a "value"
+      //
+
+      Value := 0;
+
+      CASE DocumentCode OF
+
+        'CUSTOMER STATEMENT' :
+        BEGIN
+          CustomerRec.CALCFIELDS("Balance Due (LCY)");
+          Value := CustomerRec."Balance Due (LCY)";
+        END;
+
+        'ISSUED REMINDER' :
+        BEGIN
+          IssuedReminderRec.CALCFIELDS("Remaining Amount");
+          Value := IssuedReminderRec."Remaining Amount";
+        END;
+
+        'ISSUED FINANCE CHARGE MEMO' :
+        BEGIN
+          IssuedFinanceChargeMemoRec.CALCFIELDS("Remaining Amount");
+          Value := IssuedFinanceChargeMemoRec."Remaining Amount";
+        END;
+
+        'POSTED SALES INVOICE' :
+        BEGIN
+          PostedInvoiceRec.CALCFIELDS("Amount Including VAT");
+          Value := PostedInvoiceRec."Amount Including VAT";
+        END;
+
+        'REMITTANCE ADVICE' :
+        BEGIN
+          Value := GeneralJournalLineRec.Amount;
+        END;
+
+        'VENDOR PAYMENT RECEIPT' :
+        BEGIN
+          VendorLedgerEntryRec.CALCFIELDS(Amount);
+          Value := VendorLedgerEntryRec.Amount;
+        END;
+
+        'POSTED SALES CREDIT MEMO' :
+        BEGIN
+          SalesCreditMemoRec.CALCFIELDS("Amount Including VAT");
+          Value := SalesCreditMemoRec."Amount Including VAT";
+        END;
+
+        'POSTED SERVICE CREDIT MEMO' :
+        BEGIN
+          ServiceCrMemoHeaderRec.CALCFIELDS("Amount Including VAT");
+          Value := ServiceCrMemoHeaderRec."Amount Including VAT";
+        END;
+
+        'BLANKET SALES ORDER',
+        'SALES QUOTE',
+        'SALES ORDER',
+        'SALES RETURN ORDER' :
+        BEGIN
+          SalesHeaderRec.CALCFIELDS("Amount Including VAT");
+          Value := SalesHeaderRec."Amount Including VAT";
+        END;
+
+        'BLANKET PURCHASE ORDER',
+        'PURCHASE ORDER',
+        'PURCHASE QUOTE' :
+        BEGIN
+          PurchaseHeaderRec.CALCFIELDS("Amount Including VAT");
+          Value := PurchaseHeaderRec."Amount Including VAT";
+        END;
+
+        'POSTED SERVICE INVOICE' :
+        BEGIN
+          ServiceInvoiceHeaderRec.CALCFIELDS("Amount Including VAT");
+          Value := ServiceInvoiceHeaderRec."Amount Including VAT";
+        END;
+
+        'POSTED PURCHASE INVOICE' :
+        BEGIN
+          PostedPurchaseInvoiceRec.CALCFIELDS("Amount Including VAT");
+          Value := PostedPurchaseInvoiceRec."Amount Including VAT";
+        END;
+
+        'POSTED SALES RETURN RECEIPT',
+        'POSTED SALES SHIPMENT',
+        'POSTED SERVICE SHIPMENT',
+        'POSTED PURCHASE RECEIPT',
+        'SERVICE ORDER',
+        'SERVICE QUOTE' :
+          ;
+
+      END;
+
+      EXIT(Value);
+    END;
+
+    PROCEDURE GetReportParameters@1000000007(DocCode@1000000000 : Code[50];ReportID@1000000001 : Integer;VAR RecRef@1000000005 : RecordRef) : Text;
+    VAR
+      ReportParameters@1000000003 : Text;
+    BEGIN
+
+      // This function assumes that InitializeRecord has been previously called
+
+      ReportParameters := EasyPDF.NewReportParameters(ReportID);
+
+      IF STRSUBSTNO('%1', RecRef.NUMBER) <> '0' THEN
+        ReportParameters := EasyPDF.AddReportParameter(ReportParameters, 1, RecRef.CAPTION, RecRef.GETVIEW(FALSE));
+
+      // In the case of the customer statement you must show the request page to get the date range
+
+      IF DocCode = 'CUSTOMER STATEMENT' THEN BEGIN
+        COMMIT;
+        ReportParameters := CollectReportParameters(DocCode, ReportID, ReportParameters);
+      END;
+
+      EXIT(ReportParameters);
+    END;
+
+    PROCEDURE ReportSaveAs@1000000031(DocCode@1000000000 : Code[50];ReportID@1000000001 : Integer;FilePath@1000000002 : Text[260]);
+    VAR
+      ReportParameters@1000000003 : Text;
+      SaveAsFile@1000000007 : File;
+      SaveAsOutStream@1000000006 : OutStream;
+      SystemIoFile@1000000004 : DotNet "'mscorlib'.System.IO.File";
+      RecRef@1000000009 : RecordRef;
+      FieldRec@1000000005 : Record 2000000041;
+      Junk@1000000008 : Text;
+      FldRef@1000000010 : FieldRef;
+    BEGIN
+
+      // Print to file
+
+      GetRecordVariables(DocCode, RecRef, FieldRec);
+
+      ReportParameters := EasyPDFQueue.GetReportParameters;
+      IF ReportParameters = '' THEN
+        ReportParameters := GlobalReportParameters;
+      IF ReportParameters = '' THEN
+        ReportParameters := GetReportParameters(DocCode, ReportID, RecRef);
+
+      // Report 10072 (special case) -- it will not use the request page date filter if a record is passed
+      IF ReportID = REPORT::"Customer Statement" THEN
+        CLEAR(RecRef);
+
+      CLEAR(SaveAsFile);
+      SaveAsFile.CREATE(FilePath);
+      SaveAsFile.CREATEOUTSTREAM(SaveAsOutStream);
+
+      IF STRSUBSTNO('%1', RecRef.NUMBER) = '0' THEN
+        CASE EasyPDFDocument.GetReportExtension() OF
+          'docx' : REPORT.SAVEAS(ReportID, ReportParameters, REPORTFORMAT::Word, SaveAsOutStream);
+          'xlsx' : REPORT.SAVEAS(ReportID, ReportParameters, REPORTFORMAT::Excel, SaveAsOutStream);
+          'pdf'  : REPORT.SAVEAS(ReportID, ReportParameters, REPORTFORMAT::Pdf, SaveAsOutStream);
+          'xml'  : REPORT.SAVEAS(ReportID, ReportParameters, REPORTFORMAT::Xml, SaveAsOutStream);
+        END;
+
+      IF STRSUBSTNO('%1', RecRef.NUMBER) <> '0' THEN
+        CASE EasyPDFDocument.GetReportExtension() OF
+          'docx' : REPORT.SAVEAS(ReportID, ReportParameters, REPORTFORMAT::Word, SaveAsOutStream, RecRef);
+          'xlsx' : REPORT.SAVEAS(ReportID, ReportParameters, REPORTFORMAT::Excel, SaveAsOutStream, RecRef);
+          'pdf'  : REPORT.SAVEAS(ReportID, ReportParameters, REPORTFORMAT::Pdf, SaveAsOutStream, RecRef);
+          'xml'  : REPORT.SAVEAS(ReportID, ReportParameters, REPORTFORMAT::Xml, SaveAsOutStream, RecRef);
+        END;
+
+      SaveAsFile.CLOSE;
+    END;
+
+    PROCEDURE ReportExecute@1000000024(DocCode@1000000000 : Code[50];ReportID@1000000001 : Integer);
+    VAR
+      ReportParameters@1000000003 : Text;
+      RecRef@1000000004 : RecordRef;
+      FieldRec@1000000002 : Record 2000000041;
+    BEGIN
+
+      // Preview Report
+
+      GetRecordVariables(DocCode, RecRef, FieldRec);
+
+      ReportParameters := EasyPDFQueue.GetReportParameters;
+      IF ReportParameters = '' THEN
+        ReportParameters := GlobalReportParameters;
+      IF ReportParameters = '' THEN
+        ReportParameters := GetReportParameters(DocCode, ReportID, RecRef);
+
+      // Report 10072 (special case) -- it will not use the request page date filter if a record is passed
+
+      IF ReportID = REPORT::"Customer Statement" THEN BEGIN
+        REPORT.EXECUTE(ReportID, ReportParameters);
+      END ELSE
+        REPORT.EXECUTE(ReportID, ReportParameters, RecRef);
+    END;
+
+    PROCEDURE ReportPrint@1000000029(DocCode@1000000000 : Code[50];ReportID@1000000001 : Integer);
+    VAR
+      ReportParameters@1000000003 : Text;
+      RecRef@1000000004 : RecordRef;
+      FieldRec@1000000002 : Record 2000000041;
+    BEGIN
+
+      // Print to Windows Printer
+
+      GetRecordVariables(DocCode, RecRef, FieldRec);
+
+      ReportParameters := EasyPDFQueue.GetReportParameters;
+      IF ReportParameters = '' THEN
+        ReportParameters := GlobalReportParameters;
+      IF ReportParameters = '' THEN
+        ReportParameters := GetReportParameters(DocCode, ReportID, RecRef);
+
+      // Report 10072 will not use the request page date filter if a record is passed - so clear it
+      IF ReportID = REPORT::"Customer Statement" THEN BEGIN
+        REPORT.PRINT(ReportID, ReportParameters);
+      END ELSE
+        REPORT.PRINT(ReportID, ReportParameters, '', RecRef);
+    END;
+
+    PROCEDURE ReplaceToken@1000000005(DocumentCode@1000000000 : Code[50];DocumentNo@1000000001 : Code[20];Token@1000000002 : Text) : Text;
+    VAR
+      LINEFEED@1000000003 : Char;
+      FieldRec@1000000004 : Record 2000000041;
+      RecRef@1000000005 : RecordRef;
+      FldRef@1000000006 : FieldRef;
+      StartPos@1000000012 : Integer;
+      CopyLen@1000000011 : Integer;
+      FieldName@1000000010 : Text;
+      TableName@1000000007 : Text;
+      CompanyInformationRec@1000000008 : Record 79;
+      UserRec@1100774000 : Record 2000000120;
+      UserSetupRec@1000000013 : Record 91;
+      SalespersonRec@1000000014 : Record 13;
+      Found@1000000015 : Boolean;
+      FileMgt@1000000016 : Codeunit 419;
+      TableInformationRec@1100774001 : Record 2000000028;
+      LenStr@1100774002 : Text;
+      FmtStr@1100774003 : Text;
+      Length@1100774004 : Integer;
+      FmtNo@1100774005 : Integer;
+      String@1000000009 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.String";
+    BEGIN
+
+      //
+      // This function decodes a token in the message line of a message body template.
+      // Tokens in the message line are demarcated by surrounding brackets '[' ']'
+      //
+      // A token is of the form [{table}field;length;format]
+      // where
+      //    {table}, optional, names a NAV table
+      //             (if not specified the table associated with DocumentCode is used)
+      //    field, mandatory, names a field in table
+      //    length, optional, specifies an integer length of the formatted token
+      //    format, optional, specifies a format to be used
+      //            (see the NAV FORMAT() function for a description of length, format)
+      //
+      // This default implementation implements:
+      // - a few predefined tokens (BR,DATE,..)
+      // - allows data substitution from the record currently being processed
+      // - allows data substitution from other tables denoted by a syntax of '{tablename}field'
+      // - allows detailed format specification using the ;length;format options
+      //
+      // Note- you can change this function to do anything you like, it just needs to return a string
+      //       when passed a token..
+      //
+
+      LINEFEED := 10;
+
+      String := Token;
+      Token := String.Replace('+', ' ');
+
+      //
+      // Handle predefined tokens
+      //
+
+      IF UPPERCASE(Token) = 'BR' THEN
+        EXIT(FORMAT(LINEFEED));
+
+      IF UPPERCASE(Token) = 'FAXNUMBER' THEN
+        EXIT(GetFaxNumber(DocumentCode, DocumentNo));
+
+      IF UPPERCASE(Token) = 'USERID' THEN
+        EXIT(USERID);
+
+      IF Token = 'TEMP' THEN
+        EXIT(EasyPDF.Pathname(FileMgt.ClientTempFileName('tmp')));
+
+      //
+      // Handle tokens of the form '{table}field;length;format'
+      //
+
+      TableName := '';
+      FieldName := Token;
+      LenStr    := '';
+      FmtStr    := '';
+      Length    := -1;
+      FmtNo     := -1;
+
+      IF (STRPOS(Token,'{') > 0) AND (STRPOS(Token,'}') > 0) THEN BEGIN
+        StartPos  := STRPOS(Token,'{') + 1;
+        CopyLen   := STRPOS(Token,'}') - StartPos;
+        TableName := COPYSTR(Token,StartPos,CopyLen);
+        FieldName := COPYSTR(Token,StartPos+CopyLen+1);
+      END;
+
+      IF (STRPOS(FieldName,';') > 1) THEN BEGIN
+        StartPos  := STRPOS(FieldName,';');
+        LenStr    := COPYSTR(FieldName,StartPos+1);
+        FieldName := COPYSTR(FieldName,1,StartPos-1);
+      END;
+
+      IF (STRPOS(LenStr,';') > 1) THEN BEGIN
+        FmtStr := COPYSTR(LenStr, STRPOS(LenStr,';')+1);
+        LenStr := COPYSTR(LenStr, 1, STRPOS(LenStr,';')-1);
+      END;
+
+      IF LenStr <> '' THEN
+        IF EVALUATE(Length, LenStr) THEN ;
+
+      IF FmtStr <> '' THEN
+        IF EVALUATE(FmtNo, FmtStr) THEN ;
+
+      // Handle predefined token - DATE - with formatting
+
+      IF UPPERCASE(FieldName) = 'DATE' THEN
+        IF Length > -1 THEN BEGIN
+          IF FmtNo > -1 THEN
+            EXIT(FORMAT(TODAY,Length,FmtNo));
+          IF FmtStr <> '' THEN
+            EXIT(FORMAT(TODAY,Length,FmtStr));
+          EXIT(FORMAT(TODAY,Length));
+        END ELSE BEGIN
+          IF FmtNo > -1 THEN
+            EXIT(FORMAT(TODAY,0,FmtNo));
+          EXIT(FORMAT(TODAY));
+        END;
+
+      //
+      // Initialize the record variables for the specified table
+      //
+
+      FieldRec.RESET;
+
+      IF TableName = '' THEN BEGIN
+
+        GetRecordVariables(DocumentCode,RecRef,FieldRec);
+
+      END ELSE BEGIN
+
+        //
+        // Handle special table names
+        //
+
+        CASE TableName OF
+
+          'Company Information':
+            BEGIN
+              IF CompanyInformationRec.GET THEN BEGIN
+                RecRef.GETTABLE(CompanyInformationRec);
+                FieldRec.SETRANGE(TableNo,79);
+              END;
+            END;
+
+          'User':
+            BEGIN
+              IF UserRec.GET(USERID) THEN BEGIN
+                RecRef.GETTABLE(UserRec);
+                FieldRec.SETRANGE(TableNo,2000000002);
+              END;
+            END;
+
+          'User Setup':
+            BEGIN
+              IF UserSetupRec.GET(USERID) THEN BEGIN
+                RecRef.GETTABLE(UserSetupRec);
+                FieldRec.SETRANGE(TableNo,91);
+              END;
+            END;
+
+          'Customer':
+            BEGIN
+              RecRef.GETTABLE(CustomerRec);
+              FieldRec.SETRANGE(TableNo,18);
+            END;
+
+          'Vendor':
+            BEGIN
+              RecRef.GETTABLE(VendorRec);
+              FieldRec.SETRANGE(TableNo,23);
+            END;
+
+        END;
+
+      END;
+
+      IF NOT (RecRef.NUMBER > 0) THEN
+        EXIT('');
+
+      FieldRec.SETFILTER(FieldName,'%1','@' + FieldName + '');
+      IF NOT FieldRec.FIND('-') THEN
+        EXIT('');
+
+      FldRef := RecRef.FIELD(FieldRec."No.");
+      IF FORMAT(FieldRec.Class) = 'FlowField' THEN
+        FldRef.CALCFIELD;
+
+      IF Length > -1 THEN BEGIN
+        IF FmtNo > -1 THEN
+          EXIT(FORMAT(FldRef.VALUE,Length,FmtNo));
+        IF FmtStr <> '' THEN
+          EXIT(FORMAT(FldRef.VALUE,Length,FmtStr));
+        EXIT(FORMAT(FldRef.VALUE,Length));
+      END;
+
+      IF FmtNo > -1 THEN
+        EXIT(FORMAT(FldRef.VALUE,0,FmtNo));
+      IF FmtStr <> '' THEN
+        EXIT(FORMAT(FldRef.VALUE,0,FmtStr));
+
+      EXIT(FORMAT(FldRef));  // NOTE: this does not seem to honor the AutoFormatType/Expr property for all fields
+    END;
+
+    PROCEDURE InitializeSetup@1000000004(UID@1000000002 : Code[50];RequireConfirmation@1000000003 : Boolean) : Boolean;
+    VAR
+      EasyPDFUserSetup@1000000005 : Record 14103460;
+      EasyPDFUserDocument@1000000006 : Record 14103461;
+      DEFAULT@1000000004 : Text[10];
+      EasyPDFMessageTemplate@1000000000 : Record 14103467;
+      EasyPDFUserMessageTemplate@1000000001 : Record 14103467;
+      EasyPDFUserAttachment@1000000007 : Record 14103466;
+    BEGIN
+
+      DEFAULT := 'DEFAULT';
+
+      // The DEFAULT Easy PDF setup record must be initialized first
+
+      EasyPDFSetup.RESET;
+      IF UID <> DEFAULT THEN
+        IF NOT EasyPDFSetup.GET(DEFAULT) THEN
+          InitializeSetup(DEFAULT,FALSE);
+
+      IF UID = '' THEN
+        UID := DEFAULT;
+
+      // Make sure the Easy PDF Client Add-in has been configured
+
+      CheckForAddin();
+
+      // Initialize User Setup (copy the 'DEFAULT' setup) -- 'DEFAULT' setup is initialized below
+
+      IF UID <> DEFAULT THEN
+      BEGIN
+
+        IF NOT EasyPDFSetup.GET(UID) THEN BEGIN
+
+          IF RequireConfirmation THEN
+            IF NOT CONFIRM(QINITSETUPFORUSER, TRUE, UID) THEN
+            BEGIN
+              MESSAGE(TINITSETUPCANCELED);
+              EXIT(FALSE);
+            END;
+
+          // Copy the DEFAULT setup to the (new) user setup
+
+          EasyPDFUserSetup.INIT;
+          EasyPDFUserSetup.COPY(EasyPDFSetup);
+          EasyPDFUserSetup."User ID" := UID;
+          EasyPDFUserSetup.INSERT;
+
+          // Now copy the documents (type=Document, not type=Report) from the DEFAULT setup to the user setup
+
+          EasyPDFDocument.RESET;
+          EasyPDFDocument.SETRANGE("User ID", DEFAULT);
+          EasyPDFDocument.SETRANGE("Document Type", EasyPDFDocument."Document Type"::Document);
+          IF EasyPDFDocument.FIND('-') THEN
+            REPEAT
+
+              CLEAR(EasyPDFUserDocument);
+              EasyPDFUserDocument.INIT;
+              EasyPDFUserDocument.COPY(EasyPDFDocument);
+              EasyPDFUserDocument."User ID" := UID;
+              EasyPDFUserDocument.INSERT;
+
+              // and its attachments
+
+              EasyPDFAttachment.RESET;
+              EasyPDFAttachment.SETRANGE(Code, EasyPDFDocument.Code);
+              EasyPDFAttachment.SETRANGE(UserId, EasyPDFDocument."User ID");
+              IF EasyPDFAttachment.FIND('-') THEN
+              REPEAT
+                EasyPDFAttachment.CALCFIELDS(Blob);
+                CLEAR(EasyPDFUserAttachment);
+                EasyPDFUserAttachment.INIT;
+                EasyPDFUserAttachment.TRANSFERFIELDS(EasyPDFAttachment, FALSE);
+                EasyPDFUserAttachment.UserId := EasyPDFUserDocument."User ID";
+                EasyPDFUserAttachment."Entry No." := 0;
+                EasyPDFUserAttachment.INSERT;
+              UNTIL EasyPDFAttachment.NEXT = 0;
+
+            UNTIL EasyPDFDocument.NEXT = 0;
+
+          // .. and the message templates
+
+          EasyPDFMessageTemplate.RESET;
+          EasyPDFMessageTemplate.SETRANGE("User ID", DEFAULT);
+          IF EasyPDFMessageTemplate.FIND('-') THEN
+            REPEAT
+
+              EasyPDFMessageTemplate.CALCFIELDS(Body);
+              CLEAR(EasyPDFUserMessageTemplate);
+              EasyPDFUserMessageTemplate.INIT;
+              EasyPDFUserMessageTemplate.TRANSFERFIELDS(EasyPDFMessageTemplate);
+              EasyPDFUserMessageTemplate."Entry No." := 0;
+              EasyPDFUserMessageTemplate."User ID" := UID;
+              EasyPDFUserMessageTemplate.INSERT;
+
+              // update the user document to point to the new template
+
+              EasyPDFUserDocument.RESET;
+              EasyPDFUserDocument.SETRANGE("User ID", UID);
+              EasyPDFUserDocument.SETRANGE("E-Mail Message Template", EasyPDFMessageTemplate."Entry No.");
+              IF EasyPDFUserDocument.FIND('-') THEN
+                REPEAT
+                  EasyPDFUserDocument."E-Mail Message Template" := EasyPDFUserMessageTemplate."Entry No.";
+                  EasyPDFUserDocument.MODIFY;
+                UNTIL EasyPDFUserDocument.NEXT = 0;
+
+              EasyPDFUserDocument.RESET;
+              EasyPDFUserDocument.SETRANGE("User ID", UID);
+              EasyPDFUserDocument.SETRANGE("FAX Message Template", EasyPDFMessageTemplate."Entry No.");
+              IF EasyPDFUserDocument.FIND('-') THEN
+                REPEAT
+                  EasyPDFUserDocument."FAX Message Template" := EasyPDFUserMessageTemplate."Entry No.";
+                  EasyPDFUserDocument.MODIFY;
+                UNTIL EasyPDFUserDocument.NEXT = 0;
+
+            UNTIL EasyPDFMessageTemplate.NEXT = 0;
+
+        END;
+
+      END;
+
+      // Initialize the Setup record
+
+      EasyPDFSetup.RESET;
+      IF NOT EasyPDFSetup.GET(UID) THEN BEGIN
+
+        IF RequireConfirmation THEN
+          IF NOT CONFIRM(QINITSETUPFORUSER, TRUE, UID) THEN
+          BEGIN
+            MESSAGE(TINITSETUPCANCELED);
+            EXIT(FALSE);
+          END;
+
+        EasyPDFSetup.INIT;
+        EasyPDFSetup."User ID" := UID;
+        EasyPDFSetup."Printer name" := EasyPDFPrinter.Identity();
+        EasyPDFSetup.ServerTempPath := 'C:\temp\';
+        EasyPDFSetup.FaxServerAddressExtension := '@faxserverdomain.com';
+        EasyPDFSetup.ClearBatchOnSend := FALSE;
+        EasyPDFSetup.BatchIdTemplate := '%C - %D';
+        EasyPDFSetup.PreferredLanguageCode := 'ENU';
+        EasyPDFSetup.CommitEntryBatch := TRUE;
+        EVALUATE(EasyPDFSetup.ClearHistoryAfter, '<3M>');
+
+        EasyPDFSetup.INSERT;
+
+      END;
+
+      // Ensure all Document records exist
+
+      CLEAR(EasyPDFDocument);
+
+      IF NOT EasyPDFDocument.GET('BLANKET PURCHASE ORDER',UID) THEN BEGIN
+        EasyPDFDocument.Code := 'BLANKET PURCHASE ORDER';
+        EasyPDFDocument."User ID" := UID;
+        EasyPDFDocument.Description := 'Blanket Purchase Order';
+        EasyPDFDocument."Report ID" := REPORT::"Blanket Purchase Order";
+        EasyPDFDocument.Filename := 'Blanket Purchase Order [No.]';
+        EasyPDFDocument."Preview E-Mail" := TRUE;
+        EasyPDFDocument."E-Mail Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument."FAX Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument.LogToHistory := TRUE;
+        EasyPDFDocument.INSERT;
+      END;
+
+      IF NOT EasyPDFDocument.GET('BLANKET SALES ORDER',UID) THEN BEGIN
+        EasyPDFDocument.Code := 'BLANKET SALES ORDER';
+        EasyPDFDocument."User ID" := UID;
+        EasyPDFDocument.Description := 'Blanket Sales Order';
+        EasyPDFDocument."Report ID" := REPORT::"Sales Blanket Order";
+        EasyPDFDocument.Filename := 'Blanket Sales Order [No.]';
+        EasyPDFDocument."Preview E-Mail" := TRUE;
+        EasyPDFDocument."E-Mail Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument."FAX Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument.LogToHistory := TRUE;
+        EasyPDFDocument.INSERT;
+      END;
+
+      IF NOT EasyPDFDocument.GET('CUSTOMER STATEMENT',UID) THEN BEGIN
+        EasyPDFDocument.Code := 'CUSTOMER STATEMENT';
+        EasyPDFDocument."User ID" := UID;
+        EasyPDFDocument.Description := 'Customer Statement';
+        EasyPDFDocument."Report ID" := REPORT::Statement;
+        EasyPDFDocument.BatchGenerationReportId := REPORT::"Batch Customer Statement 116";
+        EasyPDFDocument.Filename := 'Customer Statement [No.]';
+        EasyPDFDocument."Preview E-Mail" := TRUE;
+        EasyPDFDocument."E-Mail Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument."FAX Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument.LogToHistory := TRUE;
+        EasyPDFDocument.INSERT;
+      END;
+
+      IF NOT EasyPDFDocument.GET('ISSUED FINANCE CHARGE MEMO',UID) THEN BEGIN
+        EasyPDFDocument.Code := 'ISSUED FINANCE CHARGE MEMO';
+        EasyPDFDocument."User ID" := UID;
+        EasyPDFDocument.Description := 'Issued Finance Charge Memo';
+        EasyPDFDocument."Report ID" := REPORT::"Finance Charge Memo";
+        EasyPDFDocument.Filename := 'Issued Finance Charge Memo [No.]';
+        EasyPDFDocument."Preview E-Mail" := TRUE;
+        EasyPDFDocument."E-Mail Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument."FAX Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument.LogToHistory := TRUE;
+        EasyPDFDocument.INSERT;
+      END;
+
+      IF NOT EasyPDFDocument.GET('ISSUED REMINDER',UID) THEN BEGIN
+        EasyPDFDocument.Code := 'ISSUED REMINDER';
+        EasyPDFDocument."User ID" := UID;
+        EasyPDFDocument.Description := 'Issued Reminder';
+        EasyPDFDocument."Report ID" := REPORT::Reminder;
+        EasyPDFDocument.Filename := 'Issued Reminder [No.]';
+        EasyPDFDocument."Preview E-Mail" := TRUE;
+        EasyPDFDocument."E-Mail Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument."FAX Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument.LogToHistory := TRUE;
+        EasyPDFDocument.INSERT;
+      END;
+
+      IF NOT EasyPDFDocument.GET('POSTED PURCHASE INVOICE',UID) THEN BEGIN
+        EasyPDFDocument.Code := 'POSTED PURCHASE INVOICE';
+        EasyPDFDocument."User ID" := UID;
+        EasyPDFDocument.Description := 'Posted Purchase Invoice';
+        EasyPDFDocument."Report ID" := REPORT::"Purchase - Invoice";
+        EasyPDFDocument.Filename := 'Posted Purchase Invoice [No.]';
+        EasyPDFDocument."Preview E-Mail" := TRUE;
+        EasyPDFDocument."E-Mail Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument."FAX Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument.LogToHistory := TRUE;
+        EasyPDFDocument.INSERT;
+      END;
+
+      IF NOT EasyPDFDocument.GET('POSTED PURCHASE RECEIPT',UID) THEN BEGIN
+        EasyPDFDocument.Code := 'POSTED PURCHASE RECEIPT';
+        EasyPDFDocument."User ID" := UID;
+        EasyPDFDocument.Description := 'Posted Purchase Receipt';
+        EasyPDFDocument."Report ID" := REPORT::"Purchase - Receipt";
+        EasyPDFDocument.Filename := 'Posted Purchase Receipt [No.]';
+        EasyPDFDocument."Preview E-Mail" := TRUE;
+        EasyPDFDocument."E-Mail Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument."FAX Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument.LogToHistory := TRUE;
+        EasyPDFDocument.INSERT;
+      END;
+
+      IF NOT EasyPDFDocument.GET('POSTED SALES CREDIT MEMO',UID) THEN BEGIN
+        EasyPDFDocument.Code := 'POSTED SALES CREDIT MEMO';
+        EasyPDFDocument."User ID" := UID;
+        EasyPDFDocument.Description := 'Posted Sales Credit Memo';
+        EasyPDFDocument."Report ID" := REPORT::"Sales - Credit Memo";
+        EasyPDFDocument.Filename := 'Sales Credit Memo [No.]';
+        EasyPDFDocument."Preview E-Mail" := TRUE;
+        EasyPDFDocument."E-Mail Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument."FAX Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument.LogToHistory := TRUE;
+        EasyPDFDocument.INSERT;
+      END;
+
+      IF NOT EasyPDFDocument.GET('POSTED SALES INVOICE',UID) THEN BEGIN
+        EasyPDFDocument.Code := 'POSTED SALES INVOICE';
+        EasyPDFDocument."User ID" := UID;
+        EasyPDFDocument.Description := 'Posted Sales Invoice';
+        EasyPDFDocument."Report ID" := REPORT::"Sales - Invoice";
+        EasyPDFDocument.Filename := 'Sales Invoice [No.]';
+        EasyPDFDocument."Preview E-Mail" := TRUE;
+        EasyPDFDocument."E-Mail Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument."FAX Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument.LogToHistory := TRUE;
+        EasyPDFDocument.INSERT;
+      END;
+
+      IF NOT EasyPDFDocument.GET('POSTED SALES RETURN RECEIPT',UID) THEN BEGIN
+        EasyPDFDocument.Code := 'POSTED SALES RETURN RECEIPT';
+        EasyPDFDocument."User ID" := UID;
+        EasyPDFDocument.Description := 'Posted Sales Return Receipt';
+        EasyPDFDocument."Report ID" := REPORT::"Sales - Return Receipt";
+        EasyPDFDocument.Filename := 'Sales Return Receipt [No.]';
+        EasyPDFDocument."Preview E-Mail" := TRUE;
+        EasyPDFDocument."E-Mail Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument."FAX Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument.LogToHistory := TRUE;
+        EasyPDFDocument.INSERT;
+      END;
+
+      IF NOT EasyPDFDocument.GET('POSTED SALES SHIPMENT',UID) THEN BEGIN
+        EasyPDFDocument.Code := 'POSTED SALES SHIPMENT';
+        EasyPDFDocument."User ID" := UID;
+        EasyPDFDocument.Description := 'Posted Sales Shipment';
+        EasyPDFDocument."Report ID" := REPORT::"Sales - Shipment";
+        EasyPDFDocument.Filename := 'Posted Sales Shipment [No.]';
+        EasyPDFDocument."Preview E-Mail" := TRUE;
+        EasyPDFDocument."E-Mail Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument."FAX Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument.LogToHistory := TRUE;
+        EasyPDFDocument.INSERT;
+      END;
+
+      IF NOT EasyPDFDocument.GET('POSTED SERVICE CREDIT MEMO',UID) THEN BEGIN
+        EasyPDFDocument.Code := 'POSTED SERVICE CREDIT MEMO';
+        EasyPDFDocument."User ID" := UID;
+        EasyPDFDocument.Description := 'Posted Service Credit Memo';
+        EasyPDFDocument."Report ID" := REPORT::"Service Credit Memo-Sales Tax";
+        EasyPDFDocument.Filename := 'Service Credit Memo [No.]';
+        EasyPDFDocument."Preview E-Mail" := TRUE;
+        EasyPDFDocument."E-Mail Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument."FAX Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument.LogToHistory := TRUE;
+        EasyPDFDocument.INSERT;
+      END;
+
+      IF NOT EasyPDFDocument.GET('POSTED SERVICE INVOICE',UID) THEN BEGIN
+        EasyPDFDocument.Code := 'POSTED SERVICE INVOICE';
+        EasyPDFDocument."User ID" := UID;
+        EasyPDFDocument.Description := 'Posted Service Invoice';
+        EasyPDFDocument."Report ID" := REPORT::"Service - Invoice";
+        EasyPDFDocument.Filename := 'Service Invoice [No.]';
+        EasyPDFDocument."Preview E-Mail" := TRUE;
+        EasyPDFDocument."E-Mail Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument."FAX Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument.LogToHistory := TRUE;
+        EasyPDFDocument.INSERT;
+      END;
+
+      IF NOT EasyPDFDocument.GET('POSTED SERVICE SHIPMENT',UID) THEN BEGIN
+        EasyPDFDocument.Code := 'POSTED SERVICE SHIPMENT';
+        EasyPDFDocument."User ID" := UID;
+        EasyPDFDocument.Description := 'Posted Service Shipment';
+        EasyPDFDocument."Report ID" := REPORT::"Service - Shipment";
+        EasyPDFDocument.Filename := 'Service Shipment [No.]';
+        EasyPDFDocument."Preview E-Mail" := TRUE;
+        EasyPDFDocument."E-Mail Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument."FAX Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument.LogToHistory := TRUE;
+        EasyPDFDocument.INSERT;
+      END;
+
+      IF NOT EasyPDFDocument.GET('PURCHASE ORDER',UID) THEN BEGIN
+        EasyPDFDocument.Code := 'PURCHASE ORDER';
+        EasyPDFDocument."User ID" := UID;
+        EasyPDFDocument.Description := 'Purchase Order';
+        EasyPDFDocument."Report ID" := REPORT::Order;
+        EasyPDFDocument.Filename := 'Purchase Order [No.]';
+        EasyPDFDocument."Preview E-Mail" := TRUE;
+        EasyPDFDocument."E-Mail Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument."FAX Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument.LogToHistory := TRUE;
+        EasyPDFDocument.INSERT;
+      END;
+
+      IF NOT EasyPDFDocument.GET('PURCHASE QUOTE',UID) THEN BEGIN
+        EasyPDFDocument.Code := 'PURCHASE QUOTE';
+        EasyPDFDocument."User ID" := UID;
+        EasyPDFDocument.Description := 'Purchase Quote';
+        EasyPDFDocument."Report ID" := REPORT::"Purchase - Quote";
+        EasyPDFDocument.Filename := 'Purchase Quote [No.]';
+        EasyPDFDocument."Preview E-Mail" := TRUE;
+        EasyPDFDocument."E-Mail Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument."FAX Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument.LogToHistory := TRUE;
+        EasyPDFDocument.INSERT;
+      END;
+
+      IF NOT EasyPDFDocument.GET('REMITTANCE ADVICE',UID) THEN BEGIN
+        EasyPDFDocument.Code := 'REMITTANCE ADVICE';
+        EasyPDFDocument."User ID" := UID;
+        EasyPDFDocument.Description := 'Remittance Advice';
+        EasyPDFDocument."Report ID" := REPORT::"Print Electronic Payments";
+        EasyPDFDocument.Filename := 'Remittance Advice [Line No.]';
+        EasyPDFDocument."Preview E-Mail" := TRUE;
+        EasyPDFDocument."E-Mail Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument."FAX Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument.LogToHistory := TRUE;
+        EasyPDFDocument.INSERT;
+      END;
+
+      IF NOT EasyPDFDocument.GET('SALES ORDER',UID) THEN BEGIN
+        EasyPDFDocument.Code := 'SALES ORDER';
+        EasyPDFDocument."User ID" := UID;
+        EasyPDFDocument.Description := 'Sales Order';
+        EasyPDFDocument."Report ID" := REPORT::"Order Confirmation";
+        EasyPDFDocument.Filename := 'Sales Order [No.]';
+        EasyPDFDocument."Preview E-Mail" := TRUE;
+        EasyPDFDocument."E-Mail Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument."FAX Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument.LogToHistory := TRUE;
+        EasyPDFDocument.INSERT;
+      END;
+
+      IF NOT EasyPDFDocument.GET('SALES QUOTE',UID) THEN BEGIN
+        EasyPDFDocument.Code := 'SALES QUOTE';
+        EasyPDFDocument."User ID" := UID;
+        EasyPDFDocument.Description := 'Sales Quote';
+        EasyPDFDocument."Report ID" := REPORT::"Sales - Quote";
+        EasyPDFDocument.Filename := 'Sales Quote [No.]';
+        EasyPDFDocument."Preview E-Mail" := TRUE;
+        EasyPDFDocument."E-Mail Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument."FAX Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument.LogToHistory := TRUE;
+        EasyPDFDocument.INSERT;
+      END;
+
+      IF NOT EasyPDFDocument.GET('SALES RETURN ORDER',UID) THEN BEGIN
+        EasyPDFDocument.Code := 'SALES RETURN ORDER';
+        EasyPDFDocument."User ID" := UID;
+        EasyPDFDocument.Description := 'Sales Return Order';
+        EasyPDFDocument."Report ID" := REPORT::"Return Order Confirmation";
+        EasyPDFDocument.Filename := 'Sales Return Order [No.]';
+        EasyPDFDocument."Preview E-Mail" := TRUE;
+        EasyPDFDocument."E-Mail Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument."FAX Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument.LogToHistory := TRUE;
+        EasyPDFDocument.INSERT;
+      END;
+
+      IF NOT EasyPDFDocument.GET('SERVICE ORDER',UID) THEN BEGIN
+        EasyPDFDocument.Code := 'SERVICE ORDER';
+        EasyPDFDocument."User ID" := UID;
+        EasyPDFDocument.Description := 'Service Order';
+        EasyPDFDocument."Report ID" := REPORT::"Service Order";
+        EasyPDFDocument.Filename := 'Service Order [No.]';
+        EasyPDFDocument."Preview E-Mail" := TRUE;
+        EasyPDFDocument."E-Mail Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument."FAX Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument.LogToHistory := TRUE;
+        EasyPDFDocument.INSERT;
+      END;
+
+      IF NOT EasyPDFDocument.GET('SERVICE QUOTE',UID) THEN BEGIN
+        EasyPDFDocument.Code := 'SERVICE QUOTE';
+        EasyPDFDocument."User ID" := UID;
+        EasyPDFDocument.Description := 'Service Quote';
+        EasyPDFDocument."Report ID" := REPORT::"Service Quote";
+        EasyPDFDocument.Filename := 'Service Quote [No.]';
+        EasyPDFDocument."Preview E-Mail" := TRUE;
+        EasyPDFDocument."E-Mail Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument."FAX Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument.LogToHistory := TRUE;
+        EasyPDFDocument.INSERT;
+      END;
+
+      IF NOT EasyPDFDocument.GET('VENDOR PAYMENT RECEIPT',UID) THEN BEGIN
+        EasyPDFDocument.Code := 'VENDOR PAYMENT RECEIPT';
+        EasyPDFDocument."User ID" := UID;
+        EasyPDFDocument.Description := 'Vendor Payment Receipt';
+        EasyPDFDocument."Report ID" := REPORT::"Vendor - Payment Receipt";
+        EasyPDFDocument.Filename := 'Vendor Payment Receipt [Document No.]';
+        EasyPDFDocument."Preview E-Mail" := TRUE;
+        EasyPDFDocument."E-Mail Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument."FAX Message Language Code" := EasyPDFSetup.PreferredLanguageCode;
+        EasyPDFDocument.LogToHistory := TRUE;
+        EasyPDFDocument.INSERT;
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CheckForAddin@1000000027();
+    VAR
+      ClientAddinRec@1000000000 : Record 2000000069;
+    BEGIN
+
+      ClientAddinRec.RESET;
+      IF NOT ClientAddinRec.GET('EasyPDF.Client.MessageTemplateAddin', '2139766b2d013dc8') THEN BEGIN
+
+        ClientAddinRec.INIT;
+        ClientAddinRec."Add-in Name" := 'EasyPDF.Client.MessageTemplateAddin';
+        ClientAddinRec."Public Key Token" := '2139766b2d013dc8';
+        ClientAddinRec.Category := ClientAddinRec.Category::"DotNet Control Add-in";
+        ClientAddinRec.Description := 'Easy PDF Message Template control add-in';
+        IF NOT ClientAddinRec.INSERT THEN
+          ERROR(ERR001);
+
+      END;
+    END;
+
+    PROCEDURE ShowDocument@1000000009(DocumentCode@1000000000 : Code[50];DocumentNo@1000000001 : Code[20]);
+    BEGIN
+
+      IF NOT InitializeRecord(DocumentCode, DocumentNo, '', PrimaryKey) THEN
+        EXIT;
+
+      //
+      // This function displays the form associated with the document.
+      // There must be a corresponding entry in the case statement for each Easy PDF Document definition.
+      //
+
+      CASE DocumentCode OF
+        'BLANKET PURCHASE ORDER' :
+            PAGE.RUNMODAL(PAGE::"Blanket Purchase Order", PurchaseHeaderRec);
+        'BLANKET SALES ORDER' :
+            PAGE.RUNMODAL(PAGE::"Blanket Sales Order", SalesHeaderRec);
+        'CUSTOMER STATEMENT' :
+            PAGE.RUNMODAL(PAGE::"Customer Card", CustomerRec);
+        'ISSUED REMINDER' :
+            PAGE.RUNMODAL(PAGE::"Issued Reminder", IssuedReminderRec);
+        'ISSUED FINANCE CHARGE MEMO' :
+            PAGE.RUNMODAL(PAGE::"Issued Finance Charge Memo", IssuedFinanceChargeMemoRec);
+        'POSTED PURCHASE INVOICE' :
+            PAGE.RUNMODAL(PAGE::"Posted Purchase Invoice", PostedPurchaseInvoiceRec);
+        'POSTED PURCHASE RECEIPT' :
+            PAGE.RUNMODAL(PAGE::"Posted Purchase Receipt", PostedPurchaseReceiptRec);
+        'POSTED SALES CREDIT MEMO' :
+            PAGE.RUNMODAL(PAGE::"Posted Sales Credit Memo", SalesCreditMemoRec);
+        'POSTED SALES INVOICE' :
+            PAGE.RUNMODAL(PAGE::"Posted Sales Invoice", PostedInvoiceRec);
+        'POSTED SALES RETURN RECEIPT' :
+            PAGE.RUNMODAL(PAGE::"Posted Return Receipt", PostedSalesReturnReceiptRec);
+        'POSTED SALES SHIPMENT' :
+            PAGE.RUNMODAL(PAGE::"Posted Sales Shipment", PostedSalesShipmentRec);
+        'POSTED SERVICE CREDIT MEMO' :
+            PAGE.RUNMODAL(PAGE::"Posted Service Credit Memo", ServiceCrMemoHeaderRec);
+        'POSTED SERVICE INVOICE' :
+            PAGE.RUNMODAL(PAGE::"Posted Service Invoice", ServiceInvoiceHeaderRec);
+        'POSTED SERVICE SHIPMENT' :
+            PAGE.RUNMODAL(PAGE::"Posted Service Shipment", ServiceShipmentHeaderRec);
+        'PURCHASE ORDER' :
+            PAGE.RUNMODAL(PAGE::"Purchase Order", PurchaseHeaderRec);
+        'PURCHASE QUOTE' :
+            PAGE.RUNMODAL(PAGE::"Purchase Quote", PurchaseHeaderRec);
+        'SALES ORDER' :
+            PAGE.RUNMODAL(PAGE::"Sales Order", SalesHeaderRec);
+        'SALES QUOTE' :
+            PAGE.RUNMODAL(PAGE::"Sales Quote", SalesHeaderRec);
+        'SALES RETURN ORDER' :
+            PAGE.RUNMODAL(PAGE::"Sales Return Order", SalesHeaderRec);
+        'SERVICE ORDER' :
+            PAGE.RUNMODAL(PAGE::"Service Order", ServiceHeaderRec);
+        'SERVICE QUOTE' :
+            PAGE.RUNMODAL(PAGE::"Service Quote", ServiceHeaderRec);
+        'VENDOR PAYMENT RECEIPT' :
+            ;
+      END;
+    END;
+
+    PROCEDURE ShowRecipient@1000000014(DocumentCode@1000000001 : Code[50];DocumentNo@1000000000 : Code[20]);
+    BEGIN
+
+      // This function is called from the batch queue form/page
+      // It should display the card for the recipient of the specified document
+
+      IF NOT InitializeRecord(DocumentCode, DocumentNo, '', PrimaryKey) THEN
+        EXIT;
+
+      CASE DocumentCode OF
+        'BLANKET SALES ORDER',
+        'CUSTOMER STATEMENT',
+        'ISSUED REMINDER',
+        'ISSUED FINANCE CHARGE MEMO',
+        'POSTED SALES CREDIT MEMO',
+        'POSTED SALES INVOICE',
+        'POSTED SALES RETURN RECEIPT',
+        'POSTED SALES SHIPMENT',
+        'POSTED SERVICE CREDIT MEMO',
+        'POSTED SERVICE INVOICE',
+        'POSTED SERVICE SHIPMENT',
+        'SALES ORDER',
+        'SALES QUOTE',
+        'SALES RETURN ORDER' :
+            PAGE.RUNMODAL(PAGE::"Customer Card", CustomerRec);
+        'BLANKET PURCHASE ORDER',
+        'POSTED PURCHASE INVOICE',
+        'POSTED PURCHASE RECEIPT',
+        'PURCHASE ORDER',
+        'PURCHASE QUOTE',
+        'SERVICE ORDER',
+        'SERVICE QUOTE',
+        'VENDOR PAYMENT RECEIPT' :
+            PAGE.RUNMODAL(PAGE::"Vendor Card", VendorRec);
+        'REMITTANCE ADVICE' :
+        BEGIN
+          IF EFTPayeeType = EFTPayeeType::Customer THEN
+            PAGE.RUNMODAL(PAGE::"Customer Card", CustomerRec);
+          IF EFTPayeeType = EFTPayeeType::Vendor THEN
+            PAGE.RUNMODAL(PAGE::"Vendor Card", VendorRec);
+        END;
+
+      END;
+    END;
+
+    PROCEDURE GenerateBatchId@1000000011(DocumentCode@1000000000 : Code[50]) : Text[80];
+    VAR
+      Template@1000000001 : Text[80];
+      Token@1000000002 : Text[30];
+      StartPos@1000000003 : Integer;
+    BEGIN
+
+      // The following tokens are supported
+      // %C = Code (Document Code)
+      // %D = Date
+      // %U = Userid
+
+      Template := '%C %D';  // default
+
+      CLEAR(EasyPDFSetup);
+      EasyPDFSetup.RESET;
+      IF NOT EasyPDFSetup.GET(USERID) THEN
+        IF NOT EasyPDFSetup.GET('DEFAULT') THEN
+          ;
+
+      IF EasyPDFSetup.BatchIdTemplate <> '' THEN
+        Template := EasyPDFSetup.BatchIdTemplate;
+
+      WHILE (STRPOS(Template,'%') > 0) DO
+      BEGIN
+
+        StartPos := STRPOS(Template,'%');                    // Find the first '%'
+        Token := COPYSTR(Template, StartPos, 2);
+        Template := COPYSTR(Template,1,StartPos-1) +
+                    '%1' +
+                    COPYSTR(Template, StartPos+2);
+
+        CASE Token OF
+        '%C': Template := STRSUBSTNO(Template, DocumentCode);
+        '%D': Template := STRSUBSTNO(Template, FORMAT(TODAY));
+        '%U': Template := STRSUBSTNO(Template, UPPERCASE(USERID));
+        END;
+
+      END;
+
+      EXIT( Template );
+    END;
+
+    PROCEDURE OnBatchPostingStart@1000000012(DocumentCode@1000000000 : Code[50]);
+    BEGIN
+
+      EasyPDF.CreateBatch(GenerateBatchId(DocumentCode), DocumentCode);
+    END;
+
+    PROCEDURE OnDocumentPosted@1000000010(DocumentCode@1000000000 : Code[50];DocumentNo@1000000001 : Code[20]) : Boolean;
+    BEGIN
+
+      // Silently fail if Easy PDF has not yet been initialized
+
+      EasyPDFSetup.RESET;
+      IF NOT EasyPDFSetup.GET(USERID) THEN
+        IF NOT EasyPDFSetup.GET('DEFAULT') THEN
+          EXIT(FALSE);
+
+      EasyPDFDocument.RESET;
+      IF NOT EasyPDFDocument.GET(DocumentCode,USERID) THEN
+        IF NOT EasyPDFDocument.GET(DocumentCode,'DEFAULT') THEN
+          EXIT(FALSE);
+
+      // Handle the 'Send when Posted' and 'Batch when Posted' options
+
+      IF EasyPDFDocument.SendOnPost THEN
+      BEGIN
+
+        EasyPDF.SendByPreferredMethod(DocumentCode, DocumentNo);
+
+      END ELSE IF EasyPDFDocument.BatchOnPost THEN
+      BEGIN
+
+        EasyPDF.QueueBatch(DocumentCode, DocumentNo, GenerateBatchId(DocumentCode));
+
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE OnBatchPostingComplete@1000000015(DocumentCode@1000000003 : Code[50]) : Boolean;
+    VAR
+      EasyPDFQueue@1000000001 : Record 14103463;
+      BatchId@1000000002 : Text[80];
+    BEGIN
+
+      // This function is called after batch processing has completed
+      // This function initiates batch send for batches where the document is set for 'Send on Post'
+
+      EasyPDF.GetDocumentSetup(EasyPDFDocument, DocumentCode);
+
+      BatchId := GenerateBatchId(DocumentCode);
+
+      EasyPDFQueue.RESET;
+      EasyPDFQueue.SETRANGE(BatchId, BatchId);
+
+      IF EasyPDFDocument.SendOnPost THEN
+        EasyPDF.SendBatch(BatchId, EasyPDFQueue, FALSE);
+
+      IF EasyPDFQueue.COUNT = 1 THEN  // Batch is empty but header exists, remove it
+      BEGIN
+        EasyPDFQueue.SETRANGE(EntryType, EasyPDFQueue.EntryType::Header);
+        IF EasyPDFQueue.FIND('-') THEN
+          EasyPDFQueue.DELETE;
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE OnBeforeBatchSend@1000000022(EasyPDFQueueHeader@1000000000 : Record 14103463) : Boolean;
+    BEGIN
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE OnBeforeBatchEntrySend@1000000023(EasyPDFQueueEntry@1000000000 : Record 14103463) : Boolean;
+    BEGIN
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE OnAfterBatchEntrySend@1000000025(EasyPDFQueueEntry@1000000000 : Record 14103463);
+    BEGIN
+
+      CASE EasyPDFQueueEntry.DocCode OF
+
+        'REMITTANCE ADVICE' :
+        BEGIN
+          // We will use the index entry field to indicate that a remittance has been
+          // sent for this entry.  The index entry field is only used in fixed asset
+          // depreciation so its use will not collide with payment processing.
+          IF EasyPDFQueueEntry.PrimaryKey = '' THEN
+            EXIT;
+          GeneralJournalLineRec."Index Entry" := TRUE;
+          GeneralJournalLineRec.MODIFY;
+        END;
+
+      END;
+    END;
+
+    PROCEDURE OnAfterBatchSend@1000000026(EasyPDFQueueHeader@1000000000 : Record 14103463);
+    BEGIN
+    END;
+
+    PROCEDURE GetFieldCodes@1000000028(DocumentCode@1000000000 : Code[50]) : Text;
+    VAR
+      RecRef@1000000007 : RecordRef;
+      FldRef@1000000006 : FieldRef;
+      FieldRec@1000000004 : Record 2000000041;
+      I@1000000002 : Integer;
+      FieldCodes@1000000005 : Text;
+    BEGIN
+
+      GetRecordVariables(DocumentCode,RecRef,FieldRec);
+
+      IF NOT (RecRef.NUMBER > 0) THEN
+        EXIT('');
+
+      //RecRef.OPEN(RecRef.NUMBER);
+      FieldCodes := '';
+
+      FOR I:=1 TO RecRef.FIELDCOUNT() DO
+      BEGIN
+
+        FldRef := RecRef.FIELDINDEX(I);
+        FieldCodes := FieldCodes + FldRef.NAME + ';';
+
+      END;
+
+      RecRef.CLOSE();
+      EXIT(FieldCodes);
+    END;
+
+    PROCEDURE CollectReportParameters@1000000008(DocCode@1000000000 : Code[50];ReportID@1000000001 : Integer;ReportParameters@1000000002 : Text) : Text;
+    BEGIN
+
+      IF ReportParameters = '' THEN
+        ReportParameters := EasyPDF.NewReportParameters(ReportID);
+      GlobalReportParameters := REPORT.RUNREQUESTPAGE(ReportID, ReportParameters);
+      EXIT(GlobalReportParameters);
+    END;
+
+    PROCEDURE GetRecordVariant@1000000030(DocumentCode@1000000006 : Code[20];VAR RecVar@1000000003 : Variant;VAR CustomerVendorType@1000000002 : Text);
+    BEGIN
+
+      CLEAR(RecVar);
+      CustomerVendorType := '';
+
+      CASE DocumentCode OF
+
+        'CUSTOMER STATEMENT' :
+          BEGIN
+            RecVar := CustomerRec;
+            CustomerVendorType := 'CUSTOMER';
+          END;
+
+        'ISSUED REMINDER' :
+          BEGIN
+            RecVar := IssuedReminderRec;
+            CustomerVendorType := 'CUSTOMER';
+          END;
+
+        'ISSUED FINANCE CHARGE MEMO' :
+          BEGIN
+            RecVar := IssuedFinanceChargeMemoRec;
+            CustomerVendorType := 'CUSTOMER';
+          END;
+
+        'POSTED PURCHASE INVOICE' :
+          BEGIN
+            RecVar := PostedPurchaseInvoiceRec;
+            CustomerVendorType := 'VENDOR';
+          END;
+
+        'POSTED PURCHASE RECEIPT' :
+          BEGIN
+            RecVar := PostedPurchaseReceiptRec;
+            CustomerVendorType := 'VENDOR';
+          END;
+
+        'POSTED SALES CREDIT MEMO' :
+          BEGIN
+            RecVar := SalesCreditMemoRec;
+            CustomerVendorType := 'CUSTOMER';
+          END;
+
+        'POSTED SALES INVOICE' :
+          BEGIN
+            RecVar := PostedInvoiceRec;
+            CustomerVendorType := 'CUSTOMER';
+          END;
+
+        'POSTED SALES RETURN RECEIPT' :
+          BEGIN
+            RecVar := PostedSalesReturnReceiptRec;
+            CustomerVendorType := 'CUSTOMER';
+          END;
+
+        'POSTED SALES SHIPMENT' :
+          BEGIN
+            RecVar := PostedSalesShipmentRec;
+            CustomerVendorType := 'CUSTOMER';
+          END;
+
+        'POSTED SERVICE CREDIT MEMO' :
+          BEGIN
+            RecVar := ServiceCrMemoHeaderRec;
+            CustomerVendorType := 'CUSTOMER';
+          END;
+
+        'POSTED SERVICE INVOICE' :
+          BEGIN
+            RecVar := ServiceInvoiceHeaderRec;
+            CustomerVendorType := 'CUSTOMER';
+          END;
+
+        'POSTED SERVICE SHIPMENT' :
+          BEGIN
+            RecVar := ServiceShipmentHeaderRec;
+            CustomerVendorType := 'CUSTOMER';
+          END;
+
+        'PURCHASE ORDER', 'PURCHASE QUOTE', 'BLANKET PURCHASE ORDER' :
+          BEGIN
+            RecVar := PurchaseHeaderRec;
+            CustomerVendorType := 'VENDOR';
+          END;
+
+        'REMITTANCE ADVICE' :
+          BEGIN
+            RecVar := GeneralJournalLineRec;
+            IF GeneralJournalLineRec."Account Type" = GeneralJournalLineRec."Account Type"::Vendor THEN
+              CustomerVendorType := 'VENDOR';
+            IF GeneralJournalLineRec."Account Type" = GeneralJournalLineRec."Account Type"::Customer THEN
+              CustomerVendorType := 'CUSTOMER';
+          END;
+
+        'SALES ORDER', 'SALES QUOTE', 'SALES RETURN ORDER', 'BLANKET SALES ORDER' :
+          BEGIN
+            RecVar := SalesHeaderRec;
+            CustomerVendorType := 'CUSTOMER';
+          END;
+
+        'SERVICE ORDER', 'SERVICE QUOTE' :
+          BEGIN
+            RecVar := ServiceHeaderRec;
+            CustomerVendorType := 'CUSTOMER';
+          END;
+
+        'VENDOR PAYMENT RECEIPT' :
+        BEGIN
+          RecVar := VendorLedgerEntryRec;
+          CustomerVendorType := 'VENDOR';
+        END;
+
+      END;
+    END;
+
+    PROCEDURE SaveReportSelectionAsHTML@1000000006(DocumentCode@1000000006 : Code[20];Usage@1000000001 : Integer;VAR FilePath@1000000000 : Text) : Boolean;
+    VAR
+      ReportSelections@1000000002 : Record 77;
+      EmailAddress@1000000003 : Text;
+      RecVariant@1000000004 : Variant;
+      RecType@1000000005 : Text;
+    BEGIN
+
+      FilePath := '';
+      GetRecordVariant(DocumentCode, RecVariant, RecType);
+
+      IF RecType = 'CUSTOMER' THEN
+        EXIT(ReportSelections.GetEmailBody(FilePath, Usage, RecVariant, CustomerRec."No.", EmailAddress));
+      IF RecType = 'VENDOR' THEN
+        EXIT(ReportSelections.GetEmailBodyVendor(FilePath, Usage, RecVariant, VendorRec."No.", EmailAddress));
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE SaveReportLayoutAsHTML@15(DocumentCode@1000000002 : Code[20];ReportId@1000000006 : Integer;LayoutCode@1000000001 : Code[20];VAR FilePath@1000000000 : Text) : Boolean;
+    VAR
+      ReportLayoutSelection@1000 : Record 9651;
+      FileMgt@1001 : Codeunit 419;
+      CustomReportLayoutRec@1000000004 : Record 9650;
+      RecVariant@1000000005 : Variant;
+      RecType@1000000003 : Text;
+    BEGIN
+
+      IF LayoutCode <> '' THEN
+        IF NOT CustomReportLayoutRec.GET(LayoutCode) THEN
+          EXIT(FALSE);
+
+      GetRecordVariant(DocumentCode, RecVariant, RecType);
+      FilePath := COPYSTR(FileMgt.ServerTempFileName('html'),1,250);
+      IF LayoutCode <> '' THEN ReportLayoutSelection.SetTempLayoutSelected(LayoutCode);
+      REPORT.SAVEASHTML(ReportId, FilePath, RecVariant);
+      IF LayoutCode <> '' THEN ReportLayoutSelection.SetTempLayoutSelected('');
+      COMMIT;
+
+      EXIT(EXISTS(FilePath));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

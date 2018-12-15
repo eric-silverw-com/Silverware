@@ -1,0 +1,2223 @@
+OBJECT Codeunit 37062300 EasyPDF
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08/08/18;
+    Time=[ 5:06:37 PM];
+    Modified=Yes;
+    Version List=EZP2.34.02;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      EasyPDFSetup@1000000022 : Record 14103460;
+      EasyPDFCustomization@1000000009 : Codeunit 14103460;
+      EasyPDFPrinter@1000000016 : Codeunit 14103462;
+      EasyPDFDocument@1000000008 : Record 14103461;
+      EasyPDFQueue@1000000003 : Record 14103463;
+      EasyPDFQueueHeader@1000000018 : Record 14103463;
+      EasyPDFHistory@1000000026 : Record 14103465;
+      EasyPDFAttachment@1000000023 : Record 14103466;
+      EasyPDFAttachmentTemp@1000000068 : TEMPORARY Record 14103466;
+      EasyPDFPrimaryKey@1000000064 : Text;
+      EasyPDFBatchId@1000000065 : Text;
+      MAPIMail@1000000000 : DotNet "'EasyPDF.Client'.EasyPDF.Client.MAPIMail" RUNONCLIENT;
+      SMTPMail@1000000005 : DotNet "'EasyPDF'.EasyPDF.SMTPMail";
+      DocumentCode@1000000011 : Code[50];
+      DocumentNo@1000000010 : Code[20];
+      MessageType@1000000007 : Integer;
+      IsSMTP@1000000006 : Boolean;
+      IsBatch@1000000004 : Boolean;
+      TempFilePath@1000000001 : Text[260];
+      MailTransport@1000000024 : Integer;
+      AttachmentFileNames@1000000025 : Text;
+      LanguageCode@1000000013 : Code[10];
+      SubjectLine@1000000029 : Text[1024];
+      RecipientType@1000000030 : Integer;
+      RecipientNo@1000000031 : Code[20];
+      RecipientName@1000000032 : Text[50];
+      ToAddress@1000000035 : Text[250];
+      CcAddress@1000000034 : Text[250];
+      BccAddress@1000000033 : Text[250];
+      TEXT001@1000000028 : TextConst 'ENU=Document Code not found in Easy PDF Document Setup - %1';
+      TEXT002@1000000038 : TextConst 'ENU=Document not found: %1, %2';
+      TEXT003@1000000039 : TextConst 'ENU=E-Mail sent';
+      TEXT004@1000000040 : TextConst 'ENU=FAX sent';
+      TEXT005@1000000041 : TextConst 'ENU=Easy PDF initialization failed';
+      TEXT006@1000000042 : TextConst 'ENU=Attachment not found: %1, %2';
+      TEXT007@1000000043 : TextConst 'ENU=File Name must not contain a forward or backwards slash';
+      TEXT008@1000000044 : TextConst 'ENU=Printing #1###';
+      TEXT009@1000000057 : TextConst 'ENU=MergedPdfAttachments';
+      ERR000@1000000060 : TextConst 'ENU=EASY PDF ERROR \%1';
+      ERR001@1000000045 : TextConst 'ENU=Easy PDF has not been setup.  Please run setup.';
+      ERR002@1000000046 : TextConst 'ENU=The PDF Printer is not installed or is not functioning properly.';
+      ERR003@1000000047 : TextConst 'ENU=The Easy PDF Mail component is not installed.';
+      ERR004@1000000048 : TextConst 'ENU=Insufficient permission to open Outlook.';
+      ERR005@1000000049 : TextConst 'ENU=Unable to create a mail message.';
+      ERR006@1000000050 : TextConst 'ENU=File attachment not found.\Easy PDF Processing aborted.';
+      ERR007@1000000051 : TextConst 'ENU=Recipient does not have a fax number.';
+      ERR008@1000000052 : TextConst 'ENU=Recipient does not have an e-mail address.';
+      ERR009@1000000053 : TextConst 'ENU=Temporary File Path not found or insufficient write permissions.';
+      ERR010@1000000054 : TextConst 'ENU=Sender does not have an e-mail address.  See setup/e-mail.';
+      ERR011@1000000055 : TextConst 'ENU=An unknown error has occurred, please try again.';
+      ERR012@1000000002 : TextConst 'ENU=SMTP Mail not configured - please run setup';
+      ERR013@1000000014 : TextConst 'ENU=Invalid E-Mail Address ''%1'' %2';
+      SenderName@1000000037 : Text[100];
+      SenderAddress@1000000036 : Text[50];
+      UseBatchAddress@1000000017 : Boolean;
+      ClientFileHelper@1000000019 : DotNet "'mscorlib'.System.IO.File" RUNONCLIENT;
+      ServerFileHelper@1000000015 : DotNet "'mscorlib'.System.IO.File";
+      ClientPathHelper@1000000020 : DotNet "'mscorlib'.System.IO.Path" RUNONCLIENT;
+      ServerPathHelper@1000000021 : DotNet "'mscorlib'.System.IO.Path";
+      SMTPMailOnClient@1000000027 : DotNet "'EasyPDF'.EasyPDF.SMTPMail" RUNONCLIENT;
+      MergedAttachmentFile@1000000056 : Text;
+      ClientTempPath@1000000059 : Text;
+      ServerTempPath@1000000058 : Text;
+      Language@1000000061 : Record 8;
+      ERR014@1000000062 : TextConst 'ENU=The batch was created with language (%1) different from the current client language (%2)';
+      ReferenceId@1000000063 : Text;
+      ShowSmtpPreview@1000000066 : Boolean;
+      ShowSmtpConfirmation@1000000067 : Boolean;
+
+    PROCEDURE Version@1000000020() : Text[80];
+    BEGIN
+      EXIT('EZP2.34.02');
+    END;
+
+    PROCEDURE SendByPreferredMethod@1000000008(DocCode@1000000000 : Code[50];DocNo@1000000001 : Code[20]);
+    BEGIN
+
+      ClearVariables();
+
+      // Initialize the document record
+      IF NOT EasyPDFCustomization.InitializeRecord(DocCode, DocNo, EasyPDFBatchId, EasyPDFPrimaryKey) THEN
+        ERROR(TEXT002, DocCode, DocNo);
+
+      // Print using the customer preferred communication method
+      EasyPDFCustomization.GetPreferredMethod(DocCode, DocNo, MessageType);
+
+      // Print hardcopy
+      IF MessageType = EasyPDFQueue.DeliveryMethod::Print THEN
+        SendByHardcopy(DocCode, DocNo);
+
+      // Send via email
+      IF MessageType = EasyPDFQueue.DeliveryMethod::Email THEN
+        SendByEmail(DocCode, DocNo);
+
+      // Send by fax
+      IF MessageType = EasyPDFQueue.DeliveryMethod::Fax THEN
+        SendByFax(DocCode, DocNo);
+    END;
+
+    PROCEDURE SendByHardcopy@1000000001(DocCode@1000000000 : Code[50];DocNo@1000000001 : Code[20]);
+    VAR
+      dtStart@1000000002 : DateTime;
+    BEGIN
+
+      ClearVariables();
+
+      DocumentCode := DocCode;
+      DocumentNo   := DocNo;
+      MessageType  := EasyPDFQueue.DeliveryMethod::Print;
+      dtStart      := CREATEDATETIME(TODAY,TIME);
+
+      //
+      // Retrieve the document setup for this document code
+      //
+      GetDocumentSetup(EasyPDFDocument, DocCode);
+
+      // Initialize the document record
+      IF NOT EasyPDFCustomization.InitializeRecord(DocCode, DocNo, EasyPDFBatchId, EasyPDFPrimaryKey) THEN
+        ERROR(TEXT002, DocCode, DocNo);
+
+      // Print hardcopy
+      EasyPDFCustomization.ReportPrint(DocCode, EasyPDFDocument."Report ID");
+
+      // Delay after print during batch
+      EasyPDFPrinter.DelayAfterPrint(dtStart, IsBatch);
+
+      // Add to history
+      LogHistory();
+    END;
+
+    PROCEDURE SendByEmail@1000000000(DocCode@1000000004 : Code[50];DocNo@1000000001 : Code[20]);
+    BEGIN
+
+      ClearVariables();
+
+      DocumentCode := DocCode;
+      DocumentNo   := DocNo;
+      MessageType  := EasyPDFQueue.DeliveryMethod::Email;
+
+      EasyPDFCustomization.GetRecipientDetails(DocCode, DocNo, RecipientType, RecipientNo, RecipientName);
+
+      SendEmail();
+    END;
+
+    PROCEDURE SendByFax@1000000015(DocCode@1000000000 : Code[50];DocNo@1000000001 : Code[20]);
+    BEGIN
+
+      ClearVariables();
+
+      DocumentCode := DocCode;
+      DocumentNo   := DocNo;
+      MessageType  := EasyPDFQueue.DeliveryMethod::Fax;
+
+      EasyPDFCustomization.GetRecipientDetails(DocCode, DocNo, RecipientType, RecipientNo, RecipientName);
+
+      SendEmail();
+    END;
+
+    LOCAL PROCEDURE SendEmail@1000000027();
+    VAR
+      ServerFilePath@1000000001 : Text;
+    BEGIN
+
+      //
+      // Retrieve the document setup for this document code
+      //
+      GetDocumentSetup(EasyPDFDocument, DocumentCode);
+
+      //
+      // Initialize Easy PDF
+      //
+      IF NOT InitEasyPDF() THEN
+        ERROR(TEXT005);
+
+      // Initialize the document record
+      IF NOT EasyPDFCustomization.InitializeRecord(DocumentCode, DocumentNo, EasyPDFBatchId, EasyPDFPrimaryKey) THEN
+        ERROR(TEXT002, DocumentCode, DocumentNo);
+
+      // Retrieve the preferred language for the message body
+      EasyPDFCustomization.GetPreferredLanguage(DocumentCode, DocumentNo, LanguageCode);
+
+      // Create a unique id
+      ReferenceId := CREATEGUID();
+
+      // Clear temp attachments table
+      CLEAR(EasyPDFAttachmentTemp);
+
+      // Create the email message
+      IF IsSMTP THEN BEGIN
+
+        IF PrintDocument() THEN
+          IF CreateMessageSmtp() THEN
+              SendMessageSmtp();
+
+      END ELSE BEGIN
+
+        IF PrintDocument() THEN
+          IF CreateMessageMapi() THEN
+            SendMessageMapi();
+
+      END;
+
+      // Log
+      LogHistory();
+
+      // Cleanup
+      Finish();
+
+      IF ShowSmtpConfirmation AND GUIALLOWED THEN
+        MESSAGE(TEXT003);
+    END;
+
+    PROCEDURE GetSetup@1000000048(VAR EasyPDFSetupRec@1000000000 : Record 14103460);
+    BEGIN
+
+      EasyPDFSetupRec.RESET;
+      IF NOT EasyPDFSetupRec.GET(USERID) THEN
+        IF NOT EasyPDFSetupRec.GET('DEFAULT') THEN
+          DisplayError(ERR001);
+
+      //
+      // Determine if using SMTP for outgoing email
+      //
+      IsSMTP := EasyPDFSetup.SmtpUseAlways OR
+                ((MessageType = EasyPDFQueue.DeliveryMethod::Fax) AND EasyPDFSetup.FaxSendSmtp) OR
+                (CURRENTCLIENTTYPE <> CLIENTTYPE::Windows);
+
+      //
+      // However, batch job settings supercede setup
+      //
+      IF IsBatch THEN
+        IsSMTP := (MailTransport = EasyPDFQueue.MailTransport::Smtp);
+
+
+      ShowSmtpPreview := EasyPDFSetupRec.SmtpPreview AND (CURRENTCLIENTTYPE = CLIENTTYPE::Windows);
+      ShowSmtpConfirmation := IsSMTP AND (NOT IsBatch) AND (NOT ShowSmtpPreview) AND EasyPDFSetup.ConfirmEmailSent;
+    END;
+
+    PROCEDURE GetDocumentSetup@1000000051(VAR EasyPDFDocumentRec@1000000000 : Record 14103461;Code@1000000001 : Text[50]);
+    BEGIN
+
+      EasyPDFDocumentRec.RESET;
+      IF NOT EasyPDFDocumentRec.GET(Code,USERID) THEN
+        IF NOT EasyPDFDocumentRec.GET(Code,'DEFAULT') THEN
+          ERROR(TEXT001, Code);
+    END;
+
+    PROCEDURE SetPrimaryKey@1000000011(PrimaryKey@1000000000 : Text);
+    BEGIN
+
+      EasyPDFPrimaryKey := PrimaryKey;
+      EasyPDFCustomization.SetPrimaryKey(EasyPDFPrimaryKey);
+    END;
+
+    LOCAL PROCEDURE "// --- Private Interface ---"@1000000055();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE PrintDocument@1000000014() : Boolean;
+    VAR
+      ServerFilePath@1000000000 : Text;
+      ClientFilePath@1000000001 : Text;
+      Extension@1000000002 : Text;
+      CustomerRec@1000000003 : Record 18;
+    BEGIN
+
+      ServerFilePath := CreateServerTempFilePath(EasyPDFSetup, EasyPDFDocument.Filename, EasyPDFDocument.GetReportExtension);
+      ClientFilePath := '';
+
+      IF NOT EasyPDFPrinter.PrintReport(EasyPDFDocument, EasyPDFCustomization, ServerFilePath, ClientFilePath) THEN BEGIN
+        DisplayError(ERR006);
+        EXIT(FALSE);
+      END;
+
+      // Create an attachment for the file
+
+      IF (ClientFilePath <> '') OR (ServerFilePath <> '') THEN BEGIN
+        EasyPDFAttachmentTemp.INIT;
+        EasyPDFAttachmentTemp."Entry No."         := EasyPDFAttachmentTemp.COUNT + 1;
+        EasyPDFAttachmentTemp.ReferenceId         := ReferenceId;
+        EasyPDFAttachmentTemp.AttachmentType      := EasyPDFAttachmentTemp.AttachmentType::Regular;
+        EasyPDFAttachmentTemp.UserId              := EasyPDFDocument."User ID";
+        EasyPDFAttachmentTemp.Code                := DocumentCode;
+        EasyPDFAttachmentTemp."No."               := DocumentNo;
+        EasyPDFAttachmentTemp.RecipientType       := RecipientType;
+        EasyPDFAttachmentTemp.RecipientNo         := RecipientNo;
+        EasyPDFAttachmentTemp.Filename            := Basename(ServerFilePath);
+        EasyPDFAttachmentTemp.ServerFilePath      := ServerFilePath;
+        EasyPDFAttachmentTemp.ClientFilePath      := ClientFilePath;
+        EasyPDFAttachmentTemp.IsTemporary         := TRUE;
+        IF IsBatch THEN
+          EasyPDFAttachmentTemp.BatchId           := EasyPDFBatchId;
+        EasyPDFAttachmentTemp.INSERT;
+      END;
+
+      // Customer Statement - Print open invoices
+
+      IF DocumentCode = 'CUSTOMER STATEMENT' THEN
+        IF CustomerRec.GET(RecipientNo) THEN
+          IF CustomerRec.AppendOpenInvoices THEN
+            PrintOpenInvoices(EasyPDFAttachmentTemp);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CreateMessageMapi@1000000058() : Boolean;
+    VAR
+      FaxNumber@1000000000 : Text;
+      MessageTemplateRec@1000000004 : Record 14103467;
+      Token@1000000003 : Text;
+      Value@1000000002 : Text;
+      BodyText@1000000012 : Text;
+      MemoryStream@1000000011 : DotNet "'mscorlib'.System.IO.MemoryStream";
+      IStream@1000000010 : InStream;
+      ASCIIEncoding@1000000009 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.ASCIIEncoding";
+      ReportSelection@1000000008 : Record 77;
+      FileClass@1000000007 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File";
+      ServerEmailBodyFilePath@1000000006 : Text;
+      BodyFormat@1000000001 : Integer;
+    BEGIN
+
+      // Retrieve a message template data for this document - first one matching code,userid,type,language
+      // Note: the option 'MessageType' in this code unit is offset by 1 vs. the arg to FindMessageTemplate
+
+      IF NOT EasyPDFDocument.GetMessageTemplate(MessageType-1, LanguageCode, MessageTemplateRec) THEN
+        EasyPDFDocument.FindMessageTemplate(MessageType-1, LanguageCode, MessageTemplateRec, TRUE);
+
+      // Subject line
+
+      SubjectLine := ReplaceTokens(MessageTemplateRec.Subject);
+
+      // Body
+
+      IF MessageTemplateRec."Body Source" = MessageTemplateRec."Body Source"::"Easy PDF Message Template" THEN
+      BEGIN
+
+        MessageTemplateRec.CALCFIELDS(Body);
+        IF MessageTemplateRec.Body.HASVALUE THEN
+        BEGIN
+          MessageTemplateRec.Body.CREATEINSTREAM(IStream);
+          MemoryStream := MemoryStream.MemoryStream();
+          COPYSTREAM(MemoryStream,IStream);
+          BodyText := ASCIIEncoding.UTF8.GetString(MemoryStream.ToArray());
+          CLEAR(MemoryStream);
+          CLEAR(IStream);
+        END;
+
+        BodyText := ReplaceTokens(BodyText);
+        BodyFormat := MessageTemplateRec.Format;
+
+      END ELSE IF MessageTemplateRec."Body Source" = MessageTemplateRec."Body Source"::"Report Selection" THEN
+      BEGIN
+
+        IF EasyPDFCustomization.SaveReportSelectionAsHTML(EasyPDFDocument.Code, MessageTemplateRec."Report Selection Usage", ServerEmailBodyFilePath) THEN
+        BEGIN
+          BodyText := FileClass.ReadAllText(ServerEmailBodyFilePath);
+          BodyFormat := MAPIMail.BodyFormatHtml; // HTML
+          IF ERASE(ServerEmailBodyFilePath) THEN ;
+        END;
+
+      END ELSE IF MessageTemplateRec."Body Source" = MessageTemplateRec."Body Source"::"Report Layout" THEN
+      BEGIN
+
+        IF EasyPDFCustomization.SaveReportLayoutAsHTML(EasyPDFDocument.Code, MessageTemplateRec."Report ID", MessageTemplateRec."Report Layout Code", ServerEmailBodyFilePath) THEN
+        BEGIN
+          BodyText := FileClass.ReadAllText(ServerEmailBodyFilePath);
+          BodyFormat := MAPIMail.BodyFormatHtml; // HTML
+          IF ERASE(ServerEmailBodyFilePath) THEN ;
+        END;
+
+      END;
+
+      // Recipients
+
+      IF MessageType = EasyPDFQueue.DeliveryMethod::Email THEN
+      BEGIN
+
+        EasyPDFCustomization.GetEmailRecipients(DocumentCode, DocumentNo, ToAddress, CcAddress, BccAddress);
+        IF UseBatchAddress THEN
+          ToAddress := EasyPDFQueue.RecipientAddress;
+
+      END;
+
+      IF MessageType = EasyPDFQueue.DeliveryMethod::Fax THEN
+      BEGIN
+
+        FaxNumber := EasyPDFCustomization.GetFaxNumber(DocumentCode, DocumentNo);
+        IF STRLEN(FaxNumber) = 0 THEN
+          DisplayError(ERR007);
+
+        ToAddress := FaxNumber + EasyPDFSetup.FaxServerAddressExtension;
+        IF UseBatchAddress THEN
+          ToAddress := EasyPDFQueue.RecipientAddress;
+
+      END;
+
+      // Create the email message
+
+      MAPIMail.Recipients     := ToAddress;
+      MAPIMail.RecipientsCC   := CcAddress;
+      MAPIMail.RecipientsBcc  := BccAddress;
+      MAPIMail.Subject        := SubjectLine;
+      MAPIMail.BodyFormat     := BodyFormat;
+
+      // Add the body
+
+      IF MAPIMail.BodyFormat = MAPIMail.BodyFormatText THEN
+      BEGIN
+        MAPIMail.BodyText := BodyText;
+      END ELSE BEGIN
+        MAPIMail.BodyHtml := BodyText;
+      END;
+
+      // Done
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE SendMessageMapi@1000000010();
+    BEGIN
+
+      AddAttachments();
+      MAPIMail.Preview := TRUE; // NOT IsBatch;
+      MAPIMail.Send();
+    END;
+
+    LOCAL PROCEDURE CreateMessageSmtp@1000000029() : Boolean;
+    VAR
+      FaxNumber@1000000001 : Text;
+      SMTPSetup@1000000002 : Record 409;
+      MessageTemplateRec@1000000005 : Record 14103467;
+      Token@1000000004 : Text;
+      Value@1000000003 : Text;
+      BodyText@1000000013 : Text;
+      MemoryStream@1000000012 : DotNet "'mscorlib'.System.IO.MemoryStream";
+      IStream@1000000011 : InStream;
+      ASCIIEncoding@1000000010 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.ASCIIEncoding";
+      ReportSelection@1000000009 : Record 77;
+      FileClass@1000000008 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File";
+      ServerEmailBodyFilePath@1000000007 : Text;
+      BodyFormat@1000000000 : Integer;
+    BEGIN
+
+      // Retrieve the associated SMTP Mail Setup record for this EasyPDF Setup record
+
+      SMTPSetup.RESET;
+      IF EasyPDFSetup."User ID" <> 'DEFAULT' THEN
+        SMTPSetup.SETRANGE(NAVUSERID, EasyPDFSetup."User ID");
+      IF NOT SMTPSetup.FINDFIRST THEN   // if a record wasn't found with the filter
+        SMTPSetup.SETRANGE(NAVUSERID);  // clear the filter
+      IF NOT SMTPSetup.FINDFIRST THEN   // and try again
+        ERROR(ERR012);
+
+      // Authentication ---
+
+      SMTPMail.Authentication := SMTPSetup.Authentication;
+      IF SMTPSetup.Authentication <> SMTPSetup.Authentication::Anonymous THEN
+      BEGIN
+        SMTPMail.UserName := SMTPSetup."User ID";
+        IF STRLEN(SMTPMail.UserName) = 0 THEN
+          DisplayError(ERR012);
+
+        SMTPMail.Password := SMTPSetup.GetPassword();
+        IF STRLEN(SMTPMail.Password) = 0 THEN
+          DisplayError(ERR012);
+      END;
+
+      // Sender Information ---
+
+      SenderName := EasyPDFSetup.SmtpSenderName;
+      SenderAddress := EasyPDFSetup.SmtpSenderAddress;
+      IF STRLEN(SenderAddress) = 0 THEN
+        DisplayError(ERR010);
+
+      // Recipient Information ---
+
+      IF MessageType = EasyPDFQueue.DeliveryMethod::Email THEN
+      BEGIN
+
+        EasyPDFCustomization.GetEmailRecipients(DocumentCode, DocumentNo, ToAddress, CcAddress, BccAddress);
+        IF UseBatchAddress THEN
+          ToAddress := EasyPDFQueue.RecipientAddress;
+
+        IF STRLEN(ToAddress) = 0 THEN                               // If the address is blank
+          IF IsBatch OR NOT ShowSmtpPreview THEN                    // and we're in batch or not showing the preview
+            IF NOT EasyPDFSetup.SilentlyIgnoreEmptyAddresses THEN   // and we're not muted
+              DisplayError(ERR008)                                  // then show the error
+            ELSE
+              EXIT(FALSE);                                          // else fail silently
+
+      END;
+
+      IF MessageType = EasyPDFQueue.DeliveryMethod::Fax THEN
+      BEGIN
+
+        FaxNumber := EasyPDFCustomization.GetFaxNumber(DocumentCode, DocumentNo);
+        IF STRLEN(FaxNumber) = 0 THEN
+          DisplayError(ERR007);
+
+        ToAddress := FaxNumber + EasyPDFSetup.FaxServerAddressExtension;
+        IF UseBatchAddress THEN
+          ToAddress := EasyPDFQueue.RecipientAddress;
+
+      END;
+
+      IF EasyPDFSetup.SmtpAutoCcSelf THEN
+        CcAddress := SenderAddress + ';' + CcAddress;
+
+      // Retrieve a message template data for this document - first one matching code,userid,type,language
+      // Note: the option 'MessageType' in this code unit is offset by 1 vs. the arg to FindMessageTemplate
+
+      IF NOT EasyPDFDocument.GetMessageTemplate(MessageType-1, LanguageCode, MessageTemplateRec) THEN
+        EasyPDFDocument.FindMessageTemplate(MessageType-1, LanguageCode, MessageTemplateRec, TRUE);
+
+      SubjectLine := ReplaceTokens(MessageTemplateRec.Subject);
+
+      IF MessageTemplateRec."Body Source" = MessageTemplateRec."Body Source"::"Easy PDF Message Template" THEN
+      BEGIN
+
+        MessageTemplateRec.CALCFIELDS(Body);
+        IF MessageTemplateRec.Body.HASVALUE THEN
+        BEGIN
+          MessageTemplateRec.Body.CREATEINSTREAM(IStream);
+          MemoryStream := MemoryStream.MemoryStream();
+          COPYSTREAM(MemoryStream,IStream);
+          BodyText := ASCIIEncoding.UTF8.GetString(MemoryStream.ToArray());
+          CLEAR(MemoryStream);
+          CLEAR(IStream);
+        END;
+
+        BodyText := ReplaceTokens(BodyText);
+        BodyFormat := MessageTemplateRec.Format;
+
+      END ELSE IF MessageTemplateRec."Body Source" = MessageTemplateRec."Body Source"::"Report Selection" THEN
+      BEGIN
+
+        IF EasyPDFCustomization.SaveReportSelectionAsHTML(EasyPDFDocument.Code, MessageTemplateRec."Report Selection Usage", ServerEmailBodyFilePath) THEN
+        BEGIN
+          BodyText := FileClass.ReadAllText(ServerEmailBodyFilePath);
+          BodyFormat := SMTPMail.BodyFormatHtml;
+          IF ERASE(ServerEmailBodyFilePath) THEN ;
+        END;
+
+      END ELSE IF MessageTemplateRec."Body Source" = MessageTemplateRec."Body Source"::"Report Layout" THEN
+      BEGIN
+
+        IF EasyPDFCustomization.SaveReportLayoutAsHTML(EasyPDFDocument.Code, MessageTemplateRec."Report ID", MessageTemplateRec."Report Layout Code", ServerEmailBodyFilePath) THEN
+        BEGIN
+          BodyText := FileClass.ReadAllText(ServerEmailBodyFilePath);
+          BodyFormat := SMTPMail.BodyFormatHtml;
+          IF ERASE(ServerEmailBodyFilePath) THEN ;
+        END;
+
+      END;
+
+      // Create the email message
+
+      SMTPMail.ServerAddress    := SMTPSetup."SMTP Server";
+      SMTPMail.ServerPort       := SMTPSetup."SMTP Server Port";
+      SMTPMail.EnableSsl        := SMTPSetup."Secure Connection";
+      SMTPMail.AllowClientSetup := EasyPDFSetup.SmtpAllowClientSetup;
+
+      SMTPMail.SenderName       := SenderName;
+      SMTPMail.SenderAddress    := SenderAddress;
+
+      SMTPMail.Subject          := SubjectLine;
+      SMTPMail.BodyFormat       := BodyFormat;
+
+      SMTPMail.Recipients       := ToAddress;
+      SMTPMail.RecipientsCC     := CcAddress;
+      SMTPMail.RecipientsBcc    := BccAddress;
+
+      IF SMTPMail.BodyFormat = SMTPMail.BodyFormatText THEN
+        SMTPMail.BodyText := BodyText;
+      IF SMTPMail.BodyFormat = SMTPMail.BodyFormatHtml THEN
+        SMTPMail.BodyHtml := BodyText;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE SendMessageSmtp@1000000031();
+    BEGIN
+
+      AddAttachments();
+
+      IF (ShowSmtpPreview AND NOT IsBatch) THEN
+      BEGIN
+        CLEAR(SMTPMailOnClient);
+        SMTPMailOnClient := SMTPMailOnClient.SMTPMail();
+        CopySMTPMail();
+        SMTPMailOnClient.Preview := TRUE;
+        SMTPMailOnClient.Send();
+        EXIT;
+      END;
+
+      SMTPMail.Preview := FALSE;
+      SMTPMail.Send();
+    END;
+
+    LOCAL PROCEDURE AddAttachments@1000000009();
+    VAR
+      FilePath@1000000000 : Text;
+      ServerFilePath@1000000002 : Text;
+      ServerTempFilePath@1000000003 : Text;
+      AttachmentRecTemp@1000000004 : TEMPORARY Record 14103466;
+      Count@1000000005 : Integer;
+      i@1000000007 : Integer;
+      EasyPDFTools@1000000001 : DotNet "'EasyPDF.Tools'.EasyPDF.Tools.PdfSettings";
+    BEGIN
+
+      // Collect all attachments into a temporary table
+      // Called after mail message generation, prior to send
+
+      Count := 0;
+      CLEAR(AttachmentRecTemp);
+
+      // First all regular attachments
+      // - attachment created when the report was printed
+      // - subordinate attachments if batch merge in play
+
+      EasyPDFAttachmentTemp.RESET;
+      IF EasyPDFAttachmentTemp.FIND('-') THEN
+        REPEAT
+
+          Count += 1;
+          EasyPDFAttachmentTemp.CALCFIELDS(Blob);
+          AttachmentRecTemp.INIT;
+          AttachmentRecTemp.COPY(EasyPDFAttachmentTemp);
+          AttachmentRecTemp."Entry No." := Count;
+          AttachmentRecTemp.INSERT;
+
+        UNTIL EasyPDFAttachmentTemp.NEXT = 0;
+
+      // Then, if not batch, all additional attachments defined on the Document card
+
+      IF NOT IsBatch THEN
+      BEGIN
+
+        CLEAR(EasyPDFAttachment);
+        EasyPDFAttachment.RESET;
+        EasyPDFAttachment.SETRANGE(AttachmentType, EasyPDFAttachment.AttachmentType::Document);
+        EasyPDFAttachment.SETRANGE(Code, DocumentCode);
+        EasyPDFAttachment.SETRANGE(UserId, EasyPDFDocument."User ID");
+        EasyPDFAttachment.SETRANGE(HistoryId, 0);
+        IF EasyPDFAttachment.FIND('-') THEN
+          REPEAT
+
+            Count += 1;
+            EasyPDFAttachment.CALCFIELDS(Blob);
+            AttachmentRecTemp.INIT;
+            AttachmentRecTemp.COPY(EasyPDFAttachment);
+            AttachmentRecTemp."Entry No." := Count;
+            AttachmentRecTemp.INSERT;
+
+          UNTIL EasyPDFAttachment.NEXT = 0;
+
+      END;
+
+      // Else, if batch, ...
+
+      IF IsBatch THEN
+      BEGIN
+
+        // lastly, all Batch global or Batch line attachments
+
+        CLEAR(EasyPDFAttachment);
+        EasyPDFAttachment.RESET;
+        EasyPDFAttachment.SETFILTER(AttachmentType, '=%1|=%2', EasyPDFAttachment.AttachmentType::Batch, EasyPDFAttachment.AttachmentType::BatchLine);
+        EasyPDFAttachment.SETRANGE(BatchId, EasyPDFQueueHeader.BatchId);
+        EasyPDFAttachment.SETFILTER(BatchEntryNo, '=%1|=%2', EasyPDFQueue.EntryNo, EasyPDFQueueHeader.EntryNo);
+        EasyPDFAttachment.SETRANGE(HistoryId, 0);
+        IF EasyPDFAttachment.FIND('-') THEN
+          REPEAT
+
+            Count += 1;
+            EasyPDFAttachment.CALCFIELDS(Blob);
+            AttachmentRecTemp.INIT;
+            AttachmentRecTemp.TRANSFERFIELDS(EasyPDFAttachment, FALSE);
+            AttachmentRecTemp."Entry No." := Count;
+            AttachmentRecTemp.INSERT;
+
+          UNTIL EasyPDFAttachment.NEXT = 0;
+
+      END;
+
+      // At this point the temp attachments table contains:
+      // - the printed document
+      // - subordinate merge documents
+      // - batch global attachments
+      // - batch line attachments
+
+      // Now perform merge pdf attachments
+
+      IF IsBatch AND EasyPDFQueueHeader.MergePdfAttachments THEN
+        MergeAttachments(AttachmentRecTemp, TEXT009);
+
+      // Now add the result to the email
+      // At this point the temp attachments table contains:
+      // - the printed report attachment (if pdf and not merged)
+      // - any Document specific attachments (if pdf and not merged)
+      // - any Batch or BatchGlobal attachments (if pdf and not merged)
+      // - the merged attachment (if any of the above were pdf and merge was enabled)
+
+      AttachmentRecTemp.RESET;
+      IF AttachmentRecTemp.FIND('-') THEN
+        REPEAT
+
+          ServerFilePath := AttachmentRecTemp.ServerFilePath;
+          ServerTempFilePath := '';
+
+          AttachmentRecTemp.CALCFIELDS(Blob);
+          IF AttachmentRecTemp.Blob.HASVALUE THEN
+          BEGIN
+            ServerTempFilePath :=
+              CreateServerTempFilePath(EasyPDFSetup, Rootname(AttachmentRecTemp.Filename), Extension(AttachmentRecTemp.Filename));
+            AttachmentRecTemp.Blob.EXPORT(ServerTempFilePath);
+            AttachmentRecTemp.IsTemporary := TRUE;
+            AttachmentRecTemp.MODIFY;
+            ServerFilePath := ServerTempFilePath;
+          END;
+
+          IF ServerFileHelper.Exists(ServerFilePath) THEN
+          BEGIN
+
+            IF IsSMTP THEN
+            BEGIN
+
+              SMTPMail.AddAttachments(ServerFilePath);
+              AddAttachmentFileName(ServerFilePath);
+
+            END ELSE BEGIN
+
+              ClientTempPath := CopyToClientTemp(ServerFilePath);
+              IF ClientFileHelper.Exists(ClientTempPath) THEN
+              BEGIN
+                MAPIMail.AddAttachment(ClientTempPath);
+                AddAttachmentFileName(ClientTempPath);
+                ClientFileHelper.Delete(ClientTempPath);
+              END;
+
+            END;
+
+          END;
+
+          IF ServerFileHelper.Exists(ServerTempFilePath) THEN
+            ServerFileHelper.Delete(ServerTempFilePath);
+
+        UNTIL AttachmentRecTemp.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE MergeAttachments@1000000066(VAR AttachmentRecParam@1000000000 : Record 14103466;MergedFileName@1000000005 : Text);
+    VAR
+      FilePath@1000000008 : Text;
+      ServerFilePath@1000000007 : Text;
+      ServerTempFilePath@1000000006 : Text;
+      Count@1000000004 : Integer;
+      TempFiles@1000000003 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+      EasyPDFTools@1000000001 : DotNet "'EasyPDF.Tools'.EasyPDF.Tools.PdfSettings";
+      i@1000000002 : Integer;
+    BEGIN
+
+      AttachmentRecParam.RESET;
+      AttachmentRecParam.SETFILTER(Filename, '@*pdf');
+      IF AttachmentRecParam.COUNT > 1 THEN
+      BEGIN
+
+        TempFiles := TempFiles.List();
+        MergedAttachmentFile := '';
+
+        Count := 0;
+        AttachmentRecParam.RESET;
+        IF AttachmentRecParam.FIND('-') THEN
+        BEGIN
+
+          EasyPDFTools := EasyPDFTools.PdfSettings();
+          MergedAttachmentFile := CreateServerTempFilePath(EasyPDFSetup, MergedFileName, 'pdf');
+
+          REPEAT
+            IF LOWERCASE(Extension(AttachmentRecParam.Filename)) = 'pdf' THEN
+            BEGIN
+
+              AttachmentRecParam.CALCFIELDS(Blob);
+              IF AttachmentRecParam.Blob.HASVALUE THEN
+              BEGIN
+                Count += 1;
+                ServerTempFilePath :=
+                  CreateServerTempFilePath(EasyPDFSetup, Rootname(AttachmentRecParam.Filename), Extension(AttachmentRecParam.Filename));
+                AttachmentRecParam.Blob.EXPORT(ServerTempFilePath);
+                EasyPDFTools.SetValue('MergeFile', ServerTempFilePath);
+                TempFiles.Add(ServerTempFilePath);
+              END ELSE
+              IF ServerFileHelper.Exists(AttachmentRecParam.ServerFilePath) THEN
+              BEGIN
+                Count += 1;
+                EasyPDFTools.SetValue('MergeFile', AttachmentRecParam.ServerFilePath);
+                IF AttachmentRecParam.IsTemporary THEN
+                  TempFiles.Add(AttachmentRecParam.ServerFilePath);
+              END;
+
+              AttachmentRecParam.DELETE; // don't execute the triger
+
+            END;
+          UNTIL AttachmentRecParam.NEXT = 0;
+
+          // If we have something to merge
+
+          IF Count > 0 THEN
+          BEGIN
+            EasyPDFTools.ApplySettings(MergedAttachmentFile);   // do the merge
+            AttachmentRecParam.INIT;                         // then add the merge file as an attachment
+            AttachmentRecParam."Entry No." := AttachmentRecParam.COUNT + Count + 1;
+            AttachmentRecParam.ServerFilePath := MergedAttachmentFile;
+            AttachmentRecParam.IsTemporary := TRUE;
+            AttachmentRecParam.INSERT;
+          END;
+
+        END;
+
+        FOR i:=0 TO TempFiles.Count()-1 DO
+          ServerFileHelper.Delete(TempFiles.Item(i));
+
+      END;
+    END;
+
+    LOCAL PROCEDURE PrintAttachment@1000000038(DocCode@1000000000 : Code[50];DocNo@1000000001 : Code[20];RecipType@1000000003 : Integer;RecipNo@1000000002 : Code[20];BatchId@1000000005 : Text[80];PrimaryKey@1000000006 : Text[250]);
+    VAR
+      FilePath@1000000004 : Text;
+    BEGIN
+
+      DocumentCode := DocCode;
+      DocumentNo := DocNo;
+      RecipientType := RecipType;
+      RecipientNo := RecipNo;
+
+      // Retrieve the document setup for this document code
+      GetDocumentSetup(EasyPDFDocument, DocCode);
+
+      // Initialize Easy PDF
+      IF NOT InitEasyPDF THEN
+        ERROR(TEXT005);
+
+      // Initialize the document record
+      IF NOT EasyPDFCustomization.InitializeRecord(DocumentCode, DocumentNo, BatchId, PrimaryKey) THEN
+        ERROR(TEXT002, DocumentCode, DocumentNo);
+
+      // Run the report
+      IF NOT PrintDocument() THEN
+        ERROR(TEXT006, DocumentCode, DocumentNo);
+    END;
+
+    LOCAL PROCEDURE RemoveAttachments@1000000039();
+    BEGIN
+
+      // Remove all regular attachments (non-history) to this email
+      EasyPDFAttachmentTemp.RESET;
+      EasyPDFAttachmentTemp.DELETEALL(TRUE);
+      CLEAR(EasyPDFAttachmentTemp);
+    END;
+
+    PROCEDURE ReplaceTokens@1000000005(OriginalText@1000000000 : Text) : Text;
+    VAR
+      MidString@1000000002 : Text;
+      BeginString@1000000009 : Text;
+      EndString@1000000010 : Text;
+      ModifiedText@1000000001 : Text;
+      StartPos@1000000007 : Integer;
+      CopyLen@1000000008 : Integer;
+    BEGIN
+
+      EXIT(ReplaceTokensEx(DocumentCode, DocumentNo, EasyPDFCustomization, OriginalText));
+    END;
+
+    LOCAL PROCEDURE ReplaceTokensEx@1000000064(DocCode@1000000004 : Code[50];DocNo@1000000005 : Code[20];EasyPDFCustomizationParam@1000000003 : Codeunit 14103460;OriginalText@1000000000 : Text) : Text;
+    VAR
+      MidString@1000000002 : Text;
+      BeginString@1000000009 : Text;
+      EndString@1000000010 : Text;
+      ModifiedText@1000000001 : Text;
+      StartPos@1000000007 : Integer;
+      CopyLen@1000000008 : Integer;
+    BEGIN
+
+      ModifiedText := OriginalText;
+
+      // Replace tokens of the form '[TOKEN]'
+
+      WHILE (STRPOS(ModifiedText,'[') > 0) AND (STRPOS(ModifiedText,']') > 0) DO
+      BEGIN
+
+        StartPos := STRPOS(ModifiedText,'[') + 1;               // Find the first '['
+        CopyLen := STRPOS(ModifiedText,']') - StartPos;         // Find the first ']'
+
+        BeginString := '';
+        IF StartPos > 2 THEN
+          BeginString := COPYSTR(ModifiedText,1,StartPos - 2);
+
+        EndString := COPYSTR(ModifiedText,StartPos + CopyLen + 1);
+        MidString := EasyPDFCustomizationParam.ReplaceToken(DocCode,DocNo,COPYSTR(ModifiedText,StartPos,CopyLen));
+        ModifiedText := BeginString + MidString + EndString;
+
+      END;
+
+      EXIT(ModifiedText);
+    END;
+
+    LOCAL PROCEDURE ClearVariables@1000000042();
+    BEGIN
+
+      SubjectLine         := '';
+      AttachmentFileNames := '';
+      ToAddress           := '';
+      CcAddress           := '';
+      BccAddress          := '';
+      RecipientType       := 0;
+      RecipientNo         := '';
+      RecipientName       := '';
+    END;
+
+    LOCAL PROCEDURE InitEasyPDF@1000000002() : Boolean;
+    VAR
+      FilePath@1000000000 : Text[260];
+    BEGIN
+
+      GetSetup(EasyPDFSetup);
+
+      //
+      // Test the temporary file path for write permissions
+      //
+      EasyPDFSetup.ServerTempPath := ReplaceTokens(EasyPDFSetup.ServerTempPath);
+      FilePath := EasyPDFSetup.ServerTempPath;
+      IF NOT TestFileGeneration(FilePath,TRUE) THEN
+        EXIT(FALSE);
+
+      //
+      // Initialize the mail component
+      //
+      IF IsSMTP THEN BEGIN
+
+        CLEAR(SMTPMail);
+        SMTPMail := SMTPMail.SMTPMail();
+
+      END ELSE BEGIN
+
+        CLEAR(MAPIMail);
+        MAPIMail := MAPIMail.MAPIMail();
+
+      END;
+
+      //
+      // Set a default value for the Language
+      // This will be overriden in SendEMail
+      //
+      LanguageCode := EasyPDFSetup.PreferredLanguageCode;
+
+      //
+      // Success
+      //
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE Finish@1000000026();
+    BEGIN
+
+      RemoveAttachments();
+      CLEAR(MAPIMail);
+      CLEAR(SMTPMail);
+      CLEAR(SMTPMailOnClient);
+      CLEAR(ReferenceId);
+      EasyPDFPrinter.Finish();
+      UseBatchAddress := FALSE;
+    END;
+
+    LOCAL PROCEDURE CreateServerTempFilePath@1000000028(EasyPDFSetup@1000000006 : Record 14103460;BaseName@1000000000 : Text;FileExt@1000000007 : Text) : Text[250];
+    VAR
+      FileName@1000000001 : Text[250];
+      FilePath@1000000003 : Text[250];
+      TempPath@1000000004 : Text[250];
+      Iter@1000000005 : Integer;
+    BEGIN
+
+      FileName := CONVERTSTR(ReplaceTokens(BaseName),'<>:"/\|?*','_________'); // Remove illegal characters <>:"/\|?*
+      TempPath := ReplaceTokens(EasyPDFSetup.ServerTempPath);
+
+      Iter := 0;
+      FilePath := TempPath+FileName+'.'+FileExt;
+
+      WHILE FILE.EXISTS(FilePath)
+      DO
+      BEGIN
+        Iter += 1;
+        FilePath := TempPath+FileName+STRSUBSTNO('_%1', Iter)+'.'+FileExt;
+      END;
+
+      EXIT(FilePath);
+    END;
+
+    PROCEDURE TestFileGeneration@1000000035(Path@1000000002 : Text[260];ShowError@1000000003 : Boolean) : Boolean;
+    VAR
+      FilePath@1000000000 : Text[260];
+      File@1000000001 : File;
+    BEGIN
+
+      FilePath := Path + 'EasyPDF.test.tmp';
+
+      File.TEXTMODE := TRUE;
+      IF NOT File.CREATE(FilePath) THEN BEGIN
+        IF ShowError THEN
+          DisplayError(ERR009);
+        EXIT(FALSE);
+      END;
+
+      File.CLOSE;
+      CLEAR(File);
+      ERASE(FilePath);
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CheckFileName@1000000012(FileName@1000000000 : Text[260]);
+    BEGIN
+
+      IF (STRPOS(FileName, '/') <> 0) OR (STRPOS(FileName, '\') <> 0) THEN
+        ERROR(TEXT007);
+
+      IF STRLEN(FileName) < 4 THEN
+        FileName := FileName + '.pdf'
+      ELSE
+        IF LOWERCASE(COPYSTR(FileName, STRLEN(FileName) - 3, 4)) <> '.pdf' THEN
+          FileName := FileName + '.pdf';
+    END;
+
+    LOCAL PROCEDURE DisplayError@1000000017(ErrorMsg@1000000000 : Text[250]);
+    VAR
+      ErrorMessage@1000000001 : Text[250];
+    BEGIN
+
+      Finish;
+      ERROR(ERR000, ErrorMsg);
+    END;
+
+    LOCAL PROCEDURE InBatch@1000000050() : Boolean;
+    BEGIN
+
+      EXIT(IsBatch);
+    END;
+
+    PROCEDURE CreateBatch@1000000034(BatchId@1000000000 : Text[80];DocCode@1000000001 : Code[50]);
+    VAR
+      EasyPDFAttachmentBatch@1000000002 : Record 14103466;
+    BEGIN
+
+      EasyPDFQueueHeader.RESET;
+      EasyPDFQueueHeader.SETRANGE(EntryType,EasyPDFQueue.EntryType::Header);
+      EasyPDFQueueHeader.SETRANGE(BatchId,BatchId);
+      IF EasyPDFQueueHeader.FINDFIRST THEN
+        EXIT;
+
+      GetSetup(EasyPDFSetup);
+
+      CLEAR(EasyPDFQueueHeader);
+      EasyPDFQueueHeader.INIT;
+      EasyPDFQueueHeader.EntryType            := EasyPDFQueue.EntryType::Header;
+      EasyPDFQueueHeader.BatchId              := BatchId;
+      EasyPDFQueueHeader.CreatedDate          := TODAY;
+      EasyPDFQueueHeader.CreatedBy            := USERID;
+      EasyPDFQueueHeader.ConsolidateEmail     := EasyPDFSetup.BatchConsolidateEmail;
+      EasyPDFQueueHeader.MergePdfAttachments  := EasyPDFSetup.BatchMergePdfAttachments;
+      EasyPDFQueueHeader.LanguageCode         := Language.GetUserLanguage();
+      EasyPDFQueueHeader.Processed            := FALSE;
+      EasyPDFQueueHeader.INSERT;
+
+      // Add Document attachments (for this document type) IF the batch is document specific
+
+      IF BatchId = EasyPDFCustomization.GenerateBatchId(DocCode) THEN
+      BEGIN
+
+        GetDocumentSetup(EasyPDFDocument, DocCode);
+
+        EasyPDFAttachment.RESET;
+        EasyPDFAttachment.SETRANGE(AttachmentType, EasyPDFAttachment.AttachmentType::Document);
+        EasyPDFAttachment.SETRANGE(Code, DocCode);
+        EasyPDFAttachment.SETRANGE(UserId, EasyPDFDocument."User ID");
+        IF EasyPDFAttachment.FIND('-') THEN
+        BEGIN
+
+          REPEAT
+            EasyPDFAttachment.CALCFIELDS(Blob);
+            CLEAR(EasyPDFAttachmentBatch);
+            EasyPDFAttachmentBatch.INIT;
+            EasyPDFAttachmentBatch.TRANSFERFIELDS(EasyPDFAttachment, FALSE);
+            EasyPDFAttachmentBatch.AttachmentType := EasyPDFAttachmentBatch.AttachmentType::Batch;
+            EasyPDFAttachmentBatch.UserId := '';
+            EasyPDFAttachmentBatch.BatchId := BatchId;
+            EasyPDFAttachmentBatch.BatchEntryNo := EasyPDFQueueHeader.EntryNo;
+            EasyPDFAttachmentBatch.INSERT;
+          UNTIL EasyPDFAttachment.NEXT = 0;
+
+        END;
+
+      END;
+
+      COMMIT;
+    END;
+
+    PROCEDURE QueueBatch@1000000019(DocCode@1000000001 : Code[50];DocNo@1000000002 : Code[20];BatchId@1000 : Text[80]) : Integer;
+    BEGIN
+
+      EXIT(QueueBatchEx(DocCode, DocNo, '', BatchId, ''));
+    END;
+
+    PROCEDURE QueueBatchEx@1000000003(DocCode@1000000002 : Code[50];DocNo@1000000001 : Code[20];PrimaryKey@1000000004 : Text[250];BatchId@1000 : Text[80];ReportParameters@1000000005 : Text) : Integer;
+    VAR
+      ToAddress@1000000012 : Text[250];
+      NotUsed@1000000011 : Text[250];
+      RecipientType@1000000009 : Integer;
+      RecipientNo@1000000008 : Code[20];
+      RecipientName@1000000007 : Text[50];
+      EntryNo@1000000006 : Integer;
+      OStream@1000000013 : OutStream;
+      MessageType@1000000000 : Integer;
+    BEGIN
+
+      // Check for existing, identical record, skip if one exists
+      EasyPDFQueue.RESET;
+      EasyPDFQueue.SETRANGE(EntryType, EasyPDFQueue.EntryType::Line);
+      EasyPDFQueue.SETRANGE(DocCode, DocCode);
+      EasyPDFQueue.SETRANGE(DocNo, DocNo);
+      EasyPDFQueue.SETRANGE(PrimaryKey, PrimaryKey);
+      EasyPDFQueue.SETRANGE(BatchId, BatchId);
+      EasyPDFQueue.SETRANGE(Processed, FALSE);
+      IF EasyPDFQueue.FINDFIRST THEN
+        EXIT(0);
+
+      IF NOT EasyPDFCustomization.InitializeRecord(DocCode, DocNo, BatchId, PrimaryKey) THEN
+        EXIT(0); // fail silently
+
+      CreateBatch(BatchId, DocCode);
+      EasyPDFCustomization.GetPreferredMethod(DocCode, DocNo, MessageType);
+
+      CLEAR(EasyPDFQueue);
+      EasyPDFQueue.INIT;
+      EasyPDFQueue.EntryType      := EasyPDFQueue.EntryType::Line;
+      EasyPDFQueue.BatchId        := BatchId;
+      EasyPDFQueue.DocCode        := DocCode;
+      EasyPDFQueue.DocNo          := DocNo;
+      EasyPDFQueue.DeliveryMethod := MessageType;
+      EasyPDFQueue.CreatedDate    := TODAY;
+      EasyPDFQueue.CreatedBy      := USERID;
+      EasyPDFQueue.Processed      := FALSE;
+      EasyPDFQueue.PrimaryKey     := PrimaryKey;
+      EasyPDFQueue.LanguageCode   := Language.GetUserLanguage();
+
+      IF ReportParameters <> '' THEN
+      BEGIN
+        IF EasyPDFQueue.CALCFIELDS(ReportParametersData) THEN
+        BEGIN
+          EasyPDFQueue.ReportParametersData.CREATEOUTSTREAM(OStream);
+          OStream.WRITETEXT(ReportParameters);
+          CLEAR(OStream);
+        END;
+      END;
+
+      EasyPDFCustomization.GetRecipientDetails(DocCode, DocNo, RecipientType, RecipientNo, RecipientName);
+      EasyPDFCustomization.GetEmailRecipients(DocCode, DocNo, ToAddress, NotUsed, NotUsed);
+
+      IF MessageType = 2 THEN
+        ToAddress := EasyPDFCustomization.GetFaxNumber(DocCode, DocNo);
+
+      EasyPDFQueue.RecipientType    := RecipientType;
+      EasyPDFQueue.RecipientNo      := RecipientNo;
+      EasyPDFQueue.RecipientName    := RecipientName;
+      EasyPDFQueue.RecipientAddress := ToAddress;
+      EasyPDFQueue.Value            := EasyPDFCustomization.GetValue( DocCode, DocNo );
+      EasyPDFQueue.INSERT(TRUE);
+
+      EntryNo := EasyPDFQueue.EntryNo;
+      CLEAR(EasyPDFQueue);
+
+      // Mark this batch as not fully processed
+      IF EasyPDFQueueHeader.Processed = TRUE THEN
+      BEGIN
+        EasyPDFQueueHeader.Processed := FALSE;
+        EasyPDFQueueHeader.MODIFY;
+      END;
+
+      EXIT(EntryNo);
+    END;
+
+    PROCEDURE DeleteBatch@1000000030(BatchId@1000000000 : Text[80]);
+    BEGIN
+
+      EasyPDFQueue.RESET;
+      EasyPDFQueue.SETRANGE(BatchId, BatchId);
+      EasyPDFQueue.DELETEALL(TRUE);
+    END;
+
+    PROCEDURE SendBatch@1000000022(BatchId@1000000000 : Text[80];VAR EasyPDFQueueRec@1000000006 : Record 14103463;ConsolidateEmail@1000000007 : Boolean);
+    VAR
+      Window@1000000001 : Dialog;
+      CounterTotal@1000000004 : Integer;
+      Counter@1000000003 : Integer;
+      Text001@1000000005 : TextConst 'ENU=Batch sending entries  #1########## @2@@@@@@@@@@@@@';
+      Text002@1000000002 : TextConst 'ENU=%1 entries out of a total of %2 have been processed.';
+      EasyPDFQueueTemp@1100774000 : Record 14103463;
+    BEGIN
+
+      // Call this function to process a batch queue
+
+      GetSetup(EasyPDFSetup);
+
+      // Anything to do?
+
+      CLEAR(EasyPDFQueueHeader);
+      EasyPDFQueueHeader.RESET;
+      EasyPDFQueueHeader.SETRANGE(BatchId, BatchId);
+      EasyPDFQueueHeader.SETRANGE(EntryType, EasyPDFQueue.EntryType::Header);
+      EasyPDFQueueHeader.SETRANGE(Processed, FALSE);
+      IF NOT EasyPDFQueueHeader.FIND('-') THEN
+        EXIT;
+
+      EasyPDFBatchId := EasyPDFQueueHeader.BatchId;
+
+      // Indicate start of batch processing
+
+      IF NOT EasyPDFCustomization.OnBeforeBatchSend(EasyPDFQueueHeader) THEN
+        EXIT;
+
+      // Check language
+
+      IF EasyPDFQueueHeader.LanguageCode <> Language.GetUserLanguage() THEN
+        ERROR(ERR014, EasyPDFQueueHeader.LanguageCode, Language.GetUserLanguage());
+
+      // First, clean up from any previous failed attempts
+
+      CLEAR(EasyPDFAttachment);
+      EasyPDFAttachment.RESET;
+      EasyPDFAttachment.SETRANGE(AttachmentType, EasyPDFAttachment.AttachmentType::Regular);
+      EasyPDFAttachment.SETRANGE(UserId, EasyPDFDocument."User ID");
+      EasyPDFAttachment.SETRANGE(BatchId, BatchId);
+      IF EasyPDFAttachment.FIND('-') THEN
+        EasyPDFAttachment.DELETEALL(TRUE);
+
+      // Prepare the batch
+
+      IF ConsolidateEmail THEN
+        PrepareConsolidatedBatch(BatchId, EasyPDFQueueRec);
+
+      // Loop over all unprocessed lines for this batch - honoring the specified view
+
+      CLEAR(EasyPDFQueue);
+      EasyPDFQueue.RESET;
+      EasyPDFQueue.SETVIEW(EasyPDFQueueRec.GETVIEW());
+      EasyPDFQueue.SETRANGE(BatchId, EasyPDFQueueHeader.BatchId);
+      EasyPDFQueue.SETRANGE(EntryType, EasyPDFQueue.EntryType::Line);
+      EasyPDFQueue.SETRANGE(Processed, FALSE);
+
+      CounterTotal := EasyPDFQueue.COUNT;
+      IF ConsolidateEmail THEN
+        EasyPDFQueue.SETRANGE(ParentNo, 0);
+
+      IF EasyPDFQueue.FIND('-') THEN BEGIN
+
+        IsBatch := TRUE;
+
+        IF GUIALLOWED THEN
+          Window.OPEN(Text001);
+
+        REPEAT
+
+          IF EasyPDFCustomization.OnBeforeBatchEntrySend(EasyPDFQueue) THEN
+          BEGIN
+
+            MailTransport := EasyPDFQueue.MailTransport;
+            UseBatchAddress := EasyPDFQueue.AddressSpecified;
+
+            EasyPDFPrimaryKey := EasyPDFQueue.PrimaryKey;
+            EasyPDFCustomization.SetPrimaryKey(EasyPDFPrimaryKey);
+
+            IF (EasyPDFQueue.DeliveryMethod = EasyPDFQueue.DeliveryMethod::Email) OR
+               (EasyPDFQueue.DeliveryMethod = EasyPDFQueue.DeliveryMethod::Fax) THEN
+              IF ConsolidateEmail THEN BEGIN
+                ReferenceId := FORMAT(EasyPDFQueue.EntryNo);
+                PrintConsolidatedAttachments();
+              END;
+
+            EasyPDFCustomization.SetPrimaryKey(EasyPDFPrimaryKey);
+
+            CASE EasyPDFQueue.DeliveryMethod OF
+            EasyPDFQueue.DeliveryMethod::Print: SendByHardcopy(EasyPDFQueue.DocCode, EasyPDFQueue.DocNo);
+            EasyPDFQueue.DeliveryMethod::Fax:   SendByFax(EasyPDFQueue.DocCode, EasyPDFQueue.DocNo);
+            EasyPDFQueue.DeliveryMethod::Email: SendByEmail(EasyPDFQueue.DocCode, EasyPDFQueue.DocNo);
+            END;
+
+            IF (EasyPDFQueue.DeliveryMethod = EasyPDFQueue.DeliveryMethod::Email) OR
+               (EasyPDFQueue.DeliveryMethod = EasyPDFQueue.DeliveryMethod::Fax) THEN
+              IF EasyPDFDocument.BatchPrintHardcopy THEN
+                SendByHardcopy(EasyPDFQueue.DocCode, EasyPDFQueue.DocNo);
+
+            EasyPDFQueue.Processed := TRUE;
+            EasyPDFQueue.ProcessedDate := TODAY;
+            EasyPDFQueue.ProcessedBy := USERID;
+            EasyPDFQueue.MODIFY;
+
+            // Mark subordinate entries as processed
+
+            IF ConsolidateEmail THEN
+            BEGIN
+              EasyPDFQueueTemp.RESET;
+              EasyPDFQueueTemp.SETRANGE(ParentNo, EasyPDFQueue.EntryNo);
+              IF EasyPDFQueueTemp.FIND('-') THEN
+                REPEAT
+                  EasyPDFQueueTemp.Processed := TRUE;
+                  EasyPDFQueueTemp.ProcessedDate := TODAY;
+                  EasyPDFQueueTemp.ProcessedBy := USERID;
+                  EasyPDFQueueTemp.MODIFY;
+                  Counter += 1;
+                UNTIL EasyPDFQueueTemp.NEXT = 0;
+            END;
+
+            IF ServerFileHelper.Exists(MergedAttachmentFile) THEN
+              ERASE(MergedAttachmentFile);
+
+            IF EasyPDFSetup.CommitEntryBatch THEN
+              COMMIT;
+
+            EasyPDFCustomization.OnAfterBatchEntrySend(EasyPDFQueue);
+
+          END;
+
+          Counter := Counter + 1;
+          IF GUIALLOWED THEN BEGIN
+            Window.UPDATE(1,EasyPDFQueue.EntryNo);
+            Window.UPDATE(2,ROUND(Counter / CounterTotal * 10000,1));
+          END;
+
+        UNTIL EasyPDFQueue.NEXT = 0;
+
+        // Notify after batch send
+        EasyPDFCustomization.OnAfterBatchSend(EasyPDFQueueHeader);
+
+        // Look for any unprocessed entries in this batch
+        EasyPDFQueue.RESET;
+        EasyPDFQueue.SETRANGE(EntryType, EasyPDFQueue.EntryType::Line);
+        EasyPDFQueue.SETRANGE(BatchId, BatchId);
+        EasyPDFQueue.SETRANGE(Processed, FALSE);
+        IF NOT EasyPDFQueue.FIND('-') THEN
+        BEGIN
+          EasyPDFQueueHeader.Processed := TRUE;
+          EasyPDFQueueHeader.MODIFY;
+        END;
+
+        // Remove the batch if preferred and processed
+        IF EasyPDFSetup.ClearBatchOnSend THEN
+          IF EasyPDFQueueHeader.Processed THEN
+            DeleteBatch(BatchId);
+
+        CLEAR(EasyPDFQueueHeader);
+        EasyPDFBatchId := '';
+        IsBatch := FALSE;
+
+        IF GUIALLOWED THEN
+          Window.CLOSE;
+
+      END;
+
+      EasyPDFPrinter.Finish();
+      IF GUIALLOWED THEN
+        MESSAGE(Text002,Counter,CounterTotal);
+    END;
+
+    LOCAL PROCEDURE PrepareConsolidatedBatch@1000000036(BatchId@1000000001 : Text[80];VAR EasyPDFQueueRec@1000000000 : Record 14103463);
+    VAR
+      EasyPDFQueueTemp@1000000002 : Record 14103463;
+    BEGIN
+
+      // Look for email entries ordered by recipient number
+
+      CLEAR(EasyPDFQueue);
+      EasyPDFQueue.RESET;
+      EasyPDFQueue.SETVIEW(EasyPDFQueueRec.GETVIEW());
+      EasyPDFQueue.SETCURRENTKEY(RecipientNo,EntryNo);
+      EasyPDFQueue.SETRANGE(BatchId, BatchId);
+      EasyPDFQueue.SETRANGE(EntryType, EasyPDFQueue.EntryType::Line);
+      EasyPDFQueue.SETRANGE(DeliveryMethod, EasyPDFQueue.DeliveryMethod::Email);
+      EasyPDFQueue.SETRANGE(Processed, FALSE);
+
+      // Reset the ParentNo field in case a previous consolidated batch failed during send
+
+      EasyPDFQueue.MODIFYALL(ParentNo, 0);
+      COMMIT;
+
+      // Mark 'extra' entries to the same recipient as dependant on the first
+
+      IF EasyPDFQueue.FIND('-') THEN
+      BEGIN
+        REPEAT
+
+          IF EasyPDFQueue.RecipientNo <> EasyPDFQueueTemp.RecipientNo THEN BEGIN
+            EasyPDFQueueTemp.COPY(EasyPDFQueue);
+            EasyPDFQueue.ParentNo := 0;
+          END ELSE BEGIN
+            EasyPDFQueue.ParentNo := EasyPDFQueueTemp.EntryNo;
+          END;
+          EasyPDFQueue.MODIFY;
+
+        UNTIL EasyPDFQueue.NEXT = 0;
+        COMMIT;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE PrintConsolidatedAttachments@1000000041();
+    VAR
+      EasyPDFQueueTemp@1100774000 : Record 14103463;
+    BEGIN
+
+      // EasyPDFQueueTemp now holds a list for which there are 2 or more emails to the same recipient
+      // We will print the 'extra' attachments and put them in the attachments table.
+      // When we run the batch the system will attach the extra attachments when the email is sent
+
+      EasyPDFQueueTemp.RESET;
+      EasyPDFQueueTemp.SETRANGE(ParentNo, EasyPDFQueue.EntryNo);
+      IF EasyPDFQueueTemp.FIND('-') THEN
+        REPEAT
+
+          PrintAttachment(
+            EasyPDFQueueTemp.DocCode,
+            EasyPDFQueueTemp.DocNo,
+            EasyPDFQueueTemp.RecipientType,
+            EasyPDFQueueTemp.RecipientNo,
+            EasyPDFQueueTemp.BatchId,
+            EasyPDFQueueTemp.PrimaryKey
+            );
+
+        UNTIL EasyPDFQueueTemp.NEXT = 0;
+    END;
+
+    PROCEDURE UpdateBatchDeliveryMethod@1000000006(BatchId@1000000001 : Text[80];VAR EasyPDFQueueRec@1000000002 : Record 14103463;NewDeliveryMethod@1000000000 : Option);
+    BEGIN
+
+      IF EasyPDFQueueRec.FIND('-') THEN BEGIN
+
+        REPEAT
+
+          EasyPDFQueueRec.DeliveryMethod := NewDeliveryMethod;
+          EasyPDFQueueRec.MODIFY;
+
+        UNTIL EasyPDFQueueRec.NEXT = 0;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE LogHistory@1000000037();
+    BEGIN
+
+      IF EasyPDFDocument.LogToHistory THEN BEGIN
+
+        EasyPDFCustomization.GetRecipientDetails(DocumentCode, DocumentNo, RecipientType, RecipientNo, RecipientName);
+
+        EasyPDFHistory.INIT;
+        EasyPDFHistory.DocCode            := DocumentCode;
+        EasyPDFHistory.DocNo              := DocumentNo;
+        EasyPDFHistory.RecipientType      := RecipientType;
+        EasyPDFHistory.RecipientNo        := RecipientNo;
+        EasyPDFHistory.RecipientName      := RecipientName;
+        EasyPDFHistory.ToAddress          := ToAddress;
+        EasyPDFHistory.CcAddress          := CcAddress;
+        EasyPDFHistory.BccAddress         := BccAddress;
+        EasyPDFHistory.Subject            := SubjectLine;
+        EasyPDFHistory.MessageType        := MessageType;
+        EasyPDFHistory.MailTransport      := MailTransport;
+        EasyPDFHistory.FromName           := SenderName;
+        EasyPDFHistory.FromAddress        := SenderAddress;
+        EasyPDFHistory.Attachments        := COPYSTR(AttachmentFileNames,1,250);
+        EasyPDFHistory.SentBy             := USERID;
+        EasyPDFHistory.SentDate           := TODAY;
+        EasyPDFHistory.SentTime           := TIME;
+        EasyPDFHistory.ArchivedVersionNo  := EasyPDFCustomization.GetArchivedVersionNo(DocumentCode, DocumentNo);
+        EasyPDFHistory.INSERT;
+
+        SaveAttachments();
+
+        CLEAR(EasyPDFHistory);
+
+      END;
+    END;
+
+    PROCEDURE OnDeleteHistory@1000000047(EntryNo@1000000000 : Integer);
+    VAR
+      DirectoryHelper@1000000002 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory";
+    BEGIN
+
+      IF EntryNo = 0 THEN
+        EXIT;
+
+      // Remove all related attachments
+      EasyPDFAttachment.RESET;
+      EasyPDFAttachment.SETRANGE(HistoryId, EntryNo);
+      EasyPDFAttachment.DELETEALL(TRUE);
+
+      // Remove the archive subfolder if it exists
+      GetSetup(EasyPDFSetup);
+      IF DirectoryHelper.Exists(EasyPDFSetup.SaveAttachmentsPath+FORMAT(EntryNo)) THEN
+        DirectoryHelper.Delete(EasyPDFSetup.SaveAttachmentsPath+FORMAT(EntryNo), TRUE);
+    END;
+
+    LOCAL PROCEDURE SaveAttachments@1000000045();
+    VAR
+      BLOBRef@1000000000 : Record 99008535;
+      FM@1000000001 : Codeunit 419;
+      SavedAttachment@1000000002 : Record 14103466;
+      DestFolder@1000000003 : Text;
+      EntryNo@1000000005 : Integer;
+      DirectoryHelper@1000000006 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory";
+      ServerTempFilePath@1000000004 : Text;
+    BEGIN
+
+      IF NOT EasyPDFSetup.SaveAttachments THEN
+        EXIT;
+
+      IF EasyPDFSetup.SaveAttachmentsAsType = EasyPDFSetup.SaveAttachmentsAsType::File THEN
+      BEGIN
+        // Create a folder under the archive path for this history entry
+        DestFolder := EasyPDFSetup.SaveAttachmentsPath + FORMAT(EasyPDFHistory.EntryNo);
+        IF NOT DirectoryHelper.Exists(DestFolder) THEN
+          DirectoryHelper.CreateDirectory(DestFolder);
+      END;
+
+      // Save all attachments
+
+      EasyPDFAttachmentTemp.RESET;
+      IF EasyPDFAttachmentTemp.FINDSET THEN
+        REPEAT
+
+          EasyPDFAttachmentTemp.CALCFIELDS(Blob);
+
+          SavedAttachment.INIT;
+          SavedAttachment.TRANSFERFIELDS(EasyPDFAttachmentTemp);
+          SavedAttachment.AttachmentType := SavedAttachment.AttachmentType::History;
+          SavedAttachment.HistoryId   := EasyPDFHistory.EntryNo;
+          SavedAttachment."Entry No." := 0;
+          SavedAttachment.IsTemporary := TRUE;
+
+          IF EasyPDFSetup.SaveAttachmentsAsType = EasyPDFSetup.SaveAttachmentsAsType::BLOB THEN
+          BEGIN
+
+            SavedAttachment.CALCFIELDS(Blob);
+            IF NOT SavedAttachment.Blob.HASVALUE THEN
+            BEGIN
+
+              BLOBRef.Blob := SavedAttachment.Blob;
+              IF SavedAttachment.ServerFilePath <> '' THEN BEGIN
+                BLOBImportServer(BLOBRef, SavedAttachment.ServerFilePath);
+              END ELSE
+              IF SavedAttachment.ClientFilePath <> '' THEN BEGIN
+                ServerTempFilePath := CopyToServerTemp(SavedAttachment.ClientFilePath);
+                BLOBImportServer(BLOBRef, ServerTempFilePath);
+                IF FILE.ERASE(ServerTempFilePath) THEN ;
+              END ELSE
+              IF SavedAttachment.ClientTempFilePath <> '' THEN BEGIN
+                ServerTempFilePath := CopyToServerTemp(SavedAttachment.ClientTempFilePath);
+                BLOBImportServer(BLOBRef, ServerTempFilePath);
+                IF FILE.ERASE(ServerTempFilePath) THEN ;
+              END;
+              SavedAttachment.Blob := BLOBRef.Blob;
+
+            END;
+
+          END;
+
+          IF EasyPDFSetup.SaveAttachmentsAsType = EasyPDFSetup.SaveAttachmentsAsType::File THEN
+          BEGIN
+
+            SavedAttachment.CALCFIELDS(Blob);
+            IF SavedAttachment.Blob.HASVALUE THEN
+            BEGIN
+              SavedAttachment.ArchivedFilePath := DestFolder + '\' + SavedAttachment.Filename;
+              SavedAttachment.Blob.EXPORT(SavedAttachment.ArchivedFilePath);
+            END ELSE
+            IF SavedAttachment.ServerFilePath <> '' THEN BEGIN
+              SavedAttachment.ArchivedFilePath := DestFolder + '\' + Basename(SavedAttachment.ServerFilePath);
+              IF FILE.COPY(SavedAttachment.ServerFilePath, SavedAttachment.ArchivedFilePath) THEN ;
+            END ELSE
+            IF SavedAttachment.ClientFilePath <> '' THEN BEGIN
+              SavedAttachment.ArchivedFilePath :=
+                CopyToServer(SavedAttachment.ClientFilePath, DestFolder, Basename(SavedAttachment.ClientFilePath));
+            END ELSE
+            IF SavedAttachment.ClientTempFilePath <> '' THEN BEGIN
+              SavedAttachment.ArchivedFilePath :=
+                CopyToServer(SavedAttachment.ClientTempFilePath, DestFolder, Basename(SavedAttachment.ClientTempFilePath));
+            END;
+
+          END;
+
+          SavedAttachment.ServerFilePath := '';
+          SavedAttachment.ClientFilePath := '';
+          SavedAttachment.ClientTempFilePath := '';
+
+          SavedAttachment.INSERT;
+
+        UNTIL EasyPDFAttachmentTemp.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE AddAttachmentFileName@1000000043(FilePath@1000000000 : Text);
+    BEGIN
+
+      // AttachmentFileNames holds the list of attached files, used only for display in the history view
+      // This is a hack, it should be replaced with a flow field or other dynamic mechanism
+
+      IF STRLEN(AttachmentFileNames) > 0 THEN
+        AttachmentFileNames += ';';
+
+      AttachmentFileNames += Basename(FilePath);
+    END;
+
+    PROCEDURE ShowAttachment@1000000046(VAR EasyPDFAttachmentRec@1000000000 : Record 14103466);
+    VAR
+      AttachmentFilePath@1000000001 : Text;
+      AttachmentTempPath@1000000004 : Text;
+      BLOBRef@1000000002 : Record 99008535;
+    BEGIN
+
+      GetSetup(EasyPDFSetup);
+
+      WITH EasyPDFAttachmentRec DO
+      BEGIN
+
+        IF EasyPDFAttachmentRec.AttachmentType <> EasyPDFAttachmentRec.AttachmentType::History THEN
+        BEGIN
+
+          CALCFIELDS(Blob);
+          IF Blob.HASVALUE THEN                         // Attachment is stored as a BLOB
+          BEGIN                                         // Temporarily recreate it on the local host
+            BLOBRef.Blob := Blob;
+            AttachmentFilePath := BLOBExportClient(BLOBRef, Filename);
+            IF NOT ClientFileHelper.Exists(AttachmentFilePath) THEN
+              ERROR(TEXT006, EasyPDFAttachment."Entry No.", AttachmentFilePath);
+            ClientTempFilePath := AttachmentFilePath;   // This will be cleaned up when the page closes
+            MODIFY;
+          END ELSE
+          BEGIN
+            IF NOT FILE.EXISTS(ServerFilePath) THEN     // ServerFilePath must point to an existing file
+              ERROR(TEXT006, HistoryId, ServerFilePath);
+            AttachmentFilePath := CopyToClientTemp(ServerFilePath);
+            ClientTempFilePath := AttachmentFilePath;   // This will be cleaned up when the page closes
+            MODIFY;
+          END;
+
+        END;
+
+        IF EasyPDFAttachmentRec.AttachmentType = EasyPDFAttachmentRec.AttachmentType::History THEN
+        BEGIN
+
+          IF ArchivedFilePath <> '' THEN                // ArchivedFilePath has a value (stored on file system)
+          BEGIN
+
+            IF NOT FILE.EXISTS(ArchivedFilePath) THEN   // ArchivedFilePath must point to an existing file
+              ERROR(TEXT006, HistoryId, ArchivedFilePath);
+            AttachmentFilePath := CopyToClientTemp(ArchivedFilePath);
+            ClientTempFilePath := AttachmentFilePath;   // This will be cleaned up when the page closes
+            MODIFY;
+
+          END ELSE BEGIN
+
+            CALCFIELDS(Blob);
+            IF Blob.HASVALUE THEN                       // Attachment is stored as a BLOB
+            BEGIN                                       // Temporarily recreate it on the local host
+              BLOBRef.Blob := Blob;
+              AttachmentFilePath := BLOBExportClient(BLOBRef, Filename);
+              IF NOT ClientFileHelper.Exists(AttachmentFilePath) THEN
+                ERROR(TEXT006, HistoryId, AttachmentFilePath);
+              ClientTempFilePath := AttachmentFilePath; // This will be cleaned up when the page closes
+              MODIFY;
+            END;
+
+          END;
+
+        END;
+
+        HYPERLINK(AttachmentFilePath);
+
+      END;
+    END;
+
+    PROCEDURE CheckValidEmailAddresses@1000000004(Recipients@1000000000 : Text[1024];AuxErrorText@1000000002 : Text[250]);
+    VAR
+      s@1000000001 : Text[1024];
+    BEGIN
+
+      // This is a modified copy of the function from codeunit 400 (SMTP)
+
+      IF Recipients = '' THEN
+        ERROR(ERR013,Recipients,AuxErrorText);
+
+      s := Recipients;
+      WHILE STRPOS(s,';') > 1 DO BEGIN
+        CheckValidEmailAddress(COPYSTR(s,1,STRPOS(s,';') - 1),AuxErrorText);
+        s := COPYSTR(s,STRPOS(s,';') + 1);
+      END;
+
+      CheckValidEmailAddress(s,AuxErrorText);
+    END;
+
+    PROCEDURE CheckValidEmailAddress@1000000049(EmailAddress@1000000000 : Text[250];AuxErrorText@1000000003 : Text[250]);
+    VAR
+      i@1000000001 : Integer;
+      NoOfAtSigns@1000000002 : Integer;
+    BEGIN
+
+      // This is a modified copy of the function from codeunit 400 (SMTP)
+
+      IF EmailAddress = '' THEN
+        ERROR(ERR013,EmailAddress,AuxErrorText);
+
+      IF (EmailAddress[1] = '@') OR (EmailAddress[STRLEN(EmailAddress)] = '@') THEN
+        ERROR(ERR013,EmailAddress,AuxErrorText);
+
+      FOR i := 1 TO STRLEN(EmailAddress) DO BEGIN
+        IF EmailAddress[i] = '@' THEN
+          NoOfAtSigns := NoOfAtSigns + 1;
+        IF NOT (
+          ((EmailAddress[i] >='a') AND (EmailAddress[i] <='z')) OR
+          ((EmailAddress[i] >='A') AND (EmailAddress[i] <='Z')) OR
+          ((EmailAddress[i] >='0') AND (EmailAddress[i] <='9')) OR
+          (EmailAddress[i] IN ['@','.','-','_','#','$','%','&','*','+','/','=','?','^','`','{','}','|','~','''']))
+          THEN
+            ERROR(ERR013,EmailAddress,AuxErrorText);
+      END;
+
+      IF NoOfAtSigns <> 1 THEN
+        ERROR(ERR013,EmailAddress,AuxErrorText);
+    END;
+
+    PROCEDURE BLOBImportServer@1100774004(VAR BLOBRef@1100774001 : TEMPORARY Record 99008535;ServerFilepath@1100774000 : Text);
+    VAR
+      NVInStream@1100774006 : InStream;
+      NVOutStream@1100774005 : OutStream;
+      ClientFileHelper@1100774008 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File" RUNONCLIENT;
+      BLOBFile@1100774009 : File;
+    BEGIN
+
+      IF NOT FILE.EXISTS(ServerFilepath) THEN
+        EXIT;
+
+      // stream the file into the blob
+      BLOBRef.CALCFIELDS(Blob);
+      BLOBFile.OPEN(ServerFilepath);
+      BLOBFile.CREATEINSTREAM(NVInStream);
+      BLOBRef.Blob.CREATEOUTSTREAM(NVOutStream);
+      COPYSTREAM(NVOutStream,NVInStream);
+      BLOBFile.CLOSE;
+    END;
+
+    PROCEDURE BLOBImportClient@1000000063(VAR BLOBRef@1100774001 : TEMPORARY Record 99008535;ClientFilepath@1100774000 : Text);
+    VAR
+      ServerTempFilePath@1000000000 : Text;
+    BEGIN
+
+      IF NOT ClientFileHelper.Exists(ClientFilepath) THEN
+        EXIT;
+      ServerTempFilePath := CopyToServerTemp(ClientFilepath);
+      BLOBImportServer(BLOBRef, ServerTempFilePath);
+      IF FILE.ERASE(ServerTempFilePath) THEN ;
+    END;
+
+    PROCEDURE BLOBExportServer@4(VAR BLOBRef@1002 : TEMPORARY Record 99008535;ServerFilePath@1001 : Text);
+    VAR
+      NVInStream@1000000003 : InStream;
+      NVOutStream@1000000002 : OutStream;
+      BLOBFile@1000000000 : File;
+    BEGIN
+
+      BLOBFile.OPEN(ServerFilePath);
+      BLOBFile.CREATEOUTSTREAM(NVOutStream);
+      BLOBRef.Blob.CREATEINSTREAM(NVInStream);
+      COPYSTREAM(NVOutStream,NVInStream);
+      BLOBFile.CLOSE;
+    END;
+
+    PROCEDURE BLOBExportClient@1000000021(VAR BLOBRef@1002 : TEMPORARY Record 99008535;Name@1001 : Text) : Text;
+    VAR
+      NVInStream@1003 : InStream;
+      ToFile@1004 : Text;
+      IsDownloaded@1007 : Boolean;
+    BEGIN
+
+      BLOBRef.Blob.CREATEINSTREAM(NVInStream);
+      ToFile := GetClientTempPath()+'\'+Name;
+      IF ClientFileHelper.Exists(ToFile) THEN
+        ClientFileHelper.Delete(ToFile);
+      IsDownloaded := DOWNLOADFROMSTREAM(NVInStream,'','<TEMP>','',ToFile);
+      IF IsDownloaded THEN
+        EXIT(ToFile);
+      EXIT('');
+    END;
+
+    LOCAL PROCEDURE "// --- File Utilities ---"@1000000054();
+    BEGIN
+    END;
+
+    PROCEDURE CopyToServer@1000000023(ClientFilePath@1000000000 : Text;ServerFileFolder@1000000006 : Text;ServerFileName@1000000001 : Text) : Text;
+    VAR
+      TempServerFilePath@1000000005 : Text;
+      TempClientFilePath@1000000004 : Text;
+      FM@1000000003 : Codeunit 419;
+      FileAttributes@1000000002 : DotNet "'mscorlib'.System.IO.FileAttributes";
+      ServerFilePath@1000000007 : Text;
+    BEGIN
+
+      IF ClientFileHelper.Exists(ClientFilePath) THEN
+      BEGIN
+
+        // TODO: create equivalent to FM.ClientTempFileName()
+
+        TempClientFilePath := FM.ClientTempFileName(Extension(ClientFilePath));
+        TempServerFilePath := FM.ServerTempFileName(Extension(ClientFilePath));
+
+        ClientFileHelper.Copy(ClientFilePath,TempClientFilePath,TRUE);  // try/catch!!
+
+        IF UPLOAD('','<TEMP>','',Basename(TempClientFilePath),TempServerFilePath) THEN
+        BEGIN
+
+          IF (ServerFileFolder = '') OR (ServerFileFolder = '<TEMP>') THEN
+            EXIT(TempServerFilePath);
+
+          ServerFilePath := ServerPathHelper.Combine(ServerFileFolder, ServerFileName);
+          ServerFileHelper.Copy(TempServerFilePath,ServerFilePath,TRUE);  // try/catch!!
+
+          ClientFileHelper.SetAttributes(TempClientFilePath,FileAttributes.Normal);
+          ClientFileHelper.Delete(TempClientFilePath);  // try/catch!!
+
+          ServerFileHelper.SetAttributes(TempServerFilePath,FileAttributes.Normal);
+          ServerFileHelper.Delete(TempServerFilePath);  // try/catch!!
+
+          EXIT(ServerFilePath);
+
+        END;
+
+      END;
+
+      EXIT('');
+    END;
+
+    PROCEDURE CopyToServerTemp@1000000056(ClientFilePath@1000000000 : Text) : Text;
+    BEGIN
+
+      EXIT( CopyToServer(ClientFilePath, '<TEMP>', Basename(ClientFilePath)) );
+    END;
+
+    PROCEDURE CopyToClient@1000000053(ServerFilePath@1000000000 : Text;ClientFileFolder@1000000002 : Text;ClientFileName@1000000001 : Text) : Text;
+    VAR
+      TempClientFilePath@1000000003 : Text;
+      FM@1000000004 : Codeunit 419;
+      FileAttributes@1000000005 : DotNet "'mscorlib'.System.IO.FileAttributes";
+      ClientFilePath@1000000006 : Text;
+    BEGIN
+
+      IF ServerFileHelper.Exists(ServerFilePath) THEN
+      BEGIN
+
+        TempClientFilePath := ClientPathHelper.Combine(GetClientTempPath(), Basename(ServerFilePath));
+
+        IF DOWNLOAD(ServerFilePath,'','<TEMP>','',TempClientFilePath) THEN
+        BEGIN
+
+          IF (ClientFileFolder = '') OR (ClientFileFolder = '<TEMP>') THEN
+            EXIT(TempClientFilePath);
+
+          ClientFilePath := ClientPathHelper.Combine(ClientFileFolder, ClientFileName);
+          ClientFileHelper.Copy(TempClientFilePath,ClientFilePath,TRUE);
+          ClientFileHelper.Delete(TempClientFilePath);
+          EXIT(ClientFilePath);
+
+        END;
+
+      END;
+
+      EXIT('');
+    END;
+
+    PROCEDURE CopyToClientTemp@1000000057(ServerFilePath@1000000000 : Text) : Text;
+    BEGIN
+
+      EXIT( CopyToClient(ServerFilePath, '<TEMP>', Basename(ServerFilePath)) );
+    END;
+
+    PROCEDURE GetClientTempPath@1000000016() : Text;
+    VAR
+      FM@1000000000 : Codeunit 419;
+    BEGIN
+
+      IF ClientTempPath = '' THEN
+        ClientTempPath := FM.GetDirectoryName(FM.ClientTempFileName('tmp'));
+      EXIT(ClientTempPath);
+    END;
+
+    PROCEDURE GetServerTempPath@1000000007() : Text;
+    VAR
+      FM@1000000000 : Codeunit 419;
+    BEGIN
+
+      IF ServerTempPath = '' THEN
+        ServerTempPath := FM.GetDirectoryName(FM.ServerTempFileName('tmp'));
+      EXIT(ServerTempPath);
+    END;
+
+    PROCEDURE Basename@1000000040(FilePath@1000000000 : Text) : Text;
+    VAR
+      i@1000000001 : Integer;
+    BEGIN
+
+      FOR i := STRLEN(FilePath) DOWNTO 1 DO
+        IF COPYSTR(FilePath,i,1) = '\' THEN
+          EXIT(COPYSTR(FilePath,i+1));
+      IF STRLEN(FilePath) > 0 THEN
+        EXIT(FilePath);
+      EXIT('');
+    END;
+
+    PROCEDURE Pathname@1000000044(FilePath@1000000000 : Text[250]) : Text[250];
+    VAR
+      i@1000000001 : Integer;
+    BEGIN
+
+      FOR i := STRLEN(FilePath) DOWNTO 2 DO
+        IF COPYSTR(FilePath,i,1) = '\' THEN
+          EXIT(COPYSTR(FilePath,1,i-1));
+      EXIT('');
+    END;
+
+    PROCEDURE Rootname@1000000033(FilePath@1000000000 : Text[250]) : Text;
+    VAR
+      i@1000000001 : Integer;
+      Filename@1000000002 : Text;
+    BEGIN
+
+      Filename := Basename(FilePath);
+      FOR i := STRLEN(Filename) DOWNTO 1 DO
+        IF COPYSTR(Filename,i,1) = '.' THEN
+          EXIT(COPYSTR(FilePath,1,i-1));
+      EXIT('');
+    END;
+
+    PROCEDURE Extension@1000000025(FilePath@1000000000 : Text) : Text;
+    VAR
+      FileExtension@1000000001 : Text;
+      i@1000000002 : Integer;
+    BEGIN
+
+      FOR i := STRLEN(FilePath) DOWNTO 1 DO
+        IF COPYSTR(FilePath,i,1) = '.' THEN
+          EXIT(COPYSTR(FilePath,i+1));
+      EXIT('');
+    END;
+
+    LOCAL PROCEDURE CopySMTPMail@1000000013();
+    VAR
+      I@1000000000 : Integer;
+    BEGIN
+
+      SMTPMailOnClient.Subject := SMTPMail.Subject;
+      SMTPMailOnClient.Preview := SMTPMail.Preview;
+      SMTPMailOnClient.Recipients := SMTPMail.Recipients;
+      SMTPMailOnClient.RecipientsCC := SMTPMail.RecipientsCC;
+      SMTPMailOnClient.RecipientsBcc := SMTPMail.RecipientsBcc;
+      SMTPMailOnClient.BodyFormat := SMTPMail.BodyFormat;
+      SMTPMailOnClient.BodyText := SMTPMail.BodyText;
+      SMTPMailOnClient.BodyHtml := SMTPMail.BodyHtml;
+
+      SMTPMailOnClient.ServerPort := SMTPMail.ServerPort;
+      SMTPMailOnClient.ServerAddress := SMTPMail.ServerAddress;
+      SMTPMailOnClient.SenderName := SMTPMail.SenderName;
+      SMTPMailOnClient.SenderAddress := SMTPMail.SenderAddress;
+      SMTPMailOnClient.Authentication := SMTPMail.Authentication;
+      SMTPMailOnClient.UserName := SMTPMail.UserName;
+      SMTPMailOnClient.Password := SMTPMail.Password;
+      SMTPMailOnClient.EnableSsl := SMTPMail.EnableSsl;
+      SMTPMailOnClient.AllowClientSetup := SMTPMail.AllowClientSetup;
+
+      FOR I:=0 TO SMTPMail.AttachmentCount -1 DO
+        SMTPMailOnClient.AddAttachment( SMTPMail.GetAttachmentPath(I), SMTPMail.GetAttachmentData(I) );
+    END;
+
+    LOCAL PROCEDURE "// --- Report Parameters Interface ---"@1000000018();
+    BEGIN
+    END;
+
+    PROCEDURE NewReportParameters@1000000062(ReportID@1000000000 : Integer) : Text;
+    VAR
+      ObjectRec@1000000002 : Record 2000000001;
+    BEGIN
+      IF ObjectRec.GET(3,'',ReportID) THEN
+        EXIT(
+          '<?xml version="1.0" standalone="yes"?>' +
+          '<ReportParameters name="' + ObjectRec.Name + '" id="' + FORMAT(ReportID) + '">' +
+          '<Options></Options>' +
+          '<DataItems></DataItems>' +
+          '</ReportParameters>'
+          );
+      EXIT('');
+    END;
+
+    PROCEDURE AddReportParameter@1000000061(xmltext@1000000000 : Text;parametertype@1000000007 : 'Option,Dataitem';parametername@1000000001 : Text;parametervalue@1000000002 : Text) : Text;
+    VAR
+      xmldoc@1000000006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      xmlroot@1000000005 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      xmlnode@1000000004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      XmlConvert@1000000003 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlConvert";
+    BEGIN
+      IF xmltext = '' THEN
+        EXIT('');
+      CLEAR(xmldoc);
+      xmldoc := xmldoc.XmlDocument();
+      xmldoc.LoadXml(xmltext);
+      xmlroot := xmldoc.DocumentElement;
+      IF parametertype = parametertype::Option THEN
+        AddChildNode(xmldoc, 'Options', 'Field', XmlEncodeName(parametername), parametervalue);
+      IF parametertype = parametertype::Dataitem THEN
+        AddChildNode(xmldoc, 'DataItems', 'DataItem', XmlEncodeName(parametername), parametervalue);
+      EXIT(xmldoc.OuterXml);
+    END;
+
+    PROCEDURE SetReportParameter@1000000060(xmltext@1000000000 : Text;parametername@1000000001 : Text;parametervalue@1000000002 : Text) : Text;
+    VAR
+      xmldoc@1000000006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      xmlroot@1000000005 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      xmlnode@1000000004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      XmlConvert@1000000003 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlConvert";
+    BEGIN
+      IF xmltext = '' THEN
+        EXIT('');
+      CLEAR(xmldoc);
+      xmldoc := xmldoc.XmlDocument();
+      xmldoc.LoadXml(xmltext);
+      xmlroot := xmldoc.DocumentElement;
+      SetChildNode(xmldoc, 'Field', XmlEncodeName(parametername), parametervalue);
+      EXIT(xmldoc.OuterXml);
+    END;
+
+    LOCAL PROCEDURE AddChildNode@1000000059(xmldoc@1000000008 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";child@1000000002 : Text;nodetype@1000000004 : Text;nodename@1000000001 : Text;nodevalue@1000000000 : Text);
+    VAR
+      xmlnode@1000000006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      xmlelement@1000000007 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlElement";
+      String@1000000003 : DotNet "'mscorlib'.System.String";
+    BEGIN
+      xmlnode := xmldoc.SelectSingleNode(String.Format('descendant::{0}', child));
+      IF NOT ISNULL(xmlnode) THEN BEGIN
+        xmlelement := xmldoc.CreateElement(nodetype);
+        xmlelement.SetAttribute('name', nodename);
+        xmlelement.InnerText := nodevalue;
+        xmlnode.AppendChild(xmlelement);
+      END
+    END;
+
+    LOCAL PROCEDURE SetChildNode@1000000052(xmldoc@1000000008 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";nodetype@1000000004 : Text;nodename@1000000001 : Text;nodevalue@1000000000 : Text);
+    VAR
+      xmlnode@1000000006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      String@1000000003 : DotNet "'mscorlib'.System.String";
+    BEGIN
+      xmlnode := xmldoc.SelectSingleNode(String.Format('descendant::{0}[@name="{1}"]', nodetype, nodename));
+      IF NOT ISNULL(xmlnode) THEN BEGIN
+        xmlnode.InnerText := nodevalue;
+      END
+    END;
+
+    LOCAL PROCEDURE XmlEncodeName@1000000032(xmlname@1000000000 : Text) : Text;
+    VAR
+      string@1000000001 : DotNet "'mscorlib'.System.String";
+    BEGIN
+      string := xmlname;
+      string := string.Replace('"', '&quot;');
+      string := string.Replace('<', '&lt;');
+      string := string.Replace('>', '&gt;');
+      EXIT(string.ToString());
+    END;
+
+    PROCEDURE SendReport@1000000024(DocCode@1000000002 : Code[50];DocNo@1000000003 : Code[20]);
+    VAR
+      ServerFilePath@1000000001 : Text;
+      ReportParameters@1000000000 : Text;
+      SystemIoFile@1000000004 : DotNet "'mscorlib'.System.IO.File";
+    BEGIN
+
+      ClearVariables();
+
+      DocumentCode := DocCode;
+      DocumentNo   := DocNo;
+      MessageType  := EasyPDFQueue.DeliveryMethod::Email;
+
+      //
+      // Retrieve the document setup for this document code
+      //
+      GetDocumentSetup(EasyPDFDocument, DocCode);
+
+      //
+      // Initialize Easy PDF
+      //
+      IF NOT InitEasyPDF() THEN
+        ERROR(TEXT005);
+
+      // Initialize the document record
+      EasyPDFCustomization.InitializeRecord(DocCode, DocNo, EasyPDFBatchId, EasyPDFPrimaryKey);
+
+      // Retrieve the preferred language for the message body
+      EasyPDFCustomization.GetPreferredLanguage(DocCode, DocNo, LanguageCode);
+
+      // Retrieve the report parameters
+      EasyPDFCustomization.CollectReportParameters(DocCode, EasyPDFDocument."Report ID", '');
+
+      // Create a unique id
+      ReferenceId := CREATEGUID();
+
+      // Create the email message
+      IF IsSMTP THEN BEGIN
+
+        IF PrintDocument() THEN
+          IF CreateMessageSmtp() THEN
+              SendMessageSmtp();
+
+      END ELSE BEGIN
+
+        IF PrintDocument() THEN
+          IF CreateMessageMapi() THEN
+            SendMessageMapi();
+
+      END;
+
+      // Log
+      LogHistory();
+
+      // Cleanup
+      Finish();
+
+      IF ShowSmtpConfirmation AND GUIALLOWED THEN
+        MESSAGE(TEXT003);
+    END;
+
+    LOCAL PROCEDURE PrintOpenInvoices@1000000065(VAR EasyPDFAttachmentParam@1000000009 : Record 14103466);
+    VAR
+      SalesInvoiceHeaderRec@1000000000 : Record 112;
+      EasyPDFDocumentLocal@1000000004 : Record 14103461;
+      EasyPDFCustomizationLocal@1000000001 : Codeunit 14103460;
+      EasyPDFPrinterLocal@1000000002 : Codeunit 14103462;
+      ServerFilePath@1000000003 : Text;
+      ClientFilePath@1000000005 : Text;
+      DocCode@1000000006 : Code[50];
+      DocNo@1000000007 : Code[20];
+      Filename@1000000008 : Text;
+    BEGIN
+
+      SalesInvoiceHeaderRec.RESET;
+      SalesInvoiceHeaderRec.SETRANGE("Bill-to Customer No.", DocumentNo);
+      SalesInvoiceHeaderRec.SETRANGE(Closed, FALSE);
+      IF SalesInvoiceHeaderRec.FINDSET() THEN
+      BEGIN
+
+        DocCode := 'POSTED SALES INVOICE';
+        GetDocumentSetup(EasyPDFDocumentLocal, DocCode);
+
+        REPEAT
+
+          DocNo := SalesInvoiceHeaderRec."No.";
+          EasyPDFCustomizationLocal.InitializeRecord(DocCode, DocNo, EasyPDFBatchId, '');
+
+          Filename := ReplaceTokensEx(DocCode, DocNo, EasyPDFCustomizationLocal, EasyPDFDocumentLocal.Filename);
+          ServerFilePath := CreateServerTempFilePath(EasyPDFSetup, Filename, EasyPDFDocumentLocal.GetReportExtension);
+          ClientFilePath := '';
+
+          IF NOT EasyPDFPrinterLocal.PrintReport(EasyPDFDocumentLocal, EasyPDFCustomizationLocal, ServerFilePath, ClientFilePath) THEN BEGIN
+            DisplayError(ERR006);
+            EXIT;
+          END;
+
+          // Create an attachment for the file
+
+          IF ServerFilePath <> '' THEN BEGIN
+            EasyPDFAttachmentParam.INIT;
+            EasyPDFAttachmentParam."Entry No."         := EasyPDFAttachmentTemp.COUNT + 1;
+            EasyPDFAttachmentParam.ReferenceId         := ReferenceId;
+            EasyPDFAttachmentParam.AttachmentType      := EasyPDFAttachmentParam.AttachmentType::Regular;
+            EasyPDFAttachmentParam.UserId              := EasyPDFDocument."User ID";
+            EasyPDFAttachmentParam.Code                := DocCode;
+            EasyPDFAttachmentParam."No."               := DocNo;
+            EasyPDFAttachmentParam.RecipientType       := RecipientType;
+            EasyPDFAttachmentParam.RecipientNo         := RecipientNo;
+            EasyPDFAttachmentParam.Filename            := Basename(ServerFilePath);
+            EasyPDFAttachmentParam.ServerFilePath      := ServerFilePath;
+            EasyPDFAttachmentParam.ClientFilePath      := '';
+            EasyPDFAttachmentParam.IsTemporary         := TRUE;
+            IF IsBatch THEN
+              EasyPDFAttachmentParam.BatchId           := EasyPDFBatchId;
+            EasyPDFAttachmentParam.INSERT;
+          END;
+
+        UNTIL SalesInvoiceHeaderRec.NEXT = 0;
+
+        MergeAttachments(EasyPDFAttachmentParam, 'Customer Statement');
+
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

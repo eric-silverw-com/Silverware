@@ -1,0 +1,733 @@
+OBJECT Report 14103462 Batch Customer Statement 1316
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/26/18;
+    Time=12:22:54 PM;
+    Modified=Yes;
+    Version List=EZP2.32.00;
+  }
+  PROPERTIES
+  {
+    ProcessingOnly=Yes;
+    OnInitReport=BEGIN
+                   GLSetup.GET;
+                   SalesSetup.GET;
+
+                   CASE SalesSetup."Logo Position on Documents" OF
+                     SalesSetup."Logo Position on Documents"::"No Logo":
+                       ;
+                     SalesSetup."Logo Position on Documents"::Left:
+                       BEGIN
+                         CompanyInfo1.GET;
+                         CompanyInfo1.CALCFIELDS(Picture);
+                       END;
+                     SalesSetup."Logo Position on Documents"::Center:
+                       BEGIN
+                         CompanyInfo2.GET;
+                         CompanyInfo2.CALCFIELDS(Picture);
+                       END;
+                     SalesSetup."Logo Position on Documents"::Right:
+                       BEGIN
+                         CompanyInfo3.GET;
+                         CompanyInfo3.CALCFIELDS(Picture);
+                       END;
+                   END;
+
+                   LogInteractionEnable := TRUE;
+                 END;
+
+    OnPreReport=BEGIN
+                  InitRequestPageDataInternal;
+
+                  // EASYPDF.begin
+                  IF EasyPDFBatchGeneration THEN
+                    EasyPDFWindow.OPEN(EasyPDFWindowText);
+                  // EASYPDF.end
+                END;
+
+    OnPostReport=BEGIN
+                   // EasyPDF.begin
+                   IF EasyPDFBatchGeneration THEN
+                     EasyPDFWindow.CLOSE;
+                   // EasyPDF.end
+                 END;
+
+  }
+  DATASET
+  {
+    { 6836;    ;DataItem;                    ;
+               DataItemTable=Table18;
+               DataItemTableView=SORTING(No.);
+               PrintOnlyIfDetail=Yes;
+               OnPreDataItem=BEGIN
+                               VerifyDates;
+                               AgingBandEndingDate := EndDate;
+                               CalcAgingBandDates;
+
+                               CompanyInfo.GET;
+                               FormatAddr.Company(CompanyAddr,CompanyInfo);
+                               CompanyInfo.CALCFIELDS(Picture);
+
+                               TempCurrency2.Code := '';
+                               TempCurrency2.INSERT;
+                               COPYFILTER("Currency Filter",Currency.Code);
+                               IF Currency.FIND('-') THEN
+                                 REPEAT
+                                   TempCurrency2 := Currency;
+                                   TempCurrency2.INSERT;
+                                 UNTIL Currency.NEXT = 0;
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  // EASYPDF.begin
+                                  IF EasyPDFBatchGeneration THEN
+                                    EasyPDFWindow.UPDATE(1,"No.");
+                                  // EASYPDF.end
+
+                                  TempAgingBandBuf.DELETEALL;
+                                  // EASYPDF.begin
+                                  IF NOT EasyPDFBatchGeneration THEN
+                                    CurrReport.LANGUAGE := Language.GetLanguageID("Language Code");
+                                  // EASYPDF.end
+                                  PrintLine := FALSE;
+                                  Cust2 := Customer;
+                                  COPYFILTER("Currency Filter",TempCurrency2.Code);
+                                  IF PrintAllHavingBal THEN BEGIN
+                                    IF TempCurrency2.FIND('-') THEN
+                                      REPEAT
+                                        Cust2.SETRANGE("Date Filter",0D,EndDate);
+                                        Cust2.SETRANGE("Currency Filter",TempCurrency2.Code);
+                                        Cust2.CALCFIELDS("Net Change");
+                                        PrintLine := Cust2."Net Change" <> 0;
+                                      UNTIL (TempCurrency2.NEXT = 0) OR PrintLine;
+                                  END;
+                                  IF (NOT PrintLine) AND PrintAllHavingEntry THEN BEGIN
+                                    CustLedgerEntry.RESET;
+                                    CustLedgerEntry.SETCURRENTKEY("Customer No.","Posting Date");
+                                    CustLedgerEntry.SETRANGE("Customer No.","No.");
+                                    CustLedgerEntry.SETRANGE("Posting Date",StartDate,EndDate);
+                                    COPYFILTER("Currency Filter",CustLedgerEntry."Currency Code");
+                                    PrintLine := NOT CustLedgerEntry.ISEMPTY;
+                                  END;
+                                  IF NOT PrintLine THEN
+                                    CurrReport.SKIP;
+
+                                  FormatAddr.Customer(CustAddr,Customer);
+                                  CurrReport.PAGENO := 1;
+
+                                  IF NOT CurrReport.PREVIEW THEN BEGIN
+                                    LOCKTABLE;
+                                    FIND;
+                                    "Last Statement No." := "Last Statement No." + 1;
+                                    MODIFY;
+                                    COMMIT;
+                                  END ELSE
+                                    "Last Statement No." := "Last Statement No." + 1;
+
+                                  IF LogInteraction THEN
+                                    // EASYPDF.begin
+                                    IF (NOT CurrReport.PREVIEW) AND (NOT EasyPDFBatchGeneration) THEN
+                                    // EASYPDF.end
+                                      SegManagement.LogDocument(
+                                        7,FORMAT("Last Statement No."),0,0,DATABASE::Customer,"No.","Salesperson Code",'',
+                                        StatementLbl + FORMAT("Last Statement No."),'');
+                                  IsFirstLoop := FALSE;
+
+                                  // EASYPDF.begin
+                                  IF EasyPDFBatchGeneration THEN
+                                  BEGIN
+                                    EasyPDF.QueueBatchEx('CUSTOMER STATEMENT', "No.", '', EasyPDFCustomization.GenerateBatchId('CUSTOMER STATEMENT'), EasyPDFGetReportParameters);
+                                    CurrReport.SKIP;
+                                  END;
+                                  // EASYPDF.end
+                                END;
+
+               OnPostDataItem=BEGIN
+                                // EASYPDF.begin
+                                IF EasyPDFBatchGeneration THEN
+                                  CurrReport.QUIT;
+                                // EASYPDF.end
+                              END;
+
+               ReqFilterFields=No.,Search Name,Print Statements,Currency Filter }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      SaveValues=Yes;
+      OnOpenPage=BEGIN
+                   InitRequestPageDataInternal;
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 8   ;0   ;Container ;
+                  ContainerType=ContentArea }
+
+      { 5   ;1   ;Group     ;
+                  CaptionML=[ENU=Options;
+                             ESM=Opciones;
+                             FRC=Options;
+                             ENC=Options] }
+
+      { 9   ;2   ;Field     ;
+                  Name=Start Date;
+                  CaptionML=[ENU=Start Date;
+                             ESM=Fecha inicial;
+                             FRC=Date de dÇbut;
+                             ENC=Start Date];
+                  ToolTipML=[ENU=Specifies the date from which the report or batch job processes information.;
+                             ESM=Especifica la fecha a partir de la cual el informe o el trabajo por lotes procesa la informaci¢n.;
+                             FRC=SpÇcifie la date Ö partir de laquelle le rapport ou le traitement en lot traite les informations.;
+                             ENC=Specifies the date from which the report or batch job processes information.];
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=StartDate }
+
+      { 11  ;2   ;Field     ;
+                  Name=End Date;
+                  CaptionML=[ENU=End Date;
+                             ESM=Fecha final;
+                             FRC=Date de fin;
+                             ENC=End Date];
+                  ToolTipML=[ENU=Specifies the date to which the report or batch job processes information.;
+                             ESM=Especifica la fecha hasta la cual el informe o el trabajo por lotes procesa la informaci¢n.;
+                             FRC=SpÇcifie la date jusqu'Ö laquelle le rapport ou le traitement en lot traite les informations.;
+                             ENC=Specifies the date to which the report or batch job processes information.];
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=EndDate }
+
+      { 1   ;2   ;Field     ;
+                  Name=ShowOverdueEntries;
+                  CaptionML=[ENU=Show Overdue Entries;
+                             ESM=Muestra movs. vencidos;
+                             FRC=Afficher les Çcritures en souffrance;
+                             ENC=Show Overdue Entries];
+                  ToolTipML=[ENU=Specifies if you want overdue entries to be shown separately for each currency.;
+                             ESM=Especifica si desea que los movimientos vencidos se muestren por separado por divisas.;
+                             FRC=Indique si vous souhaitez que les Çcritures dues soient affichÇes sÇparÇment pour chaque devise.;
+                             ENC=Specifies if you want overdue entries to be shown separately for each currency.];
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=PrintEntriesDue }
+
+      { 13  ;2   ;Group     ;
+                  Name=Include;
+                  CaptionML=[ENU=Include;
+                             ESM=Incluye;
+                             FRC=Inclure;
+                             ENC=Include];
+                  GroupType=Group }
+
+      { 2   ;3   ;Field     ;
+                  Name=IncludeAllCustomerswithLE;
+                  CaptionML=[ENU=Include All Customers with Ledger Entries;
+                             ESM=Incluye todos los clientes con movs.;
+                             FRC=Inclure tous les clients ayant des Çcritures;
+                             ENC=Include All Customers with Ledger Entries];
+                  ToolTipML=[ENU=Specifies if you want entries displayed for customers that have ledger entries at the end of the selected period.;
+                             ESM=Especifica si desea que se muestren los movimientos de los clientes que tienen movimientos contables al final del periodo seleccionado.;
+                             FRC=Indique si vous souhaitez que les Çcritures soient affichÇes pour les clients ayant des Çcritures Ö la fin de la pÇriode sÇlectionnÇe.;
+                             ENC=Specifies if you want entries displayed for customers that have ledger entries at the end of the selected period.];
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=PrintAllHavingEntry;
+                  MultiLine=Yes;
+                  OnValidate=BEGIN
+                               IF NOT PrintAllHavingEntry THEN
+                                 PrintAllHavingBal := TRUE;
+                             END;
+                              }
+
+      { 3   ;3   ;Field     ;
+                  Name=IncludeAllCustomerswithBalance;
+                  CaptionML=[ENU=Include All Customers with a Balance;
+                             ESM=Incluye todos los clientes con saldo;
+                             FRC=Inclure tous les clients ayant un solde.;
+                             ENC=Include All Customers with a Balance];
+                  ToolTipML=[ENU=Specifies if you want entries displayed for customers that have a balance at the end of the selected period.;
+                             ESM=Especifica si desea que se muestren los movimientos de los clientes que tienen saldo al final del periodo seleccionado.;
+                             FRC=Indique si vous souhaitez que les Çcritures soient affichÇes pour les clients avec un solde Ö la fin de la pÇriode sÇlectionnÇe.;
+                             ENC=Specifies if you want entries displayed for customers that have a balance at the end of the selected period.];
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=PrintAllHavingBal;
+                  MultiLine=Yes;
+                  OnValidate=BEGIN
+                               IF NOT PrintAllHavingBal THEN
+                                 PrintAllHavingEntry := TRUE;
+                             END;
+                              }
+
+      { 10  ;3   ;Field     ;
+                  Name=IncludeReversedEntries;
+                  CaptionML=[ENU=Include Reversed Entries;
+                             ESM=Incluir movs. revertidos;
+                             FRC=Inclure les Çcritures renversÇes;
+                             ENC=Include Reversed Entries];
+                  ToolTipML=[ENU=Specifies if you want to include reversed entries in the report.;
+                             ESM=Especifica si desea incluir movimientos revertidos en el informe.;
+                             FRC=SpÇcifie si vous souhaitez inclure des Çcritures inversÇes dans le rapport.;
+                             ENC=Specifies if you want to include reversed entries in the report.];
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=PrintReversedEntries }
+
+      { 14  ;3   ;Field     ;
+                  Name=IncludeUnappliedEntries;
+                  CaptionML=[ENU=Include Unapplied Entries;
+                             ESM=Incluir movimientos sin liquidar;
+                             FRC=Inclure Çcrit. non affect.;
+                             ENC=Include Unapplied Entries];
+                  ToolTipML=[ENU=Specifies if you want to include unapplied entries in the report.;
+                             ESM=Especifica si desea incluir movimientos no liquidados en el informe.;
+                             FRC=SpÇcifie si vous souhaitez inclure dans le rapport les Çcritures dont l'affectation a ÇtÇ annulÇe.;
+                             ENC=Specifies if you want to include unapplied entries in the report.];
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=PrintUnappliedEntries }
+
+      { 15  ;2   ;Group     ;
+                  CaptionML=[ENU=Aging Band;
+                             ESM=Rango antigÅedad;
+                             FRC=Cumul;
+                             ENC=Aging Band];
+                  GroupType=Group }
+
+      { 12  ;3   ;Field     ;
+                  Name=IncludeAgingBand;
+                  CaptionML=[ENU=Include Aging Band;
+                             ESM=Incluye rango antigÅedad;
+                             FRC=Inclure la bande chronologique;
+                             ENC=Include Aging Band];
+                  ToolTipML=[ENU=Specifies if you want an aging band to be included in the document. If you select the check box, then you must also fill the Aging Band Period Length and Aging Band by fields.;
+                             ESM=Especifica si desea incluir en el documento un rango de antigÅedad. Si activa la casilla, tambiÇn debe rellenar los campos Longitud periodo rango antigÅedad y Rango antigÅedad por.;
+                             FRC=SpÇcifie si vous souhaitez qu'une bande chronologique soit incluse dans le document. Si vous cochez la case, vous devez renseigner les champs DurÇe de pÇriode de la bande chronologique et Bande chronologique par.;
+                             ENC=Specifies if you want an aging band to be included in the document. If you select the check box, then you must also fill the Aging Band Period Length and Aging Band by fields.];
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=IncludeAgingBand }
+
+      { 7   ;3   ;Field     ;
+                  Name=AgingBandPeriodLengt;
+                  CaptionML=[ENU=Aging Band Period Length;
+                             ESM=Longitud periodo rango antigÅedad;
+                             FRC=DurÇe de pÇriode de la bande chronologique;
+                             ENC=Aging Band Period Length];
+                  ToolTipML=[ENU=Specifies the length of each of the four periods in the aging band, for example, enter "1M" for one month. The most recent period will end on the last day of the period in the Date Filter field.;
+                             ESM=Especifica la duraci¢n de cada uno de los cuatro periodos del rango de antigÅedad. Por ejemplo, introduzca "1M" para un mes. El periodo m†s reciente terminar† el £ltimo d°a del periodo del campo Filtro fecha.;
+                             FRC="SpÇcifie la longueur de chacune des quatreˇpÇriodes dans le bande chronologiqueˇ; par exemple, saisissez Æˇ1MˇØ pour un mois. La pÇriode la plus rÇcente se termine le dernier jour de la pÇriode dans le champ Filtre date.";
+                             ENC=Specifies the length of each of the four periods in the aging band, for example, enter "1M" for one month. The most recent period will end on the last day of the period in the Date Filter field.];
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=PeriodLength }
+
+      { 6   ;3   ;Field     ;
+                  Name=AgingBandby;
+                  CaptionML=[ENU=Aging Band by;
+                             ESM=Rango antigÅedad por;
+                             FRC=Bande chronologique par;
+                             ENC=Aging Band by];
+                  ToolTipML=[ENU=Specifies if the aging band will be calculated from the due date or from the posting date.;
+                             ESM=Especifica si el rango de antigÅedad se calcular† desde la fecha de vencimiento o desde la fecha de registro.;
+                             FRC=SpÇcifie si la bande chronologique est calculÇe Ö partir de la date d'ÇchÇance ou de la date de report.;
+                             ENC=Specifies if the aging band will be calculated from the due date or from the posting date.];
+                  OptionCaptionML=[ENU=Due Date,Posting Date;
+                                   ESM=Fecha vto,Fecha registro;
+                                   FRC=Date d'ÇchÇance,Date de report;
+                                   ENC=Due Date,Posting Date];
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=DateChoice }
+
+      { 4   ;2   ;Field     ;
+                  Name=LogInteraction;
+                  CaptionML=[ENU=Log Interaction;
+                             ESM=Log interacci¢n;
+                             FRC=Journal interaction;
+                             ENC=Log Interaction];
+                  ToolTipML=[ENU=Specifies if you want the program to log this interaction.;
+                             ESM=Especifica si desea que el programa registre esta interacci¢n.;
+                             FRC=SpÇcifie si vous souhaitez que le programme enregistre cette interaction.;
+                             ENC=Specifies if you want the program to log this interaction.];
+                  ApplicationArea=#Advanced;
+                  SourceExpr=LogInteraction;
+                  Enabled=LogInteractionEnable }
+
+      { 17  ;1   ;Group     ;
+                  Name=Output Options;
+                  CaptionML=[ENU=Output Options;
+                             ESM=Opciones de salida;
+                             FRC=Options sortie;
+                             ENC=Output Options];
+                  GroupType=Group }
+
+      { 16  ;2   ;Field     ;
+                  Name=ReportOutput;
+                  CaptionML=[ENU=Report Output;
+                             ESM=Salida de informe;
+                             FRC=Sortie rapport;
+                             ENC=Report Output];
+                  ToolTipML=[ENU=Specifies the output of the scheduled report, such as PDF or Word.;
+                             ESM=Especifica el tipo del informe programado, como PDF o Word.;
+                             FRC=SpÇcifie la sortie du rapport programmÇ, par exemple PDF ou Word.;
+                             ENC=Specifies the output of the scheduled report, such as PDF or Word.];
+                  OptionCaptionML=[@@@=Each item is a verb/action - to print, to preview, to export to Word, export to PDF, send email, export to XML for RDLC layouts only;
+                                   ENU=Print,Preview,Word,PDF,Email,XML - RDLC layouts only;
+                                   ESM=Imprimir,Vista previa,Word,PDF,Correo electr¢nico,XML - solo dise§os RDLC;
+                                   FRC=Imprimer,Aperáu,Word,PDF,Courriel,XML - PrÇsentations RDLC uniquement;
+                                   ENC=Print,Preview,Word,PDF,Email,XML - RDLC layouts only];
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=SupportedOutputMethod;
+                  OnValidate=VAR
+                               CustomLayoutReporting@1000 : Codeunit 8800;
+                             BEGIN
+                               ShowPrintRemaining := (SupportedOutputMethod = SupportedOutputMethod::Email);
+
+                               CASE SupportedOutputMethod OF
+                                 SupportedOutputMethod::Print:
+                                   ChosenOutputMethod := CustomLayoutReporting.GetPrintOption;
+                                 SupportedOutputMethod::Preview:
+                                   ChosenOutputMethod := CustomLayoutReporting.GetPreviewOption;
+                                 SupportedOutputMethod::Word:
+                                   ChosenOutputMethod := CustomLayoutReporting.GetWordOption;
+                                 SupportedOutputMethod::PDF:
+                                   ChosenOutputMethod := CustomLayoutReporting.GetPDFOption;
+                                 SupportedOutputMethod::Email:
+                                   ChosenOutputMethod := CustomLayoutReporting.GetEmailOption;
+                                 SupportedOutputMethod::XML:
+                                   ChosenOutputMethod := CustomLayoutReporting.GetXMLOption;
+                               END;
+                             END;
+                              }
+
+      { 18  ;2   ;Field     ;
+                  Name=ChosenOutput;
+                  ApplicationArea=#Advanced;
+                  SourceExpr=ChosenOutputMethod;
+                  Visible=False }
+
+      { 20  ;2   ;Group     ;
+                  Name=EmailOptions;
+                  CaptionML=[ENU=Email Options;
+                             ESM=Opciones de correo electr¢nico;
+                             FRC=Options de courriel;
+                             ENC=Email Options];
+                  Visible=ShowPrintRemaining;
+                  GroupType=Group }
+
+      { 21  ;3   ;Field     ;
+                  Name=PrintMissingAddresses;
+                  CaptionML=[ENU=Print remaining statements;
+                             ESM=Imprimir estados de cuenta restantes;
+                             FRC=Imprimer relevÇs restants;
+                             ENC=Print remaining statements];
+                  ToolTipML=[ENU=Specifies that amounts remaining to be paid will be included.;
+                             ESM=Especifica que se incluir†n los importes pendientes de pago.;
+                             FRC=SpÇcifie que les montants restant Ö payer seront inclus.;
+                             ENC=Specifies that amounts remaining to be paid will be included.];
+                  ApplicationArea=#Basic,#Suite;
+                  SourceExpr=PrintRemaining }
+
+      { 1000000000;2;Field  ;
+                  CaptionML=ENU=EasyPDF Batch Generation;
+                  SourceExpr=EasyPDFBatchGeneration;
+                  Visible=FALSE }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      EntriesLbl@1001 : TextConst '@@@="%1 = Currency code";ENU=Entries %1;ESM=Movimientos %1;FRC=êcritures %1;ENC=Entries %1';
+      OverdueEntriesLbl@1002 : TextConst '@@@="%1=Currency code";ENU=Overdue Entries %1;ESM=Movs. vencidos %1;FRC=êcritures Çchues %1;ENC=Overdue Entries %1';
+      StatementLbl@1003 : TextConst 'ENU="Statement ";ESM="Estado de cuenta ";FRC=RelevÇ;ENC="Statement "';
+      GLSetup@1004 : Record 98;
+      SalesSetup@1052 : Record 311;
+      CompanyInfo@1005 : Record 79;
+      CompanyInfo1@1049 : Record 79;
+      CompanyInfo2@1050 : Record 79;
+      CompanyInfo3@1051 : Record 79;
+      Cust2@1006 : Record 18;
+      Currency@1007 : Record 4;
+      TempCurrency2@1008 : TEMPORARY Record 4;
+      Language@1009 : Record 8;
+      CustLedgerEntry@1033 : Record 21;
+      DetailedCustLedgEntry2@1034 : Record 379;
+      TempAgingBandBuf@1037 : TEMPORARY Record 47;
+      FormatAddr@1021 : Codeunit 365;
+      SegManagement@1020 : Codeunit 5051;
+      PrintAllHavingEntry@1010 : Boolean;
+      PrintAllHavingBal@1011 : Boolean;
+      PrintEntriesDue@1012 : Boolean;
+      PrintUnappliedEntries@1047 : Boolean;
+      PrintReversedEntries@1048 : Boolean;
+      PrintLine@1013 : Boolean;
+      LogInteraction@1023 : Boolean;
+      EntriesExists@1024 : Boolean;
+      StartDate@1014 : Date;
+      EndDate@1015 : Date;
+      DueDate@1030 : Date;
+      CustAddr@1016 : ARRAY [8] OF Text[50];
+      CompanyAddr@1017 : ARRAY [8] OF Text[50];
+      Description@1026 : Text[50];
+      StartBalance@1018 : Decimal;
+      CustBalance@1019 : Decimal;
+      RemainingAmount@1031 : Decimal;
+      CurrencyCode3@1022 : Code[10];
+      MulticurrencyAppLbl@1027 : TextConst 'ENU=Multicurrency Application;ESM=Aplicaci¢n multidivisa;FRC=Application multidevise;ENC=Multicurrency Application';
+      PaymentDiscountLbl@1028 : TextConst 'ENU=Payment Discount;ESM=Dto. P.P.;FRC=Escompte de paiement;ENC=Payment Discount';
+      RoundingLbl@1029 : TextConst 'ENU=Rounding;ESM=Redondeo;FRC=Arrondissement;ENC=Rounding';
+      PeriodLength@1032 : DateFormula;
+      PeriodLength2@1046 : DateFormula;
+      DateChoice@1035 : 'Due Date,Posting Date';
+      AgingDate@1036 : ARRAY [5] OF Date;
+      AgingBandPeriodErr@1038 : TextConst 'ENU=You must specify the Aging Band Period Length.;ESM=Debe especificar la longitud periodo rango antigÅedad.;FRC=Vous devez spÇcifier une base pÇriode pour le(s) cumul(s) date.;ENC=You must specify the Aging Band Period Length.';
+      AgingBandEndingDate@1040 : Date;
+      AgingBandEndErr@1044 : TextConst 'ENU=You must specify Aging Band Ending Date.;ESM=Debe especificar la fecha final del rango antigÅedad.;FRC=Vous devez indiquer la date de fin de la bande chronologique;ENC=You must specify Aging Band Ending Date.';
+      AgedSummaryLbl@1041 : TextConst '@@@="%1=Report aging band end date, %2=Aging band period, %3=Type of deadline (''due date'', ''posting date'') as given in DuePostingDateLbl";ENU=Aged Summary by %1 (%2 by %3);ESM=Sumario por fecha de %1 (%2 por %3);FRC=Cumul en date du %1 (%2 par %3);ENC=Aged Summary by %1 (%2 by %3)';
+      IncludeAgingBand@1043 : Boolean;
+      PeriodLengthErr@1039 : TextConst 'ENU=Period Length is out of range.;ESM=La longitud del periodo est† fuera del rango.;FRC=La pÇriode ne correspond pas Ö l''intervalle dÇfini.;ENC=Period Length is out of range.';
+      AgingBandCurrencyCode@1042 : Code[20];
+      DuePostingDateLbl@1025 : TextConst 'ENU=Due Date,Posting Date;ESM=Fecha vto,Fecha registro;FRC=Date d''ÇchÇance,Date de report;ENC=Due Date,Posting Date';
+      WriteoffsLbl@1045 : TextConst 'ENU=Application Writeoffs;ESM=PÇrdidas por aplicaci¢n;FRC=êcarts d''affectation;ENC=Application Writeoffs';
+      LogInteractionEnable@19003940 : Boolean INDATASET;
+      PeriodSeparatorLbl@1070 : TextConst '@@@=Negating the period length: %1 is the period length;ENU=-%1;ESM=-%1;FRC=-%1;ENC=-%1';
+      StatementCaptionLbl@1978 : TextConst 'ENU=Statement;ESM=Estado de cuenta;FRC=RelevÇ;ENC=Statement';
+      PhoneNo_CompanyInfoCaptionLbl@2240 : TextConst 'ENU=Phone No.;ESM=Nß telÇfono;FRC=N¯ tÇlÇphone;ENC=Phone No.';
+      VATRegNo_CompanyInfoCaptionLbl@4406 : TextConst 'ENU=Tax Registration No.;ESM=RFC/Curp;FRC=N¯ identif. intracomm.;ENC=GST/HST Registration No.';
+      GiroNo_CompanyInfoCaptionLbl@6756 : TextConst 'ENU=Giro No.;ESM=Nß giro postal;FRC=N¯ CCP;ENC=Giro No.';
+      BankName_CompanyInfoCaptionLbl@4354 : TextConst 'ENU=Bank;ESM=Banco;FRC=Banque;ENC=Bank';
+      BankAccNo_CompanyInfoCaptionLbl@6132 : TextConst 'ENU=Account No.;ESM=Nß cuenta;FRC=N¯ de compte;ENC=Account No.';
+      No1_CustCaptionLbl@9474 : TextConst 'ENU=Customer No.;ESM=Nß cliente;FRC=N¯ client;ENC=Customer No.';
+      StartDateCaptionLbl@9565 : TextConst 'ENU=Starting Date;ESM=Fecha inicial;FRC=Date dÇbut;ENC=Starting Date';
+      EndDateCaptionLbl@4843 : TextConst 'ENU=Ending Date;ESM=Fecha final;FRC=Date fin;ENC=Ending Date';
+      LastStatmntNo_CustCaptionLbl@8647 : TextConst 'ENU=Statement No.;ESM=Nß estado de cta. banco;FRC=N¯ de relevÇ;ENC=Statement No.';
+      PostDate_DtldCustLedgEntriesCaptionLbl@1432 : TextConst 'ENU=Posting Date;ESM=Fecha registro;FRC=Date de report;ENC=Posting Date';
+      DueDate_CustLedgEntry2CaptionLbl@1175 : TextConst 'ENU=Due Date;ESM=Fecha vencimiento;FRC=Date d''ÇchÇance;ENC=Due Date';
+      CustBalanceCaptionLbl@2935 : TextConst 'ENU=Balance;ESM=Saldo;FRC=Solde;ENC=Balance';
+      beforeCaptionLbl@1964 : TextConst 'ENU=..before;ESM=...antes;FRC=..avant;ENC=..before';
+      isInitialized@1090 : Boolean;
+      CompanyInfoHomepageCaptionLbl@3493 : TextConst 'ENU=Home Page;ESM=P†gina principal;FRC=Page d''accueil;ENC=Home Page';
+      CompanyInfoEmailCaptionLbl@1765 : TextConst 'ENU=Email;ESM=Correo electr¢nico;FRC=Courriel;ENC=Email';
+      DocDateCaptionLbl@6175 : TextConst 'ENU=Document Date;ESM=Fecha emisi¢n documento;FRC=Date document;ENC=Document Date';
+      Total_CaptionLbl@1000 : TextConst 'ENU=Total;ESM=Total;FRC=Total;ENC=Total';
+      BlankStartDateErr@1053 : TextConst 'ENU=Start Date must have a value.;ESM=La fecha inicial debe tener un valor.;FRC=Date dÇbut doit avoir une valeur.;ENC=Start Date must have a value.';
+      BlankEndDateErr@1054 : TextConst 'ENU=End Date must have a value.;ESM=La fecha final debe tener un valor.;FRC=Date fin doit avoir une valeur.;ENC=End Date must have a value.';
+      StartDateLaterTheEndDateErr@1055 : TextConst 'ENU=Start date must be earlier than End date.;ESM=La fecha inicial debe ser anterior a la fecha final.;FRC=Date dÇbut doit àtre antÇrieure Ö Date fin.;ENC=Start date must be earlier than End date.';
+      IsFirstLoop@1056 : Boolean;
+      CurrReportPageNoCaptionLbl@1057 : TextConst 'ENU=Page;ESM=P†g.;FRC=Page;ENC=Page';
+      IsFirstPrintLine@1058 : Boolean;
+      IsNewCustCurrencyGroup@1059 : Boolean;
+      AgingDateHeader1@1061 : Text;
+      AgingDateHeader2@1060 : Text;
+      AgingDateHeader3@1062 : Text;
+      AgingDateHeader4@1063 : Text;
+      SupportedOutputMethod@1071 : 'Print,Preview,Word,PDF,Email,XML';
+      ChosenOutputMethod@1069 : Integer;
+      PrintRemaining@1065 : Boolean;
+      ShowPrintRemaining@1067 : Boolean INDATASET;
+      CustBalance2@1066 : Decimal;
+      GreetingLbl@1074 : TextConst 'ENU=Hello;ESM=Hola;FRC=Bonjour;ENC=Hello';
+      ClosingLbl@1073 : TextConst 'ENU=Sincerely;ESM=Un saludo,;FRC=Cordialement;ENC=Sincerely';
+      BodyLbl@1064 : TextConst 'ENU=Thank you for your business. Your statement is attached to this message.;ESM=Gracias por confiar en nosotros. Su estado de cuenta est† adjunto a este mensaje.;FRC=Merci de votre collaboration. Votre relevÇ est joint Ö ce message.;ENC=Thank you for your business. Your statement is attached to this message.';
+      EasyPDFBatchGeneration@1000000005 : Boolean;
+      EasyPDFCount@1000000004 : Integer;
+      EasyPDFWindow@1000000003 : Dialog;
+      EasyPDF@1000000002 : Codeunit 37062300;
+      EasyPDFCustomization@1000000001 : Codeunit 14103460;
+      "Cust. Ledger Entry"@1000000000 : Record 21;
+      EasyPDFWindowText@1000000006 : TextConst 'ENU=Processing #1###';
+
+    LOCAL PROCEDURE GetDate@3(PostingDate@1000 : Date;DueDate@1001 : Date) : Date;
+    BEGIN
+      IF DateChoice = DateChoice::"Posting Date" THEN
+        EXIT(PostingDate);
+
+      EXIT(DueDate);
+    END;
+
+    LOCAL PROCEDURE CalcAgingBandDates@1();
+    BEGIN
+      IF NOT IncludeAgingBand THEN
+        EXIT;
+      IF AgingBandEndingDate = 0D THEN
+        ERROR(AgingBandEndErr);
+      IF FORMAT(PeriodLength) = '' THEN
+        ERROR(AgingBandPeriodErr);
+      EVALUATE(PeriodLength2,STRSUBSTNO(PeriodSeparatorLbl,PeriodLength));
+      AgingDate[5] := AgingBandEndingDate;
+      AgingDate[4] := CALCDATE(PeriodLength2,AgingDate[5]);
+      AgingDate[3] := CALCDATE(PeriodLength2,AgingDate[4]);
+      AgingDate[2] := CALCDATE(PeriodLength2,AgingDate[3]);
+      AgingDate[1] := CALCDATE(PeriodLength2,AgingDate[2]);
+      IF AgingDate[2] <= AgingDate[1] THEN
+        ERROR(PeriodLengthErr);
+
+      AgingDateHeader1 := FORMAT(AgingDate[1]) + ' - ' + FORMAT(AgingDate[2]);
+      AgingDateHeader2 := FORMAT(AgingDate[2] + 1) + ' - ' + FORMAT(AgingDate[3]);
+      AgingDateHeader3 := FORMAT(AgingDate[3] + 1) + ' - ' + FORMAT(AgingDate[4]);
+      AgingDateHeader4 := FORMAT(AgingDate[4] + 1);
+    END;
+
+    LOCAL PROCEDURE UpdateBuffer@2(CurrencyCode@1000 : Code[10];Date@1001 : Date;Amount@1002 : Decimal);
+    VAR
+      I@1003 : Integer;
+      GoOn@1004 : Boolean;
+    BEGIN
+      TempAgingBandBuf.INIT;
+      TempAgingBandBuf."Currency Code" := CurrencyCode;
+      IF NOT TempAgingBandBuf.FIND THEN
+        TempAgingBandBuf.INSERT;
+      I := 1;
+      GoOn := TRUE;
+      WHILE (I <= 5) AND GoOn DO BEGIN
+        IF Date <= AgingDate[I] THEN
+          IF I = 1 THEN BEGIN
+            TempAgingBandBuf."Column 1 Amt." := TempAgingBandBuf."Column 1 Amt." + Amount;
+            GoOn := FALSE;
+          END;
+        IF Date <= AgingDate[I] THEN
+          IF I = 2 THEN BEGIN
+            TempAgingBandBuf."Column 2 Amt." := TempAgingBandBuf."Column 2 Amt." + Amount;
+            GoOn := FALSE;
+          END;
+        IF Date <= AgingDate[I] THEN
+          IF I = 3 THEN BEGIN
+            TempAgingBandBuf."Column 3 Amt." := TempAgingBandBuf."Column 3 Amt." + Amount;
+            GoOn := FALSE;
+          END;
+        IF Date <= AgingDate[I] THEN
+          IF I = 4 THEN BEGIN
+            TempAgingBandBuf."Column 4 Amt." := TempAgingBandBuf."Column 4 Amt." + Amount;
+            GoOn := FALSE;
+          END;
+        IF Date <= AgingDate[I] THEN
+          IF I = 5 THEN BEGIN
+            TempAgingBandBuf."Column 5 Amt." := TempAgingBandBuf."Column 5 Amt." + Amount;
+            GoOn := FALSE;
+          END;
+        I := I + 1;
+      END;
+      TempAgingBandBuf.MODIFY;
+    END;
+
+    [External]
+    PROCEDURE SkipReversedUnapplied@4(VAR DetailedCustLedgEntry@1000 : Record 379) : Boolean;
+    VAR
+      CustLedgEntry@1001 : Record 21;
+    BEGIN
+      IF PrintReversedEntries AND PrintUnappliedEntries THEN
+        EXIT(FALSE);
+      IF NOT PrintUnappliedEntries THEN
+        IF DetailedCustLedgEntry.Unapplied THEN
+          EXIT(TRUE);
+      IF NOT PrintReversedEntries THEN BEGIN
+        CustLedgEntry.GET(DetailedCustLedgEntry."Cust. Ledger Entry No.");
+        IF CustLedgEntry.Reversed THEN
+          EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+    END;
+
+    [External]
+    PROCEDURE InitializeRequest@5(NewPrintEntriesDue@1000 : Boolean;NewPrintAllHavingEntry@1001 : Boolean;NewPrintAllHavingBal@1002 : Boolean;NewPrintReversedEntries@1003 : Boolean;NewPrintUnappliedEntries@1004 : Boolean;NewIncludeAgingBand@1005 : Boolean;NewPeriodLength@1006 : Text[30];NewDateChoice@1007 : 'Due Date,Posting Date';NewLogInteraction@1008 : Boolean;NewStartDate@1009 : Date;NewEndDate@1010 : Date);
+    BEGIN
+      InitRequestPageDataInternal;
+
+      PrintEntriesDue := NewPrintEntriesDue;
+      PrintAllHavingEntry := NewPrintAllHavingEntry;
+      PrintAllHavingBal := NewPrintAllHavingBal;
+      PrintReversedEntries := NewPrintReversedEntries;
+      PrintUnappliedEntries := NewPrintUnappliedEntries;
+      IncludeAgingBand := NewIncludeAgingBand;
+      EVALUATE(PeriodLength,NewPeriodLength);
+      DateChoice := NewDateChoice;
+      LogInteraction := NewLogInteraction;
+      StartDate := NewStartDate;
+      EndDate := NewEndDate;
+    END;
+
+    [External]
+    PROCEDURE InitRequestPageDataInternal@1091();
+    BEGIN
+      IF isInitialized THEN
+        EXIT;
+
+      isInitialized := TRUE;
+
+      IF (NOT PrintAllHavingEntry) AND (NOT PrintAllHavingBal) THEN
+        PrintAllHavingBal := TRUE;
+
+      LogInteraction := SegManagement.FindInteractTmplCode(7) <> '';
+      LogInteractionEnable := LogInteraction;
+
+      IF FORMAT(PeriodLength) = '' THEN
+        EVALUATE(PeriodLength,'<1M+CM>');
+
+      ShowPrintRemaining := (SupportedOutputMethod = SupportedOutputMethod::Email);
+    END;
+
+    LOCAL PROCEDURE VerifyDates@7();
+    BEGIN
+      IF StartDate = 0D THEN
+        ERROR(BlankStartDateErr);
+      IF EndDate = 0D THEN
+        ERROR(BlankEndDateErr);
+      IF StartDate > EndDate THEN
+        ERROR(StartDateLaterTheEndDateErr);
+    END;
+
+    LOCAL PROCEDURE EasyPDFGetReportParameters@14103460() : Text;
+    VAR
+      CustomerRec@1000000000 : Record 18;
+      Parameters@1000000001 : Text;
+      PL@1000000002 : Text;
+    BEGIN
+
+      // EASYPDF.begin
+
+      // Remove leading '-' from PeriodLength
+      PL := FORMAT(PeriodLength,0,9);
+      IF PL <> '' THEN BEGIN
+        IF STRPOS(PL,'-') = 1 THEN
+          PL := COPYSTR(PL, 2);
+        PL := '<' + PL +'>';
+      END;
+
+      Parameters := EasyPDF.NewReportParameters(116);
+      Parameters := EasyPDF.AddReportParameter(Parameters, 0, 'StartDate', FORMAT(StartDate,0,9));
+      Parameters := EasyPDF.AddReportParameter(Parameters, 0, 'EndDate', FORMAT(EndDate,0,9));
+      Parameters := EasyPDF.AddReportParameter(Parameters, 0, 'PrintEntriesDue', FORMAT(PrintEntriesDue,0,9));
+      Parameters := EasyPDF.AddReportParameter(Parameters, 0, 'PrintAllHavingEntry', FORMAT(PrintAllHavingEntry,0,9));
+      Parameters := EasyPDF.AddReportParameter(Parameters, 0, 'PrintAllHavingBal', FORMAT(PrintAllHavingBal,0,9));
+      Parameters := EasyPDF.AddReportParameter(Parameters, 0, 'PrintReversedEntries', FORMAT(PrintReversedEntries,0,9));
+      Parameters := EasyPDF.AddReportParameter(Parameters, 0, 'PrintUnappliedEntries', FORMAT(PrintUnappliedEntries,0,9));
+      Parameters := EasyPDF.AddReportParameter(Parameters, 0, 'IncludeAgingBand', FORMAT(IncludeAgingBand,0,9));
+      Parameters := EasyPDF.AddReportParameter(Parameters, 0, 'PeriodLength', PL);
+      Parameters := EasyPDF.AddReportParameter(Parameters, 0, 'DateChoice', FORMAT(DateChoice,0,9));
+      Parameters := EasyPDF.AddReportParameter(Parameters, 0, 'LogInteraction', FORMAT(LogInteraction,0,9));
+
+      CustomerRec.COPY(Customer);
+      CustomerRec.SETRANGE("No.", Customer."No.");
+      Parameters := EasyPDF.AddReportParameter(Parameters, 1, 'Customer', CustomerRec.GETVIEW);
+
+      EXIT(Parameters);
+      // EASYPDF.end
+    END;
+
+    BEGIN
+    {
+
+      // EASYPDF.begin
+      // This report is a "processing only" version of report 1316 - Standard Statement
+      // This report creates an Easy PDF batch from the customers selected in the report.
+      // If modifications to the selection logic or report parameters are made to report
+      // 1316 then corresponding modifications must be made to this report.
+      // EASYPDF.end
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

@@ -1,0 +1,1600 @@
+OBJECT Codeunit 14103464 EasyPDF Events
+{
+  OBJECT-PROPERTIES
+  {
+    Date=12/14/18;
+    Time=[ 7:54:42 PM];
+    Modified=Yes;
+    Version List=EZP2.34.01,SW00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      BeforePaymentJournalVoidText@1000000000 : TextConst 'ENU=Remittances have been sent to vendors.\You will need to notify vendors of non-payment.\ Continue to Void?';
+      BeforePaymentJournalVoidError@1000000002 : TextConst 'ENU=Void action canceled';
+      BeforePaymentJournalPostText@1000000001 : TextConst 'ENU=Undelivered Easy PDF batch entries exist.\Posting payments before remittance delivery will remove those entries from the Easy PDF batch.\ Continue to Post?';
+      BeforePaymentJournalPostError@1000000003 : TextConst 'ENU=Post action canceled';
+      ErrorNotFoundArgs2@1000000004 : TextConst 'ENU=%1 %2 not found';
+
+    [EventSubscriber(Table,18,OnAfterDeleteEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE AfterCustomerDelete@1000000061(VAR Rec@1000000000 : Record 18;RunTrigger@1000000001 : Boolean);
+    VAR
+      EasyPDFAddressRec@1000000002 : Record 14103464;
+    BEGIN
+      EasyPDFAddressRec.RESET;
+      EasyPDFAddressRec.SETRANGE(OwnerType, EasyPDFAddressRec.OwnerType::Customer);
+      EasyPDFAddressRec.SETRANGE(OwnerNo, Rec."No.");
+      IF EasyPDFAddressRec.FIND('-') THEN
+        EasyPDFAddressRec.DELETEALL;
+    END;
+
+    [EventSubscriber(Table,23,OnAfterDeleteEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE AfterVendorDelete@1000000066(VAR Rec@1000000000 : Record 23;RunTrigger@1000000001 : Boolean);
+    VAR
+      EasyPDFAddressRec@1000000002 : Record 14103464;
+    BEGIN
+      EasyPDFAddressRec.RESET;
+      EasyPDFAddressRec.SETRANGE(OwnerType, EasyPDFAddressRec.OwnerType::Vendor);
+      EasyPDFAddressRec.SETRANGE(OwnerNo, Rec."No.");
+      IF EasyPDFAddressRec.FIND('-') THEN
+        EasyPDFAddressRec.DELETEALL;
+    END;
+
+    [EventSubscriber(Codeunit,80,OnAfterPostSalesDoc,"",Skip,Skip)]
+    LOCAL PROCEDURE AfterPostSalesDoc@2(VAR SalesHeader@1000000000 : Record 36;VAR GenJnlPostLine@1000000001 : Codeunit 12;SalesShptHdrNo@1000000002 : Code[20];RetRcpHdrNo@1000000003 : Code[20];SalesInvHdrNo@1000000004 : Code[20];SalesCrMemoHdrNo@1000000005 : Code[20]);
+    VAR
+      EasyPDFCustomization@1003 : Codeunit 14103460;
+    BEGIN
+      // Note: The signatures for event "Sale-Post":AfterPostSalesDoc differ between NA & W1 (last two NA params are missing in W1)
+      //       Defining this function's signature without the last two NA params allows it to work in both NA & W1
+      IF SalesHeader.Invoice AND (SalesHeader."Document Type" IN [SalesHeader."Document Type"::Order,SalesHeader."Document Type"::Invoice]) THEN
+        EasyPDFCustomization.OnDocumentPosted('POSTED SALES INVOICE', SalesInvHdrNo);
+      IF SalesHeader.Invoice AND (SalesHeader."Document Type" IN [SalesHeader."Document Type"::"Credit Memo",SalesHeader."Document Type"::"Return Order"]) THEN
+        EasyPDFCustomization.OnDocumentPosted('POSTED SALES CREDIT MEMO', SalesCrMemoHdrNo);
+      IF SalesHeader.Ship AND (SalesShptHdrNo <> '') THEN
+        EasyPDFCustomization.OnDocumentPosted('POSTED SALES SHIPMENT', SalesShptHdrNo);
+    END;
+
+    [EventSubscriber(Codeunit,442,OnAfterPostPrepayments,"",Skip,Skip)]
+    LOCAL PROCEDURE AfterPostSalesPrepayments@1000000005(VAR SalesHeader@1000000000 : Record 36;DocumentType@1000000001 : 'Invoice,Credit Memo');
+    VAR
+      EasyPDFCustomization@1000000004 : Codeunit 14103460;
+      SalesInvoiceHeader@1000000002 : Record 112;
+      SalesCreditMemoHeader@1000000003 : Record 114;
+    BEGIN
+      IF DocumentType = DocumentType::Invoice THEN
+      BEGIN
+        SalesInvoiceHeader.RESET;
+        SalesInvoiceHeader.SETRANGE("Prepayment Order No.", SalesHeader."No.");
+        SalesInvoiceHeader.SETRANGE("Prepayment Invoice", TRUE);
+        IF SalesInvoiceHeader.FINDFIRST THEN
+          EasyPDFCustomization.OnDocumentPosted('POSTED SALES INVOICE', SalesInvoiceHeader."No.");
+      END;
+
+      IF DocumentType = DocumentType::"Credit Memo" THEN
+      BEGIN
+        SalesCreditMemoHeader.RESET;
+        SalesCreditMemoHeader.SETRANGE("Prepayment Order No.", SalesHeader."No.");
+        SalesCreditMemoHeader.SETRANGE("Prepayment Credit Memo", TRUE);
+        IF SalesCreditMemoHeader.FINDFIRST THEN
+          EasyPDFCustomization.OnDocumentPosted('POSTED SALES CREDIT MEMO', SalesCreditMemoHeader."No.");
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,90,OnAfterPostPurchaseDoc,"",Skip,Skip)]
+    LOCAL PROCEDURE AfterPostPurchaseDoc@1000000001(VAR PurchaseHeader@1000000000 : Record 38;VAR GenJnlPostLine@1000000001 : Codeunit 12;PurchRcpHdrNo@1000000002 : Code[20];RetShptHdrNo@1000000003 : Code[20];PurchInvHdrNo@1000000004 : Code[20];PurchCrMemoHdrNo@1000000005 : Code[20]);
+    VAR
+      EasyPDFCustomization@1000000006 : Codeunit 14103460;
+    BEGIN
+      IF (PurchaseHeader.Invoice AND (PurchaseHeader."Document Type" = PurchaseHeader."Document Type"::Invoice)) THEN
+        EasyPDFCustomization.OnDocumentPosted('POSTED PURCHASE INVOICE', PurchInvHdrNo);
+    END;
+
+    [EventSubscriber(Codeunit,5988,OnBeforeFinalizeInvoiceDocument,"",Skip,Skip)]
+    LOCAL PROCEDURE AfterFinalizeServiceInvoice@1000000134(VAR ServiceInvoiceHeader@1000000000 : Record 5992);
+    VAR
+      EasyPDFCustomization@1000000001 : Codeunit 14103460;
+    BEGIN
+      IF ServiceInvoiceHeader."No." <> '' THEN
+        EasyPDFCustomization.OnDocumentPosted('POSTED SERVICE INVOICE', ServiceInvoiceHeader."No.");
+    END;
+
+    [EventSubscriber(Codeunit,5988,OnBeforeFinalizeCrMemoDocument,"",Skip,Skip)]
+    LOCAL PROCEDURE AfterFinalizeServiceCreditMemo@1000000133(VAR ServiceCrMemoHeader@1000000000 : Record 5994);
+    VAR
+      EasyPDFCustomization@1000000001 : Codeunit 14103460;
+    BEGIN
+      IF ServiceCrMemoHeader."No." <> '' THEN
+        EasyPDFCustomization.OnDocumentPosted('POSTED SERVICE CREDIT MEMO', ServiceCrMemoHeader."No.");
+    END;
+
+    [EventSubscriber(Codeunit,5988,OnBeforeFinalizeShipmentDocument,"",Skip,Skip)]
+    LOCAL PROCEDURE AfterFinalizeServiceShipment@1000000135(VAR ServiceShipmentHeader@1000000000 : Record 5990);
+    VAR
+      EasyPDFCustomization@1000000001 : Codeunit 14103460;
+    BEGIN
+      IF ServiceShipmentHeader."No." <> '' THEN
+        EasyPDFCustomization.OnDocumentPosted('POSTED SERVICE SHIPMENT', ServiceShipmentHeader."No.");
+    END;
+
+    [EventSubscriber(Table,295,OnAfterDeleteEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE AfterIssueReminder@1000000002(VAR Rec@1000000000 : Record 295;RunTrigger@1000000001 : Boolean);
+    VAR
+      IssuedReminderHeader@1000000002 : Record 297;
+      EasyPDFCustomization@1000000003 : Codeunit 14103460;
+    BEGIN
+      IssuedReminderHeader.RESET;
+      IssuedReminderHeader.SETRANGE("Pre-Assigned No.", Rec."No.");
+      IF IssuedReminderHeader.FINDFIRST THEN
+        EasyPDFCustomization.OnDocumentPosted('ISSUED REMINDER', IssuedReminderHeader."No.");
+    END;
+
+    [EventSubscriber(Table,302,OnAfterDeleteEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE AfterIssueFinanceChargeMemo@1000000003(VAR Rec@1000000000 : Record 302;RunTrigger@1000000001 : Boolean);
+    VAR
+      IssuedFinChrgMemoHeader@1000000002 : Record 304;
+      EasyPDFCustomization@1000000003 : Codeunit 14103460;
+    BEGIN
+      IssuedFinChrgMemoHeader.RESET;
+      IssuedFinChrgMemoHeader.SETRANGE("Pre-Assigned No.", Rec."No.");
+      IF IssuedFinChrgMemoHeader.FINDFIRST THEN
+        EasyPDFCustomization.OnDocumentPosted('ISSUED FINANCE CHARGE MEMO', IssuedFinChrgMemoHeader."No.");
+    END;
+
+    [EventSubscriber(Page,256,OnAfterActionEvent,ExportPaymentsToFile,Skip,Skip)]
+    LOCAL PROCEDURE AfterPaymentJournalExport@1000000004(VAR Rec@1000000000 : Record 81);
+    VAR
+      EasyPDFQueue@1000000001 : Record 14103463;
+      EasyPDFCustomization@1000000002 : Codeunit 14103460;
+    BEGIN
+      // Show the batch queue if REMITTANCE entries exist
+      EasyPDFQueue.RESET;
+      EasyPDFQueue.SETRANGE(Processed, FALSE);
+      EasyPDFQueue.SETRANGE(BatchId, EasyPDFCustomization.GenerateBatchId('REMITTANCE ADVICE'));
+      IF EasyPDFQueue.FINDFIRST THEN
+        PAGE.RUN(PAGE::"EasyPDF Batch Queues", EasyPDFQueue);
+    END;
+
+    [EventSubscriber(Page,256,OnBeforeActionEvent,VoidPayments,Skip,Skip)]
+    LOCAL PROCEDURE BeforePaymentJournalVoid@1000000007(VAR Rec@1000000000 : Record 81);
+    VAR
+      GenJnlLine@1000000001 : Record 81;
+      EasyPDFPrimaryKey@1000000003 : Text;
+      EasyPDFQueue@1000000002 : Record 14103463;
+    BEGIN
+      // Check for lines where a remittance has been delivered - if any exist confirm void
+      GenJnlLine.RESET;
+      GenJnlLine := Rec;
+      GenJnlLine.SETRANGE("Journal Template Name",Rec."Journal Template Name");
+      GenJnlLine.SETRANGE("Journal Batch Name",Rec."Journal Batch Name");
+      GenJnlLine.SETRANGE("Index Entry",TRUE);  // Easy PDF uses this field to indicate remittance
+      IF GenJnlLine.FIND('-') THEN
+        IF NOT CONFIRM(BeforePaymentJournalVoidText) THEN
+          ERROR(BeforePaymentJournalVoidError);
+
+      // Remove undelivered entries from the Easy PDF remittance batch
+      GenJnlLine.RESET;
+      GenJnlLine := Rec;
+      GenJnlLine.SETRANGE("Journal Template Name",Rec."Journal Template Name");
+      GenJnlLine.SETRANGE("Journal Batch Name",Rec."Journal Batch Name");
+      IF GenJnlLine.FIND('-') THEN
+        REPEAT
+          EasyPDFPrimaryKey := GenJnlLine."Journal Template Name" + ',' + GenJnlLine."Journal Batch Name" + ',' + FORMAT(GenJnlLine."Line No.");
+          EasyPDFQueue.RESET;
+          EasyPDFQueue.SETRANGE(PrimaryKey, EasyPDFPrimaryKey);
+          EasyPDFQueue.SETRANGE(Processed, FALSE);
+          EasyPDFQueue.DELETEALL(TRUE);
+        UNTIL GenJnlLine.NEXT = 0;
+
+      COMMIT;
+    END;
+
+    [EventSubscriber(Page,256,OnBeforeActionEvent,Post,Skip,Skip)]
+    LOCAL PROCEDURE BeforePaymentJournalPost@1000000010(VAR Rec@1000000000 : Record 81);
+    VAR
+      GenJnlLine@1000000004 : Record 81;
+      PrimaryKey@1000000003 : Text;
+      EasyPDFQueue@1000000002 : Record 14103463;
+      Confirmed@1000000001 : Boolean;
+    BEGIN
+      // If Easy PDF batch queue entries exist confirm batch delete
+      Confirmed := FALSE;
+      GenJnlLine.RESET;
+      GenJnlLine := Rec;
+      GenJnlLine.SETRANGE("Journal Template Name",Rec."Journal Template Name");
+      GenJnlLine.SETRANGE("Journal Batch Name",Rec."Journal Batch Name");
+      IF GenJnlLine.FIND('-') THEN
+        REPEAT
+          PrimaryKey := GenJnlLine."Journal Template Name" + ',' + GenJnlLine."Journal Batch Name" + ',' + FORMAT(GenJnlLine."Line No.");
+          EasyPDFQueue.RESET;
+          EasyPDFQueue.SETRANGE(PrimaryKey, PrimaryKey);
+          EasyPDFQueue.SETRANGE(Processed, FALSE);
+          IF EasyPDFQueue.FIND('-') THEN
+          BEGIN
+            IF NOT Confirmed THEN
+              IF NOT CONFIRM(BeforePaymentJournalPostText) THEN
+                ERROR(BeforePaymentJournalPostError);
+            Confirmed := TRUE;
+            EasyPDFQueue.DELETE(TRUE);
+          END;
+        UNTIL GenJnlLine.NEXT = 0;
+
+      COMMIT;
+    END;
+
+    [EventSubscriber(Table,272,OnAfterInsertEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE AfterInsertCheckLedgerEntry@1000000006(VAR Rec@1000000000 : Record 272;RunTrigger@1000000001 : Boolean);
+    VAR
+      GenJournalLine@1000000002 : Record 81;
+    BEGIN
+      // If the check is for an exported payment then send notification
+      IF (Rec."Bank Payment Type" = Rec."Bank Payment Type"::"Electronic Payment") AND
+         (Rec."Entry Status" = Rec."Entry Status"::Exported) THEN
+      BEGIN
+        GenJournalLine.RESET;
+        GenJournalLine.SETRANGE("Document Type", Rec."Document Type");
+        GenJournalLine.SETRANGE("Document No.", Rec."Document No.");
+        IF GenJournalLine.FINDFIRST THEN
+          AfterExportPayment(GenJournalLine);
+      END;
+    END;
+
+    LOCAL PROCEDURE AfterExportPayment@1000000011(VAR Rec@1000000000 : Record 81);
+    VAR
+      GenJournalLineRec@1000000002 : Record 81;
+      ReportParameters@1000000003 : Text;
+      EasyPDF@1000000004 : Codeunit 37062300;
+      EasyPDFCustomization@1000000006 : Codeunit 14103460;
+      EasyPDFDocument@1000000007 : Record 14103461;
+      PrimaryKey@1000000001 : Text;
+      BankAccountNo@1000000005 : Code[20];
+    BEGIN
+      EasyPDF.GetDocumentSetup(EasyPDFDocument, 'REMITTANCE ADVICE');
+      IF NOT EasyPDFDocument.BatchOnPost THEN
+        EXIT;
+
+      PrimaryKey :=
+        Rec."Journal Template Name" + ',' +
+        Rec."Journal Batch Name" + ',' +
+        FORMAT(Rec."Line No.");
+
+      IF Rec."Account Type" = Rec."Account Type"::"Bank Account" THEN
+        BankAccountNo := Rec."Account No.";
+      IF Rec."Bal. Account Type" = Rec."Bal. Account Type"::"Bank Account" THEN
+        BankAccountNo := Rec."Bal. Account No.";
+
+      GenJournalLineRec.COPY(Rec);
+      GenJournalLineRec.SETRANGE("Journal Template Name", GenJournalLineRec."Journal Template Name");
+      GenJournalLineRec.SETRANGE("Journal Batch Name", GenJournalLineRec."Journal Batch Name");
+      GenJournalLineRec.SETRANGE("Line No.", GenJournalLineRec."Line No.");
+      ReportParameters := EasyPDF.NewReportParameters(REPORT::"Print Electronic Payments");
+      ReportParameters := EasyPDF.AddReportParameter(ReportParameters, 0, 'EasyPDFInvoked', 'true');
+      ReportParameters := EasyPDF.AddReportParameter(ReportParameters, 0, 'EasyPDFBankAccountNo', BankAccountNo);
+      ReportParameters := EasyPDF.AddReportParameter(ReportParameters, 1, 'Gen. Journal Line', GenJournalLineRec.GETVIEW);
+
+      EasyPDF.QueueBatchEx(
+        'REMITTANCE ADVICE',
+        FORMAT(Rec."Line No."),
+        PrimaryKey,
+        EasyPDFCustomization.GenerateBatchId('REMITTANCE ADVICE'),
+        ReportParameters);
+    END;
+
+    [EventSubscriber(Page,21,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE CustomerCardSendByEmail@1000000017(VAR Rec@1000000000 : Record 18);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('CUSTOMER STATEMENT', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,21,OnAfterActionEvent,Action14103465,Skip,Skip)]
+    LOCAL PROCEDURE CustomerCardSendByEmailPrint@1000000088(VAR Rec@1000000000 : Record 18);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('CUSTOMER STATEMENT', Rec."No.");
+      EasyPDF.SendByHardcopy('CUSTOMER STATEMENT', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,21,OnAfterActionEvent,Action14103466,Skip,Skip)]
+    LOCAL PROCEDURE CustomerCardSendByFax@1000000022(VAR Rec@1000000000 : Record 18);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByFax('CUSTOMER STATEMENT', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,21,OnAfterActionEvent,Action14103467,Skip,Skip)]
+    LOCAL PROCEDURE CustomerCardSendByPreferredMethod@1000000023(VAR Rec@1000000000 : Record 18);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByPreferredMethod('CUSTOMER STATEMENT', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,22,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE CustomerListSendByEmail@1000000049(VAR Rec@1000000000 : Record 18);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('CUSTOMER STATEMENT', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,22,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE CustomerListSendByEmailPrint@1000000093(VAR Rec@1000000000 : Record 18);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('CUSTOMER STATEMENT', Rec."No.");
+      EasyPDF.SendByHardcopy('CUSTOMER STATEMENT', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,22,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE CustomerListSendByFax@1000000050(VAR Rec@1000000000 : Record 18);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByFax('CUSTOMER STATEMENT', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,22,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE CustomerListSendByPreferredMethod@1000000055(VAR Rec@1000000000 : Record 18);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByPreferredMethod('CUSTOMER STATEMENT', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,22,OnAfterActionEvent,Action14103465,Skip,Skip)]
+    LOCAL PROCEDURE CustomerListBatchCustomerStatement@1000000060(VAR Rec@1000000000 : Record 18);
+    VAR
+      EasyPDF@1000000006 : Codeunit 37062300;
+      EasyPDFCustomization@1000000005 : Codeunit 14103460;
+      EasyPDFQueue@1000000004 : Record 14103463;
+      EasyPDFBatchReportId@1000000003 : Integer;
+      EasyPDFDocument@1000000002 : Record 14103461;
+      EasyPDFObject@1000000001 : Record 2000000001;
+      EasyPDFParameters@1000000007 : Text;
+      EASYPDFERR01@1000000009 : TextConst 'ENU=Report not found (%1)';
+      EASYPDFERR02@1000000008 : TextConst 'ENU=Easy PDF Setup for Customer Statement batch generation does not match this report (%1)';
+    BEGIN
+      // Check Setup to make sure this is the correct report
+      EasyPDF.GetDocumentSetup(EasyPDFDocument, 'CUSTOMER STATEMENT');
+
+      // To ensure that there is not a mismatch between the batch generation report and the printed report
+      // we require that the name of the batch generation report contains the ID of the printed report.
+
+      EasyPDFBatchReportId := EasyPDFDocument.BatchGenerationReportId;
+      IF NOT EasyPDFObject.GET(EasyPDFObject.Type::Report, '', EasyPDFBatchReportId) THEN
+        ERROR(EASYPDFERR01, EasyPDFBatchReportId);
+      IF STRPOS(EasyPDFObject.Name, FORMAT(EasyPDFDocument."Report ID")) = 0 THEN
+        ERROR(EASYPDFERR02, EasyPDFDocument."Report ID");
+
+      // Run the request page for the report and collect parameters
+      EasyPDFParameters := REPORT.RUNREQUESTPAGE(EasyPDFBatchReportId);
+      IF EasyPDFParameters = '' THEN
+        EXIT;
+
+      // Execute the report - with invocation by EasyPDF for batch generation
+      EasyPDFParameters := EasyPDF.SetReportParameter(EasyPDFParameters, 'EasyPDFBatchGeneration', 'true');
+      REPORT.EXECUTE(EasyPDFBatchReportId, EasyPDFParameters);
+
+      // Show the batch queue if batch entries exist
+      EasyPDFQueue.RESET;
+      EasyPDFQueue.SETRANGE(Processed, FALSE);
+      EasyPDFQueue.SETRANGE(BatchId, EasyPDFCustomization.GenerateBatchId('CUSTOMER STATEMENT'));
+      IF EasyPDFQueue.COUNT > 0 THEN
+        PAGE.RUN(PAGE::"EasyPDF Batch Queues", EasyPDFQueue);
+    END;
+
+    [EventSubscriber(Page,25,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE CustomerLedgerEntrySendByEmail@1000000016(VAR Rec@1000000000 : Record 21);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      IF CustomerLedgerEntryDocType(Rec) = '' THEN
+        ERROR(ErrorNotFoundArgs2, FORMAT(Rec."Document Type"), Rec."Document No.");
+      EasyPDF.SendByEmail(CustomerLedgerEntryDocType(Rec), Rec."Document No.");
+    END;
+
+    [EventSubscriber(Page,25,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE CustomerLedgerEntrySendByEmailPrint@1000000094(VAR Rec@1000000000 : Record 21);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      IF CustomerLedgerEntryDocType(Rec) = '' THEN
+        ERROR(ErrorNotFoundArgs2, FORMAT(Rec."Document Type"), Rec."Document No.");
+      EasyPDF.SendByEmail(CustomerLedgerEntryDocType(Rec), Rec."Document No.");
+      EasyPDF.SendByHardcopy(CustomerLedgerEntryDocType(Rec), Rec."Document No.");
+    END;
+
+    [EventSubscriber(Page,25,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE CustomerLedgerEntrySendByFax@1000000024(VAR Rec@1000000000 : Record 21);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      IF CustomerLedgerEntryDocType(Rec) = '' THEN
+        ERROR(ErrorNotFoundArgs2, FORMAT(Rec."Document Type"), Rec."Document No.");
+      EasyPDF.SendByFax(CustomerLedgerEntryDocType(Rec), Rec."Document No.");
+    END;
+
+    [EventSubscriber(Page,25,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE CustomerLedgerEntrySendByPreferredMethod@1000000025(VAR Rec@1000000000 : Record 21);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      IF CustomerLedgerEntryDocType(Rec) = '' THEN
+        ERROR(ErrorNotFoundArgs2, FORMAT(Rec."Document Type"), Rec."Document No.");
+      EasyPDF.SendByPreferredMethod(CustomerLedgerEntryDocType(Rec), Rec."Document No.");
+    END;
+
+    [EventSubscriber(Page,25,OnAfterActionEvent,Action14103465,Skip,Skip)]
+    LOCAL PROCEDURE CustomerLedgerEntrySendSelectedToBatch@1000000026(VAR Rec@1000000000 : Record 21);
+    VAR
+      LedgerEntry@1000000004 : Record 21;
+      BatchId@1000000003 : Text[80];
+      Count@1000000002 : Integer;
+      EasyPDFQueue@1000000001 : Record 14103463;
+      EasyPDFCustomization@1000000005 : Codeunit 14103460;
+      EasyPDF@1000000006 : Codeunit 37062300;
+    BEGIN
+      // TODO: It is not currently possible to identify selected entries in an event subscriber
+      // The code below is not invoked but is included here to use when the functionality is added to NAV
+      EXIT;
+
+      Count := 0;
+      // CurrPage.SETSELECTIONFILTER(LedgerEntry);
+      IF LedgerEntry.FIND('-') THEN
+      BEGIN
+
+        BatchId := EasyPDFCustomization.GenerateBatchId('CUSTOMER LEDGER ENTRIES');
+        REPEAT
+          IF CustomerLedgerEntryDocType(LedgerEntry) <> '' THEN
+          BEGIN
+            EasyPDF.QueueBatch(CustomerLedgerEntryDocType(LedgerEntry), LedgerEntry."Document No.", BatchId);
+            Count += 1;
+          END;
+        UNTIL LedgerEntry.NEXT = 0;
+
+        IF Count > 0 THEN
+        BEGIN
+          EasyPDFQueue.RESET;
+          EasyPDFQueue.SETRANGE(BatchId, BatchId);
+          PAGE.RUN(PAGE::"EasyPDF Batch Queues", EasyPDFQueue);
+        END;
+
+      END;
+    END;
+
+    [EventSubscriber(Page,29,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE VendorLedgerEntrySendByEmail@1000000031(VAR Rec@1000000000 : Record 25);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+      EasyPDFCustomization@1000000002 : Codeunit 14103460;
+    BEGIN
+      IF VendorLedgerEntryDocType(Rec) = '' THEN
+        ERROR(ErrorNotFoundArgs2, FORMAT(Rec."Document Type"), Rec."Document No.");
+      EasyPDF.SetPrimaryKey(FORMAT(Rec."Entry No."));
+      EasyPDF.SendByEmail(VendorLedgerEntryDocType(Rec), Rec."Document No.");
+    END;
+
+    [EventSubscriber(Page,29,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE VendorLedgerEntrySendByEmailPrint@1000000083(VAR Rec@1000000000 : Record 25);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+      EasyPDFCustomization@1000000002 : Codeunit 14103460;
+    BEGIN
+      IF VendorLedgerEntryDocType(Rec) = '' THEN
+        ERROR(ErrorNotFoundArgs2, FORMAT(Rec."Document Type"), Rec."Document No.");
+      EasyPDF.SetPrimaryKey(FORMAT(Rec."Entry No."));
+      EasyPDF.SendByEmail(VendorLedgerEntryDocType(Rec), Rec."Document No.");
+      EasyPDF.SendByHardcopy(VendorLedgerEntryDocType(Rec), Rec."Document No.");
+    END;
+
+    [EventSubscriber(Page,29,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE VendorLedgerEntrySendByFax@1000000030(VAR Rec@1000000000 : Record 25);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      IF VendorLedgerEntryDocType(Rec) = '' THEN
+        ERROR(ErrorNotFoundArgs2, FORMAT(Rec."Document Type"), Rec."Document No.");
+      EasyPDF.SetPrimaryKey(FORMAT(Rec."Entry No."));
+      EasyPDF.SendByFax(VendorLedgerEntryDocType(Rec), Rec."Document No.");
+    END;
+
+    [EventSubscriber(Page,29,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE VendorLedgerEntrySendByPreferredMethod@1000000029(VAR Rec@1000000000 : Record 25);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      IF VendorLedgerEntryDocType(Rec) = '' THEN
+        ERROR(ErrorNotFoundArgs2, FORMAT(Rec."Document Type"), Rec."Document No.");
+      EasyPDF.SetPrimaryKey(FORMAT(Rec."Entry No."));
+      EasyPDF.SendByPreferredMethod(VendorLedgerEntryDocType(Rec), Rec."Document No.");
+    END;
+
+    [EventSubscriber(Page,29,OnAfterActionEvent,Action14103465,Skip,Skip)]
+    LOCAL PROCEDURE VendorLedgerEntrySendSelectedToBatch@1000000028(VAR Rec@1000000000 : Record 25);
+    VAR
+      EasyPDFQueue@1000000001 : Record 14103463;
+      EasyPDFCustomization@1000000005 : Codeunit 14103460;
+      EasyPDF@1000000006 : Codeunit 37062300;
+      LedgerEntry@1000000004 : Record 25;
+      BatchId@1000000003 : Text[80];
+      Count@1000000002 : Integer;
+    BEGIN
+      // TODO: It is not currently possible to identify selected entries in an event subscriber
+      // The code below is not invoked but is included here to use when the functionality is added to NAV
+      EXIT;
+
+      Count := 0;
+      //CurrPage.SETSELECTIONFILTER(LedgerEntry);
+      IF LedgerEntry.FIND('-') THEN
+      BEGIN
+
+        BatchId := EasyPDFCustomization.GenerateBatchId('VENDOR LEDGER ENTRIES');
+        REPEAT
+          BEGIN
+            CASE LedgerEntry."Document Type" OF
+              LedgerEntry."Document Type"::Invoice:
+                BEGIN
+                  EasyPDF.QueueBatch('POSTED PURCHASE INVOICE', LedgerEntry."Document No.", BatchId);
+                  Count += 1;
+                END;
+              LedgerEntry."Document Type"::Payment:
+                BEGIN
+                  EasyPDF.QueueBatchEx('VENDOR PAYMENT RECEIPT', LedgerEntry."Document No.", FORMAT(LedgerEntry."Entry No."), BatchId, '');
+                  Count += 1;
+                END;
+            END;
+          END;
+        UNTIL LedgerEntry.NEXT = 0;
+
+        IF Count > 0 THEN
+        BEGIN
+          EasyPDFQueue.RESET;
+          EasyPDFQueue.SETRANGE(BatchId, BatchId);
+          PAGE.RUN(PAGE::"EasyPDF Batch Queues", EasyPDFQueue);
+        END;
+
+      END;
+    END;
+
+    [EventSubscriber(Page,41,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE SalesQuoteSendByEmail@1000000021(VAR Rec@1000000000 : Record 36);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('SALES QUOTE', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,41,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE SalesQuoteSendByEmailPrint@1000000018(VAR Rec@1000000000 : Record 36);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+      DocPrint@1000000002 : Codeunit 229;
+      Usage@1000000003 : 'Order Confirmation,Work Order,Pick Instruction';
+    BEGIN
+      EasyPDF.SendByEmail('SALES QUOTE', Rec."No.");
+      COMMIT;
+      DocPrint.PrintSalesHeader(Rec);
+    END;
+
+    [EventSubscriber(Page,41,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE SalesQuoteSendByFax@1000000020(VAR Rec@1000000000 : Record 36);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByFax('SALES QUOTE', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,41,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE SalesQuoteSendByPreferredMethod@1000000019(VAR Rec@1000000000 : Record 36);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByPreferredMethod('SALES QUOTE', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,42,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE SalesOrderSendByEmail@1000000012(VAR Rec@1000000000 : Record 36);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('SALES ORDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,42,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE SalesOrderSendByEmailPrint@1000000015(VAR Rec@1000000000 : Record 36);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+      DocPrint@1000000002 : Codeunit 229;
+      Usage@1000000003 : 'Order Confirmation,Work Order,Pick Instruction';
+    BEGIN
+      EasyPDF.SendByEmail('SALES ORDER', Rec."No.");
+      COMMIT;
+      DocPrint.PrintSalesOrder(Rec,Usage::"Order Confirmation");
+    END;
+
+    [EventSubscriber(Page,42,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE SalesOrderSendByFax@1000000013(VAR Rec@1000000000 : Record 36);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByFax('SALES ORDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,42,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE SalesOrderSendByPreferredMethod@1000000014(VAR Rec@1000000000 : Record 36);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByPreferredMethod('SALES ORDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,9305,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE SalesOrderListSendByEmail@1000000115(VAR Rec@1000000000 : Record 36);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('SALES ORDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,9305,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE SalesOrderListSendByEmailPrint@1000000114(VAR Rec@1000000000 : Record 36);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('SALES ORDER', Rec."No.");
+      EasyPDF.SendByHardcopy('SALES ORDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,9305,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE SalesOrderListSendByFax@1000000109(VAR Rec@1000000000 : Record 36);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByFax('SALES ORDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,9305,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE SalesOrderListSendByPreferredMethod@1000000104(VAR Rec@1000000000 : Record 36);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByPreferredMethod('SALES ORDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,9305,OnAfterActionEvent,Action14103465,Skip,Skip)]
+    LOCAL PROCEDURE SalesOrderListSendSelectedToBatch@1000000099(VAR Rec@1000000000 : Record 36);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+      EasyPDFQueue@1000000003 : Record 14103463;
+      EasyPDFCustomization@1000000002 : Codeunit 14103460;
+      SalesHeader@1000000007 : Record 36;
+      BatchId@1000000006 : Text[80];
+      Count@1000000005 : Integer;
+    BEGIN
+      // TODO: It is not currently possible to identify selected entries in an event subscriber
+      // The code below is not invoked but is included here to use when the functionality is added to NAV
+      EXIT;
+
+      Count := 0;
+      // CurrPage.SETSELECTIONFILTER(SalesHeader);
+      IF SalesHeader.FIND('-') THEN
+      BEGIN
+
+        BatchId := EasyPDFCustomization.GenerateBatchId('SALES ORDER');
+        REPEAT
+          EasyPDF.QueueBatch('SALES ORDER', SalesHeader."No.", BatchId);
+          Count += 1;
+        UNTIL SalesHeader.NEXT = 0;
+
+        IF Count > 0 THEN
+        BEGIN
+          EasyPDFQueue.RESET;
+          EasyPDFQueue.SETRANGE(BatchId, BatchId);
+          PAGE.RUN(PAGE::"EasyPDF Batch Queues", EasyPDFQueue);
+        END;
+
+      END;
+    END;
+
+    [EventSubscriber(Page,49,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE PurchaseQuoteSendByEmail@1000000036(VAR Rec@1000000000 : Record 38);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('PURCHASE QUOTE', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,49,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE PurchaseQuoteSendByEmailPrint@1000000033(VAR Rec@1000000000 : Record 38);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+      DocPrint@1000000002 : Codeunit 229;
+    BEGIN
+      EasyPDF.SendByEmail('PURCHASE QUOTE', Rec."No.");
+      COMMIT;
+      DocPrint.PrintPurchHeader(Rec);
+    END;
+
+    [EventSubscriber(Page,49,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE PurchaseQuoteSendByFax@1000000035(VAR Rec@1000000000 : Record 38);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByFax('PURCHASE QUOTE', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,49,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE PurchaseQuoteSendByPreferredMethod@1000000034(VAR Rec@1000000000 : Record 38);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByPreferredMethod('PURCHASE QUOTE', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,50,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE PurchaseOrderSendByEmail@1000000042(VAR Rec@1000000000 : Record 38);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('PURCHASE ORDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,50,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE PurchaseOrderSendByEmailPrint@1000000039(VAR Rec@1000000000 : Record 38);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+      PurchaseHeader@1000000002 : Record 38;
+    BEGIN
+      EasyPDF.SendByEmail('PURCHASE ORDER', Rec."No.");
+      COMMIT;
+      PurchaseHeader := Rec;
+      PurchaseHeader.SETRANGE("Document Type", PurchaseHeader."Document Type"::Order);
+      PurchaseHeader.SETRANGE("No.", PurchaseHeader."No.");
+      PurchaseHeader.PrintRecords(TRUE);
+    END;
+
+    [EventSubscriber(Page,50,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE PurchaseOrderSendByFax@1000000041(VAR Rec@1000000000 : Record 38);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByFax('PURCHASE ORDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,50,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE PurchaseOrderSendByPreferredMethod@1000000040(VAR Rec@1000000000 : Record 38);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByPreferredMethod('PURCHASE ORDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,9307,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE PurchaseOrderListSendByEmail@1000000129(VAR Rec@1000000000 : Record 38);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('PURCHASE ORDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,9307,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE PurchaseOrderListSendByEmailPrint@1000000009(VAR Rec@1000000000 : Record 38);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('PURCHASE ORDER', Rec."No.");
+      EasyPDF.SendByHardcopy('PURCHASE ORDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,9307,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE PurchaseOrderListSendByFax@1000000128(VAR Rec@1000000000 : Record 38);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByFax('PURCHASE ORDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,9307,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE PurchaseOrderListSendByPreferredMethod@1000000127(VAR Rec@1000000000 : Record 38);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByPreferredMethod('PURCHASE ORDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,9307,OnAfterActionEvent,Action14103465,Skip,Skip)]
+    LOCAL PROCEDURE PurchaseOrderListSendSelectedToBatch@1000000126(VAR Rec@1000000000 : Record 38);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+      EasyPDFQueue@1000000003 : Record 14103463;
+      EasyPDFCustomization@1000000002 : Codeunit 14103460;
+      PurchaseHeader@1000000007 : Record 38;
+      BatchId@1000000006 : Text[80];
+      Count@1000000005 : Integer;
+    BEGIN
+      // TODO: It is not currently possible to identify selected entries in an event subscriber
+      // The code below is not invoked but is included here to use when the functionality is added to NAV
+      EXIT;
+
+      Count := 0;
+      // CurrPage.SETSELECTIONFILTER(PurchaseHeader);
+      IF PurchaseHeader.FIND('-') THEN
+      BEGIN
+
+        BatchId := EasyPDFCustomization.GenerateBatchId('PURCHASE ORDER');
+        REPEAT
+          EasyPDF.QueueBatch('PURCHASE ORDER', PurchaseHeader."No.", BatchId);
+          Count += 1;
+        UNTIL PurchaseHeader.NEXT = 0;
+
+        IF Count > 0 THEN
+        BEGIN
+          EasyPDFQueue.RESET;
+          EasyPDFQueue.SETRANGE(BatchId, BatchId);
+          PAGE.RUN(PAGE::"EasyPDF Batch Queues", EasyPDFQueue);
+        END;
+
+      END;
+    END;
+
+    [EventSubscriber(Page,130,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE PostedSalesShipmentSendByEmail@1000000046(VAR Rec@1000000000 : Record 110);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('POSTED SALES SHIPMENT', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,130,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE PostedSalesShipmentSendByEmailPrint@1000000043(VAR Rec@1000000000 : Record 110);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+      SalesShptHeader@1000000002 : Record 110;
+    BEGIN
+      EasyPDF.SendByEmail('POSTED SALES SHIPMENT', Rec."No.");
+      COMMIT;
+      SalesShptHeader := Rec;
+      SalesShptHeader.SETRANGE("No.", Rec."No.");
+      SalesShptHeader.PrintRecords(TRUE);
+    END;
+
+    [EventSubscriber(Page,130,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE PostedSalesShipmentSendByFax@1000000045(VAR Rec@1000000000 : Record 110);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByFax('POSTED SALES SHIPMENT', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,130,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE PostedSalesShipmentSendByPreferredMethod@1000000044(VAR Rec@1000000000 : Record 110);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByPreferredMethod('POSTED SALES SHIPMENT', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,132,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE PostedSalesInvoiceSendByEmail@1000000048(VAR Rec@1000000000 : Record 112);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('POSTED SALES INVOICE', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,132,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE PostedSalesInvoiceSendByEmailPrint@1000000037(VAR Rec@1000000000 : Record 112);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+      SalesInvHeader@1000000002 : Record 112;
+    BEGIN
+      EasyPDF.SendByEmail('POSTED SALES INVOICE', Rec."No.");
+      COMMIT;
+      SalesInvHeader := Rec;
+      SalesInvHeader.SETRANGE("No.", Rec."No.");
+      SalesInvHeader.PrintRecords(TRUE);
+    END;
+
+    [EventSubscriber(Page,132,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE PostedSalesInvoiceSendByFax@1000000047(VAR Rec@1000000000 : Record 112);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByFax('POSTED SALES INVOICE', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,132,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE PostedSalesInvoiceSendByPreferredMethod@1000000038(VAR Rec@1000000000 : Record 112);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByPreferredMethod('POSTED SALES INVOICE', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,143,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE PostedSalesInviocesSendByEmail@1000000067(VAR Rec@1000000000 : Record 112);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('POSTED SALES INVOICE', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,143,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE PostedSalesInviocesSendByEmailPrint@1000000008(VAR Rec@1000000000 : Record 112);
+    BEGIN
+    END;
+
+    [EventSubscriber(Page,143,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE PostedSalesInviocesSendByFax@1000000072(VAR Rec@1000000000 : Record 112);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByFax('POSTED SALES INVOICE', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,143,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE PostedSalesInviocesSendByPreferredMethod@1000000077(VAR Rec@1000000000 : Record 112);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByPreferredMethod('POSTED SALES INVOICE', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,134,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE PostedSalesCreditMemoSendByEmail@1000000054(VAR Rec@1000000000 : Record 114);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('POSTED SALES CREDIT MEMO', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,134,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE PostedSalesCreditMemoSendByEmailPrint@1000000051(VAR Rec@1000000000 : Record 114);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+      SalesCrMemoHeader@1000000002 : Record 114;
+    BEGIN
+      EasyPDF.SendByEmail('POSTED SALES CREDIT MEMO', Rec."No.");
+      COMMIT;
+      SalesCrMemoHeader := Rec;
+      SalesCrMemoHeader.SETRANGE("No.", Rec."No.");
+      SalesCrMemoHeader.PrintRecords(TRUE);
+    END;
+
+    [EventSubscriber(Page,134,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE PostedSalesCreditMemoSendByFax@1000000053(VAR Rec@1000000000 : Record 114);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByFax('POSTED SALES CREDIT MEMO', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,134,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE PostedSalesCreditMemoSendByPreferredMethod@1000000052(VAR Rec@1000000000 : Record 114);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByPreferredMethod('POSTED SALES CREDIT MEMO', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,144,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE PostedSalesCreditMemoListSendByEmail@1000000132(VAR Rec@1000000000 : Record 114);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('POSTED SALES CREDIT MEMO', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,144,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE PostedSalesCreditMemoListSendByEmailPrint@1000000131(VAR Rec@1000000000 : Record 114);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('POSTED SALES CREDIT MEMO', Rec."No.");
+      EasyPDF.SendByHardcopy('POSTED SALES CREDIT MEMO', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,144,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE PostedSalesCreditMemoListSendByFax@1000000130(VAR Rec@1000000000 : Record 114);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByFax('POSTED SALES CREDIT MEMO', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,144,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE PostedSalesCreditMemoListSendByPreferredMethod@1000000125(VAR Rec@1000000000 : Record 114);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByPreferredMethod('POSTED SALES CREDIT MEMO', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,144,OnAfterActionEvent,Action14103465,Skip,Skip)]
+    LOCAL PROCEDURE PostedSalesCreditMemoListSendSelectedToBatch@1000000120(VAR Rec@1000000000 : Record 114);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+      EasyPDFQueue@1000000003 : Record 14103463;
+      EasyPDFCustomization@1000000002 : Codeunit 14103460;
+      SalesCreditMemoHeader@1000000007 : Record 114;
+      BatchId@1000000006 : Text[80];
+      Count@1000000005 : Integer;
+    BEGIN
+      // TODO: It is not currently possible to identify selected entries in an event subscriber
+      // The code below is not invoked but is included here to use when the functionality is added to NAV
+      EXIT;
+
+      Count := 0;
+      // CurrPage.SETSELECTIONFILTER(SalesCreditMemoHeader);
+      IF SalesCreditMemoHeader.FIND('-') THEN
+      BEGIN
+
+        BatchId := EasyPDFCustomization.GenerateBatchId('POSTED SALES CREDIT MEMO');
+        REPEAT
+          EasyPDF.QueueBatch('POSTED SALES CREDIT MEMO', SalesCreditMemoHeader."No.", BatchId);
+          Count += 1;
+        UNTIL SalesCreditMemoHeader.NEXT = 0;
+
+        IF Count > 0 THEN
+        BEGIN
+          EasyPDFQueue.RESET;
+          EasyPDFQueue.SETRANGE(BatchId, BatchId);
+          PAGE.RUN(PAGE::"EasyPDF Batch Queues", EasyPDFQueue);
+        END;
+
+      END;
+    END;
+
+    [EventSubscriber(Page,136,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE PostedPurchaseReceiptSendByEmail@1000000059(VAR Rec@1000000000 : Record 120);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('POSTED PURCHASE RECEIPT', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,136,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE PostedPurchaseReceiptSendByEmailPrint@1000000056(VAR Rec@1000000000 : Record 120);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+      PurchRcptHeader@1000000002 : Record 120;
+    BEGIN
+      EasyPDF.SendByEmail('POSTED PURCHASE RECEIPT', Rec."No.");
+      COMMIT;
+      PurchRcptHeader := Rec;
+      PurchRcptHeader.SETRANGE("No.", Rec."No.");
+      PurchRcptHeader.PrintRecords(TRUE);
+    END;
+
+    [EventSubscriber(Page,136,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE PostedPurchaseReceiptSendByFax@1000000058(VAR Rec@1000000000 : Record 120);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByFax('POSTED PURCHASE RECEIPT', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,136,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE PostedPurchaseReceiptSendByPreferredMethod@1000000057(VAR Rec@1000000000 : Record 120);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByPreferredMethod('POSTED PURCHASE RECEIPT', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,138,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE PostedPurchaseInvoiceSendByEmail@1000000065(VAR Rec@1000000000 : Record 122);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('POSTED PURCHASE INVOICE', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,138,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE PostedPurchaseInvoiceSendByEmailPrint@1000000062(VAR Rec@1000000000 : Record 122);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+      PurchInvHeader@1000000002 : Record 122;
+    BEGIN
+      EasyPDF.SendByEmail('POSTED PURCHASE INVOICE', Rec."No.");
+      COMMIT;
+      PurchInvHeader := Rec;
+      PurchInvHeader.SETRANGE("No.", Rec."No.");
+      PurchInvHeader.PrintRecords(TRUE);
+    END;
+
+    [EventSubscriber(Page,138,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE PostedPurchaseInvoiceSendByFax@1000000064(VAR Rec@1000000000 : Record 122);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByFax('POSTED PURCHASE INVOICE', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,138,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE PostedPurchaseInvoiceSendByPreferredMethod@1000000063(VAR Rec@1000000000 : Record 122);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByPreferredMethod('POSTED PURCHASE INVOICE', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,438,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE IssuedReminderSendByEmail@1000000071(VAR Rec@1000000000 : Record 297);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('ISSUED REMINDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,438,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE IssuedReminderSendByEmailPrint@1000000068(VAR Rec@1000000000 : Record 297);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+      IssuedReminderHeader@1000000002 : Record 297;
+    BEGIN
+      EasyPDF.SendByEmail('ISSUED REMINDER', Rec."No.");
+      COMMIT;
+      IssuedReminderHeader := Rec;
+      IssuedReminderHeader.SETRANGE("No.", Rec."No.");
+      IssuedReminderHeader.PrintRecords(TRUE,FALSE,FALSE);
+    END;
+
+    [EventSubscriber(Page,438,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE IssuedReminderSendByFax@1000000070(VAR Rec@1000000000 : Record 297);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByFax('ISSUED REMINDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,438,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE IssuedReminderSendByPreferredMethod@1000000069(VAR Rec@1000000000 : Record 297);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByPreferredMethod('ISSUED REMINDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,450,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE IssuedFinanceChargeMemoSendByEmail@1000000076(VAR Rec@1000000000 : Record 304);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('ISSUED FINANCE CHARGE MEMO', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,450,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE IssuedFinanceChargeMemoSendByEmailPrint@1000000073(VAR Rec@1000000000 : Record 304);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+      IssuedFinChrgMemoHeader@1000000002 : Record 304;
+    BEGIN
+      EasyPDF.SendByEmail('ISSUED FINANCE CHARGE MEMO', Rec."No.");
+      COMMIT;
+      IssuedFinChrgMemoHeader := Rec;
+      IssuedFinChrgMemoHeader.SETRANGE("No.", Rec."No.");
+      IssuedFinChrgMemoHeader.PrintRecords(TRUE,FALSE,FALSE);
+    END;
+
+    [EventSubscriber(Page,450,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE IssuedFinanceChargeMemoSendByFax@1000000075(VAR Rec@1000000000 : Record 304);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByFax('ISSUED FINANCE CHARGE MEMO', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,450,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE IssuedFinanceChargeMemoSendByPreferredMethod@1000000074(VAR Rec@1000000000 : Record 304);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByPreferredMethod('ISSUED FINANCE CHARGE MEMO', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,507,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE BlanketSalesOrderSendByEmail@1000000081(VAR Rec@1000000000 : Record 36);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('BLANKET SALES ORDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,507,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE BlanketSalesOrderSendByEmailPrint@1000000078(VAR Rec@1000000000 : Record 36);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+      DocPrint@1000000002 : Codeunit 229;
+    BEGIN
+      EasyPDF.SendByEmail('BLANKET SALES ORDER', Rec."No.");
+      COMMIT;
+      DocPrint.PrintSalesHeader(Rec);
+    END;
+
+    [EventSubscriber(Page,507,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE BlanketSalesOrderSendByFax@1000000080(VAR Rec@1000000000 : Record 36);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByFax('BLANKET SALES ORDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,507,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE BlanketSalesOrderSendByPreferredMethod@1000000079(VAR Rec@1000000000 : Record 36);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByPreferredMethod('BLANKET SALES ORDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,509,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE BlanketPurchaseOrderSendByEmail@1000000087(VAR Rec@1000000000 : Record 38);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('BLANKET PURCHASE ORDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,509,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE BlanketPurchaseOrderSendByEmailPrint@1000000084(VAR Rec@1000000000 : Record 38);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+      DocPrint@1000000002 : Codeunit 229;
+    BEGIN
+      EasyPDF.SendByEmail('BLANKET PURCHASE ORDER', Rec."No.");
+      COMMIT;
+      DocPrint.PrintPurchHeader(Rec);
+    END;
+
+    [EventSubscriber(Page,509,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE BlanketPurchaseOrderSendByFax@1000000086(VAR Rec@1000000000 : Record 38);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByFax('BLANKET PURCHASE ORDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,509,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE BlanketPurchaseOrderSendByPreferredMethod@1000000085(VAR Rec@1000000000 : Record 38);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByPreferredMethod('BLANKET PURCHASE ORDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,5900,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE ServiceOrderSendByEmail@1000000092(VAR Rec@1000000000 : Record 5900);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('SERVICE ORDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,5900,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE ServiceOrderSendByEmailPrint@1000000089(VAR Rec@1000000000 : Record 5900);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+      DocPrint@1000000002 : Codeunit 229;
+    BEGIN
+      EasyPDF.SendByEmail('SERVICE ORDER', Rec."No.");
+      COMMIT;
+      DocPrint.PrintServiceHeader(Rec);
+    END;
+
+    [EventSubscriber(Page,5900,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE ServiceOrderSendByFax@1000000091(VAR Rec@1000000000 : Record 5900);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByFax('SERVICE ORDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,5900,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE ServiceOrderSendByPreferredMethod@1000000090(VAR Rec@1000000000 : Record 5900);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByPreferredMethod('SERVICE ORDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,5964,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE ServiceQuoteSendByEmail@1000000098(VAR Rec@1000000000 : Record 5900);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('SERVICE QUOTE', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,5964,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE ServiceQuoteSendByEmailPrint@1000000095(VAR Rec@1000000000 : Record 5900);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+      DocPrint@1000000002 : Codeunit 229;
+    BEGIN
+      EasyPDF.SendByEmail('SERVICE QUOTE', Rec."No.");
+      COMMIT;
+      // CurrPage.UPDATE(TRUE);
+      DocPrint.PrintServiceHeader(Rec);
+    END;
+
+    [EventSubscriber(Page,5964,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE ServiceQuoteSendByFax@1000000097(VAR Rec@1000000000 : Record 5900);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByFax('SERVICE QUOTE', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,5964,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE ServiceQuoteSendByPreferredMethod@1000000096(VAR Rec@1000000000 : Record 5900);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByPreferredMethod('SERVICE QUOTE', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,5972,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE PostedServiceCreditMemoSendByEmail@1000000103(VAR Rec@1000000000 : Record 5994);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('POSTED SERVICE CREDIT MEMO', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,5972,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE PostedServiceCreditMemoSendByEmailPrint@1000000100(VAR Rec@1000000000 : Record 5994);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+      ServCrMemoHeader@1000000002 : Record 5994;
+    BEGIN
+      EasyPDF.SendByEmail('POSTED SERVICE CREDIT MEMO', Rec."No.");
+      COMMIT;
+      ServCrMemoHeader := Rec;
+      ServCrMemoHeader.SETRANGE("No.", Rec."No.");
+      ServCrMemoHeader.PrintRecords(TRUE);
+    END;
+
+    [EventSubscriber(Page,5972,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE PostedServiceCreditMemoSendByFax@1000000102(VAR Rec@1000000000 : Record 5994);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByFax('POSTED SERVICE CREDIT MEMO', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,5972,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE PostedServiceCreditMemoSendByPreferredMethod@1000000101(VAR Rec@1000000000 : Record 5994);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByPreferredMethod('POSTED SERVICE CREDIT MEMO', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,5975,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE PostedServiceShipmentSendByEmail@1000000108(VAR Rec@1000000000 : Record 5990);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('POSTED SERVICE SHIPMENT', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,5975,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE PostedServiceShipmentSendByEmailPrint@1000000105(VAR Rec@1000000000 : Record 5990);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+      ServShptHeader@1000000002 : Record 5990;
+    BEGIN
+      EasyPDF.SendByEmail('POSTED SERVICE SHIPMENT', Rec."No.");
+      COMMIT;
+      ServShptHeader := Rec;
+      ServShptHeader.SETRANGE("No.", Rec."No.");
+      ServShptHeader.PrintRecords(TRUE);
+    END;
+
+    [EventSubscriber(Page,5975,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE PostedServiceShipmentSendByFax@1000000107(VAR Rec@1000000000 : Record 5990);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByFax('POSTED SERVICE SHIPMENT', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,5975,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE PostedServiceShipmentSendByPreferredMethod@1000000106(VAR Rec@1000000000 : Record 5990);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByPreferredMethod('POSTED SERVICE SHIPMENT', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,5978,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE PostedServiceInvoiceSendByEmail@1000000113(VAR Rec@1000000000 : Record 5992);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('POSTED SERVICE INVOICE', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,5978,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE PostedServiceInvoiceSendByEmailPrint@1000000110(VAR Rec@1000000000 : Record 5992);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+      ServiceInvHeader@1000000002 : Record 5992;
+    BEGIN
+      EasyPDF.SendByEmail('POSTED SERVICE INVOICE', Rec."No.");
+      COMMIT;
+      ServiceInvHeader := Rec;
+      ServiceInvHeader.SETRANGE("No.", Rec."No.");
+      ServiceInvHeader.PrintRecords(TRUE);
+    END;
+
+    [EventSubscriber(Page,5978,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE PostedServiceInvoiceSendByFax@1000000112(VAR Rec@1000000000 : Record 5992);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByFax('POSTED SERVICE INVOICE', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,5978,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE PostedServiceInvoiceSendByPreferredMethod@1000000111(VAR Rec@1000000000 : Record 5992);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByPreferredMethod('POSTED SERVICE INVOICE', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,6630,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE SalesReturnOrderSendByEmail@1000000119(VAR Rec@1000000000 : Record 36);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('SALES RETURN ORDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,6630,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE SalesReturnOrderSendByEmailPrint@1000000116(VAR Rec@1000000000 : Record 36);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+      DocPrint@1000000002 : Codeunit 229;
+    BEGIN
+      EasyPDF.SendByEmail('SALES RETURN ORDER', Rec."No.");
+      COMMIT;
+      DocPrint.PrintSalesHeader(Rec);
+    END;
+
+    [EventSubscriber(Page,6630,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE SalesReturnOrderSendByFax@1000000118(VAR Rec@1000000000 : Record 36);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByFax('SALES RETURN ORDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,6630,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE SalesReturnOrderSendByPreferredMethod@1000000117(VAR Rec@1000000000 : Record 36);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByPreferredMethod('SALES RETURN ORDER', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,6660,OnAfterActionEvent,Action14103461,Skip,Skip)]
+    LOCAL PROCEDURE PostedReturnReceiptSendByEmail@1000000124(VAR Rec@1000000000 : Record 6660);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByEmail('POSTED SALES RETURN RECEIPT', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,6660,OnAfterActionEvent,Action14103463,Skip,Skip)]
+    LOCAL PROCEDURE PostedReturnReceiptSendByFax@1000000123(VAR Rec@1000000000 : Record 6660);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByFax('POSTED SALES RETURN RECEIPT', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,6660,OnAfterActionEvent,Action14103464,Skip,Skip)]
+    LOCAL PROCEDURE PostedReturnReceiptSendByPreferredMethod@1000000122(VAR Rec@1000000000 : Record 6660);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+    BEGIN
+      EasyPDF.SendByPreferredMethod('POSTED SALES RETURN RECEIPT', Rec."No.");
+    END;
+
+    [EventSubscriber(Page,6660,OnAfterActionEvent,Action14103462,Skip,Skip)]
+    LOCAL PROCEDURE PostedReturnReceiptSendByEmailPrint@1000000121(VAR Rec@1000000000 : Record 6660);
+    VAR
+      EasyPDF@1000000001 : Codeunit 37062300;
+      ReturnRcptHeader@1000000002 : Record 6660;
+    BEGIN
+      EasyPDF.SendByEmail('POSTED SALES RETURN RECEIPT', Rec."No.");
+      COMMIT;
+      ReturnRcptHeader := Rec;
+      ReturnRcptHeader.SETRANGE("No.", Rec."No.");
+      ReturnRcptHeader.PrintRecords(TRUE);
+    END;
+
+    PROCEDURE CustomerLedgerEntryDocType@1000000027(LedgerEntry@1000000000 : Record 21) : Text;
+    VAR
+      EasyPDF@1000000008 : Codeunit 37062300;
+      EasyPDFCustomization@1000000007 : Codeunit 14103460;
+      PostedSalesInvoice@1000000006 : Record 112;
+      PostedSalesCreditMemo@1000000005 : Record 114;
+      IssuedFinanceChargeMemo@1000000004 : Record 304;
+      IssuedReminder@1000000003 : Record 297;
+      PostedServiceInvoice@1000000002 : Record 5992;
+      PostedServiceCreditMemo@1000000001 : Record 5994;
+    BEGIN
+      CASE LedgerEntry."Document Type" OF
+
+        LedgerEntry."Document Type"::Invoice:
+          BEGIN
+            IF PostedSalesInvoice.GET(LedgerEntry."Document No.") THEN
+              EXIT('POSTED SALES INVOICE');
+            IF PostedServiceInvoice.GET(LedgerEntry."Document No.") THEN
+              EXIT('POSTED SERVICE INVOICE');
+          END;
+
+        LedgerEntry."Document Type"::"Credit Memo":
+          BEGIN
+            IF PostedSalesCreditMemo.GET(LedgerEntry."Document No.") THEN
+              EXIT('POSTED SALES CREDIT MEMO');
+            IF PostedServiceCreditMemo.GET(LedgerEntry."Document No.") THEN
+              EXIT('POSTED SERVICE CREDIT MEMO');
+          END;
+
+        LedgerEntry."Document Type"::"Finance Charge Memo":
+            IF IssuedFinanceChargeMemo.GET(LedgerEntry."Document No.") THEN
+              EXIT('ISSUED FINANCE CHARGE MEMO');
+
+        LedgerEntry."Document Type"::Reminder:
+            IF PostedSalesInvoice.GET(LedgerEntry."Document No.") THEN
+              EXIT('ISSUED REMINDER');
+
+      END;
+
+      EXIT('');
+    END;
+
+    LOCAL PROCEDURE VendorLedgerEntryDocType@1000000032(LedgerEntry@1000000000 : Record 25) : Text;
+    VAR
+      EasyPDF@1000000008 : Codeunit 37062300;
+      EasyPDFCustomization@1000000007 : Codeunit 14103460;
+      PostedPurchaseInvoice@1000000001 : Record 122;
+    BEGIN
+      CASE LedgerEntry."Document Type" OF
+
+        LedgerEntry."Document Type"::Invoice:
+          IF PostedPurchaseInvoice.GET(LedgerEntry."Document No.") THEN
+            EXIT('POSTED PURCHASE INVOICE');
+
+        LedgerEntry."Document Type"::Payment:
+          EXIT('VENDOR PAYMENT RECEIPT');
+
+      END;
+
+      EXIT('');
+    END;
+
+    BEGIN
+    {
+      //SW00 - Changed the service hooks to call standard events
+    }
+    END.
+  }
+}
+
