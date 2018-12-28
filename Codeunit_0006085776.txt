@@ -1,0 +1,897 @@
+OBJECT Codeunit 6085776 Sales Doc. - Register
+{
+  OBJECT-PROPERTIES
+  {
+    Date=06/27/18;
+    Time=[ 1:00:00 AM];
+    Version List=DCW17.00.00.5.00.01;
+  }
+  PROPERTIES
+  {
+    TableNo=6085590;
+    OnRun=VAR
+            DocCat@1160040000 : Record 6085575;
+            Template@1000000012 : Record 6085579;
+            SalesHeader@1000000002 : Record 36;
+            SalesLine@1000000003 : Record 37;
+            Field@1000000004 : Record 6085580;
+            OurContToPurchSalesperson@1000000014 : Record 6085778;
+            SalesInvHeader@1000000000 : Record 112;
+            SalesCrMemoHeader@1000000001 : Record 114;
+            SalesRcptHeader@161024015 : Record 110;
+            ShptHeader@161024014 : Record 110;
+            CaptureMgt@1000000009 : Codeunit 6085576;
+            SkipNextStep@1160040002 : Boolean;
+            OrderNo@161024016 : Code[100];
+            NextLineNo@1000000018 : Integer;
+            DocType@1160040001 : Integer;
+          BEGIN
+            ValidateDocument;
+            COMMIT;
+
+            CheckOkToRegister;
+
+            DocCat.GET("Document Category Code");
+            Template.GET("Template No.");
+
+            IF DocCat."Destination Header Table No." <> 0 THEN
+              DocCat.TESTFIELD("Destination Header Table No.",DATABASE::"Sales Header");
+
+            IF DocCat."Destination Line Table No." <> 0 THEN
+              DocCat.TESTFIELD("Destination Line Table No.",DATABASE::"Sales Line");
+
+            DocType := SalesDocMgt.GetDocType(Rec);
+
+            // IDENTIFY THE SALESPERSON CODE FOR THIS DOCUMENT
+            IF NOT SetupAlias(OurContToPurchSalesperson,Template,GetSourceID,SalesDocMgt.GetOurContact(Rec)) THEN
+              ERROR('');
+
+            COMMIT;
+
+            // PERFORM STEP 1
+            SkipNextStep := CreateWithoutMatch(Rec,Template,SalesHeader,DocType,OurContToPurchSalesperson."Salespers./Purch. Code");
+
+            // PERFORM STEP 2
+            IF NOT SkipNextStep THEN
+              SkipNextStep := PerformStep2(Rec,Template,SalesHeader,DocType);
+
+            // SHOW REGISTERED DOCUMENT
+            IF GUIALLOWED AND ("Show after Register" OR SkipNextStep) THEN
+              ShowAfterRegister(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text002@1000000005 : TextConst 'ENU=Select Salesperson from List,Use Salesperson from Customer (%1),Always use Salesperson from Customer (%1)';
+      Text003@1000000009 : TextConst 'ENU="No line translations exists with %1 = ''%2''\\This must be create in order to register the document."';
+      CaptureMgt@1000000008 : Codeunit 6085576;
+      SalesDocMgt@1000000010 : Codeunit 6085770;
+      Text004@161024017 : TextConst 'ENU=No Account has been configured for %1.';
+      Text006@161024013 : TextConst 'ENU=\Any subsequent steps will have to be performed manually.';
+      Text007@1160040000 : TextConst 'ENU=An error occurred when performing %1 on %2 %3.';
+      Text008@1160040003 : TextConst 'ENU=Select Salesperson from List,Change Salesperson on Customer';
+      Text009@1160040002 : TextConst 'ENU=Would you like to set up a translation from %1 to Purchaser Code %2?';
+      Text010@1160040001 : TextConst 'ENU=Translate ''%1'' to %2 for all vendors,Translate ''%1'' to %2 for %3 only';
+
+    PROCEDURE SetupAlias@1000000004(VAR OurContToPurchSalesperson@1000000003 : Record 6085778;VAR Template@1000000001 : Record 6085579;CustomerNo@1000000007 : Code[20];ContactName@1000000000 : Text[200]) : Boolean;
+    VAR
+      Field@1000000005 : Record 6085580;
+      Salesperson@1000000002 : Record 13;
+      Customer@1000000006 : Record 18;
+      OurContToPurchSalespers@1160040000 : Page 6086059;
+      Selection@1000000004 : ' ,UseCustSalespersonCode,AlwaysUseCustSalespersonCode,SelectSalesperson,NothingSelected';
+      Selection2@1160040001 : ' ,AllCustomers,ThisCustomerOnly';
+    BEGIN
+      WHILE TRUE DO BEGIN
+        Customer.GET(CustomerNo);
+        IF Template."Purch. Use Vend. Purch. Code" AND (Customer."Salesperson Code" <> '') THEN BEGIN
+          OurContToPurchSalesperson.RESET;
+          OurContToPurchSalesperson.INIT;
+          OurContToPurchSalesperson."Salespers./Purch. Code" := Customer."Salesperson Code";
+          EXIT(TRUE);
+        END;
+
+        OurContToPurchSalesperson.RESET;
+        OurContToPurchSalesperson.SETRANGE(Type,OurContToPurchSalesperson.Type::Customer);
+        OurContToPurchSalesperson.SETFILTER("Vendor/Customer No.",'%1|%2','',CustomerNo);
+        OurContToPurchSalesperson.SETRANGE("Our Contact",UPPERCASE(ContactName));
+        IF OurContToPurchSalesperson.FINDFIRST AND (OurContToPurchSalesperson."Salespers./Purch. Code" <> '') THEN
+          EXIT(TRUE);
+
+        IF ContactName <> '' THEN BEGIN
+          Salesperson.SETFILTER(Name,COPYSTR('@' + CaptureMgt.ReplaceIllegalFilterCharacters(ContactName,FALSE,0),1,
+            MAXSTRLEN(Salesperson.Name)));
+          IF Salesperson.FINDFIRST THEN BEGIN
+            OurContToPurchSalesperson.RESET;
+            OurContToPurchSalesperson.INIT;
+            OurContToPurchSalesperson."Salespers./Purch. Code" := Salesperson.Code;
+            EXIT(TRUE);
+          END ELSE BEGIN
+            Salesperson.SETRANGE(Name);
+            Salesperson.SETRANGE(Code,COPYSTR(ContactName,1,MAXSTRLEN(Salesperson.Code)));
+            IF Salesperson.FINDFIRST THEN BEGIN
+              OurContToPurchSalesperson.RESET;
+              OurContToPurchSalesperson.INIT;
+              OurContToPurchSalesperson."Salespers./Purch. Code" := Salesperson.Code;
+              EXIT(TRUE);
+            END;
+          END;
+        END;
+
+        IF NOT Field.GET(Template."No.",Field.Type::Header,'OURCONTACT') THEN BEGIN
+          OurContToPurchSalesperson.INIT;
+          OurContToPurchSalesperson."Salespers./Purch. Code" := '';
+          EXIT(TRUE);
+        END;
+
+        IF NOT Field.Required THEN
+          EXIT(TRUE);
+
+        IF GUIALLOWED THEN
+          CASE TRUE OF
+            Customer."Salesperson Code" <> '':
+              CASE STRMENU(STRSUBSTNO(Text002,Customer."Salesperson Code"),1) OF
+                1:
+                  Selection := Selection::SelectSalesperson;
+                2:
+                  Selection := Selection::UseCustSalespersonCode;
+                3:
+                  Selection := Selection::AlwaysUseCustSalespersonCode;
+                ELSE
+                  Selection := Selection::" ";
+              END;
+
+            ELSE BEGIN
+              CASE STRMENU(Text008) OF
+                1:
+                  Selection := Selection::SelectSalesperson;
+                2:
+                  BEGIN
+                    PAGE.RUNMODAL(PAGE::"Customer Card",Customer);
+                    COMMIT;
+                    Customer.GET(CustomerNo);
+                    IF Customer."Salesperson Code" <> '' THEN
+                      Selection := Selection::AlwaysUseCustSalespersonCode
+                    ELSE
+                      Selection := Selection::NothingSelected;
+                  END;
+                ELSE
+                  Selection := Selection::" ";
+              END;
+            END;
+        END;
+
+        CASE Selection OF
+          Selection::" ":
+            EXIT(FALSE);
+
+          Selection::UseCustSalespersonCode:
+            BEGIN
+              OurContToPurchSalesperson.RESET;
+              OurContToPurchSalesperson.INIT;
+              OurContToPurchSalesperson."Salespers./Purch. Code" := Customer."Salesperson Code";
+              EXIT(TRUE);
+            END;
+
+          Selection::AlwaysUseCustSalespersonCode:
+            BEGIN
+              Template."Purch. Use Vend. Purch. Code" := TRUE;
+              Template.MODIFY;
+              COMMIT;
+            END;
+
+          Selection::SelectSalesperson:
+            BEGIN
+              Salesperson.RESET;
+              IF PAGE.RUNMODAL(0,Salesperson) = ACTION::LookupOK THEN BEGIN
+                OurContToPurchSalesperson.RESET;
+                OurContToPurchSalesperson.INIT;
+                OurContToPurchSalesperson.Type := OurContToPurchSalesperson.Type::Vendor;
+                OurContToPurchSalesperson."Our Contact" := UPPERCASE(ContactName);
+                OurContToPurchSalesperson."Salespers./Purch. Code" := Salesperson.Code;
+
+                IF ContactName <> '' THEN
+                  IF CONFIRM(Text009,TRUE,ContactName,Salesperson.Code) THEN BEGIN
+                    Selection2 := STRMENU(STRSUBSTNO(Text010,ContactName,Customer."Salesperson Code",Customer.Name),1);
+                    CASE Selection2 OF
+                      Selection2::" ":
+                        EXIT(FALSE);
+                      Selection2::AllCustomers:
+                        OurContToPurchSalesperson."Vendor/Customer No." := '';
+                      Selection2::ThisCustomerOnly:
+                        OurContToPurchSalesperson."Vendor/Customer No." := CustomerNo;
+                    END;
+                    OurContToPurchSalesperson.INSERT(TRUE);
+                    COMMIT;
+                  END;
+
+                OurContToPurchSalesperson.RESET;
+                OurContToPurchSalesperson.INIT;
+                OurContToPurchSalesperson."Salespers./Purch. Code" := Salesperson.Code;
+                EXIT(TRUE);
+              END;
+            END;
+        END;
+      END;
+
+      CLEAR(OurContToPurchSalesperson);
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE CreateSalesHeader@1000000001(VAR Document@1000000003 : Record 6085590;VAR SalesHeader@1000000002 : Record 36;DocType@1160040003 : Integer;SalespersonCode@1000000000 : Code[10]);
+    VAR
+      GLSetup@1000000006 : Record 98;
+      DCSetup@1000000007 : Record 6085573;
+      Template@1000000004 : Record 6085579;
+      Field@1000000005 : Record 6085580;
+      OldDimId@6085573 : Integer;
+      DimValueCode@161024012 : Code[20];
+      CurrCode@1160040001 : Code[10];
+      RespCenter@1160040002 : Code[10];
+      CustContact@1160040000 : Text[80];
+    BEGIN
+      // *********************************************************************************************************************************
+      // CREATE SALES HEADER
+      // *********************************************************************************************************************************
+      GLSetup.GET;
+      DCSetup.GET;
+
+      Template.GET(Document."Template No.");
+      SalesHeader.SetHideValidationDialog(TRUE);
+
+      IF SalesDocMgt.GetOurDocNo(Document) = '' THEN BEGIN
+        SalesHeader.INIT;
+        SalesHeader."No. Series" := CaptureMgt.GetText(Document,Field.Type::Header,'NOSERIES',0);
+        SalesHeader.VALIDATE("Document Type",DocType);
+        SalesHeader.INSERT(TRUE);
+
+        SalesHeader.VALIDATE("Sell-to Customer No.",Document.GetSourceID);
+      END ELSE
+        SalesHeader.GET(DocType,SalesDocMgt.GetOurDocNo(Document));
+
+      CASE TRUE OF
+        SalesDocMgt.GetPostingDate(Document) <> 0D:
+          SalesHeader.VALIDATE("Posting Date",SalesDocMgt.GetPostingDate(Document));
+        Template."Posting Date" = Template."Posting Date"::"Use Document Date (recognized on document)":
+          SalesHeader.VALIDATE("Posting Date",SalesDocMgt.GetDocumentDate(Document));
+        Template."Posting Date" = Template."Posting Date"::"Use Today":
+          SalesHeader.VALIDATE("Posting Date",TODAY);
+        Template."Posting Date" = Template."Posting Date"::"Use Work Date":
+          SalesHeader.VALIDATE("Posting Date",WORKDATE);
+      END;
+
+      IF DocType IN [SalesHeader."Document Type"::Order,SalesHeader."Document Type"::Invoice] THEN
+        SalesHeader.VALIDATE("Order Date",SalesDocMgt.GetDocumentDate(Document))
+      ELSE
+        SalesHeader.VALIDATE("Document Date",SalesDocMgt.GetDocumentDate(Document));
+
+      SalesHeader.VALIDATE("External Document No.",SalesDocMgt.GetDocumentNo(Document));
+
+      IF (SalespersonCode <> '') AND (SalesHeader."Salesperson Code" <> SalespersonCode) THEN
+        SalesHeader.VALIDATE("Salesperson Code",SalespersonCode);
+
+      CustContact := COPYSTR(SalesDocMgt.GetCustContact(Document),1,MAXSTRLEN(SalesHeader."Sell-to Contact"));
+      IF (CustContact <> '') AND (CustContact <> SalesHeader."Sell-to Contact") THEN BEGIN
+        SalesHeader.VALIDATE("Sell-to Contact No.",'');
+        SalesHeader.VALIDATE("Sell-to Contact",SalesDocMgt.GetCustContact(Document));
+      END;
+
+      IF (SalesDocMgt.GetCurrencyCode(Document) = GLSetup."LCY Code") AND (NOT DCSetup."Fill-out LCY") THEN
+        CurrCode := ''
+      ELSE
+        CurrCode := SalesDocMgt.GetCurrencyCode(Document);
+
+      IF SalesHeader."Currency Code" <> CurrCode THEN
+        SalesHeader.VALIDATE("Currency Code",CurrCode);
+
+      RespCenter := SalesDocMgt.GetResponsibillityCenter(Document);
+      IF (RespCenter <> '') AND (RespCenter <> SalesHeader."Responsibility Center") THEN
+        SalesHeader.VALIDATE("Responsibility Center",RespCenter);
+
+      IF SalesHeader."Prices Including VAT" <> Template."Prices Including VAT" THEN
+        SalesHeader.VALIDATE("Prices Including VAT",Template."Prices Including VAT");
+
+      TransferSalesHeader(SalesHeader,Document);
+
+      SalesHeader.MODIFY(TRUE);
+
+      Field.SETRANGE("Template No.",Document."Template No.");
+      Field.SETRANGE(Type,Field.Type::Header);
+      Field.SETRANGE("Data Type",Field."Data Type"::Lookup);
+      Field.SETRANGE("Source Table No.",DATABASE::"Dimension Value");
+      IF Field.FINDSET THEN BEGIN
+        OldDimId := SalesHeader."Dimension Set ID";
+        REPEAT
+          DimValueCode := CaptureMgt.GetValueAsText(Document."No.",0,Field);
+          IF (DimValueCode <> '') OR Field."Transfer Blank Values" THEN BEGIN
+            CASE TRUE OF
+              Field.Code = GLSetup."Global Dimension 1 Code":
+                SalesHeader.VALIDATE("Shortcut Dimension 1 Code",DimValueCode);
+              Field.Code = GLSetup."Global Dimension 2 Code":
+                SalesHeader.VALIDATE("Shortcut Dimension 2 Code",DimValueCode);
+              ELSE
+                SalesHeader."Dimension Set ID" := UpdateDimension(SalesHeader."Dimension Set ID",Field.Code,DimValueCode);
+            END;
+          END;
+        UNTIL Field.NEXT = 0;
+      END;
+
+      IF OldDimId <> SalesHeader."Dimension Set ID" THEN
+        SalesHeader.MODIFY(TRUE);
+    END;
+
+    PROCEDURE CreateWithoutMatch@1000000000(VAR Document@1000000012 : Record 6085590;Template@1160040017 : Record 6085579;VAR SalesHeader@1000000022 : Record 36;DocType@1160040001 : Integer;SalespersonCode@1000000019 : Code[10]) SkipNextStep : Boolean;
+    VAR
+      DocumentLine@1000000023 : TEMPORARY Record 6085596;
+      SalesLine@1000000021 : Record 37;
+      Field@1000000020 : Record 6085580;
+      TemplField2@161024016 : Record 6085580;
+      LineTrans@1000000018 : Record 6085584;
+      Item@161024017 : Record 27;
+      ItemVendor@161024019 : Record 99;
+      ItemCrossRef@161024018 : Record 5717;
+      DCApprMgt@1160040016 : Codeunit 6085722;
+      IsValid@1160040003 : Boolean;
+      AccountRequired@1160040002 : Boolean;
+      No@1000000002 : Code[50];
+      Quantity@1000000007 : Decimal;
+      UnitCost@1000000001 : Decimal;
+      LineAmount@1000000000 : Decimal;
+      LineSum@1000000025 : Decimal;
+      Amount@161024015 : Decimal;
+      ImportedAmountExclVAT@6085574 : Decimal;
+      ImportedAmountInclVAT@6085573 : Decimal;
+      AssignedAmountExclVAT@6085575 : Decimal;
+      AssignedAmountInclVAT@6085576 : Decimal;
+      SubtractedAmountExclVAT@1160040018 : Decimal;
+      NoOfTextLines@1160040010 : Integer;
+      NextLineNo@1160040009 : Integer;
+      i@161024014 : Integer;
+      OurContact@1160040008 : Text[250];
+      PostingDesc@1160040007 : Text[250];
+      LineDescription@1160040006 : Text[250];
+      TextLineArray@1160040000 : ARRAY [50] OF Text[1024];
+      MessageText@1160040015 : Text[1024];
+    BEGIN
+      CreateSalesHeader(Document,SalesHeader,DocType,SalespersonCode);
+      PostingDesc := SalesDocMgt.GetPostingDescription(Document);
+
+      // *********************************************************************************************************************************
+      // BUILD TEMP. TABLE TO HOLD LINES. THIS IS DONE TO GET TOTAL NUMBER OF LINES
+      // *********************************************************************************************************************************
+      Document.BuildTempLinesTable(DocumentLine);
+
+      // *********************************************************************************************************************************
+      // IF LINES HAVE BEEN RECOGNIZED THEN START CREATING EQUIVALENT SALES LINES
+      // *********************************************************************************************************************************
+      IF DocumentLine.FINDSET(FALSE,FALSE) THEN BEGIN
+        REPEAT
+          No := SalesDocMgt.GetLineAccountNo(Document,DocumentLine."Line No.");
+          Quantity := SalesDocMgt.GetLineQuantity(Document,DocumentLine."Line No.");
+          UnitCost := SalesDocMgt.GetLineUnitCost(Document,DocumentLine."Line No.");
+          LineAmount := SalesDocMgt.GetLineAmount(Document,DocumentLine."Line No.");
+          LineSum := LineSum + LineAmount;
+
+          // If either Quantity, Unit Cost or Line Amount has a value, then an Account No. for this line is required
+          AccountRequired := (Quantity <> 0) OR (UnitCost <> 0) OR (LineAmount <> 0);
+
+          NextLineNo := NextLineNo + 10000;
+          SalesLine.INIT;
+          SalesLine."Document Type" := SalesHeader."Document Type";
+          SalesLine.VALIDATE("Document No.",SalesHeader."No.");
+          SalesLine."Line No." := NextLineNo;
+          SalesLine.INSERT(TRUE);
+
+          IF AccountRequired THEN BEGIN
+            // Filter the Line Translation table to find the appropriate account no.
+            IF No <> '' THEN BEGIN
+              IF NOT SalesDocMgt.GetTranslLineInfo2(Document,DocumentLine."Line No.",LineTrans) THEN
+                ERROR(Text003,LineTrans.FIELDCAPTION("Translate From"),No);
+            END ELSE BEGIN
+              LineTrans.RESET;
+              LineTrans.SETRANGE("Template No.",Document."Template No.");
+              LineTrans.SETFILTER("Translate to Type",'>%1',LineTrans."Translate to Type"::" ");
+              LineTrans.SETFILTER("Translate to No.",'<>%1','');
+              LineTrans.SETRANGE(Type,LineTrans.Type::"Header Field");
+              LineTrans.SETRANGE("Field Code",'AMOUNTEXCLVAT');
+              IF NOT LineTrans.FINDFIRST THEN BEGIN
+                TemplField2.GET(Document."Template No.",Field.Type::Header,'AMOUNTEXCLVAT');
+                ERROR(Text004,TemplField2."Field Name");
+              END;
+            END;
+
+            SalesLine.VALIDATE(Type,LineTrans."Translate to Type");
+            SalesLine.VALIDATE("No.",LineTrans."Translate to No.");
+            IF LineTrans."Transl. to VAT Prod. Post.Grp." <> '' THEN
+              SalesLine.VALIDATE("VAT Prod. Posting Group",LineTrans."Transl. to VAT Prod. Post.Grp.");
+            IF LineTrans."Translate to Variant Code" <> '' THEN
+              SalesLine.VALIDATE("Variant Code",LineTrans."Translate to Variant Code");
+            SalesLine.VALIDATE("Unit of Measure Code",LineTrans."Translate to UOM Code");
+          END ELSE
+            LineTrans."Translate to (Text)" := '';
+
+          LineDescription := SalesDocMgt.GetLineDescription(Document,DocumentLine."Line No.");
+
+          // Determine the description
+          CASE TRUE OF
+            LineTrans."Translate to (Text)" <> '':
+              SalesLine.VALIDATE(Description,COPYSTR(LineTrans."Translate to (Text)",1,MAXSTRLEN(SalesLine.Description)));
+            LineDescription <> '':
+              SalesLine.VALIDATE(Description,COPYSTR(LineDescription,1,MAXSTRLEN(SalesLine.Description)));
+            PostingDesc <> '':
+              SalesLine.VALIDATE(Description,COPYSTR(PostingDesc,1,MAXSTRLEN(SalesLine.Description)));
+          END;
+
+          IF Quantity <> SalesLine.Quantity THEN
+            SalesLine.VALIDATE(Quantity,Quantity);
+
+          TransferSalesLine(SalesLine,Document,DocumentLine."Line No.");
+
+          SalesLine.MODIFY(TRUE);
+
+          IF AccountRequired THEN
+            TransferLineDim(Document,DocumentLine."Line No.",SalesLine,LineTrans);
+        UNTIL DocumentLine.NEXT = 0;
+
+        SubtractedAmountExclVAT := SalesDocMgt.GetSubtractedAmountExclVAT(Document);
+        IF (LineSum <> SubtractedAmountExclVAT) AND (LineSum <> 0) AND (SubtractedAmountExclVAT <> 0) THEN
+          CreateAmountDifferenceLine(Document,SalesHeader,SubtractedAmountExclVAT - LineSum,PostingDesc);
+
+        CreateHeaderAmounts(Document,SalesHeader,TRUE,PostingDesc);
+      END ELSE BEGIN
+        NoOfTextLines := CreateTextArray(PostingDesc,MAXSTRLEN(SalesLine.Description),TextLineArray);
+        IF NoOfTextLines > 0 THEN
+          PostingDesc := TextLineArray[1];
+
+        CreateHeaderAmounts(Document,SalesHeader,FALSE,PostingDesc);
+
+        FOR i := 2 TO NoOfTextLines DO
+          CreateTextLine(SalesHeader,TextLineArray[i]);
+      END;
+
+      COMMIT;
+
+      Document."Amount Excl. VAT" := SalesDocMgt.GetAllAmountsExclVAT(Document);
+      Document."Amount Incl. VAT" := SalesDocMgt.GetAmountInclVAT(Document);
+      StoreDocReference(Document,SalesHeader);
+
+      IF SkipNextStep AND GUIALLOWED THEN BEGIN
+        IF DocType = 1 THEN
+          ShowSkipNextStepMessage(SalesHeader,LOWERCASE(FORMAT(Template."Sales Order Reg. Step 1")))
+        ELSE
+          ShowSkipNextStepMessage(SalesHeader,LOWERCASE(FORMAT(Template."Sales Cr.Memo Reg. Step 1")));
+      END ELSE BEGIN
+        // CHECK DIFFERENCE ON IMPORTED AMOUNTS VS TOTAL AMOUNT ON THE LINES
+        IF AmountsTransfered(SalesHeader) THEN BEGIN
+          SalesDocMgt.GetSalesStatusAmounts(SalesHeader,ImportedAmountExclVAT,ImportedAmountInclVAT,AssignedAmountExclVAT,
+            AssignedAmountInclVAT);
+
+          MessageText := DCApprMgt.CheckSalesDocAmtAgainstImpAmt(SalesHeader,ImportedAmountExclVAT,ImportedAmountInclVAT,
+            AssignedAmountExclVAT,AssignedAmountInclVAT);
+
+          IF MessageText <> '' THEN BEGIN
+            SkipNextStep := TRUE;
+
+            IF GUIALLOWED THEN BEGIN
+              MessageText += Text006;
+              MESSAGE(MessageText);
+            END;
+          END;
+        END;
+      END;
+
+      Document.VALIDATE(Status,Document.Status::Registered);
+      Document.MODIFY;
+
+      COMMIT;
+
+      // PERFORM AFTER STEP 1
+      IF Template."Codeunit ID: After Step 1" > 0 THEN BEGIN
+        CLEARLASTERROR;
+        IF NOT CODEUNIT.RUN(Template."Codeunit ID: After Step 1",Document) THEN
+          SkipNextStep := TRUE;
+        COMMIT;
+
+        IF SkipNextStep AND GUIALLOWED THEN
+          ShowSkipNextStepMessage(SalesHeader,Template.FIELDCAPTION("Codeunit ID: After Step 1"));
+      END;
+    END;
+
+    PROCEDURE CreateAmountDifferenceLine@161024020(VAR Document@1000000002 : Record 6085590;VAR SalesHeader@1000000001 : Record 36;Amount@161024014 : Decimal;Description@1000000005 : Text[250]);
+    VAR
+      Field@161024012 : Record 6085580;
+    BEGIN
+      Field.GET(Document."Template No.",Field.Type::Header,'AMOUNTEXCLVAT');
+      CreateSalesLine(Document,SalesHeader,Field,Amount,Description,FALSE);
+    END;
+
+    PROCEDURE CreateHeaderAmounts@161024015(VAR Document@1000000002 : Record 6085590;VAR SalesHeader@1000000001 : Record 36;LinesRecognised@1000000007 : Boolean;Description@1000000005 : Text[250]);
+    VAR
+      Template@161024015 : Record 6085579;
+      DataTrans@1000000000 : Record 6085584;
+      Field@161024012 : Record 6085580;
+      Amount@161024013 : Decimal;
+    BEGIN
+      Field.SETRANGE("Template No.",Document."Template No.");
+      Field.SETRANGE(Type,Field.Type::Header);
+      Field.SETRANGE("Data Type",Field."Data Type"::Number);
+      IF LinesRecognised THEN
+        Field.SETRANGE("Transfer Amount to Document",Field."Transfer Amount to Document"::Always)
+      ELSE
+        Field.SETFILTER("Transfer Amount to Document",'<>%1',Field."Transfer Amount to Document"::" ");
+
+      Template.GET(Document."Template No.");
+
+      IF Field.FINDSET THEN
+        REPEAT
+          Amount := CaptureMgt.GetDecimal(Document,Field.Type,Field.Code,0);
+
+          // FIND POTENTIAL AMOUNTS (FROM OTHER TEMPLATE FIELDS) TO BE SUBTRACTED
+          Amount -= CaptureMgt.GetAmountToSubtract(Document,Field);
+
+          IF Amount <> 0 THEN
+            CreateSalesLine(Document,SalesHeader,Field,Amount,Description,Template."Allow Register without Amounts");
+        UNTIL Field.NEXT = 0;
+    END;
+
+    PROCEDURE CreateSalesLine@1000000005(VAR Document@161024016 : Record 6085590;VAR SalesHeader@1000000001 : Record 36;Field@161024013 : Record 6085580;Amount@1000000003 : Decimal;Description@1000000005 : Text[250];CreateIfNoAccountNo@161024017 : Boolean);
+    VAR
+      SalesLine@1000000004 : Record 37;
+      DataTransl@161024012 : Record 6085584;
+      DataTransl2@1160040000 : Record 6085584;
+      TemplField2@161024014 : Record 6085580;
+      AccountNo@161024015 : Code[20];
+      NextLineNo@1000000006 : Integer;
+    BEGIN
+      IF Field."G/L Account Field Code" <> '' THEN
+        IF TemplField2.GET(Field."Template No.",Field.Type,Field."G/L Account Field Code") THEN
+          AccountNo := CaptureMgt.GetValueAsText(Document."No.",0,TemplField2);
+
+      DataTransl.INIT;
+      IF DataTransl2.GET(Document."Template No.",Field.Type,Field.Code) THEN BEGIN
+        IF (DataTransl2."Translate to No." <> AccountNo) AND (AccountNo <> '') THEN BEGIN
+          DataTransl."Translate to Type" := DataTransl2."Translate to Type"::"G/L Account";
+          DataTransl."Translate to No." := AccountNo;
+        END ELSE
+          DataTransl := DataTransl2;
+      END ELSE BEGIN
+        IF AccountNo <> '' THEN BEGIN
+          DataTransl."Translate to Type" := DataTransl."Translate to Type"::"G/L Account";
+          DataTransl."Translate to No." := AccountNo;
+        END ELSE
+          IF NOT CreateIfNoAccountNo THEN
+            ERROR(Text004,Field."Field Name")
+          ELSE
+            IF Description = '' THEN
+              EXIT;
+      END;
+
+      SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+      SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+      IF SalesLine.FINDLAST THEN
+        NextLineNo := SalesLine."Line No." + 10000
+      ELSE
+        NextLineNo := 10000;
+
+      // *********************************************************************************************************************************
+      // CREATE THE SALES LINE
+      // *********************************************************************************************************************************
+      SalesLine.INIT;
+      SalesLine."Document Type" := SalesHeader."Document Type";
+      SalesLine.VALIDATE("Document No.",SalesHeader."No.");
+      SalesLine."Line No." := NextLineNo;
+      SalesLine.INSERT(TRUE);
+
+      IF DataTransl."Translate to No." <> '' THEN BEGIN
+        SalesLine.VALIDATE(Type,DataTransl."Translate to Type");
+        SalesLine.VALIDATE("No.",DataTransl."Translate to No.");
+
+        IF DataTransl."Transl. to VAT Prod. Post.Grp." <> '' THEN
+          SalesLine.VALIDATE("VAT Prod. Posting Group",DataTransl."Transl. to VAT Prod. Post.Grp.");
+
+        IF DataTransl."Translate to Variant Code" <> '' THEN
+          SalesLine.VALIDATE("Variant Code",DataTransl."Translate to Variant Code");
+
+        IF DataTransl."Translate to UOM Code" <> '' THEN
+          SalesLine.VALIDATE("Unit of Measure Code",DataTransl."Translate to UOM Code");
+      END;
+
+      CASE TRUE OF
+        DataTransl."Translate to (Text)" <> '':
+          SalesLine.VALIDATE(Description,COPYSTR(DataTransl."Translate to (Text)",1,MAXSTRLEN(SalesLine.Description)));
+        Description <> '':
+          SalesLine.VALIDATE(Description,COPYSTR(Description,1,MAXSTRLEN(SalesLine.Description)));
+      END;
+
+      IF DataTransl."Translate to No." <> '' THEN BEGIN
+        SalesLine.VALIDATE(Quantity,1);
+        SalesLine.VALIDATE("Unit Price",Amount);
+      END;
+
+      TransferSalesLine(SalesLine,Document,0);
+      SalesLine.MODIFY(TRUE);
+
+      TransferLineDim(Document,0,SalesLine,DataTransl);
+    END;
+
+    PROCEDURE AmountsTransfered@161024023(SalesHeader@161024013 : Record 36) : Boolean;
+    VAR
+      SalesLine@161024012 : Record 37;
+    BEGIN
+      SalesLine.RESET;
+      SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+      SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+      SalesLine.SETFILTER("Line Amount",'<>%1',0);
+      EXIT(NOT SalesLine.ISEMPTY);
+    END;
+
+    PROCEDURE StoreDocReference@1000000008(VAR Document@1000000003 : Record 6085590;VAR SalesHeader@1000000001 : Record 36);
+    BEGIN
+      // *********************************************************************************************************************************
+      // SAVE A REFERENCE TO THE DOCUMENT CREATE FOR LATER TRACKING ETC.
+      // *********************************************************************************************************************************
+      Document.Description := STRSUBSTNO('%1 %2',SalesHeader."Document Type",SalesHeader."No.");
+      Document."Created Doc. Type" := DATABASE::"Sales Header";
+      Document."Created Doc. Subtype" := SalesHeader."Document Type";
+      Document."Created Doc. ID" := SalesHeader."No.";
+      Document.MODIFY;
+    END;
+
+    PROCEDURE PerformStep2@1000000011(VAR Document@1160040001 : Record 6085590;Template@1000000000 : Record 6085579;VAR SalesHeader@1000000001 : Record 36;DocType@1160040000 : Integer) SkipNextStep : Boolean;
+    BEGIN
+      SalesHeader.FIND('=');
+      CLEARLASTERROR;
+
+      IF (SalesHeader."Document Type" IN [SalesHeader."Document Type"::Order,SalesHeader."Document Type"::Invoice]) THEN BEGIN
+        CASE Template."Sales Order Reg. Step 2" OF
+          Template."Sales Order Reg. Step 2"::"Submit for Approval":
+            SkipNextStep := NOT CODEUNIT.RUN(CODEUNIT::"DC Approvals Bridge",Document);
+
+          Template."Sales Order Reg. Step 2"::Release:
+            SkipNextStep := NOT CODEUNIT.RUN(CODEUNIT::"Release Sales Document",SalesHeader);
+        END;
+      END ELSE
+        IF (SalesHeader."Document Type" = SalesHeader."Document Type"::"Credit Memo") THEN BEGIN
+          CASE Template."Sales Cr.Memo Reg. Step 2" OF
+            Template."Sales Cr.Memo Reg. Step 2"::"Submit for Approval":
+              SkipNextStep := NOT CODEUNIT.RUN(CODEUNIT::"DC Approvals Bridge",Document);
+
+            Template."Sales Cr.Memo Reg. Step 2"::Release:
+              SkipNextStep := NOT CODEUNIT.RUN(CODEUNIT::"Release Sales Document",SalesHeader);
+          END;
+        END;
+
+      COMMIT;
+
+      IF SkipNextStep AND GUIALLOWED THEN BEGIN
+        IF DocType = 1 THEN
+          ShowSkipNextStepMessage(SalesHeader,LOWERCASE(FORMAT(Template."Sales Order Reg. Step 2")))
+        ELSE
+          ShowSkipNextStepMessage(SalesHeader,LOWERCASE(FORMAT(Template."Sales Cr.Memo Reg. Step 2")));
+      END;
+
+      // PERFORM AFTER STEP 2
+      IF Template."Codeunit ID: After Step 2" > 0 THEN BEGIN
+        CLEARLASTERROR;
+        SkipNextStep := NOT CODEUNIT.RUN(Template."Codeunit ID: After Step 2",Document);
+        COMMIT;
+
+        IF SkipNextStep AND GUIALLOWED THEN
+          ShowSkipNextStepMessage(SalesHeader,Template.FIELDCAPTION("Codeunit ID: After Step 2"));
+      END;
+    END;
+
+    PROCEDURE CreateTextLine@1000000002(VAR SalesHeader@1000000000 : Record 36;Text@1000000002 : Text[1024]);
+    VAR
+      SalesLine@1000000003 : Record 37;
+      LineNo@161024012 : Integer;
+    BEGIN
+      SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+      SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+      IF SalesLine.FINDLAST THEN
+        LineNo := SalesLine."Line No." + 10000
+      ELSE
+        LineNo := 10000;
+
+      SalesLine.INIT;
+      SalesLine."Document Type" := SalesHeader."Document Type";
+      SalesLine.VALIDATE("Document No.",SalesHeader."No.");
+      SalesLine."Line No." := LineNo;
+      SalesLine.INSERT(TRUE);
+      SalesLine.VALIDATE(Description,COPYSTR(Text,1,MAXSTRLEN(SalesLine.Description)));
+      SalesLine.MODIFY(TRUE);
+    END;
+
+    PROCEDURE TransferLineDim@161024014(VAR Document@1160040001 : Record 6085590;LineNo@1160040003 : Integer;VAR SalesLine@161024012 : Record 37;VAR LineTrans@161024013 : Record 6085584);
+    VAR
+      GLSetup@6085573 : Record 98;
+      DataTranslDim@161024014 : Record 6085586;
+      Field@1160040000 : Record 6085580;
+      DimValueCode@1160040002 : Code[20];
+      OldDimID@6085576 : Integer;
+    BEGIN
+      GLSetup.GET;
+
+      DataTranslDim.SETRANGE("Template No.",LineTrans."Template No.");
+      DataTranslDim.SETRANGE("Field Type",LineTrans.Type);
+      DataTranslDim.SETRANGE("Field Code",LineTrans."Field Code");
+      DataTranslDim.SETRANGE("Translate From",LineTrans."Translate From");
+      IF DataTranslDim.FINDSET THEN BEGIN
+        OldDimID := SalesLine."Dimension Set ID";
+        REPEAT
+          CASE TRUE OF
+            DataTranslDim."Dimension Code" = GLSetup."Global Dimension 1 Code":
+              SalesLine.VALIDATE("Shortcut Dimension 1 Code",DataTranslDim."Dimension Value Code");
+            DataTranslDim."Dimension Code" = GLSetup."Global Dimension 2 Code":
+              SalesLine.VALIDATE("Shortcut Dimension 2 Code",DataTranslDim."Dimension Value Code");
+            ELSE
+              SalesLine."Dimension Set ID" := UpdateDimension(SalesLine."Dimension Set ID",DataTranslDim."Dimension Code",DataTranslDim."Dimension Value Code");
+          END;
+        UNTIL DataTranslDim.NEXT = 0;
+        IF OldDimID <> SalesLine."Dimension Set ID" THEN
+          SalesLine.MODIFY(TRUE);
+      END;
+
+      IF LineNo = 0 THEN
+        EXIT;
+
+      Field.SETRANGE("Template No.",Document."Template No.");
+      Field.SETRANGE(Type,Field.Type::Line);
+      Field.SETRANGE("Data Type",Field."Data Type"::Lookup);
+      Field.SETRANGE("Source Table No.",DATABASE::"Dimension Value");
+      IF Field.FINDSET THEN BEGIN
+        OldDimID := SalesLine."Dimension Set ID";
+        REPEAT
+          DimValueCode := CaptureMgt.GetValueAsText(Document."No.",LineNo,Field);
+          IF (DimValueCode <> '') OR Field."Transfer Blank Values" THEN BEGIN
+            CASE TRUE OF
+              Field.Code = GLSetup."Global Dimension 1 Code":
+                SalesLine.VALIDATE("Shortcut Dimension 1 Code",DimValueCode);
+              Field.Code = GLSetup."Global Dimension 2 Code":
+                SalesLine.VALIDATE("Shortcut Dimension 2 Code",DimValueCode);
+              ELSE
+                SalesLine."Dimension Set ID" := UpdateDimension(SalesLine."Dimension Set ID",Field.Code,DimValueCode);
+            END;
+          END;
+        UNTIL Field.NEXT = 0;
+
+        IF OldDimID <> SalesLine."Dimension Set ID" THEN
+          SalesLine.MODIFY(TRUE);
+      END;
+    END;
+
+    PROCEDURE CreateTextArray@161024013(Text@161024012 : Text[1024];MaxLen@161024013 : Integer;VAR Arr@161024014 : ARRAY [50] OF Text[1024]) : Integer;
+    VAR
+      i@161024015 : Integer;
+      Index@161024016 : Integer;
+    BEGIN
+      WHILE Text <> '' DO BEGIN
+        i := i + 1;
+        Text := DELCHR(Text,'<>',' ');
+        IF STRLEN(Text) <= MaxLen THEN BEGIN
+          Arr[i] := Text;
+          EXIT(i);
+        END;
+
+        IF COPYSTR(Text,MaxLen+1,1) <> ' ' THEN
+          Index := LastIndexOf(COPYSTR(Text,1,MaxLen),' ',TRUE)
+        ELSE
+          Index := MaxLen;
+
+        IF Index = 0 THEN
+          Index := MaxLen;
+
+        Arr[i] := DELCHR(COPYSTR(Text,1,Index),'<>',' ');
+
+        Text := COPYSTR(Text,STRLEN(Arr[i])+1);
+      END;
+      EXIT(i);
+    END;
+
+    PROCEDURE LastIndexOf@161024012(Text@161024012 : Text[1024];CharToFind@161024013 : Text[1];IgnoreCase@161024014 : Boolean) : Integer;
+    VAR
+      StartIndex@161024015 : Integer;
+    BEGIN
+      IF IgnoreCase THEN BEGIN
+        Text := UPPERCASE(Text);
+        CharToFind := UPPERCASE(CharToFind);
+      END;
+
+      StartIndex := STRLEN(Text);
+      WHILE StartIndex > 0 DO BEGIN
+        IF COPYSTR(Text,StartIndex,1) = CharToFind THEN
+          EXIT(StartIndex)
+        ELSE
+          StartIndex -= 1;
+      END;
+    END;
+
+    PROCEDURE UpdateDimension@6085573(DimSetID@6085573 : Integer;DimCode@6085574 : Code[20];DimValueCode@6085575 : Code[20]) : Integer;
+    VAR
+      DimSetEntry@6085576 : TEMPORARY Record 480;
+      DimMgt@6085577 : Codeunit 408;
+    BEGIN
+      DimMgt.GetDimensionSet(DimSetEntry,DimSetID);
+
+      IF DimSetEntry.GET(DimSetID,DimCode) THEN BEGIN
+        IF DimSetEntry."Dimension Value Code" <> DimValueCode THEN BEGIN
+          IF DimValueCode <> '' THEN BEGIN
+            DimSetEntry.VALIDATE("Dimension Value Code",DimValueCode);
+            DimSetEntry.MODIFY(TRUE);
+          END ELSE
+            DimSetEntry.DELETE;
+        END;
+      END ELSE BEGIN
+        DimSetEntry.INIT;
+        DimSetEntry."Dimension Set ID" := DimSetID;
+        DimSetEntry.VALIDATE("Dimension Code",DimCode);
+        DimSetEntry.VALIDATE("Dimension Value Code",DimValueCode);
+        DimSetEntry.INSERT(TRUE);
+      END;
+
+      EXIT(DimMgt.GetDimensionSetID(DimSetEntry));
+    END;
+
+    PROCEDURE TransferSalesHeader@1160040009(VAR SalesHeader@1160040000 : Record 36;Document@1160040004 : Record 6085590);
+    VAR
+      RecRef@1160040007 : RecordRef;
+    BEGIN
+      RecRef.GETTABLE(SalesHeader);
+      CaptureMgt.TransferTableFields(RecRef,Document,0,TRUE);
+      RecRef.SETTABLE(SalesHeader);
+    END;
+
+    PROCEDURE TransferSalesLine@1160040001(VAR SalesLine@1160040000 : Record 37;Document@1160040012 : Record 6085590;DocumentLineNo@1160040010 : Integer);
+    VAR
+      RecRef@1160040006 : RecordRef;
+    BEGIN
+      RecRef.GETTABLE(SalesLine);
+      CaptureMgt.TransferTableFields(RecRef,Document,DocumentLineNo,FALSE);
+      RecRef.SETTABLE(SalesLine);
+    END;
+
+    PROCEDURE ShowSkipNextStepMessage@61(VAR SalesHeader@1003 : Record 36;MessageToShow@1000 : Text[250]);
+    BEGIN
+      MESSAGE(STRSUBSTNO(Text007,MessageToShow,LOWERCASE(FORMAT(SalesHeader."Document Type")),SalesHeader."No.")+Text006);
+    END;
+
+    PROCEDURE ShowAfterRegister@1160040014(VAR Document@1160040000 : Record 6085590);
+    VAR
+      SalesHeader@1160040001 : Record 36;
+      SalesInvHeader@1160040002 : Record 112;
+      SalesCrMemoHeader@1160040003 : Record 114;
+    BEGIN
+      IF SalesHeader.GET(Document."Created Doc. Subtype",Document."Created Doc. ID") THEN
+        CASE SalesHeader."Document Type" OF
+          SalesHeader."Document Type"::Order:
+            PAGE.RUNMODAL(PAGE::"Sales Order",SalesHeader);
+          SalesHeader."Document Type"::Invoice:
+            PAGE.RUNMODAL(PAGE::"Sales Invoice",SalesHeader);
+          SalesHeader."Document Type"::"Return Order":
+            PAGE.RUNMODAL(PAGE::"Sales Return Order",SalesHeader);
+          SalesHeader."Document Type"::"Credit Memo":
+            PAGE.RUNMODAL(PAGE::"Sales Credit Memo",SalesHeader);
+        END
+      ELSE
+        IF SalesHeader."Document Type" IN [SalesHeader."Document Type"::Order,SalesHeader."Document Type"::Invoice] THEN BEGIN
+          IF SalesHeader."Last Posting No." <> '' THEN
+            SalesInvHeader.GET(SalesHeader."Last Posting No.")
+          ELSE
+            SalesInvHeader.GET(SalesHeader."No.");
+          PAGE.RUNMODAL(PAGE::"Posted Sales Invoice",SalesInvHeader);
+        END ELSE BEGIN
+          IF SalesHeader."Last Posting No." <> '' THEN
+            SalesCrMemoHeader.GET(SalesHeader."Last Posting No.")
+          ELSE
+            SalesCrMemoHeader.GET(SalesHeader."No.");
+          PAGE.RUNMODAL(PAGE::"Posted Sales Credit Memo",SalesCrMemoHeader);
+        END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

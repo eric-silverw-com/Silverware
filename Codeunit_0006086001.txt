@@ -1,0 +1,949 @@
+OBJECT Codeunit 6086001 Approval Functions (WS)
+{
+  OBJECT-PROPERTIES
+  {
+    Date=09/26/18;
+    Time=[ 1:00:00 AM];
+    Version List=DCOW13.70.00,DCW16.00.00.5.00.04;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 454=m,
+                TableData 455=rim,
+                TableData 6085590=rimd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1160040002 : TextConst 'ENU=You are not allowed to change this document.';
+      Text001@161024013 : TextConst 'ENU=You are not allowed to reject this document.';
+      Text002@161024012 : TextConst 'ENU=You are not allowed to approve this document.';
+      FileSysMgt@1005 : Codeunit 6085584;
+      NSTLanguageId@161024015 : Integer;
+      Text003@161024014 : TextConst 'ENU=You are not allowed to forward this document.';
+      Text004@161024016 : TextConst 'ENU=You are not allowed to put this document on hold.';
+      Text005@161024017 : TextConst 'ENU=You are not allowed to remove this document from on hold.';
+      Text006@161024018 : TextConst 'ENU=Your approval limit does not allow you to forward this %1.';
+      Text007@6085573 : TextConst 'ENU=There are no %1 that has %2.';
+      OnHoldRemovedWhenApprovingTxt@1160040001 : TextConst 'ENU=On Hold was removed when approving.';
+      OnHoldKeptWhenApprovingTxt@1160040000 : TextConst 'ENU=On Hold was kept intentionally when approving.';
+      InvoicePutOnHoldReasonTxt@1001 : TextConst 'ENU="Invoice was put on hold with %1 = %2 (%3)."';
+      CrMemoPutOnHoldReasonTxt@1000 : TextConst 'ENU="Credit Memo was put on hold with %1 = %2 (%3)."';
+      InvoiceRejectedReasonTxt@1003 : TextConst 'ENU="Invoice was rejected with %1 = %2 (%3)."';
+      CrMemoRejectedReasonTxt@1002 : TextConst 'ENU="Credit Memo was rejected with %1 = %2 (%3)."';
+      DocumentRejectedReasonTxt@1004 : TextConst 'ENU="Document was rejected with %1 = %2 (%3)."';
+
+    PROCEDURE AddDocumentLine@161024019(LCID@1160040000 : Integer;DocumentType@161024012 : Integer;DocumentNo@161024013 : Code[20];VAR NewLineNo@161024015 : Integer;Type@1000 : Integer;VAR AmountExclVAT@1002 : Decimal;VAR AmountInclVAT@1001 : Decimal);
+    VAR
+      PurchLine@161024014 : Record 39;
+    BEGIN
+      ActivateLanguage(LCID);
+
+      PurchLine.SETRANGE("Document Type",DocumentType);
+      PurchLine.SETRANGE("Document No.",DocumentNo);
+      IF PurchLine.FINDLAST THEN
+        NewLineNo := PurchLine."Line No." + 10000
+      ELSE
+        NewLineNo := 10000;
+
+      PurchLine.INIT;
+      PurchLine.VALIDATE("Document Type",DocumentType);
+      PurchLine.VALIDATE("Document No.",DocumentNo);
+      PurchLine."Line No." := NewLineNo;
+
+      PurchLine.SuspendStatusCheck(TRUE);
+      PurchLine.VALIDATE(Type,Type);
+      PurchLine.INSERT(TRUE);
+
+      GetTotalDocumentAmount(DocumentType,DocumentNo,AmountExclVAT,AmountInclVAT);
+
+      GLOBALLANGUAGE := NSTLanguageId;
+    END;
+
+    PROCEDURE CopyDocumentLine@1160040002(LCID@1160040007 : Integer;DocumentType@1160040002 : Integer;DocumentNo@1160040001 : Code[20];LineNo@1160040003 : Integer;VAR NewLineNo@1160040000 : Integer);
+    VAR
+      PurchLine@1160040004 : Record 39;
+      PurchLine2@1160040005 : Record 39;
+      NextLineNo@1160040006 : Integer;
+    BEGIN
+      ActivateLanguage(LCID);
+
+      PurchLine.GET(DocumentType,DocumentNo,LineNo);
+
+      PurchLine2 := PurchLine;
+      PurchLine2.SETRANGE("Document Type",PurchLine2."Document Type");
+      PurchLine2.SETRANGE("Document No.",PurchLine2."Document No.");
+
+      IF PurchLine2.NEXT = 1 THEN BEGIN
+        NextLineNo := PurchLine2."Line No." - PurchLine."Line No.";
+        IF NextLineNo = 1 THEN BEGIN
+          PurchLine2.FINDLAST;
+          NextLineNo := PurchLine2."Line No." + 10000;
+        END ELSE BEGIN
+          NextLineNo := PurchLine."Line No." + ROUND(NextLineNo/2,1);
+        END;
+      END ELSE
+        NextLineNo := PurchLine."Line No." + 10000;
+
+      PurchLine2.RESET;
+      PurchLine2."Document Type" := PurchLine."Document Type";
+      PurchLine2."Document No." := PurchLine."Document No.";
+      PurchLine2."Line No." := NextLineNo;
+      PurchLine2.INSERT(TRUE);
+
+      PurchLine2.SuspendStatusCheck(TRUE);
+      PurchLine2.VALIDATE(Type,PurchLine.Type);
+      PurchLine2.VALIDATE("No.",PurchLine."No.");
+      PurchLine2.VALIDATE(Description,PurchLine.Description);
+      PurchLine2.VALIDATE("Gen. Prod. Posting Group",PurchLine."Gen. Prod. Posting Group");
+      PurchLine2.VALIDATE("VAT Prod. Posting Group",PurchLine."VAT Prod. Posting Group");
+      PurchLine2.VALIDATE("Posting Group",PurchLine."Posting Group");
+      PurchLine2.VALIDATE("Location Code",PurchLine."Location Code");
+      PurchLine2.VALIDATE("Unit of Measure Code",PurchLine."Unit of Measure Code");
+      PurchLine2.VALIDATE("FA Posting Type",PurchLine."FA Posting Type");
+      PurchLine2.VALIDATE(Quantity,PurchLine.Quantity);
+      PurchLine2.VALIDATE("Direct Unit Cost",PurchLine."Direct Unit Cost");
+      PurchLine2.VALIDATE("Line Discount %",PurchLine."Line Discount %");
+      PurchLine2.VALIDATE("Job No.",PurchLine."Job No.");
+
+      PurchLine2.MODIFY(TRUE);
+
+      NewLineNo := PurchLine2."Line No.";
+
+      GLOBALLANGUAGE := NSTLanguageId;
+    END;
+
+    PROCEDURE DeleteDocumentLine@161024020(LCID@1160040000 : Integer;DocumentType@161024012 : Integer;DocumentNo@161024013 : Code[20];LineNo@161024015 : Integer);
+    VAR
+      PurchLine@161024014 : Record 39;
+    BEGIN
+      ActivateLanguage(LCID);
+
+      PurchLine.GET(DocumentType,DocumentNo,LineNo);
+      PurchLine.SuspendStatusCheck(TRUE);
+      PurchLine.DELETE(TRUE);
+
+      GLOBALLANGUAGE := NSTLanguageId;
+    END;
+
+    PROCEDURE GetDocumentFile@1160040003(LCID@1160040003 : Integer;DocNo@1160040005 : Code[20];ToUrl@1160040001 : Text[1024]);
+    VAR
+      Document@1160040000 : Record 6085590;
+      TempFile@1160040004 : TEMPORARY Record 6085608;
+      OnlineMgt@1160040002 : Codeunit 6192772;
+      OrgDocNo@6085573 : Code[20];
+      i@6085574 : Integer;
+    BEGIN
+      ActivateLanguage(LCID);
+
+      IF NOT Document.GET(DocNo) THEN BEGIN
+        OrgDocNo := DocNo;
+
+        REPEAT
+          IF DocNo[STRLEN(DocNo)-i]='-' THEN
+            DocNo := DELSTR(DocNo,STRLEN(DocNo)-i);
+          i += 1;
+        UNTIL (OrgDocNo <> DocNo) OR (i = STRLEN(OrgDocNo));
+        Document.GET(DocNo);
+      END;
+
+      IF Document."File Type" = Document."File Type"::OCR THEN
+        Document.GetPdfFile(TempFile)
+      ELSE
+        Document.GetMiscFile(TempFile);
+
+      IF TempFile.Data.HASVALUE THEN
+        OnlineMgt.UploadFile(TempFile,ToUrl,TRUE,FALSE);
+
+      GLOBALLANGUAGE := NSTLanguageId;
+    END;
+
+    PROCEDURE GetXmlFile@6085573(LCID@1160040000 : Integer;TableID@6085580 : Integer;DocumentType@6085574 : Integer;DocumentNo@6085573 : Code[20];XmlToUrl@6085575 : Text[1024];XslToUrl@6085576 : Text[1024]) : Boolean;
+    VAR
+      TempDocFileInfo@6085578 : Record 6085600;
+      AllObj@6085577 : Record 2000000038;
+      TempFile@1160040001 : TEMPORARY Record 6085608;
+      OnlineMgt@6085579 : Codeunit 6192772;
+    BEGIN
+      IF NOT AllObj.GET(AllObj."Object Type"::Codeunit,6014371) THEN
+        EXIT;
+
+      ActivateLanguage(LCID);
+
+      TempDocFileInfo."Document Type" := TableID;
+      TempDocFileInfo."Document Subtype" := DocumentType;
+      TempDocFileInfo."Document ID" := DocumentNo;
+      IF NOT CODEUNIT.RUN(6014371,TempDocFileInfo) THEN
+        EXIT;
+
+      IF TempDocFileInfo."XML Filename" <> '' THEN BEGIN
+        TempFile.CreateFromFileIfExist(TempDocFileInfo."XML Filename",FALSE);
+        OnlineMgt.UploadFile(TempFile,XmlToUrl,TRUE,FALSE);
+      END;
+
+      IF TempDocFileInfo."XSL Filename" <> '' THEN BEGIN
+        TempFile.CreateFromFileIfExist(TempDocFileInfo."XSL Filename",FALSE);
+        OnlineMgt.UploadFile(TempFile,XslToUrl,TRUE,FALSE);
+      END;
+
+      GLOBALLANGUAGE := NSTLanguageId;
+
+      EXIT(TempDocFileInfo."XML Filename" <> '');
+    END;
+
+    PROCEDURE AddDocumentFile@1160040001(LCID@1160040009 : Integer;TableID@1160040008 : Integer;DocumentType@1160040000 : Integer;DocumentNo@1160040001 : Code[20];Description@1160040002 : Text[80];Username@1160040003 : Code[50];FileExt@1160040004 : Text[30];FromUrl@1160040005 : Text[1024];VAR NewDocumentNo@1160040006 : Code[20]);
+    VAR
+      Document@1160040007 : Record 6085590;
+      TempFile@1000 : TEMPORARY Record 6085608;
+      DocCat@6085573 : Record 6085575;
+      OnlineMgt@1160040010 : Codeunit 6192772;
+      FileSysMgt@1160040011 : Codeunit 6085584;
+    BEGIN
+      ActivateLanguage(LCID);
+
+      DocCat.SETRANGE("Source Table No.",TableID);
+      DocCat.SETRANGE("Drag and Drop Category",TRUE);
+      IF NOT DocCat.FINDFIRST THEN BEGIN
+        DocCat.SETRANGE("Source Table No.",0);
+        IF NOT DocCat.FINDFIRST THEN
+          ERROR(Text007,DocCat.TABLECAPTION,DocCat.FIELDCAPTION("Drag and Drop Category"));
+      END;
+
+      Document.INSERT(TRUE);
+      Document."Created Doc. Type" := TableID;
+      Document."Created Doc. Subtype" := DocumentType;
+      Document."Created Doc. ID" := DocumentNo;
+      Document."Document Category Code" := DocCat.Code;
+      Document.Status := Document.Status::Registered;
+      Document.Description := Description;
+      Document."File Extension" := FileExt;
+      Document."File Type" := Document."File Type"::Miscellaneous;
+      Document."Imported by" := Username;
+      Document."Allow Delete" := TRUE;
+      Document.MODIFY(TRUE);
+
+      NewDocumentNo := Document."No.";
+
+      TempFile.CreateTemp(FileExt);
+      OnlineMgt.DownloadFile(FromUrl,'',TempFile,FALSE);
+      Document.SetMiscFile(TempFile);
+
+      GLOBALLANGUAGE := NSTLanguageId;
+    END;
+
+    PROCEDURE GetApprovalPDF@1160040004(LCID@1160040015 : Integer;MenuCode@1160040007 : Code[20];SubMenuCode@1160040008 : Code[20];TableID@1160040014 : Integer;DocumentType@1160040002 : Integer;DocumentNo@1160040001 : Code[20];ApproverId@1160040000 : Code[50];ToUrl@6085573 : Text[1024]);
+    VAR
+      DCSetup@1160040011 : Record 6085573;
+      ContiniaCompanySetup@6085574 : Record 6192773;
+      ApprovalEntry@1160040003 : Record 454;
+      PDFReportSetup@1160040012 : Record 6086012;
+      Document@1001 : Record 6085590;
+      SalesHeader@1160040005 : Record 36;
+      PurchHeader@1160040013 : Record 38;
+      TempFile@1160040017 : TEMPORARY Record 6085608;
+      FileSystemMgt@1160040006 : Codeunit 6085584;
+      OnlineMgt@1160040009 : Codeunit 6192772;
+      ReportHandling@1160040016 : Codeunit 6086003;
+      RecordRef@6085576 : RecordRef;
+      Path@1160040010 : Text[1024];
+      Filename@1160040004 : Text[1024];
+    BEGIN
+      ActivateLanguage(LCID);
+
+      DCSetup.GET;
+      ContiniaCompanySetup.GET;
+      ContiniaCompanySetup.TESTFIELD("Company Code");
+
+      PDFReportSetup.GET(TableID,DocumentType);
+      PDFReportSetup.TESTFIELD("PDF Report ID");
+
+      IF DCSetup."Company Code in Archive" THEN
+        Path := DCSetup."Miscellaneous File Path" + ContiniaCompanySetup."Company Code"
+      ELSE
+        Path := DCSetup."Miscellaneous File Path";
+
+      IF DCSetup."Category Code in Archive" THEN BEGIN
+        Document.SETRANGE("Created Doc. Type",TableID);
+        Document.SETRANGE("Created Doc. Subtype",DocumentType);
+        Document.SETRANGE("Created Doc. ID",DocumentNo);
+        IF Document.FINDFIRST THEN
+          IF Document."Document Category Code" <> '' THEN
+            Path := Path + '\' + Document."Document Category Code";
+      END;
+
+      Path := STRSUBSTNO('%1\%2\%3\',Path,MenuCode,SubMenuCode);
+      Filename := STRSUBSTNO('%1\%2 - %3.PDF',Path,DocumentType,DocumentNo);
+
+      IF NOT FileSystemMgt.DirectoryExists(Path) THEN
+        FileSystemMgt.CreateDirectory(Path);
+
+      CASE TableID OF
+        DATABASE::"Sales Header":
+          BEGIN
+            IF FileSysMgt.FileExists(Filename) THEN
+              FileSysMgt.DeleteFile(Filename,FALSE);
+
+            SalesHeader.GET(DocumentType,DocumentNo);
+            SalesHeader.SETRECFILTER;
+            RecordRef.GETTABLE(SalesHeader);
+            ReportHandling.PrintToFile(PDFReportSetup."PDF Report ID",Filename,RecordRef,TempFile);
+          END;
+
+        DATABASE::"Purchase Header":
+          BEGIN
+            IF FileSysMgt.FileExists(Filename) THEN
+              FileSysMgt.DeleteFile(Filename,FALSE);
+
+            PurchHeader.GET(DocumentType,DocumentNo);
+            PurchHeader.SETRECFILTER;
+            RecordRef.GETTABLE(PurchHeader);
+            ReportHandling.PrintToFile(PDFReportSetup."PDF Report ID",Filename,RecordRef,TempFile);
+          END;
+      END;
+
+      OnlineMgt.UploadFile(TempFile,ToUrl,TRUE,FALSE);
+
+      GLOBALLANGUAGE := NSTLanguageId;
+    END;
+
+    PROCEDURE DeleteDocumentFile@1160040000(LCID@1160040002 : Integer;DocumentNo@1160040000 : Code[20]);
+    VAR
+      Document@1160040001 : Record 6085590;
+    BEGIN
+      ActivateLanguage(LCID);
+
+      Document.GET(DocumentNo);
+      Document.DELETE(TRUE);
+
+      GLOBALLANGUAGE := NSTLanguageId;
+    END;
+
+    PROCEDURE AddApprCmtLine@161024012(LCID@1160040001 : Integer;TableID@1160040000 : Integer;DocumentType@161024012 : Integer;DocumentNo@161024013 : Code[20];_UserID@161024014 : Code[50];Comment@161024016 : Text[1024]);
+    VAR
+      ApprovalEntry@1000 : Record 454;
+      ApprovalCmtMgt@161024017 : Codeunit 6085600;
+      DCApprovalMgnt@1001 : Codeunit 6085722;
+    BEGIN
+      ActivateLanguage(LCID);
+
+      DCApprovalMgnt.FilterApprovalEntry2(ApprovalEntry,TableID,DocumentType,DocumentNo,_UserID,ApprovalEntry.Status::Open);
+      IF NOT ApprovalEntry.FINDFIRST THEN BEGIN
+        DCApprovalMgnt.FilterApprovalEntry2(ApprovalEntry,TableID,DocumentType,DocumentNo,
+          DCApprovalMgnt.GetApprovalSharingToUserFilter(_UserID),ApprovalEntry.Status::Open);
+
+        IF NOT ApprovalEntry.FINDFIRST THEN BEGIN
+          ApprovalEntry.RESET;
+          ApprovalEntry.SETCURRENTKEY("Table ID","Document Type","Document No.");
+          ApprovalEntry.SETRANGE("Table ID",TableID);
+          ApprovalEntry.SETRANGE("Document Type",DocumentType);
+          ApprovalEntry.SETRANGE("Document No.",DocumentNo);
+          ApprovalEntry.FINDFIRST;
+        END;
+      END;
+
+      ApprovalCmtMgt.AddCommentForAppvlEntry(ApprovalEntry,_UserID,Comment);
+
+      GLOBALLANGUAGE := NSTLanguageId;
+    END;
+
+    PROCEDURE Approve@161024013(LCID@1160040008 : Integer;MenuCode@1160040003 : Code[20];SubMenuCode@1160040002 : Code[20];TableID@1160040000 : Integer;DocumentType@161024012 : Integer;DocumentNo@161024013 : Code[20];ApproverId@161024014 : Code[50];RemoveOnHold@1160040007 : Boolean;VAR NextTableID@1160040004 : Integer;VAR NextDocumentType@161024015 : Integer;VAR NextDocumentNo@161024016 : Code[20];VAR NextApproverId@161024019 : Text[250]);
+    VAR
+      ApprovalEntry@161024017 : Record 454;
+      PurchHeader@161024021 : Record 38;
+      SalesHeader@1160040001 : Record 36;
+      DCApprovalsBridge@1160040006 : Codeunit 6085790;
+      DCApprovalMgnt@161024020 : Codeunit 6085722;
+      WebUserFunc@1160040005 : Codeunit 6086002;
+      ApprovalCmtMgt@1160040009 : Codeunit 6085600;
+    BEGIN
+      ActivateLanguage(LCID);
+
+      DCApprovalMgnt.FilterApprovalEntry2(ApprovalEntry,TableID,DocumentType,DocumentNo,ApproverId,ApprovalEntry.Status::Open);
+      IF NOT ApprovalEntry.FINDFIRST THEN
+        DCApprovalMgnt.FilterApprovalEntry2(ApprovalEntry,TableID,DocumentType,DocumentNo,
+          DCApprovalMgnt.GetApprovalSharingToUserFilter(ApproverId),ApprovalEntry.Status::Open);
+
+      IF NOT ApprovalEntry.FINDFIRST THEN
+        ERROR(Text002);
+
+      DCApprovalsBridge.SetCurrentUser(ApproverId);
+      DCApprovalsBridge.ApproveApprovalRequest(ApprovalEntry);
+
+      CASE TableID OF
+        DATABASE::"Sales Header":
+          BEGIN
+            SalesHeader.GET(DocumentType,DocumentNo);
+            IF SalesHeader."On Hold" <> '' THEN BEGIN
+              IF RemoveOnHold THEN BEGIN
+                SalesHeader."On Hold" := '';
+                SalesHeader.MODIFY(TRUE);
+                ApprovalCmtMgt.AddCommentForAppvlEntry(ApprovalEntry,ApproverId,OnHoldRemovedWhenApprovingTxt);
+              END ELSE
+                ApprovalCmtMgt.AddCommentForAppvlEntry(ApprovalEntry,ApproverId,OnHoldKeptWhenApprovingTxt);
+            END;
+
+            NextApproverId := DCApprovalMgnt.GetApproverDisplayName(DCApprovalMgnt.GetNextApproverSales(SalesHeader));
+          END;
+
+        DATABASE::"Purchase Header":
+          BEGIN
+            PurchHeader.GET(DocumentType,DocumentNo);
+            IF PurchHeader."On Hold" <> '' THEN BEGIN
+              IF RemoveOnHold THEN BEGIN
+                PurchHeader."On Hold" := '';
+                PurchHeader.MODIFY(TRUE);
+                ApprovalCmtMgt.AddCommentForAppvlEntry(ApprovalEntry,ApproverId,OnHoldRemovedWhenApprovingTxt);
+              END ELSE
+                ApprovalCmtMgt.AddCommentForAppvlEntry(ApprovalEntry,ApproverId,OnHoldKeptWhenApprovingTxt);
+            END;
+
+            NextApproverId := DCApprovalMgnt.GetApproverDisplayName(DCApprovalMgnt.GetNextApprover(PurchHeader));
+          END;
+      END;
+
+      WebUserFunc.UpdateWebUserCompany(ApproverId);
+
+      GLOBALLANGUAGE := NSTLanguageId;
+    END;
+
+    PROCEDURE Reject@161024014(LCID@1160040008 : Integer;MenuCode@1160040003 : Code[20];SubMenuCode@1160040002 : Code[20];TableID@1160040000 : Integer;DocumentType@161024012 : Integer;DocumentNo@161024013 : Code[20];ApproverId@161024014 : Code[50];ReasonCode@1160040007 : Code[10];VAR NextTableID@1160040004 : Integer;VAR NextDocumentType@161024015 : Integer;VAR NextDocumentNo@161024016 : Code[20]);
+    VAR
+      ApprovalEntry@161024018 : Record 454;
+      SalesHeader@161024019 : Record 36;
+      PurchHeader@1160040001 : Record 38;
+      EnabledReasonCode@1160040010 : Record 6085773;
+      DCApprovalsBridge@1160040006 : Codeunit 6085790;
+      DCApprovalMgnt@161024020 : Codeunit 6085722;
+      WebSearchMgnt@161024021 : Codeunit 6085748;
+      WebUserFunc@1160040005 : Codeunit 6086002;
+      ApprovalCmtMgt@1001 : Codeunit 6085600;
+      ModifyHeader@1160040009 : Boolean;
+    BEGIN
+      ActivateLanguage(LCID);
+
+      DCApprovalMgnt.FilterApprovalEntry2(ApprovalEntry,TableID,DocumentType,DocumentNo,ApproverId,ApprovalEntry.Status::Open);
+      IF NOT ApprovalEntry.FINDFIRST THEN
+        DCApprovalMgnt.FilterApprovalEntry2(ApprovalEntry,TableID,DocumentType,DocumentNo,
+          DCApprovalMgnt.GetApprovalSharingToUserFilter(ApproverId),ApprovalEntry.Status::Open);
+
+      IF NOT ApprovalEntry.FINDFIRST THEN
+        ERROR(Text001);
+
+      DCApprovalsBridge.SetCurrentUser(ApproverId);
+      DCApprovalsBridge.RejectApprovalRequest(ApprovalEntry);
+
+      CASE TableID OF
+        DATABASE::"Sales Header":
+          BEGIN
+            SalesHeader.GET(DocumentType,DocumentNo);
+            IF SalesHeader."On Hold" <> '' THEN BEGIN
+              SalesHeader."On Hold" := '';
+              ModifyHeader := TRUE;
+            END;
+
+            IF ReasonCode <> '' THEN BEGIN
+              SalesHeader.VALIDATE("Reason Code",ReasonCode);
+              ModifyHeader := TRUE;
+            END ELSE
+              IF DCApprovalMgnt.IsDCReasonCode(DATABASE::"Sales Header",SalesHeader."Document Type",
+                SalesHeader."Reason Code")
+              THEN BEGIN
+                SalesHeader.VALIDATE("Reason Code",'');
+                ModifyHeader := TRUE;
+              END;
+
+            IF ModifyHeader THEN
+              SalesHeader.MODIFY(TRUE);
+          END;
+
+        DATABASE::"Purchase Header":
+          BEGIN
+            PurchHeader.GET(DocumentType,DocumentNo);
+            IF PurchHeader."On Hold" <> '' THEN BEGIN
+              PurchHeader."On Hold" := '';
+              ModifyHeader := TRUE;
+            END;
+
+            IF ReasonCode <> '' THEN BEGIN
+              PurchHeader.VALIDATE("Reason Code",ReasonCode);
+              ModifyHeader := TRUE;
+
+              CASE PurchHeader."Document Type" OF
+                PurchHeader."Document Type"::Invoice:
+                  ApprovalCmtMgt.AddCommentForAppvlEntry(ApprovalEntry,ApproverId,
+                    STRSUBSTNO(InvoiceRejectedReasonTxt,PurchHeader.FIELDCAPTION("Reason Code"),ReasonCode,
+                      DCApprovalMgnt.GetReasonCodeDesc(ReasonCode)));
+
+                PurchHeader."Document Type"::"Credit Memo":
+                  ApprovalCmtMgt.AddCommentForAppvlEntry(ApprovalEntry,ApproverId,
+                    STRSUBSTNO(CrMemoRejectedReasonTxt,PurchHeader.FIELDCAPTION("Reason Code"),ReasonCode,
+                      DCApprovalMgnt.GetReasonCodeDesc(ReasonCode)));
+
+                ELSE
+                  ApprovalCmtMgt.AddCommentForAppvlEntry(ApprovalEntry,ApproverId,
+                    STRSUBSTNO(DocumentRejectedReasonTxt,PurchHeader.FIELDCAPTION("Reason Code"),ReasonCode,
+                      DCApprovalMgnt.GetReasonCodeDesc(ReasonCode)));
+              END;
+            END ELSE
+              IF DCApprovalMgnt.IsDCReasonCode(
+                DATABASE::"Purchase Header",PurchHeader."Document Type",PurchHeader."Reason Code")
+              THEN BEGIN
+                PurchHeader.VALIDATE("Reason Code",'');
+                ModifyHeader := TRUE;
+              END;
+
+            PurchHeader.MODIFY(TRUE);
+          END;
+      END;
+
+      WebSearchMgnt.UpdateWebSearchFromAppvlEntry(ApprovalEntry,ApprovalEntry."Approver ID");
+      WebSearchMgnt.UpdateWebSearchFromAppvlEntry(ApprovalEntry,ApproverId);
+
+      WebUserFunc.UpdateWebUserCompany(ApproverId);
+
+      GLOBALLANGUAGE := NSTLanguageId;
+    END;
+
+    PROCEDURE Delegate@161024015(LCID@1160040006 : Integer;MenuCode@1160040003 : Code[20];SubMenuCode@1160040002 : Code[20];TableID@1160040000 : Integer;DocumentType@161024012 : Integer;DocumentNo@161024013 : Code[20];ApproverId@161024014 : Code[50];DelegateToUserId@161024017 : Code[50];DelegateAction@161024026 : Integer;VAR NextTableID@1160040004 : Integer;VAR NextDocumentType@161024015 : Integer;VAR NextDocumentNo@161024016 : Code[20]);
+    VAR
+      ApprovalEntry@161024019 : Record 454;
+      Language@161024025 : Record 8;
+      DCApprovalMgnt@161024021 : Codeunit 6085722;
+      WebUserFunc@1160040005 : Codeunit 6086002;
+    BEGIN
+      ActivateLanguage(LCID);
+
+      DCApprovalMgnt.FilterApprovalEntry2(ApprovalEntry,TableID,DocumentType,DocumentNo,ApproverId,ApprovalEntry.Status::Open);
+      IF NOT ApprovalEntry.FINDFIRST THEN
+        DCApprovalMgnt.FilterApprovalEntry2(ApprovalEntry,TableID,DocumentType,DocumentNo,
+          DCApprovalMgnt.GetApprovalSharingToUserFilter(ApproverId),ApprovalEntry.Status::Open);
+
+      IF NOT ApprovalEntry.FINDFIRST THEN
+        ERROR(Text006);
+
+      DCApprovalMgnt.SetCurrUserID(ApproverId);
+      DCApprovalMgnt.DelegateApprovalRequest2(ApprovalEntry,DelegateAction,DelegateToUserId);
+
+      GLOBALLANGUAGE := NSTLanguageId;
+
+      WebUserFunc.UpdateWebUserCompany(ApproverId);
+    END;
+
+    PROCEDURE PutOnHold@161024021(LCID@1160040003 : Integer;TableID@1160040000 : Integer;DocumentType@161024014 : Integer;DocumentNo@161024013 : Code[20];ApproverId@161024012 : Code[50];ReasonCode@1160040002 : Code[10]);
+    VAR
+      ApprovalEntry@161024015 : Record 454;
+      PurchHeader@161024016 : Record 38;
+      SalesHeader@1160040001 : Record 36;
+      ApprovalCmtLine@161024017 : Record 455;
+      DCApprovalMgnt@161024018 : Codeunit 6085722;
+      ApprovalCmtMgt@1000 : Codeunit 6085600;
+    BEGIN
+      ActivateLanguage(LCID);
+
+      DCApprovalMgnt.FilterApprovalEntry2(ApprovalEntry,TableID,DocumentType,DocumentNo,ApproverId,ApprovalEntry.Status::Open);
+      IF NOT ApprovalEntry.FINDFIRST THEN
+        DCApprovalMgnt.FilterApprovalEntry2(ApprovalEntry,TableID,DocumentType,DocumentNo,
+          DCApprovalMgnt.GetApprovalSharingToUserFilter(ApproverId),ApprovalEntry.Status::Open);
+
+      IF NOT ApprovalEntry.FINDFIRST THEN
+        ERROR(Text004);
+
+      CASE TableID OF
+        DATABASE::"Sales Header":
+          BEGIN
+            SalesHeader.GET(DocumentType,DocumentNo);
+            SalesHeader."On Hold" := COPYSTR(DCApprovalMgnt.RemoveDomainName(ApproverId),1,MAXSTRLEN(SalesHeader."On Hold"));
+            IF ReasonCode <> '' THEN
+              SalesHeader.VALIDATE("Reason Code",ReasonCode);
+            SalesHeader.MODIFY(TRUE);
+          END;
+
+        DATABASE::"Purchase Header":
+          BEGIN
+            PurchHeader.GET(DocumentType,DocumentNo);
+            PurchHeader."On Hold" := COPYSTR(DCApprovalMgnt.RemoveDomainName(ApproverId),1,MAXSTRLEN(PurchHeader."On Hold"));
+            IF ReasonCode <> '' THEN BEGIN
+              PurchHeader.VALIDATE("Reason Code",ReasonCode);
+              CASE PurchHeader."Document Type" OF
+                PurchHeader."Document Type"::Invoice:
+                  ApprovalCmtMgt.AddCommentForPurchHeader(PurchHeader,ApproverId,
+                    STRSUBSTNO(InvoicePutOnHoldReasonTxt,PurchHeader.FIELDCAPTION("Reason Code"),ReasonCode,
+                      DCApprovalMgnt.GetReasonCodeDesc(ReasonCode)));
+
+                PurchHeader."Document Type"::"Credit Memo":
+                  ApprovalCmtMgt.AddCommentForPurchHeader(PurchHeader,ApproverId,
+                    STRSUBSTNO(CrMemoPutOnHoldReasonTxt,PurchHeader.FIELDCAPTION("Reason Code"),ReasonCode,
+                      DCApprovalMgnt.GetReasonCodeDesc(ReasonCode)));
+              END;
+            END;
+            PurchHeader.MODIFY(TRUE);
+          END;
+      END;
+
+      GLOBALLANGUAGE := NSTLanguageId;
+    END;
+
+    PROCEDURE RemoveOnHold@161024026(LCID@1160040003 : Integer;TableID@1160040000 : Integer;DocumentType@161024014 : Integer;DocumentNo@161024013 : Code[20];ApproverId@161024012 : Code[50]);
+    VAR
+      ApprovalEntry@161024015 : Record 454;
+      PurchHeader@161024016 : Record 38;
+      SalesHeader@1160040001 : Record 36;
+      ApprovalCmtLine@161024017 : Record 455;
+      DCApprovalMgnt@161024018 : Codeunit 6085722;
+      ModifyHeader@1160040002 : Boolean;
+    BEGIN
+      ActivateLanguage(LCID);
+
+      DCApprovalMgnt.FilterApprovalEntry2(ApprovalEntry,TableID,DocumentType,DocumentNo,ApproverId,ApprovalEntry.Status::Open);
+      IF NOT ApprovalEntry.FINDFIRST THEN
+        DCApprovalMgnt.FilterApprovalEntry2(ApprovalEntry,TableID,DocumentType,DocumentNo,
+          DCApprovalMgnt.GetApprovalSharingToUserFilter(ApproverId),ApprovalEntry.Status::Open);
+
+      IF NOT ApprovalEntry.FINDFIRST THEN
+        ERROR(Text005);
+
+      CASE TableID OF
+        DATABASE::"Sales Header":
+          BEGIN
+            SalesHeader.GET(DocumentType,DocumentNo);
+            IF SalesHeader."On Hold" <> '' THEN BEGIN
+              SalesHeader."On Hold" := '';
+              ModifyHeader := TRUE;
+            END;
+
+            IF DCApprovalMgnt.IsDCReasonCode(DATABASE::"Sales Header",SalesHeader."Document Type",
+              SalesHeader."Reason Code")
+            THEN BEGIN
+              SalesHeader.VALIDATE("Reason Code",'');
+              ModifyHeader := TRUE;
+            END;
+
+            IF ModifyHeader THEN
+              SalesHeader.MODIFY(TRUE);
+          END;
+
+        DATABASE::"Purchase Header":
+          BEGIN
+            PurchHeader.GET(DocumentType,DocumentNo);
+            IF PurchHeader."On Hold" <> '' THEN BEGIN
+              PurchHeader."On Hold" := '';
+              ModifyHeader := TRUE;
+            END;
+
+            IF DCApprovalMgnt.IsDCReasonCode(DATABASE::"Purchase Header",PurchHeader."Document Type",
+              PurchHeader."Reason Code")
+            THEN BEGIN
+              PurchHeader.VALIDATE("Reason Code",'');
+              ModifyHeader := TRUE;
+            END;
+
+            IF ModifyHeader THEN
+              PurchHeader.MODIFY(TRUE);
+          END;
+      END;
+
+      GLOBALLANGUAGE := NSTLanguageId;
+    END;
+
+    PROCEDURE ApplyAmountDistribution@1160040006(LCID@1160040003 : Integer;TableID@1160040000 : Integer;DocumentType@161024014 : Integer;DocumentNo@161024013 : Code[20];ApproverId@161024012 : Code[50];StdAmountDistribCode@1160040002 : Code[10];LineAction@1160040001 : Integer;AmtToDistribute@1160040004 : Decimal);
+    VAR
+      ApprovalEntry@161024015 : Record 454;
+      PurchHeader@161024016 : Record 38;
+      DCApprovalMgnt@1160040005 : Codeunit 6085722;
+      PurchDocMgt@161024018 : Codeunit 6085709;
+    BEGIN
+      // LineAction changed from option to integer to solve error on web portal
+      // LineAction 0 = ReplaceLines, 1 = KeepLines
+
+      ActivateLanguage(LCID);
+
+      DCApprovalMgnt.FilterApprovalEntry2(ApprovalEntry,TableID,DocumentType,DocumentNo,ApproverId,ApprovalEntry.Status::Open);
+      IF NOT ApprovalEntry.FINDFIRST THEN
+        DCApprovalMgnt.FilterApprovalEntry2(ApprovalEntry,TableID,DocumentType,DocumentNo,
+          DCApprovalMgnt.GetApprovalSharingToUserFilter(ApproverId),ApprovalEntry.Status::Open);
+
+      IF NOT ApprovalEntry.FINDFIRST THEN
+        ERROR(Text000);
+
+      CASE TableID OF
+        DATABASE::"Sales Header":
+          ERROR(Text000);
+
+        DATABASE::"Purchase Header":
+          BEGIN
+            PurchHeader.GET(DocumentType,DocumentNo);
+            PurchDocMgt.ApplyAmountDistribution(PurchHeader,StdAmountDistribCode,LineAction,AmtToDistribute);
+          END;
+      END;
+
+      GLOBALLANGUAGE := NSTLanguageId;
+    END;
+
+    PROCEDURE SetOutOfOffice@161024025(LCID@1160040000 : Integer;ApproverId@161024012 : Code[50];ForwardToApproverId@161024015 : Code[50];FromDate@161024013 : Date;ToDate@161024014 : Date);
+    VAR
+      DCApprovalMgnt@161024017 : Codeunit 6085722;
+    BEGIN
+      ActivateLanguage(LCID);
+
+      DCApprovalMgnt.SetOutOfOffice(ApproverId,ForwardToApproverId,FromDate,ToDate);
+
+      GLOBALLANGUAGE := NSTLanguageId;
+    END;
+
+    PROCEDURE GetOutOfOffice@161024024(LCID@1160040000 : Integer;ApproverId@161024014 : Code[50];VAR ForwardToApproverId@161024015 : Code[50];VAR ForwardToApproverName@161024016 : Text[80];VAR FromDate@161024013 : Date;VAR ToDate@161024012 : Date) : Boolean;
+    VAR
+      UserSetup@161024019 : Record 91;
+      Purchaser@161024018 : Record 13;
+      DCApprovalMgnt@161024017 : Codeunit 6085722;
+    BEGIN
+      ActivateLanguage(LCID);
+
+      IF NOT DCApprovalMgnt.GetOutOfOffice(ApproverId,ForwardToApproverId,FromDate,ToDate) THEN
+        IF UserSetup.GET(ApproverId) THEN
+          ForwardToApproverId := UserSetup."Approver ID";
+
+      IF UserSetup.GET(ForwardToApproverId) THEN
+        IF Purchaser.GET(UserSetup."Salespers./Purch. Code") THEN;
+
+      IF Purchaser.Name <> '' THEN
+        ForwardToApproverName := Purchaser.Name
+      ELSE
+        ForwardToApproverName := Purchaser.Code;
+
+      GLOBALLANGUAGE := NSTLanguageId;
+    END;
+
+    PROCEDURE GetNextApprover@161024027(LCID@1160040001 : Integer;TableID@1160040000 : Integer;DocumentType@161024017 : Integer;DocumentNo@161024016 : Code[20];ApproverId@161024015 : Code[50]) NextApproverId : Code[50];
+    VAR
+      ApprovalEntry@161024013 : Record 454;
+      AdvAppvlMgnt@161024014 : Codeunit 6085746;
+      DCApprovalMgnt@161024018 : Codeunit 6085722;
+    BEGIN
+      ActivateLanguage(LCID);
+
+      DCApprovalMgnt.FilterApprovalEntry2(ApprovalEntry,TableID,DocumentType,DocumentNo,ApproverId,ApprovalEntry.Status::Open);
+      IF NOT ApprovalEntry.FINDFIRST THEN
+        DCApprovalMgnt.FilterApprovalEntry2(ApprovalEntry,TableID,DocumentType,DocumentNo,
+          DCApprovalMgnt.GetApprovalSharingToUserFilter(ApproverId),ApprovalEntry.Status::Open);
+
+      IF NOT ApprovalEntry.FINDFIRST THEN
+        ERROR(Text002);
+
+      NextApproverId := AdvAppvlMgnt.CalcNextApprover(ApprovalEntry,ApproverId);
+
+      GLOBALLANGUAGE := NSTLanguageId;
+    END;
+
+    LOCAL PROCEDURE GetNextDocId@161024018(MenuCode@1160040001 : Code[20];SubMenuCode@1160040000 : Code[20];VAR TableID@1160040002 : Integer;VAR DocumentType@161024013 : Integer;VAR DocumentNo@161024012 : Code[20];ApproverId@161024016 : Code[50]);
+    VAR
+      PurchHeader@161024015 : Record 38;
+      ApprovalEntry@1160040003 : Record 454;
+      WebSubMenu@1160040004 : Record 6086011;
+      DCApprovalMgnt@161024014 : Codeunit 6085722;
+    BEGIN
+      IF MenuCode = '' THEN BEGIN
+        TableID := DATABASE::"Purchase Header";
+
+        DCApprovalMgnt.FilterPurchHeaderForApprover(-1,ApproverId,PurchHeader);
+        PurchHeader.SETRANGE("Document Type",DocumentType);
+        PurchHeader.SETFILTER("No.",'>%1',DocumentNo);
+        PurchHeader.SETRANGE("On Hold",'');
+        IF PurchHeader.FINDFIRST THEN BEGIN
+          DocumentType := PurchHeader."Document Type";
+          DocumentNo := PurchHeader."No.";
+          EXIT;
+        END;
+
+        PurchHeader.SETFILTER("No.",'<%1',DocumentNo);
+        IF PurchHeader.FINDFIRST THEN BEGIN
+          DocumentType := PurchHeader."Document Type";
+          DocumentNo := PurchHeader."No.";
+          EXIT;
+        END;
+
+        IF DocumentType = PurchHeader."Document Type"::Invoice THEN
+          PurchHeader.SETRANGE("Document Type",PurchHeader."Document Type"::"Credit Memo")
+        ELSE
+          PurchHeader.SETRANGE("Document Type",PurchHeader."Document Type"::Invoice);
+
+        PurchHeader.SETRANGE("No.");
+        IF PurchHeader.FINDFIRST THEN BEGIN
+          DocumentType := PurchHeader."Document Type";
+          DocumentNo := PurchHeader."No.";
+          EXIT;
+        END;
+      END ELSE BEGIN
+        WebSubMenu.GET(MenuCode,SubMenuCode);
+        ApprovalEntry.SETCURRENTKEY("Approver ID",Status);
+        ApprovalEntry.FILTERGROUP(4);
+        IF WebSubMenu."Approval Code Filter" <> '' THEN
+          ApprovalEntry.SETFILTER("Approval Code",WebSubMenu."Approval Code Filter");
+        IF WebSubMenu."Table ID Filter" <> '' THEN
+          ApprovalEntry.SETFILTER("Table ID",WebSubMenu."Table ID Filter");
+        IF WebSubMenu."Document Type Filter" <> '' THEN
+          ApprovalEntry.SETFILTER("Document Type",WebSubMenu."Document Type Filter");
+        ApprovalEntry.FILTERGROUP(0);
+
+        ApprovalEntry.SETRANGE("Approver ID",ApproverId);
+        ApprovalEntry.SETRANGE(Status,ApprovalEntry.Status::Open);
+
+        ApprovalEntry.SETFILTER("Document No.",'>%1',DocumentNo);
+        IF ApprovalEntry.FINDFIRST THEN BEGIN
+          TableID := ApprovalEntry."Table ID";
+          DocumentType := ApprovalEntry."Document Type";
+          DocumentNo := ApprovalEntry."Document No.";
+          EXIT;
+        END;
+
+        ApprovalEntry.SETFILTER("Document No.",'<%1',DocumentNo);
+        IF ApprovalEntry.FINDFIRST THEN BEGIN
+          TableID := ApprovalEntry."Table ID";
+          DocumentType := ApprovalEntry."Document Type";
+          DocumentNo := ApprovalEntry."Document No.";
+          EXIT;
+        END;
+
+        ApprovalEntry.SETRANGE("Document No.");
+        IF ApprovalEntry.FINDFIRST THEN BEGIN
+          TableID := ApprovalEntry."Table ID";
+          DocumentType := ApprovalEntry."Document Type";
+          DocumentNo := ApprovalEntry."Document No.";
+          EXIT;
+        END;
+      END;
+
+      TableID := 0;
+      DocumentType := 0;
+      DocumentNo := '';
+    END;
+
+    PROCEDURE GetTotalDocumentAmount@161024017(DocumentType@161024012 : Integer;DocumentNo@161024013 : Code[20];VAR AmountExclVAT@161024014 : Decimal;VAR AmountInclVAT@161024015 : Decimal);
+    VAR
+      PurchHeader@161024018 : Record 38;
+      PurchLine@161024017 : Record 39;
+      TempVATAmountLine0@161024016 : TEMPORARY Record 290;
+    BEGIN
+      PurchHeader.GET(DocumentType,DocumentNo);
+      PurchLine.SetPurchHeader(PurchHeader);
+      PurchLine.CalcVATAmountLines(1,PurchHeader,PurchLine,TempVATAmountLine0);
+
+      AmountExclVAT := 0;
+      AmountInclVAT := 0;
+
+      IF TempVATAmountLine0.FINDSET THEN
+        REPEAT
+          AmountExclVAT := AmountExclVAT + TempVATAmountLine0."Amount Including VAT" - TempVATAmountLine0."VAT Amount";
+          AmountInclVAT := AmountInclVAT + TempVATAmountLine0."Amount Including VAT";
+        UNTIL TempVATAmountLine0.NEXT = 0;
+    END;
+
+    PROCEDURE GetDocumentPermissions@161024023(LCID@1160040001 : Integer;TableID@1160040000 : Integer;DocumentType@161024015 : Integer;DocumentNo@161024014 : Code[20];ApproverId@161024023 : Code[50];VAR AllowView@161024013 : Boolean;VAR AllowEditLines@161024016 : Boolean;VAR AllowAddComment@161024017 : Boolean;VAR AllowAttachFiles@161024018 : Boolean;VAR AllowApprove@161024019 : Boolean;VAR AllowReject@161024020 : Boolean;VAR AllowForward@161024021 : Boolean;VAR AllowPutOnHold@161024022 : Boolean);
+    VAR
+      ApprovalEntry@161024025 : Record 454;
+      PurchHeader@161024026 : Record 38;
+      WebDocSearch@161024012 : Record 6086005;
+      ContiniaUserSetup@161024024 : Record 6086002;
+      DCApprovalMgnt@161024028 : Codeunit 6085722;
+    BEGIN
+      IF NOT ContiniaUserSetup.GET(ApproverId) THEN
+        EXIT;
+
+      ActivateLanguage(LCID);
+
+      DCApprovalMgnt.FilterApprovalEntry2(ApprovalEntry,TableID,DocumentType,DocumentNo,ApproverId,ApprovalEntry.Status::Open);
+      IF NOT ApprovalEntry.FINDFIRST THEN
+        DCApprovalMgnt.FilterApprovalEntry2(ApprovalEntry,TableID,DocumentType,DocumentNo,
+          DCApprovalMgnt.GetApprovalSharingToUserFilter(ApproverId),ApprovalEntry.Status::Open);
+
+      IF ApprovalEntry.FINDFIRST THEN BEGIN
+        AllowView := TRUE;
+        AllowEditLines := ContiniaUserSetup."Can Edit Posting Lines";
+        AllowAddComment := TRUE;
+        AllowAttachFiles := TRUE;
+        AllowApprove := TRUE;
+        AllowReject := TRUE;
+        AllowForward := TRUE;
+        AllowPutOnHold := TRUE;
+      END ELSE BEGIN
+        DCApprovalMgnt.FilterApprovalEntry2(ApprovalEntry,TableID,DocumentType,DocumentNo,ApproverId,-1);
+        IF NOT ApprovalEntry.FINDFIRST THEN
+          DCApprovalMgnt.FilterApprovalEntry2(ApprovalEntry,TableID,DocumentType,DocumentNo,
+            DCApprovalMgnt.GetApprovalSharingToUserFilter(ApproverId),-1);
+        IF ApprovalEntry.FINDFIRST THEN BEGIN
+          AllowView := TRUE;
+        END ELSE BEGIN
+          IF TableID = DATABASE::"Purchase Header" THEN BEGIN
+            IF DocumentType = PurchHeader."Document Type"::Invoice THEN
+              WebDocSearch.SETRANGE(Type,WebDocSearch.Type::"Purchase Invoice")
+            ELSE
+              WebDocSearch.SETRANGE(Type,WebDocSearch.Type::"Purchase Credit Memo");
+            WebDocSearch.SETRANGE("No.",DocumentNo);
+            WebDocSearch.SETRANGE("User ID",ApproverId);
+            IF NOT WebDocSearch.ISEMPTY THEN
+              AllowView := TRUE;
+          END;
+        END;
+      END;
+
+      GLOBALLANGUAGE := NSTLanguageId;
+    END;
+
+    LOCAL PROCEDURE ActivateLanguage@161024022(LCID@1160040000 : Integer);
+    BEGIN
+      IF LCID = 0 THEN
+        LCID := GLOBALLANGUAGE;
+      NSTLanguageId := GLOBALLANGUAGE;
+      IF HasLicenseAccessToLanguage(LCID) THEN
+        GLOBALLANGUAGE(LCID);
+    END;
+
+    PROCEDURE GetUTSStylesheet@1160040005(LCID@1160040006 : Integer;XslToUrl@1160040000 : Text[1024]);
+    VAR
+      AllObj@1160040001 : Record 2000000038;
+      TempFile@1160040007 : Record 6085608;
+      OnlineMgt@1160040002 : Codeunit 6192772;
+      StylesheetRecRef@1160040004 : RecordRef;
+      OIOTypeFieldRef@1160040005 : FieldRef;
+      StylesheetFieldRef@1160040003 : FieldRef;
+    BEGIN
+      IF NOT AllObj.GET(AllObj."Object Type"::Table,'',6014387) THEN
+        EXIT;
+
+      ActivateLanguage(LCID);
+
+      StylesheetRecRef.OPEN(6014387);
+      OIOTypeFieldRef := StylesheetRecRef.FIELD(1); // OIO Type
+      OIOTypeFieldRef.SETRANGE(2); // OIO UTS
+      StylesheetRecRef.FINDFIRST;
+      StylesheetFieldRef := StylesheetRecRef.FIELD(3); // Default Stylesheet
+
+      TempFile.CreateFromFileIfExist(FORMAT(StylesheetFieldRef.VALUE),FALSE);
+      OnlineMgt.UploadFile(TempFile,XslToUrl,TRUE,FALSE);
+
+      GLOBALLANGUAGE := NSTLanguageId;
+    END;
+
+    PROCEDURE HasLicenseAccessToLanguage@1160040007(LCID@1160040000 : Integer) : Boolean;
+    VAR
+      ContiniaLicenseMgt@1160040001 : Codeunit 6192771;
+      HasAccessToLanguage@1160040002 : Boolean;
+    BEGIN
+      NSTLanguageId := GLOBALLANGUAGE;
+
+      IF ContiniaLicenseMgt.HasLicenseAccessToLanguage(LCID) THEN
+        HasAccessToLanguage := TRUE
+      ELSE
+        HasAccessToLanguage := FALSE;
+
+      GLOBALLANGUAGE := NSTLanguageId;
+      EXIT(HasAccessToLanguage);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,456 @@
+OBJECT Codeunit 6085584 File System Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08/14/18;
+    Time=[ 1:00:00 AM];
+    Version List=DCW17.00.00.5.00.03;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      FileInfo@1000 : Codeunit 6085666;
+      FileSystem@161024012 : DotNet "'Akeyto.DocumentCapture.Dynamics.Nav.Shared, Version=5.0.0.0, Culture=neutral, PublicKeyToken=0c53e51c0afe7001'.Akeyto.DocumentCapture.Dynamics.Nav.Shared.FileSystem";
+
+    PROCEDURE GetClientFilename@1160040002(ServerFilename@1160040000 : Text[1024];WriteProtected@6085573 : Boolean) ClientFileName : Text[1024];
+    VAR
+      DCSetup@6085575 : Record 6085573;
+      FileMgt@6085574 : Codeunit 419;
+    BEGIN
+      IF NOT CreateVars THEN
+        EXIT('');
+
+      ClientFileName := FileMgt.ClientTempFileName(FileMgt.GetExtension(ServerFilename));
+
+      IF NOT WriteProtected THEN
+        ClientFileName := DownloadTempFile(ServerFilename)
+      ELSE
+        IF FILE.EXISTS(ServerFilename) THEN
+          FileMgt.DownloadToFile(ServerFilename,ClientFileName);
+
+      IF WriteProtected THEN
+        WriteProtectClientFile(ClientFileName);
+    END;
+
+    PROCEDURE GetServerFile@6085574(ServerFilename@6085573 : Text[1024]) ClientFileName : Text;
+    VAR
+      FileMgt@6085574 : Codeunit 419;
+    BEGIN
+      ClientFileName := FileMgt.ClientTempFileName(FileMgt.GetExtension(ServerFilename));
+      FileMgt.DownloadToFile(ServerFilename,ClientFileName);
+    END;
+
+    PROCEDURE FileExists@12(Name@1000 : Text[1024]) : Boolean;
+    BEGIN
+      EXIT(FILE.EXISTS(Name));
+    END;
+
+    PROCEDURE DirectoryExists@161024013(Path@161024012 : Text[1024]) : Boolean;
+    BEGIN
+      IF NOT CreateVars THEN
+        EXIT(FALSE);
+
+      EXIT(FileSystem.DirectoryExists(Path));
+    END;
+
+    PROCEDURE CreateDirectory@161024015(Path@161024012 : Text[1024]) : Boolean;
+    BEGIN
+      IF NOT CreateVars THEN
+        EXIT(FALSE);
+
+      EXIT(FileSystem.CreateDirectory(Path));
+    END;
+
+    PROCEDURE CreateTempDirectory@6085575(FolderName@161024012 : Text[1024]) FolderPath : Text;
+    BEGIN
+      IF NOT CreateVars THEN
+        EXIT;
+
+      FolderPath := TEMPORARYPATH + FolderName;
+      IF FileSystem.DirectoryExists(FolderPath) THEN
+        FileSystem.DeleteDirectory(FolderPath);
+
+      IF NOT FileSystem.CreateDirectory(FolderPath) THEN
+        EXIT('');
+    END;
+
+    PROCEDURE IsFileLocked@161024017(Filename@161024012 : Text[1024]) : Boolean;
+    BEGIN
+      IF NOT CreateVars THEN
+        EXIT(FALSE);
+
+      EXIT(FileSystem.IsFileLocked(Filename));
+    END;
+
+    PROCEDURE CopyFile@1160040000(FromFile@1160040001 : Text[1024];ToFile@1160040000 : Text[1024]) : Boolean;
+    BEGIN
+      EXIT(FILE.COPY(FromFile,ToFile));
+    END;
+
+    PROCEDURE MoveFile@161024020(FromFile@161024012 : Text[1024];ToFile@161024013 : Text[1024]) : Boolean;
+    BEGIN
+      IF NOT CreateVars THEN
+        EXIT(FALSE);
+
+      EXIT(FileSystem.Move(FromFile,ToFile));
+    END;
+
+    PROCEDURE DeleteFile@1160040001(Filename@1160040000 : Text[1024];SupressError@1160040001 : Boolean) : Boolean;
+    BEGIN
+      IF SupressError THEN
+        EXIT(FILE.ERASE(Filename))
+      ELSE
+        FILE.ERASE(Filename)
+    END;
+
+    PROCEDURE UploadFileSilent@3(ClientFilePath@1001 : Text) : Text[1024];
+    VAR
+      FileMgt@6085574 : Codeunit 419;
+    BEGIN
+      EXIT(FileMgt.UploadFileSilent(ClientFilePath));
+    END;
+
+    PROCEDURE UploadFileToStreamSilent@73(ClientFilePath@1001 : Text;VAR ReadStream@1007 : InStream) : Boolean;
+    VAR
+      ClientFileHelper@1005 : DotNet "'mscorlib'.System.IO.File" RUNONCLIENT;
+      ClientFileAttributes@1004 : DotNet "'mscorlib'.System.IO.FileAttributes";
+      TempClientFileName@1000 : Text;
+      FileName@1002 : Text;
+      FileExtension@1003 : Text;
+    BEGIN
+      IF NOT ClientFileHelper.Exists(ClientFilePath) THEN
+        EXIT;
+
+      FileName := FileInfo.GetFilename(ClientFilePath);
+      FileExtension := FileInfo.GetFileExtension(FileName);
+
+      TempClientFileName := GetClientTempFilename('',FileExtension);
+
+      // Move file to temp folder ("Magicpath") if not allready temporary
+      IF FileInfo.GetFilePath(TempClientFileName) <> FileInfo.GetFilePath(ClientFilePath) THEN
+        TempClientFileName := FileInfo.GetFilePath(TempClientFileName) + '\' + FileInfo.GetFilename(ClientFilePath);
+
+      ClientFileHelper.Copy(ClientFilePath,TempClientFileName,TRUE);
+
+      IF NOT UPLOADINTOSTREAM('','<TEMP>','',TempClientFileName,ReadStream) THEN
+        EXIT;
+
+      ClientFileHelper.SetAttributes(TempClientFileName,ClientFileAttributes.Normal);
+      ClientFileHelper.Delete(TempClientFileName);
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE UploadFileSilentToServerPath@10(ClientFilePath@1001 : Text;ServerDirPath@6085573 : Text) : Boolean;
+    VAR
+      FileMgt@6085574 : Codeunit 419;
+      ServerTempPath@6085576 : Text;
+      ServerFileName@6085575 : Text;
+    BEGIN
+      IF COPYSTR(ServerDirPath,STRLEN(ServerDirPath)) = '\' THEN
+        ServerFileName := ServerDirPath + FileInfo.GetFilename(ClientFilePath)
+      ELSE
+        ServerFileName := ServerDirPath + '\' + FileInfo.GetFilename(ClientFilePath);
+
+      ServerTempPath := FileMgt.UploadFileSilent(ClientFilePath);
+
+      IF NOT CopyFile(ServerTempPath,ServerFileName) THEN
+        EXIT(FALSE);
+
+      DeleteFile(ServerTempPath,TRUE);
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CreateVars@161024012() : Boolean;
+    BEGIN
+      IF NOT ISNULL(FileSystem) THEN
+        EXIT(TRUE);
+
+      IF NOT CANLOADTYPE(FileSystem) THEN
+        EXIT(FALSE);
+
+      FileSystem := FileSystem.FileSystem;
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GetFile@2(ServerFilename@6085573 : Text[1024];VAR DCFile@1001 : TEMPORARY Record 6085608) : Boolean;
+    VAR
+      FileMgt@6085574 : Codeunit 419;
+      ReadStream@1002 : InStream;
+      WriteStream@1003 : OutStream;
+      File@1000 : File;
+    BEGIN
+      IF FileExists(ServerFilename) THEN BEGIN
+        File.OPEN(ServerFilename);
+        File.CREATEINSTREAM(ReadStream);
+        DCFile.CreateFromStream(ServerFilename,ReadStream);
+        File.CLOSE;
+        EXIT(TRUE);
+      END ELSE
+        DCFile.CreateEmpty(ServerFilename);
+    END;
+
+    PROCEDURE GetTempFilename@1160040004(Name@6085573 : Text[1024];Extension@1160040000 : Text[30]) TempFileName : Text[1024];
+    VAR
+      TierAutoMgt@1160040001 : Codeunit 419;
+    BEGIN
+      TempFileName := TierAutoMgt.ServerTempFileName(Extension);
+      IF FileExists(TempFileName) THEN
+        DeleteFile(TempFileName,FALSE);
+    END;
+
+    PROCEDURE GetTempFolderPath@6085576() Text : Text[1024];
+    BEGIN
+      EXIT(TEMPORARYPATH);
+    END;
+
+    PROCEDURE GetClientTempFolderPath@6085578() ClientTempPath : Text[1024];
+    VAR
+      ClientFileName@6085574 : Text[1024];
+      TempFile@6085573 : File;
+    BEGIN
+      TempFile.CREATETEMPFILE;
+      ClientFileName := FileInfo.GetFilename(TempFile.NAME);
+      TempFile.CLOSE;
+      TempFile.CREATE(ClientFileName);
+      TempFile.CLOSE;
+      DOWNLOAD(ClientFileName,'','<TEMP>','',ClientFileName);
+      ClientTempPath := FileInfo.GetFilePath(ClientFileName);
+      IF ERASE(ClientFileName) THEN;
+    END;
+
+    PROCEDURE GetClientTempFilename@15(Name@6085573 : Text[1024];Extension@1160040000 : Text[30]) : Text[1024];
+    BEGIN
+      EXIT(STRSUBSTNO('%1\%2.%3',GetClientTempFolderPath,Name,Extension));
+    END;
+
+    PROCEDURE LocalShell@1160040003(Filename@1160040000 : Text[1024]);
+    VAR
+      LocalFileSystem@6085573 : DotNet "'Akeyto.DocumentCapture.Dynamics.Nav.Shared, Version=5.0.0.0, Culture=neutral, PublicKeyToken=0c53e51c0afe7001'.Akeyto.DocumentCapture.Dynamics.Nav.Shared.FileSystem" RUNONCLIENT;
+    BEGIN
+      LocalFileSystem := LocalFileSystem.FileSystem;
+      LocalFileSystem.OpenFile(Filename);
+      CLEAR(LocalFileSystem);
+    END;
+
+    PROCEDURE LocalShellModal@1160040008(Filename@1160040000 : Text[1024]) Succes : Boolean;
+    VAR
+      LocalFileSystem@6085573 : DotNet "'Akeyto.DocumentCapture.Dynamics.Nav.Shared, Version=5.0.0.0, Culture=neutral, PublicKeyToken=0c53e51c0afe7001'.Akeyto.DocumentCapture.Dynamics.Nav.Shared.FileSystem" RUNONCLIENT;
+    BEGIN
+      LocalFileSystem := LocalFileSystem.FileSystem;
+      Succes := LocalFileSystem.OpenFileModal(Filename);
+      CLEAR(LocalFileSystem);
+    END;
+
+    PROCEDURE WriteProtectClientFile@1160040011(FilePath@1160040000 : Text[1024]) : Boolean;
+    VAR
+      FileAttributes@6085573 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.FileAttributes" RUNONCLIENT;
+      File@6085574 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File" RUNONCLIENT;
+      IntAtt@6085575 : Integer;
+      IntAtt2@6085576 : Integer;
+    BEGIN
+      FileAttributes := File.GetAttributes(FilePath);
+      IntAtt := FileAttributes;
+      IntAtt2 := FileAttributes.ReadOnly;
+      File.SetAttributes(FilePath,IntAtt + IntAtt2);
+    END;
+
+    PROCEDURE RemoveClientFileWriteProtection@1160040012(FilePath@6085577 : Text[1024]) : Boolean;
+    VAR
+      FileAttributes@6085576 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.FileAttributes" RUNONCLIENT;
+      File@6085575 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File" RUNONCLIENT;
+      IntAtt@6085574 : Integer;
+      IntAtt2@6085573 : Integer;
+    BEGIN
+      FileAttributes := File.GetAttributes(FilePath);
+      IntAtt := FileAttributes;
+      IntAtt2 := FileAttributes.ReadOnly;
+      File.SetAttributes(FilePath,IntAtt - IntAtt2);
+    END;
+
+    PROCEDURE GetFilesInDir@1000000005(DirectoryPath@1000000002 : Text[1024];Pattern@161024012 : Text[30]) : Integer;
+    VAR
+      Directory@1160040001 : DotNet "'mscorlib'.System.IO.Directory";
+    BEGIN
+      IF NOT DirectoryExists(DirectoryPath) THEN
+        EXIT;
+
+      EXIT(Directory.GetFiles(DirectoryPath,Pattern).Length);
+    END;
+
+    PROCEDURE GetFilesInDir2@1160040006(DirectoryPath@1160040000 : Text[250];Pattern@1160040001 : Text[30];VAR OutFileArray@1160040003 : ARRAY [10000] OF Text[250]) FileCount : Integer;
+    VAR
+      FileDirectory@6085575 : DotNet "'mscorlib'.System.IO.Directory";
+      FileObject@6085574 : DotNet "'mscorlib'.System.Object";
+      FileList@6085573 : DotNet "'mscorlib'.System.Collections.Generic.List`1";
+      FileNo@1160040004 : Integer;
+    BEGIN
+      IF NOT CreateVars THEN
+        EXIT(0);
+
+      IF NOT FileDirectory.Exists(DirectoryPath) THEN
+        EXIT(0);
+
+      FileObject := FileDirectory.GetFiles(DirectoryPath,Pattern);
+      FileList := FileList.List;
+
+      FileList.AddRange(FileObject);
+
+      FileCount := FileList.Count;
+
+      FOR FileNo := 1 TO FileCount DO
+        OutFileArray[FileNo] := FileList.Item(FileNo-1);
+
+      CLEAR(FileObject);
+      CLEAR(FileList);
+    END;
+
+    PROCEDURE GetDirectories@1160040005(DirectoryPath@1160040003 : Text[250];Pattern@1160040001 : Text[30];VAR OutDirectoryArray@1160040000 : ARRAY [10000] OF Text[250]) DirectoryCount : Integer;
+    VAR
+      Directory@6085576 : DotNet "'mscorlib'.System.IO.Directory";
+      DirectoryObject@6085575 : DotNet "'mscorlib'.System.Object";
+      DirectoryList@6085574 : DotNet "'mscorlib'.System.Collections.Generic.List`1";
+      DirectoryNo@6085573 : Integer;
+    BEGIN
+      IF NOT CreateVars THEN
+        EXIT(0);
+
+      IF Pattern = '' THEN
+        DirectoryObject := Directory.GetDirectories(DirectoryPath)
+      ELSE
+        DirectoryObject := Directory.GetDirectories(DirectoryPath,Pattern);
+
+      DirectoryList := DirectoryList.List;
+      DirectoryList.AddRange(DirectoryObject);
+
+      DirectoryCount := DirectoryList.Count;
+
+      FOR DirectoryNo := 1 TO DirectoryCount DO
+        OutDirectoryArray[DirectoryNo] := DirectoryList.Item(DirectoryNo-1);
+
+      CLEAR(DirectoryList);
+    END;
+
+    PROCEDURE DownloadTempFile@7(ServerFileName@1001 : Text) : Text;
+    VAR
+      FileName@1102601003 : Text;
+      Path@1102601004 : Text;
+    BEGIN
+      FileName := ServerFileName;
+      Path := '<TEMP>';
+      IF DOWNLOAD(ServerFileName,'',Path,'',FileName) THEN
+        EXIT(FileName);
+    END;
+
+    PROCEDURE BlobImport@5(VAR BLOBRef@1001 : TEMPORARY Record 99008535;Name@1000 : Text) : Text[1024];
+    VAR
+      FileMgt@1002 : Codeunit 419;
+    BEGIN
+      EXIT(FileMgt.BLOBImport(BLOBRef,Name));
+    END;
+
+    PROCEDURE BlobExport@6(VAR BLOBRef@1002 : TEMPORARY Record 99008535;Name@1001 : Text;CommonDialog@1000 : Boolean) : Text[1024];
+    VAR
+      FileMgt@1003 : Codeunit 419;
+    BEGIN
+      EXIT(FileMgt.BLOBExport(BLOBRef,Name,CommonDialog));
+    END;
+
+    PROCEDURE BlobDownload@14(VAR BLOBRef@1002 : TEMPORARY Record 99008535;ClientFilePath@1000 : Text[1024]) : Text[1024];
+    VAR
+      FileMgt@1003 : Codeunit 419;
+      ClientTempFilePath@1001 : Text;
+    BEGIN
+      ClientTempFilePath := FileMgt.BLOBExport(BLOBRef,FileInfo.GetFilename(ClientFilePath),FALSE);
+      FileMgt.CopyClientFile(ClientTempFilePath,ClientFilePath,TRUE); // Note this is a clientside move.
+      FileMgt.DeleteClientFile(ClientTempFilePath);
+    END;
+
+    PROCEDURE DownloadToFile@9(ServerFileName@1001 : Text;ClientFileName@1000 : Text);
+    VAR
+      FileMgt@1002 : Codeunit 419;
+    BEGIN
+      FileMgt.DownloadToFile(ServerFileName,ClientFileName);
+    END;
+
+    PROCEDURE DeleteClientFile@8(FilePath@1000 : Text) : Boolean;
+    VAR
+      FileMgt@1001 : Codeunit 419;
+    BEGIN
+      EXIT(FileMgt.DeleteClientFile(FilePath));
+    END;
+
+    PROCEDURE GetClientDirectoryFilesList@51(VAR NameValueBuffer@1002 : Record 823;DirectoryPath@1000 : Text);
+    VAR
+      DirectoryHelper@6085573 : DotNet "'mscorlib'.System.IO.Directory" RUNONCLIENT;
+      ArrayHelper@1001 : DotNet "'mscorlib'.System.Array" RUNONCLIENT;
+      i@1003 : Integer;
+    BEGIN
+      NameValueBuffer.RESET;
+      NameValueBuffer.DELETEALL;
+
+      ArrayHelper := DirectoryHelper.GetFiles(DirectoryPath);
+      FOR i := 1 TO ArrayHelper.GetLength(0) DO BEGIN
+        NameValueBuffer.ID := i;
+        EVALUATE(NameValueBuffer.Name,ArrayHelper.GetValue(i - 1));
+        NameValueBuffer.INSERT;
+      END;
+    END;
+
+    PROCEDURE OpenFileDialog@11(WindowTitle@1002 : Text[250];DefaultFileName@1001 : Text;FilterString@1000 : Text) : Text[1024];
+    VAR
+      FileMgt@1003 : Codeunit 419;
+    BEGIN
+      EXIT(FileMgt.OpenFileDialog(WindowTitle,DefaultFileName,FilterString));
+    END;
+
+    PROCEDURE SelectFolderDialog@1(WindowTitle@1001 : Text[1024];VAR SelectedFolder@1002 : Text[1024]) : Boolean;
+    VAR
+      FolderBrowser@6085574 : DotNet "'System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Windows.Forms.FolderBrowserDialog" RUNONCLIENT;
+      DialogResult@6085573 : DotNet "'System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Windows.Forms.DialogResult" RUNONCLIENT;
+    BEGIN
+      FolderBrowser := FolderBrowser.FolderBrowserDialog;
+      FolderBrowser.ShowNewFolderButton := TRUE;
+      FolderBrowser.Description := WindowTitle;
+
+      DialogResult := FolderBrowser.ShowDialog;
+      IF DialogResult = 1 THEN BEGIN
+        SelectedFolder := FolderBrowser.SelectedPath;
+        EXIT(TRUE);
+      END;
+    END;
+
+    PROCEDURE SaveFileDialog@4(WindowTitle@1002 : Text[50];DefaultFileName@1001 : Text;FilterString@1000 : Text) : Text[1024];
+    VAR
+      FileMgt@1003 : Codeunit 419;
+    BEGIN
+      EXIT(FileMgt.SaveFileDialog(WindowTitle,DefaultFileName,FilterString));
+    END;
+
+    PROCEDURE SaveDataUrlToFile@17(VAR TempFile@1009 : TEMPORARY Record 6085608;VAR DataUrl@1006 : Text) : Boolean;
+    VAR
+      Document@1000 : Record 6085590;
+      MemStream@1004 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.MemoryStream";
+      Convert@1001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Convert";
+      Base64Data@1002 : Text;
+    BEGIN
+      IF NOT (STRPOS(DataUrl,'data:') = 1) AND (STRPOS(DataUrl,'base64') > 0) THEN
+        EXIT(FALSE);
+
+      Base64Data := COPYSTR(DataUrl,STRPOS(DataUrl,'base64,') + STRLEN('base64,'));
+
+      MemStream := MemStream.MemoryStream(Convert.FromBase64String(Base64Data));
+      TempFile.CreateFromStream('',MemStream);
+      EXIT(TRUE);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

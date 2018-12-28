@@ -1,0 +1,226 @@
+OBJECT Table 6085749 Approval Sharing
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/09/18;
+    Time=[ 1:00:00 AM];
+    Version List=DCW13.70.00.5.00;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 6085749=rimd;
+    DataCaptionFields=Owner User ID,Shared to User ID;
+    OnInsert=BEGIN
+               TESTFIELD("Owner User ID");
+               TESTFIELD("Shared to User ID");
+               IF "Owner User ID" = "Shared to User ID" THEN
+                 ERROR(OwnerEqualSharedToErr,FIELDCAPTION("Owner User ID"),FIELDCAPTION("Shared to User ID"),"Owner User ID");
+
+               CASE "Sharing Type" OF
+                 "Sharing Type"::Normal:
+                   "Display Order" := 1;
+                 "Sharing Type"::"Out of Office":
+                   "Display Order" := 0;
+               END;
+
+               IF "Copy to All Companies" THEN
+                 InsertInAllCompanies;
+             END;
+
+    OnModify=BEGIN
+               IF "Copy to All Companies" AND xRec."Copy to All Companies" THEN
+                 ModifyInAllCompanies;
+             END;
+
+    OnDelete=BEGIN
+               IF "Copy to All Companies" THEN BEGIN
+                 IF NOT GUIALLOWED THEN
+                   DeleteFromAllCompanies
+                 ELSE
+                   IF "Owner User ID" = USERID THEN
+                     DeleteFromAllCompanies
+                   ELSE BEGIN
+                     IF CONFIRM(Text002,TRUE,TABLECAPTION) THEN
+                       DeleteFromAllCompanies
+                     ELSE BEGIN
+                       "Copy to All Companies" := FALSE;
+                       ModifyInAllCompanies;
+                     END;
+                   END;
+               END;
+             END;
+
+    OnRename=BEGIN
+               IF "Copy to All Companies" THEN
+                 RenameInAllCompanies;
+             END;
+
+    CaptionML=ENU=Approval Sharing;
+    LookupPageID=Page6085737;
+    DrillDownPageID=Page6085737;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Owner User ID       ;Code50        ;TableRelation="Continia User Setup";
+                                                   OnValidate=BEGIN
+                                                                IF "Owner User ID" <> '' THEN
+                                                                  IF "Owner User ID" = "Shared to User ID" THEN
+                                                                    ERROR(OwnerEqualSharedToErr,FIELDCAPTION("Owner User ID"),FIELDCAPTION("Shared to User ID"),"Owner User ID");
+                                                              END;
+
+                                                   CaptionML=ENU=Owner User ID;
+                                                   NotBlank=Yes }
+    { 2   ;   ;Shared to User ID   ;Code50        ;TableRelation="Continia User Setup";
+                                                   OnValidate=BEGIN
+                                                                IF "Shared to User ID" <> '' THEN
+                                                                  IF "Owner User ID" = "Shared to User ID" THEN
+                                                                    ERROR(OwnerEqualSharedToErr,FIELDCAPTION("Owner User ID"),FIELDCAPTION("Shared to User ID"),"Owner User ID");
+                                                              END;
+
+                                                   CaptionML=ENU=Shared to User ID;
+                                                   NotBlank=Yes }
+    { 3   ;   ;Sharing Type        ;Option        ;CaptionML=ENU=Sharing Type;
+                                                   OptionCaptionML=ENU=Normal,Out of Office;
+                                                   OptionString=Normal,Out of Office }
+    { 4   ;   ;Valid From          ;Date          ;OnValidate=BEGIN
+                                                                CheckValidDates;
+                                                              END;
+
+                                                   CaptionML=ENU=Valid From }
+    { 5   ;   ;Valid To            ;Date          ;OnValidate=BEGIN
+                                                                CheckValidDates;
+                                                              END;
+
+                                                   CaptionML=ENU=Valid To }
+    { 6   ;   ;Use Owners Limts & Permissions;Boolean;
+                                                   CaptionML=ENU=Use Owners Limts && Permissions }
+    { 7   ;   ;Display Order       ;Integer       ;CaptionML=ENU=Display Order }
+    { 8   ;   ;Forward E-mails     ;Boolean       ;CaptionML=ENU=Forward E-mails }
+    { 9   ;   ;Copy to All Companies;Boolean      ;OnValidate=VAR
+                                                                ApprovalSharing@1160040000 : Record 6085749;
+                                                              BEGIN
+                                                                ApprovalSharing := Rec;
+                                                                IF NOT ApprovalSharing.FIND('=') THEN // only continue if the record is already inserted in the table
+                                                                  EXIT;
+
+                                                                IF "Copy to All Companies" THEN
+                                                                  InsertInAllCompanies
+                                                                ELSE BEGIN
+                                                                  IF CONFIRM(Text002,TRUE,TABLECAPTION) THEN
+                                                                    DeleteFromAllCompanies
+                                                                  ELSE
+                                                                    ModifyInAllCompanies;
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ENU=Copy to All Companies }
+  }
+  KEYS
+  {
+    {    ;Owner User ID,Shared to User ID,Sharing Type,Valid From,Valid To;
+                                                   Clustered=Yes }
+    {    ;Shared to User ID,Sharing Type,Valid From,Valid To }
+    {    ;Display Order                            }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      Text001@1160040001 : TextConst 'ENU=Do you want to copy this %1 to all companies?';
+      Text002@1160040002 : TextConst 'ENU=Do you want to delete this %1 from all other companies?';
+      Text003@1160040000 : TextConst 'ENU=You cannot rename a %1.;ENC=You cannot rename a %1.';
+      OwnerEqualSharedToErr@1160040003 : TextConst 'ENU=%1 (%3) must not be equal to %2 (%3).';
+      ValidDatesErr@6085573 : TextConst 'ENU=%1 is higher than %2.';
+
+    PROCEDURE InsertInAllCompanies@1160040000();
+    VAR
+      Company@1160040001 : Record 2000000006;
+      ContiniaUserSetup@1160040002 : Record 6086002;
+      ApprovalSharing@1160040000 : Record 6085749;
+    BEGIN
+      Company.SETFILTER(Name,'<>%1',COMPANYNAME);
+      IF Company.FINDSET THEN
+        REPEAT
+          ContiniaUserSetup.CHANGECOMPANY(Company.Name);
+          IF ContiniaUserSetup.GET("Owner User ID") AND ContiniaUserSetup.GET("Shared to User ID") THEN BEGIN
+            ApprovalSharing.CHANGECOMPANY(Company.Name);
+            IF NOT ApprovalSharing.GET("Owner User ID","Shared to User ID","Sharing Type","Valid From","Valid To") THEN BEGIN
+              ApprovalSharing := Rec;
+              ApprovalSharing.INSERT;
+            END;
+          END;
+        UNTIL Company.NEXT = 0;
+    END;
+
+    PROCEDURE ModifyInAllCompanies@1160040002();
+    VAR
+      Company@1160040001 : Record 2000000006;
+      ContiniaUserSetup@1160040002 : Record 6086002;
+      ApprovalSharing@1160040000 : Record 6085749;
+    BEGIN
+      Company.SETFILTER(Name,'<>%1',COMPANYNAME);
+      IF Company.FINDSET THEN
+        REPEAT
+          ApprovalSharing.CHANGECOMPANY(Company.Name);
+          IF ApprovalSharing.GET("Owner User ID","Shared to User ID","Sharing Type","Valid From","Valid To") THEN BEGIN
+            ApprovalSharing."Use Owners Limts & Permissions" := "Use Owners Limts & Permissions";
+            ApprovalSharing."Display Order" := "Display Order";
+            ApprovalSharing."Forward E-mails" := "Forward E-mails";
+            ApprovalSharing."Copy to All Companies" := "Copy to All Companies";
+            ApprovalSharing.MODIFY;
+          END;
+        UNTIL Company.NEXT = 0;
+    END;
+
+    PROCEDURE DeleteFromAllCompanies@1160040004();
+    VAR
+      Company@1160040001 : Record 2000000006;
+      ApprovalSharing@1160040000 : Record 6085749;
+    BEGIN
+      Company.SETFILTER(Name,'<>%1',COMPANYNAME);
+      IF Company.FINDSET THEN
+        REPEAT
+          ApprovalSharing.CHANGECOMPANY(Company.Name);
+          IF ApprovalSharing.GET("Owner User ID","Shared to User ID","Sharing Type","Valid From","Valid To") THEN
+            ApprovalSharing.DELETE;
+        UNTIL Company.NEXT = 0;
+    END;
+
+    PROCEDURE RenameInAllCompanies@1160040001();
+    VAR
+      Company@1160040001 : Record 2000000006;
+      ContiniaUserSetup@1160040002 : Record 6086002;
+      ApprovalSharing@1160040000 : Record 6085749;
+    BEGIN
+      Company.SETFILTER(Name,'<>%1',COMPANYNAME);
+      IF Company.FINDSET THEN
+        REPEAT
+          ApprovalSharing.CHANGECOMPANY(Company.Name);
+          IF ApprovalSharing.GET(xRec."Owner User ID",xRec."Shared to User ID",
+            xRec."Sharing Type",xRec."Valid From",xRec."Valid To")
+          THEN
+            ApprovalSharing.DELETE;
+
+          IF ApprovalSharing.GET("Owner User ID","Shared to User ID","Sharing Type","Valid From","Valid To") THEN
+            ApprovalSharing.DELETE;
+
+          ApprovalSharing := Rec;
+          ApprovalSharing.INSERT;
+        UNTIL Company.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE CheckValidDates@6085573();
+    BEGIN
+      IF ("Valid From" = 0D) OR ("Valid To" = 0D) THEN
+        EXIT;
+      IF "Valid From" > "Valid To" THEN
+        ERROR(ValidDatesErr,FIELDCAPTION("Valid From"),FIELDCAPTION("Valid To"));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

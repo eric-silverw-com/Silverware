@@ -1,0 +1,542 @@
+OBJECT Codeunit 6085705 Purch. Doc. - Validation
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08/17/18;
+    Time=[ 1:00:00 AM];
+    Version List=DCW13.70.00.5.00.03;
+  }
+  PROPERTIES
+  {
+    TableNo=6085590;
+    OnRun=VAR
+            DCSetup@1160040002 : Record 6085573;
+            PurchSetup@1160040010 : Record 312;
+            DocumentLine@1000000000 : TEMPORARY Record 6085596;
+            Template@1000000010 : Record 6085579;
+            Field@1000000004 : Record 6085580;
+            DocumentComment@1000000008 : Record 6085594;
+            DocPage@1160040006 : Record 6085591;
+            Vendor@161024012 : Record 23;
+            PurchHeader@161024014 : Record 38;
+            VendLedgEntry@161024015 : Record 25;
+            PaymentTerms@161024020 : Record 3;
+            GLSetup@161024022 : Record 98;
+            DocVal@1160040003 : Record 6085593;
+            Currency@1160040008 : Record 4;
+            DCDocument@6085573 : Record 6085590;
+            CaptureMgt@1000000009 : Codeunit 6085576;
+            DCAppMgt@1160040007 : Codeunit 6085722;
+            IsValid@1160040001 : Boolean;
+            IsInvoice@1160040004 : Boolean;
+            UsePayTo@1160040000 : Boolean;
+            VendDocNo@161024016 : Code[250];
+            DocCurrCode@161024023 : Code[20];
+            CurrCode@1160040009 : Code[10];
+            PayToVendNo@1160040012 : Code[20];
+            DocDate@161024019 : Date;
+            DocDueDate@161024017 : Date;
+            CalcDueDate@161024018 : Date;
+            AmountExclVAT@1000000002 : Decimal;
+            VATAmount@1000000005 : Decimal;
+            AmountInclVAT@1000000006 : Decimal;
+            SubtractedAmountExclVAT@161024013 : Decimal;
+            TotalLineAmount@1000000003 : Decimal;
+            MaxVATDiffAllowed@1160040011 : Decimal;
+            Text@1160040005 : Text[250];
+            VendDocNoCaption@1160040013 : Text[80];
+            CommentText@1160040014 : Text[250];
+            FldName@6085574 : Text[80];
+          BEGIN
+            CODEUNIT.RUN(CODEUNIT::"Doc. - Field Validation",Rec);
+
+            Template.GET("Template No.");
+
+            IsValid := OK;
+
+            Vendor.GET(GetSourceID);
+            IF Vendor.Blocked = Vendor.Blocked::All THEN BEGIN
+              DocumentComment.Add(Rec,Field,0,DocumentComment.Area::Validation,DocumentComment."Comment Type"::Error,
+                STRSUBSTNO(Text007,Vendor.FIELDCAPTION(Blocked),Vendor.Blocked,Vendor.TABLECAPTION,Vendor."No."));
+              IsValid := FALSE;
+            END;
+
+            AmountExclVAT := PurchDocMgt.GetAllAmountsExclVAT(Rec);
+            VATAmount := PurchDocMgt.GetVATAmount(Rec);
+            SubtractedAmountExclVAT := PurchDocMgt.GetSubtractedAmountExclVAT(Rec);
+            AmountInclVAT := PurchDocMgt.GetAmountInclVAT(Rec);
+            IsInvoice := PurchDocMgt.GetIsInvoice(Rec);
+
+            // *********************************************************************************************************************************
+            // CHECK EXTERNAL DOCUMENT NO.
+            // *********************************************************************************************************************************
+            VendDocNo := COPYSTR(PurchDocMgt.GetDocumentNo(Rec),1,MAXSTRLEN(VendDocNo));
+            IF VendDocNo <> '' THEN BEGIN
+              IF Vendor."Pay-to Vendor No." = '' THEN BEGIN
+                PayToVendNo := Vendor."No.";
+                UsePayTo := FALSE;
+              END ELSE BEGIN
+                PayToVendNo := Vendor."Pay-to Vendor No.";
+                UsePayTo := TRUE;
+              END;
+
+              VendLedgEntry.SETCURRENTKEY("External Document No.");
+              IF IsInvoice THEN BEGIN
+                VendLedgEntry.SETRANGE("Document Type",VendLedgEntry."Document Type"::Invoice);
+                VendDocNoCaption := PurchHeader.FIELDCAPTION("Vendor Invoice No.");
+              END ELSE BEGIN
+                VendLedgEntry.SETRANGE("Document Type",VendLedgEntry."Document Type"::"Credit Memo");
+                VendDocNoCaption := PurchHeader.FIELDCAPTION("Vendor Cr. Memo No.");
+              END;
+
+              VendLedgEntry.SETRANGE("External Document No.",COPYSTR(VendDocNo,1,MAXSTRLEN(VendLedgEntry."External Document No.")));
+              VendLedgEntry.SETRANGE("Vendor No.",PayToVendNo);
+
+              IF VendLedgEntry.FINDFIRST THEN BEGIN
+                IF UsePayTo THEN
+                  DocumentComment.Add(Rec,Field,0,DocumentComment.Area::Validation,DocumentComment."Comment Type"::Error,
+                    STRSUBSTNO(DocNoExistToOnEntryForPayMsg,VendDocNoCaption,VendDocNo,VendLedgEntry.TABLECAPTION,
+                    VendLedgEntry.FIELDCAPTION("Entry No."),VendLedgEntry."Entry No.",Vendor.FIELDCAPTION("Pay-to Vendor No."),
+                    Vendor."Pay-to Vendor No."))
+                ELSE
+                  DocumentComment.Add(Rec,Field,0,DocumentComment.Area::Validation,DocumentComment."Comment Type"::Error,
+                    STRSUBSTNO(DocNoExistOnEntryMsg,VendDocNoCaption,VendDocNo,VendLedgEntry.TABLECAPTION,
+                    VendLedgEntry.FIELDCAPTION("Entry No."),VendLedgEntry."Entry No."));
+                IsValid := FALSE;
+              END ELSE BEGIN
+                // Key only exists in NAV 7.00.00 and forward
+                IF PurchHeader.SETCURRENTKEY("Document Type","Pay-to Vendor No.") THEN;
+
+                IF IsInvoice THEN BEGIN
+                  PurchHeader.SETRANGE("Document Type",PurchHeader."Document Type"::Invoice);
+                  PurchHeader.SETRANGE("Vendor Invoice No.",COPYSTR(VendDocNo,1,MAXSTRLEN(PurchHeader."Vendor Invoice No.")));
+                END ELSE BEGIN
+                  PurchHeader.SETRANGE("Document Type",PurchHeader."Document Type"::"Credit Memo");
+                  PurchHeader.SETRANGE("Vendor Cr. Memo No.",COPYSTR(VendDocNo,1,MAXSTRLEN(PurchHeader."Vendor Cr. Memo No.")));
+                END;
+
+                PurchHeader.SETRANGE("Pay-to Vendor No.",PayToVendNo);
+
+                IF PurchHeader.FINDFIRST THEN BEGIN
+                  IF UsePayTo THEN BEGIN
+                    IF PurchHeader."Document Type" = PurchHeader."Document Type"::Invoice THEN
+                      CommentText := InvDocNoExistForPayToMsg
+                    ELSE
+                      CommentText := CrMemoDocNoExistForPayToMsg;
+
+                    DocumentComment.Add(Rec,Field,0,DocumentComment.Area::Validation,DocumentComment."Comment Type"::Error,
+                      STRSUBSTNO(CommentText,VendDocNoCaption,VendDocNo,PurchHeader."No.",
+                      Vendor.FIELDCAPTION("Pay-to Vendor No."),Vendor."Pay-to Vendor No."))
+                  END ELSE BEGIN
+                    IF PurchHeader."Document Type" = PurchHeader."Document Type"::Invoice THEN
+                      CommentText := InvDocNoExistMsg
+                    ELSE
+                      CommentText := CrMemoDocNoExistMsg;
+
+                    DocumentComment.Add(Rec,Field,0,DocumentComment.Area::Validation,DocumentComment."Comment Type"::Error,
+                      STRSUBSTNO(CommentText,VendDocNoCaption,VendDocNo,PurchHeader."No."));
+                  END;
+                  IsValid := FALSE;
+                END;
+              END;
+            END;
+
+            // *********************************************************************************************************************************
+            // WARN IF DIFFERENT DATE FORMATS ARE USED ON FIELDS
+            // *********************************************************************************************************************************
+            Field.SETRANGE("Template No.","Template No.");
+            Field.SETRANGE("Data Type",Field."Data Type"::Date);
+            IF Field.FINDFIRST THEN BEGIN
+              Field.SETFILTER("Date Format",'<>%1',Field."Date Format");
+              IF NOT Field.ISEMPTY THEN
+                DocumentComment.Add(Rec,Field,0,DocumentComment.Area::Validation,DocumentComment."Comment Type"::Warning,Text016);
+            END;
+            Field.RESET;
+
+            DocDate := PurchDocMgt.GetDocumentDate(Rec);
+            DocDueDate := PurchDocMgt.GetDueDate(Rec);
+
+            IF IsInvoice THEN BEGIN
+              IF DocDate <> 0D THEN
+                IF PaymentTerms.GET(Vendor."Payment Terms Code") AND (FORMAT(PaymentTerms."Due Date Calculation") <> '') THEN
+                  CalcDueDate := CALCDATE(PaymentTerms."Due Date Calculation",DocDate);
+
+              IF Field.GET("Template No.",Field.Type::Header,'DUEDATE') THEN BEGIN
+                // *****************************************************************************************************************************
+                // WARN IF DUE DATE = DOCUMENT DATE
+                // *****************************************************************************************************************************
+                IF Field."Search for Value" THEN
+                  IF (DocDueDate = DocDate) AND (DocDueDate <> CalcDueDate) AND (DocDate <> 0D) THEN
+                    DocumentComment.Add(Rec,Field,0,DocumentComment.Area::Validation,DocumentComment."Comment Type"::Warning,
+                      STRSUBSTNO(Text008,PurchDocMgt.GetDueDateDesc(Rec),PurchDocMgt.GetDocDateDesc(Rec)));
+
+                // *****************************************************************************************************************************
+                // WARN IF DUE DATE <> CALCULATE DUE DATE (BASED ON THE DOCUMENT DATE AND VENDOR PAYMENT TERMS)
+                // *****************************************************************************************************************************
+                IF (DocDate <> 0D) AND (DocDueDate <> 0D) AND (CalcDueDate <> 0D) AND (DocDueDate <> CalcDueDate) THEN
+                  DocumentComment.Add(Rec,Field,0,DocumentComment.Area::Validation,DocumentComment."Comment Type"::Warning,
+                    STRSUBSTNO(Text009,Vendor."Payment Terms Code"));
+              END;
+            END ELSE BEGIN
+            // *********************************************************************************************************************************
+            // WARN IF THIS IS A CREDIT MEMO AND DUE DATE IS IN THE FUTURE
+            // *********************************************************************************************************************************
+              IF DocDueDate > TODAY THEN
+                DocumentComment.Add(Rec,Field,0,DocumentComment.Area::Validation,DocumentComment."Comment Type"::Warning,
+                  STRSUBSTNO(Text017,PurchDocMgt.GetDueDateDesc(Rec)));
+            END;
+
+            IF Field.GET("Template No.",Field.Type::Header,'CURRCODE') THEN
+              FldName := Field."Field Name"
+            ELSE
+              FldName := PurchHeader.FIELDCAPTION("Currency Code");
+
+            DocCurrCode := PurchDocMgt.GetCurrencyCode(Rec);
+            DCSetup.GET;
+            GLSetup.GET;
+
+            // *********************************************************************************************************************************
+            // CHECK CURRENCY CODE
+            // *********************************************************************************************************************************
+            IF (DocCurrCode = '') AND DCSetup."Fill-out LCY" THEN
+              DocumentComment.Add(Rec,Field,0,DocumentComment.Area::Validation,DocumentComment."Comment Type"::Error,
+                STRSUBSTNO(MissingCurrencyCodeMsg,FldName,DCSetup.FIELDCAPTION("Fill-out LCY"),DCSetup.TABLECAPTION));
+
+            // *********************************************************************************************************************************
+            // WARN IF CURRENCY CODE <> VENDOR CARD CURRENCY CODE
+            // *********************************************************************************************************************************
+            IF (NOT ((Vendor."Currency Code" IN ['',GLSetup."LCY Code"]) AND (DocCurrCode IN ['',GLSetup."LCY Code"])) AND
+              (Vendor."Currency Code" <> DocCurrCode))
+            THEN
+              DocumentComment.Add(Rec,Field,0,DocumentComment.Area::Validation,DocumentComment."Comment Type"::Warning,
+                STRSUBSTNO(Text011,DocCurrCode,Vendor."Currency Code"));
+
+            // *********************************************************************************************************************************
+            // WARN IF TOTAL AMOUNTS ARE NEGATIVE WHEN THIS IS AN INVOICE (LIKELY THAT THE DOCUMENT TYPE SHOULD BE A CREDIT MEMO)
+            // *********************************************************************************************************************************
+            IF IsInvoice THEN
+              IF AmountExclVAT < 0 THEN
+                DocumentComment.Add(Rec,Field,0,DocumentComment.Area::Validation,DocumentComment."Comment Type"::Error,
+                  STRSUBSTNO(FieldIsNegativeMsg,DCDocument.FIELDCAPTION("Amount Excl. VAT")));
+
+            // *********************************************************************************************************************************
+            // CHECK VAT AMOUNT
+            // *********************************************************************************************************************************
+            PurchSetup.GET;
+
+            IF (DocCurrCode = '') OR ((DocCurrCode <> '') AND (DocCurrCode = GLSetup."LCY Code") AND NOT DCSetup."Fill-out LCY") THEN BEGIN
+              Currency.InitRoundingPrecision;
+              CurrCode := GLSetup."LCY Code";
+
+              IF PurchSetup."Invoice Rounding" THEN
+                GLSetup.TESTFIELD("Inv. Rounding Precision (LCY)");
+            END ELSE BEGIN
+              Currency.GET(DocCurrCode);
+              CurrCode := DocCurrCode;
+
+              IF PurchSetup."Invoice Rounding" THEN
+                Currency.TESTFIELD("Invoice Rounding Precision");
+            END;
+
+            IF PurchSetup."Invoice Rounding" THEN
+              MaxVATDiffAllowed := Currency."Invoice Rounding Precision"
+            ELSE
+              MaxVATDiffAllowed := 0;
+
+            IF Template."Purch. Validate VAT Calc." THEN BEGIN
+              IF ABS((AmountExclVAT + VATAmount) - AmountInclVAT) > MaxVATDiffAllowed THEN BEGIN
+                DocumentComment.Add(Rec,Field,0,DocumentComment.Area::Validation,DocumentComment."Comment Type"::Error,Text001);
+                IsValid := FALSE;
+              END;
+            END;
+
+            IF PurchSetup."Invoice Rounding" THEN
+              IF ROUND(AmountInclVAT,Currency."Invoice Rounding Precision",Currency.InvoiceRoundingDirection) <> AmountInclVAT THEN BEGIN
+                Field.GET("Template No.",Field.Type::Header,'AMOUNTINCLVAT');
+
+                DocumentComment.Add(Rec,Field,0,DocumentComment.Area::Validation,DocumentComment."Comment Type"::Warning,
+                  STRSUBSTNO(InvRoundMsg,Field."Field Name",AmountInclVAT,
+                  ROUND(AmountInclVAT,Currency."Invoice Rounding Precision",Currency.InvoiceRoundingDirection),
+                  Currency.FIELDCAPTION("Invoice Rounding Precision"),Currency.FIELDCAPTION("Invoice Rounding Type"),CurrCode));
+              END;
+
+            // *********************************************************************************************************************************
+            // BUILD LINES TABLE AND CHECK THE LINES
+            // *********************************************************************************************************************************
+            BuildTempLinesTable(DocumentLine);
+            IF DocumentLine.ISEMPTY THEN BEGIN
+              IF Template."Recognize Lines" = Template."Recognize Lines"::Yes THEN
+                DocumentComment.Add(Rec,Field,0,DocumentComment.Area::Validation,DocumentComment."Comment Type"::Warning,Text018);
+            END ELSE BEGIN
+              DocumentLine.SETRANGE(OK,FALSE);
+              IF NOT DocumentLine.ISEMPTY THEN BEGIN
+                DocumentComment.Add(Rec,Field,0,DocumentComment.Area::Validation,DocumentComment."Comment Type"::Error,Text002);
+                IsValid := FALSE;
+              END;
+
+              IF Template."Validate Line Totals" THEN BEGIN
+                // Sum all the lines and compare it to the headerfield, Amount Excl. VAT
+                DocumentLine.SETRANGE(OK);
+                IF DocumentLine.FINDSET(FALSE,FALSE) THEN
+                  REPEAT
+                    TotalLineAmount := TotalLineAmount + PurchDocMgt.GetLineAmount(Rec,DocumentLine."Line No.");
+                  UNTIL DocumentLine.NEXT = 0;
+
+                IF TotalLineAmount <> SubtractedAmountExclVAT THEN BEGIN
+                  DocumentComment.Add(Rec,Field,0,DocumentComment.Area::Validation,DocumentComment."Comment Type"::Error,
+                    STRSUBSTNO(Text003,DCAppMgt.FormatAmount(TotalLineAmount,DocCurrCode),
+                    DCAppMgt.FormatAmount(SubtractedAmountExclVAT,DocCurrCode)));
+                  IsValid := FALSE;
+                END;
+              END;
+
+              // *****************************************************************************************************************************
+              // VALIDATE MATCH
+              // *****************************************************************************************************************************
+              IF "Match Status" <> "Match Status"::"Manually Matched" THEN BEGIN
+                IF IsInvoice THEN BEGIN
+                  IF Template."Purch. Inv. Reg. Step 1" = Template."Purch. Inv. Reg. Step 1"::"Match Order & Create Invoice" THEN
+                    IsValid := IsValid AND ValidateLineMatch(Rec,DocumentLine);
+                END ELSE BEGIN
+                  IF Template."Purch. Cr.Memo Reg. Step 1" =
+                    Template."Purch. Cr.Memo Reg. Step 1"::"Match Return Order & Create Credit Memo"
+                  THEN
+                    IsValid := IsValid AND ValidateLineMatch(Rec,DocumentLine);
+                END;
+              END;
+            END;
+
+            IsValid := IsValid AND ValidateMatch(Rec,Template);
+            IsValid := IsValid AND ValidateLines(Template,Rec,DocumentLine);
+            IsValid := IsValid AND ValidateAmtAccounts(Rec,Template);
+
+            IF IsValid <> OK THEN BEGIN
+              OK := IsValid;
+              MODIFY;
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1000000000 : TextConst 'ENU=Amounts do not match.';
+      Text002@1000000001 : TextConst 'ENU=One or more lines have errors.';
+      Text003@1000000002 : TextConst 'ENU=The sum of all lines (%1) does not reconcile to the total amount (%2).';
+      Text004@6085580 : TextConst 'ENU=%1 (%2) on line %3 must be translated.';
+      Text005@1000000004 : TextConst 'ENU=No lines recognized.';
+      Text006@1000000005 : TextConst 'ENU=One or more lines are unmatched.';
+      PurchDocMgt@1000000006 : Codeunit 6085709;
+      Text007@161024012 : TextConst 'ENU=%1 cannot be ''%2'' on %3 %4';
+      Text008@161024013 : TextConst 'ENU="WARNING: %1 = %2"';
+      Text009@161024015 : TextConst 'ENU=WARNING: Payment Terms(%1) not correct.';
+      DocNoExistOnEntryMsg@6085573 : TextConst 'ENU="%1 %2 already exists (on %3, %4 = %5)."';
+      DocNoExistToOnEntryForPayMsg@6085574 : TextConst 'ENU="%1 %2 already exists (on %3, %4 = %5 for %6 = %7)."';
+      InvDocNoExistMsg@6085575 : TextConst 'ENU=%1 %2 already exists (on unposted invoice %3).';
+      CrMemoDocNoExistMsg@6085576 : TextConst 'ENU=%1 %2 already exists (on unposted credit memo %3).';
+      InvDocNoExistForPayToMsg@6085577 : TextConst 'ENU="%1 %2 already exists (on unposted invoice %3 for %4 = %5)."';
+      CrMemoDocNoExistForPayToMsg@6085578 : TextConst 'ENU="%1 %2 already exists (on unposted credit memo %3 for %4 = %5)."';
+      Text011@161024016 : TextConst 'ENU="WARNING: Currency Code is different. Document = ''%1'', Vendor = ''%2''"';
+      SumMatchedLinesMsg@161024017 : TextConst 'ENU=The sum of all matched lines (%1) does not reconcile to the total amount (%2).';
+      WarningTxtMsg@1160040004 : TextConst 'ENU=WARNING:';
+      Text013@161024018 : TextConst 'ENU=No lines have been matched and no amounts has been configured to be transfered.';
+      Text014@161024019 : TextConst 'ENU=%1 must be specified on the template.';
+      Text015@161024020 : TextConst 'ENU=No Account has been configured for %1.';
+      Text016@161024021 : TextConst 'ENU=WARNING: Different date formats used on fields.';
+      Text017@161024022 : TextConst 'ENU=WARNING: %1 greater than today on credit note.';
+      Text018@1160040000 : TextConst 'ENU=WARNING: No lines recognized.';
+      MissingCurrencyCodeMsg@1160040002 : TextConst 'ENU=You must specify %1 when %2 is activated in %3.';
+      FieldIsNegativeMsg@1160040001 : TextConst 'ENU=%1 is negative on invoice.';
+      InvRoundMsg@1160040003 : TextConst 'ENU=WARNING: %1 (%2) does not match the rounded amount (%3) calculated using %4 and %5 configured for %6.';
+      FoundAccountToLongMsg@6085579 : TextConst 'ENU=The Account (%1) found from %2 for %3 is %4 characters long but the account must not be more than %5 characters.';
+
+    PROCEDURE ValidateLineMatch@1000000000(VAR Document@1000000004 : Record 6085590;VAR DocumentLine@1000000002 : TEMPORARY Record 6085596) : Boolean;
+    VAR
+      PurchDocMatch@1000000000 : Record 6085700;
+      CaptureMgnt@1000000001 : Codeunit 6085576;
+      Field@1000000005 : Record 6085580;
+      DocumentComment@1000000009 : Record 6085594;
+      Quantity@1000000003 : Decimal;
+      UnitCost@1000000006 : Decimal;
+      LineAmount@1000000007 : Decimal;
+      MatchRequired@1000000008 : Boolean;
+    BEGIN
+      IF DocumentLine.FINDSET THEN
+        REPEAT
+          Quantity := PurchDocMgt.GetLineQuantity(Document,DocumentLine."Line No.");
+          UnitCost := PurchDocMgt.GetLineUnitCost(Document,DocumentLine."Line No.");
+          LineAmount := PurchDocMgt.GetLineAmount(Document,DocumentLine."Line No.");
+
+          MatchRequired := (Quantity <> 0) OR (UnitCost <> 0) OR (LineAmount <> 0);
+
+          IF MatchRequired THEN BEGIN
+            PurchDocMatch.SETRANGE("Document No.",DocumentLine."Document No.");
+            PurchDocMatch.SETRANGE("Document Line No.",DocumentLine."Line No.");
+            IF PurchDocMatch.ISEMPTY THEN BEGIN
+              DocumentComment.Add(Document,Field,0,DocumentComment.Area::Validation,DocumentComment."Comment Type"::Error,Text006);
+              EXIT(FALSE);
+            END;
+          END;
+        UNTIL DocumentLine.NEXT = 0;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ValidateMatch@161024019(VAR Document@1000000004 : Record 6085590;Template@161024014 : Record 6085579) : Boolean;
+    VAR
+      CaptureMgnt@1000000001 : Codeunit 6085576;
+      DCAppMgt@1160040000 : Codeunit 6085722;
+      Field@1000000005 : Record 6085580;
+      DocumentComment@1000000009 : Record 6085594;
+      AmountToMatch@161024015 : Decimal;
+      MatchedAmount@161024017 : Decimal;
+      IsInvalid@161024012 : Boolean;
+      DocCurrCode@1160040001 : Code[20];
+    BEGIN
+      IF PurchDocMgt.IsDocMatched(Document) THEN BEGIN
+        MatchedAmount := PurchDocMgt.GetDocMatchedAmount(Document);
+        AmountToMatch := PurchDocMgt.GetAmountToMatch(Document);
+        DocCurrCode := PurchDocMgt.GetCurrencyCode(Document);
+
+        IF NOT PurchDocMgt.MatchWithinTolerance(Template,PurchDocMgt.GetPurchPostingDate(Document,Template),DocCurrCode,0,AmountToMatch,
+          MatchedAmount)
+        THEN BEGIN
+          IF Document."Match Status" <> Document."Match Status"::"Manually Matched" THEN BEGIN
+            DocumentComment.Add(Document,Field,0,DocumentComment.Area::Validation,DocumentComment."Comment Type"::Error,
+              STRSUBSTNO(SumMatchedLinesMsg,DCAppMgt.FormatAmount(MatchedAmount,DocCurrCode),
+              DCAppMgt.FormatAmount(AmountToMatch,DocCurrCode)));
+            IsInvalid := TRUE;
+          END ELSE
+            DocumentComment.Add(Document,Field,0,DocumentComment.Area::Validation,DocumentComment."Comment Type"::Warning,
+              STRSUBSTNO('%1 %2',WarningTxtMsg,STRSUBSTNO(SumMatchedLinesMsg,DCAppMgt.FormatAmount(MatchedAmount,DocCurrCode),
+              DCAppMgt.FormatAmount(AmountToMatch,DocCurrCode))));
+        END ELSE
+          IF AmountToMatch <> MatchedAmount THEN BEGIN
+            IF Template."Variance Posting Account" = '' THEN BEGIN
+              DocumentComment.Add(Document,Field,0,DocumentComment.Area::Validation,DocumentComment."Comment Type"::Error,
+                STRSUBSTNO(Text014,Template.FIELDCAPTION("Variance Posting Account")));
+              IsInvalid := TRUE;
+            END;
+          END;
+      END;
+
+      EXIT(NOT IsInvalid);
+    END;
+
+    PROCEDURE ValidateLines@6085573(Template@1160040005 : Record 6085579;VAR Document@1000000004 : Record 6085590;VAR DocumentLine@1160040000 : TEMPORARY Record 6085596) : Boolean;
+    VAR
+      Field@1000000005 : Record 6085580;
+      DocumentComment@1000000009 : Record 6085594;
+      LineTransl@1160040003 : Record 6085584;
+      CaptureMgnt@1160040002 : Codeunit 6085576;
+      No@1160040001 : Code[50];
+      Quantity@1000000003 : Decimal;
+      UnitCost@1000000006 : Decimal;
+      LineAmount@1000000007 : Decimal;
+      MatchRequired@1000000008 : Boolean;
+      IsValid@1160040007 : Boolean;
+    BEGIN
+      IF PurchDocMgt.IsDocMatched(Document) THEN
+        EXIT(TRUE);
+
+      IsValid := TRUE;
+      Field.GET(Template."No.",Field.Type::Line,'NO');
+      IF DocumentLine.FINDSET THEN
+        REPEAT
+          No := PurchDocMgt.GetLineAccountNo(Document,DocumentLine."Line No.");
+          Quantity := PurchDocMgt.GetLineQuantity(Document,DocumentLine."Line No.");
+          UnitCost := PurchDocMgt.GetLineUnitCost(Document,DocumentLine."Line No.");
+          LineAmount := PurchDocMgt.GetLineAmount(Document,DocumentLine."Line No.");
+
+          MatchRequired := (Quantity <> 0) OR (UnitCost <> 0) OR (LineAmount <> 0);
+
+          IF MatchRequired THEN
+            IF NOT PurchDocMgt.GetTranslLineInfo2(Document,DocumentLine."Line No.",LineTransl) THEN BEGIN
+              DocumentComment.Add(Document,Field,DocumentLine."Line No.",DocumentComment.Area::Validation,
+                DocumentComment."Comment Type"::Error,STRSUBSTNO(Text004,Field."Field Name",No,DocumentLine."Line No."));
+              IsValid := FALSE;
+            END;
+        UNTIL DocumentLine.NEXT = 0;
+
+      EXIT(IsValid);
+    END;
+
+    PROCEDURE ValidateAmtAccounts@161024021(VAR Document@1000000004 : Record 6085590;Template@161024014 : Record 6085579) : Boolean;
+    VAR
+      PurchDocMatch@1000000000 : Record 6085700;
+      DataTransl@161024019 : Record 6085584;
+      Field@1000000005 : Record 6085580;
+      TemplField@161024013 : Record 6085580;
+      DocumentComment@1000000009 : Record 6085594;
+      Value@161024020 : Record 6085593;
+      CaptureMgnt@161024021 : Codeunit 6085576;
+      Amount@161024016 : Decimal;
+      MatchedAmount@161024017 : Decimal;
+      IsInvalid@161024012 : Boolean;
+      AccountNo@161024018 : Code[20];
+      TempAccountNo@6085573 : Code[1024];
+      LinesCaptured@161024015 : Boolean;
+    BEGIN
+      Value.SETCURRENTKEY("Document No.","Is Value",Type,"Line No.");
+      Value.SETRANGE("Document No.",Document."No.");
+      Value.SETRANGE("Is Value",TRUE);
+      Value.SETRANGE(Type,Value.Type::Line);
+      LinesCaptured := NOT Value.ISEMPTY;
+
+      PurchDocMatch.SETRANGE("Document No.",Document."No.");
+
+      Field.SETRANGE("Template No.",Document."Template No.");
+      Field.SETRANGE(Type,Field.Type::Header);
+      Field.SETRANGE("Data Type",Field."Data Type"::Number);
+      IF (PurchDocMatch.ISEMPTY) AND (NOT LinesCaptured) THEN
+        Field.SETFILTER("Transfer Amount to Document",'<>%1',Field."Transfer Amount to Document"::" ")
+      ELSE
+        Field.SETRANGE("Transfer Amount to Document",Field."Transfer Amount to Document"::Always);
+      Field.SETRANGE("Subtract from Amount Field",'');
+
+      IF NOT Template."Allow Register without Amounts" THEN BEGIN
+        IF (NOT Field.FINDFIRST) AND (PurchDocMatch.ISEMPTY) AND (NOT LinesCaptured) THEN BEGIN
+          DocumentComment.Add(Document,Field,0,DocumentComment.Area::Validation,DocumentComment."Comment Type"::Error,Text013);
+          IsInvalid := TRUE;
+        END;
+      END;
+
+      REPEAT
+        Amount := CaptureMgnt.GetDecimal(Document,Field.Type,Field.Code,0);
+        IF Amount <> 0 THEN BEGIN
+          AccountNo := '';
+
+          IF Field."G/L Account Field Code" <> '' THEN
+            IF (TemplField.GET(Field."Template No.",Field.Type,Field."G/L Account Field Code")) THEN BEGIN
+              TempAccountNo := CaptureMgnt.GetValueAsText(Document."No.",0,TemplField);
+              IF STRLEN(TempAccountNo) <= MAXSTRLEN(AccountNo) THEN
+                AccountNo := TempAccountNo
+              ELSE
+                DocumentComment.Add(Document,Field,0,DocumentComment.Area::Validation,DocumentComment."Comment Type"::Error,
+                  STRSUBSTNO(FoundAccountToLongMsg,TempAccountNo,TemplField."Field Name",Field."Field Name",STRLEN(TempAccountNo),
+                    MAXSTRLEN(AccountNo)));
+            END;
+
+          IF AccountNo = '' THEN
+            IF DataTransl.GET(Document."Template No.",Field.Type,Field.Code) THEN
+              AccountNo := DataTransl."Translate to No.";
+
+          IF (AccountNo = '') AND (NOT Template."Allow Register without Amounts") THEN BEGIN
+            DocumentComment.Add(Document,Field,0,DocumentComment.Area::Validation,DocumentComment."Comment Type"::Error,
+              STRSUBSTNO(Text015,Field."Field Name"));
+            IsInvalid := TRUE;
+          END;
+        END;
+      UNTIL Field.NEXT = 0;
+
+      EXIT(NOT IsInvalid);
+    END;
+
+    BEGIN
+    {
+      This codeunit validates the full purchase document
+    }
+    END.
+  }
+}
+

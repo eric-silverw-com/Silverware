@@ -1,0 +1,222 @@
+OBJECT Codeunit 6085665 DC Temp File Storage
+{
+  OBJECT-PROPERTIES
+  {
+    Date=09/10/18;
+    Time=[ 1:00:00 AM];
+    Version List=DCW13.70.00.5.00.03;
+  }
+  PROPERTIES
+  {
+    SingleInstance=Yes;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      TempFileSystem@1000 : TEMPORARY Record 6085608;
+      FileInfo@1001 : Codeunit 6085666;
+      DeleteProhibited@6085573 : Boolean;
+
+    PROCEDURE AddFile@9(VAR TempFileIn@1000 : TEMPORARY Record 6085608);
+    BEGIN
+      TempFileSystem.INIT;
+      TempFileSystem := TempFileIn;
+      TempFileSystem.Data := TempFileIn.Data;
+      IF NOT TempFileSystem.INSERT(TRUE) THEN
+        TempFileSystem.MODIFY(TRUE);
+    END;
+
+    PROCEDURE CheckCreateDirectory@14(DirectoryPath@1000 : Text[1024]);
+    BEGIN
+      IF NOT DirectoryExists(DirectoryPath) THEN
+        CreateDirectory(DirectoryPath);
+    END;
+
+    PROCEDURE GetFileReadStream@2(FullFileName@1000 : Text[1024];VAR ReadStream@1001 : InStream) Succes : Boolean;
+    VAR
+      FileName@1003 : Text[1024];
+      Path@1002 : Text[1024];
+    BEGIN
+      FileName := FileInfo.GetFilename(FullFileName);
+      Path := FileInfo.GetFilePath(FullFileName);
+
+      TempFileSystem.SETRANGE(Path,Path);
+      TempFileSystem.SETRANGE(Name,FileName);
+
+      TempFileSystem.FINDFIRST;
+      TempFileSystem.CALCFIELDS(Data);
+      IF TempFileSystem.Data.HASVALUE THEN BEGIN
+        TempFileSystem.Data.CREATEINSTREAM(ReadStream);
+        EXIT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateDirectory@6(Path@1000 : Text[1024]);
+    BEGIN
+      IF COPYSTR(Path,STRLEN(Path),1) = '\' THEN
+        Path := COPYSTR(Path,1,STRLEN(Path) - 1);
+
+      TempFileSystem.Path := Path;
+      TempFileSystem.Name := '..';
+      TempFileSystem.INSERT(TRUE);
+    END;
+
+    PROCEDURE CreateFile@1(FullFileName@1000 : Text[1024];FileReadStream@1001 : InStream);
+    VAR
+      FileName@1003 : Text[1024];
+      Path@1004 : Text[1024];
+      WriteStream@1002 : OutStream;
+    BEGIN
+      FileName := FileInfo.GetFilename(FullFileName);
+      Path := FileInfo.GetFilePath(FullFileName);
+
+      CheckCreateDirectory(Path);
+      TempFileSystem.SETRANGE(Path,Path);
+      TempFileSystem.SETRANGE(Name,FileName);
+
+      IF NOT TempFileSystem.FINDFIRST THEN BEGIN
+        TempFileSystem.Path := Path;
+        TempFileSystem.Name := FileName;
+        TempFileSystem.INSERT(TRUE);
+      END;
+
+      TempFileSystem.Data.CREATEOUTSTREAM(WriteStream);
+      COPYSTREAM(WriteStream,FileReadStream);
+      TempFileSystem.MODIFY(TRUE);
+    END;
+
+    PROCEDURE MoveFile@4(FromFullFileName@1000 : Text[1024];ToFullFileName@1001 : Text[1024]) : Boolean;
+    VAR
+      ToName@1005 : Text[1024];
+      ToPath@1006 : Text[1024];
+      FileReadStream@1002 : InStream;
+      WriteStream@1007 : OutStream;
+    BEGIN
+      ToName := FileInfo.GetFilename(ToFullFileName);
+      ToPath := FileInfo.GetFilePath(ToFullFileName);
+
+      CheckCreateDirectory(ToPath);
+
+      IF TempFileSystem.GET(ToFullFileName) THEN
+        TempFileSystem.DELETE(TRUE);
+
+      TempFileSystem.GET(FromFullFileName);
+      TempFileSystem.Path := ToPath;
+      TempFileSystem.Name := ToName;
+      TempFileSystem.INSERT(TRUE);
+
+      TempFileSystem.GET(FromFullFileName);
+      TempFileSystem.DELETE;
+    END;
+
+    PROCEDURE DeleteFile@5(FilePath@1000 : Text[1024]);
+    VAR
+      WriteStream@1002 : OutStream;
+    BEGIN
+      IF TempFileSystem.GetFromFullFileName(FilePath) THEN
+        TempFileSystem.DELETE(TRUE);
+    END;
+
+    PROCEDURE GetFilesInDir2@1160040006(DirectoryPath@1160040000 : Text[250];Pattern@1160040001 : Text[30];VAR OutFileArray@1160040003 : ARRAY [10000] OF Text[250]) FileCount : Integer;
+    VAR
+      FileNo@1160040004 : Integer;
+    BEGIN
+      IF NOT DirectoryExists(DirectoryPath) THEN
+        EXIT(0);
+
+      TempFileSystem.SETRANGE(Path,DirectoryPath);
+      TempFileSystem.SETRANGE("Is A File",TRUE);
+
+      IF Pattern <> '' THEN
+        TempFileSystem.SETFILTER(Name,Pattern);
+
+      FileCount := TempFileSystem.COUNT;
+
+      IF TempFileSystem.FINDSET THEN
+        REPEAT
+          FileNo += 1;
+          OutFileArray[FileNo] := TempFileSystem.GetFullFileName;
+        UNTIL TempFileSystem.NEXT = 0;
+
+      TempFileSystem.RESET;
+    END;
+
+    PROCEDURE GetDirectories@1160040005(DirectoryPath@1160040003 : Text[250];Pattern@1160040001 : Text[30];VAR OutDirectoryArray@1160040000 : ARRAY [10000] OF Text[250]) DirectoryCount : Integer;
+    VAR
+      DirectoryNo@6085573 : Integer;
+    BEGIN
+      TempFileSystem.SETRANGE("Is A File",FALSE);
+      IF Pattern <> '' THEN
+        TempFileSystem.SETRANGE(Path,STRSUBSTNO('%1\%2',DirectoryPath,Pattern))
+      ELSE
+        TempFileSystem.SETRANGE(Path,STRSUBSTNO('%1\%2',DirectoryPath));
+
+      IF TempFileSystem.ISEMPTY THEN
+        EXIT(0);
+
+      IF TempFileSystem.FINDSET THEN
+        REPEAT
+          DirectoryNo +=1;
+          OutDirectoryArray[DirectoryNo] := TempFileSystem.Path;
+        UNTIL TempFileSystem.NEXT = 0;
+
+      DirectoryCount := TempFileSystem.COUNT;
+
+      TempFileSystem.RESET;
+    END;
+
+    PROCEDURE DirectoryExists@17(DirectoryPath@1000 : Text[1024]) Exists : Boolean;
+    BEGIN
+      TempFileSystem.SETRANGE(Path,DirectoryPath);
+      Exists := NOT TempFileSystem.ISEMPTY;
+      TempFileSystem.RESET;
+    END;
+
+    PROCEDURE FileExists@8(FullFileName@1001 : Text[1024]) Exists : Boolean;
+    VAR
+      Name@1003 : Text[1024];
+      Path@1002 : Text[1024];
+    BEGIN
+      Name := FileInfo.GetFilename(FullFileName);
+      Path := FileInfo.GetFilePath(FullFileName);
+
+      TempFileSystem.SETRANGE(Name,Name);
+      TempFileSystem.SETRANGE(Path,Path);
+      TempFileSystem.SETRANGE("Is A File",TRUE);
+
+      Exists := TempFileSystem.FINDFIRST;
+
+      TempFileSystem.RESET;
+    END;
+
+    PROCEDURE GetFile@3(FullFileName@1000 : Text[1024];VAR TempFileSystemOut@1001 : TEMPORARY Record 6085608);
+    BEGIN
+      TempFileSystem.RESET;
+      TempFileSystem.GetFromFullFileName(FullFileName);
+      TempFileSystem.CALCFIELDS(Data);
+      TempFileSystemOut := TempFileSystem;
+      TempFileSystemOut.Data := TempFileSystem.Data;
+    END;
+
+    PROCEDURE Clear@1160040000();
+    BEGIN
+      IF DeleteProhibited THEN
+        EXIT;
+
+      TempFileSystem.RESET;
+      TempFileSystem.DELETEALL(TRUE);
+    END;
+
+    PROCEDURE SetDeleteProhibited@6085573(NewDeleteProhibited@6085573 : Boolean);
+    BEGIN
+      DeleteProhibited := NewDeleteProhibited;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,146 @@
+OBJECT Codeunit 6085600 Approval Comment Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=01/11/17;
+    Time=[ 1:00:00 AM];
+    Version List=DCW19.00.00.4.07;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@161024012 : TextConst 'ENU=You must enter a comment.';
+
+    PROCEDURE ShowComments@1160040001(TableID@1160040000 : Integer;DocumentType@161024012 : Integer;DocumentNo@1160040001 : Code[20];RecID@1000 : RecordID);
+    VAR
+      ApprovalCommentLine@161024013 : Record 455;
+    BEGIN
+      ApprovalCommentLine.SETCURRENTKEY("Table ID","Document Type","Document No.");
+
+      // Setting the same filters below two times is intentionally. Setting filters in FILTERGROUP 4 ensures that the user cannot remove
+      // the filters. Setting filters in FILTERGROUP 0 ensures that the standard OnInsert code on table 455 (Approval Comment Line) works
+      ApprovalCommentLine.FILTERGROUP(4);
+      SetDoubleAppvlEntryFilters(ApprovalCommentLine,TableID,DocumentType,DocumentNo,RecID);
+      ApprovalCommentLine.FILTERGROUP(0);
+      SetDoubleAppvlEntryFilters(ApprovalCommentLine,TableID,DocumentType,DocumentNo,RecID);
+
+      PAGE.RUN(PAGE::"DC Approval Comments",ApprovalCommentLine);
+    END;
+
+    PROCEDURE ShowCmtFromAppvlEntry@161024013(AppvlEntry@161024012 : Record 454);
+    VAR
+      ApprovalCommentLine@161024013 : Record 455;
+      RecID@1000 : RecordID;
+    BEGIN
+      ApprovalCommentLine.SETCURRENTKEY("Table ID","Document Type","Document No.");
+
+      // Setting the same filters below two times is intentionally. Setting filters in FILTERGROUP 4 ensures that the user cannot remove
+      // the filters. Setting filters in FILTERGROUP 0 ensures that the standard OnInsert code on table 455 (Approval Comment Line) works
+      RecID := AppvlEntry."Record ID to Approve";
+      ApprovalCommentLine.FILTERGROUP(4);
+      SetDoubleAppvlEntryFilters(ApprovalCommentLine,AppvlEntry."Table ID",AppvlEntry."Document Type",AppvlEntry."Document No.",RecID);
+      ApprovalCommentLine.FILTERGROUP(0);
+      SetDoubleAppvlEntryFilters(ApprovalCommentLine,AppvlEntry."Table ID",AppvlEntry."Document Type",AppvlEntry."Document No.",RecID);
+
+      PAGE.RUN(PAGE::"DC Approval Comments",ApprovalCommentLine);
+    END;
+
+    PROCEDURE RequestComment@161024012(TableID@161024019 : Integer;DocumentType@1160040000 : Integer;DocumentNo@1160040001 : Code[20];RecID@1000 : RecordID;DocumentTitle@1001 : Text[250];ApprovalAction@1160040002 : ',Reject,,Put on Hold';VAR ReasonCode@1160040004 : Code[10]);
+    VAR
+      AppvlReasonCode@1160040008 : Record 6085773;
+      ReqApprovalComment@1160040007 : Page 6085774;
+      ReqApprovalReasonCmt@1160040003 : Page 6085770;
+      Comment@1160040005 : Text[1024];
+    BEGIN
+      AppvlReasonCode.SETRANGE("Table ID",TableID);
+      AppvlReasonCode.SETRANGE("Document Type",DocumentType);
+      AppvlReasonCode.SETRANGE(Type,ApprovalAction);
+      IF AppvlReasonCode.COUNT = 0 THEN BEGIN
+        ReqApprovalComment.SetParam(DocumentTitle,TableID,DocumentType,DocumentNo,ApprovalAction);
+        ReqApprovalComment.LOOKUPMODE := TRUE;
+        IF ReqApprovalComment.RUNMODAL = ACTION::LookupOK THEN BEGIN
+          ReqApprovalComment.GetValues(Comment);
+          AddComment(TableID,DocumentType,DocumentNo,RecID,USERID,Comment);
+        END ELSE
+          ERROR('');
+      END ELSE BEGIN
+        ReqApprovalReasonCmt.SetParam(DocumentTitle,TableID,DocumentType,DocumentNo,ApprovalAction);
+        ReqApprovalReasonCmt.LOOKUPMODE := TRUE;
+        IF ReqApprovalReasonCmt.RUNMODAL = ACTION::LookupOK THEN BEGIN
+          ReqApprovalReasonCmt.GetValues(ReasonCode,Comment);
+          AddComment(TableID,DocumentType,DocumentNo,RecID,USERID,Comment);
+        END ELSE
+          ERROR('');
+      END;
+      COMMIT;
+    END;
+
+    PROCEDURE RequestCommentForAppvlEntry@4(AppvlEntry@1003 : Record 454;DocumentTitle@1007 : Text[250];ApprovalAction@1002 : ',Reject,,Put on Hold';VAR ReasonCode@1001 : Code[10]);
+    VAR
+      RecID@1000 : RecordID;
+    BEGIN
+      RecID := AppvlEntry."Record ID to Approve";
+      RequestComment(AppvlEntry."Table ID",AppvlEntry."Document Type",AppvlEntry."Document No.",RecID,DocumentTitle,ApprovalAction,ReasonCode);
+    END;
+
+    PROCEDURE RequestCommentForPurchHeader@3(PurchHeader@1004 : Record 38;DocumentTitle@1003 : Text[250];ApprovalAction@1002 : ',Reject,,Put on Hold';VAR ReasonCode@1001 : Code[10]);
+    VAR
+      RecRef@1000 : RecordRef;
+    BEGIN
+      RecRef.GETTABLE(PurchHeader);
+      RequestComment(DATABASE::"Purchase Header",PurchHeader."Document Type",PurchHeader."No.",RecRef.RECORDID,DocumentTitle,ApprovalAction,ReasonCode);
+    END;
+
+    PROCEDURE AddComment@1160040000(TableID@1160040000 : Integer;DocumentType@161024012 : Integer;DocumentNo@161024013 : Code[20];RecID@1001 : RecordID;_UserID@161024014 : Code[50];Comment@161024016 : Text[1024]);
+    VAR
+      ApprovalCmtLine@161024017 : Record 455;
+      DCApprovalsBridge@1002 : Codeunit 6085790;
+    BEGIN
+      WHILE Comment <> '' DO BEGIN
+        CLEAR(ApprovalCmtLine);
+        ApprovalCmtLine."Table ID" := TableID;
+        ApprovalCmtLine."Document Type" := DocumentType;
+        ApprovalCmtLine."Document No." := DocumentNo;
+        ApprovalCmtLine."Record ID to Approve" := RecID;
+        ApprovalCmtLine.Comment := COPYSTR(Comment,1,MAXSTRLEN(ApprovalCmtLine.Comment));
+        Comment := COPYSTR(Comment,MAXSTRLEN(ApprovalCmtLine.Comment)+1);
+        ApprovalCmtLine."User ID" := _UserID;
+        DCApprovalsBridge.InsertApprovalCmtLine(ApprovalCmtLine,FALSE);
+      END;
+    END;
+
+    PROCEDURE AddCommentForAppvlEntry@1(AppvlEntry@1160040000 : Record 454;_UserID@161024014 : Code[50];Comment@161024016 : Text[1024]);
+    VAR
+      RecID@1000 : RecordID;
+    BEGIN
+      RecID := AppvlEntry."Record ID to Approve";
+      AddComment(AppvlEntry."Table ID",AppvlEntry."Document Type",AppvlEntry."Document No.",RecID,_UserID,Comment);
+    END;
+
+    PROCEDURE AddCommentForPurchHeader@2(PurchHeader@1160040000 : Record 38;_UserID@161024014 : Code[50];Comment@161024016 : Text[1024]);
+    VAR
+      RecRef@1000 : RecordRef;
+    BEGIN
+      RecRef.GETTABLE(PurchHeader);
+      AddComment(DATABASE::"Purchase Header",PurchHeader."Document Type",PurchHeader."No.",RecRef.RECORDID,_UserID,Comment);
+    END;
+
+    LOCAL PROCEDURE SetDoubleAppvlEntryFilters@1160040002(VAR ApprovalCommentLine@1160040000 : Record 455;TableID@1160040003 : Integer;DocumentType@1160040002 : Integer;DocumentNo@1160040001 : Code[20];RecID@1000 : RecordID);
+    BEGIN
+      ApprovalCommentLine.SETRANGE("Table ID",TableID);
+      ApprovalCommentLine.SETRANGE("Document Type",DocumentType);
+      ApprovalCommentLine.SETRANGE("Document No.",DocumentNo);
+      ApprovalCommentLine.SETRANGE("Record ID to Approve",RecID);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

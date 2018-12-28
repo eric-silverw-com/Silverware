@@ -1,0 +1,77 @@
+OBJECT Codeunit 6085920 DC Purchase Header Subscr.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=04/18/18;
+    Time=[ 1:00:00 AM];
+    Version List=DCW19.00.00.5.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    [EventSubscriber(Table,38,OnBeforeDeleteEvent,"",Skip)]
+    LOCAL PROCEDURE OnBeforeDelete@6085588(VAR Rec@6085573 : Record 38;RunTrigger@6085574 : Boolean);
+    VAR
+      PurchDocManagement@6085577 : Codeunit 6085709;
+      Document@6085575 : Record 6085590;
+      DocCat@6085576 : Record 6085575;
+      LastPostingNo@6085578 : Code[20];
+      AdvancedAppvlManagement@6085579 : Codeunit 6085746;
+    BEGIN
+      IF Rec.ISTEMPORARY THEN
+        EXIT;
+
+      // Only run below code when Purchase Document is deleted directly - not need when deleting during posting
+      IF NOT PurchDocManagement.DeletingPurchDocFromC90(Rec,LastPostingNo) THEN BEGIN
+        Document.SETCURRENTKEY("Created Doc. Type",Document."Created Doc. Subtype",Document."Created Doc. ID");
+        Document.SETRANGE("Created Doc. Type",DATABASE::"Purchase Header");
+        Document.SETRANGE("Created Doc. Subtype",Rec."Document Type");
+        Document.SETRANGE("Created Doc. ID",Rec."No.");
+        Document.SETRANGE("File Type",Document."File Type"::Miscellaneous);
+        IF Document.FIND('-') THEN
+          REPEAT
+            IF Document."Document Category Code" <> '' THEN BEGIN
+              DocCat.GET(Document."Document Category Code");
+              DocCat.TESTFIELD("Allow Deleting Documents",TRUE);
+            END;
+          UNTIL Document.NEXT = 0;
+      END;
+
+      AdvancedAppvlManagement.DeleteDtldAppvlEntries(DATABASE::"Purchase Line",Rec."Document Type",Rec."No.");
+    END;
+
+    [EventSubscriber(Table,38,OnAfterDeleteEvent,"",Skip)]
+    LOCAL PROCEDURE OnAfterDelete@6085587(VAR Rec@6085573 : Record 38;RunTrigger@6085574 : Boolean);
+    VAR
+      WebSearchMgnt@6085577 : Codeunit 6085748;
+      PurchDocManagement@6085575 : Codeunit 6085709;
+      PurchInvHeader@6085578 : Record 122;
+      PurchCrMemoHeader@6085576 : Record 124;
+      LastPostingNo@6085579 : Code[20];
+    BEGIN
+      IF Rec.ISTEMPORARY THEN
+        EXIT;
+
+      // Only Update Web Search when Purchase Header is deleted from C90 during posting a document and subsequent deleting the document
+      IF PurchDocManagement.DeletingPurchDocFromC90(Rec,LastPostingNo) THEN BEGIN
+        IF Rec."Document Type" IN [Rec."Document Type"::Order,Rec."Document Type"::Invoice] THEN BEGIN
+          PurchInvHeader.GET(LastPostingNo);
+          WebSearchMgnt.UpdateWebSearchFromInvoice2(PurchInvHeader)
+        END ELSE BEGIN
+          PurchCrMemoHeader.GET(LastPostingNo);
+          WebSearchMgnt.UpdateWebSearchFromCrMemo2(PurchCrMemoHeader);
+        END;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

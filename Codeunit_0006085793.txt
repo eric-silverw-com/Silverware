@@ -1,0 +1,107 @@
+OBJECT Codeunit 6085793 DC Dimension Handling
+{
+  OBJECT-PROPERTIES
+  {
+    Date=04/18/18;
+    Time=[ 1:00:00 AM];
+    Version List=DCW17.00.00.5.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      DimensionsInvalidErr@6085573 : TextConst 'ENU=The dimensions used in %1 %2, line no. %3 are invalid. %4';
+      DimCombinationBlockedErr@6085574 : TextConst 'ENU=The combination of dimensions used in %1 %2, line no. %3 is blocked. %4';
+
+    PROCEDURE CheckDimensions@6085588(PurchHeader@6085573 : Record 38);
+    VAR
+      PurchLine@6085574 : Record 39;
+      DimMgt@6085576 : Codeunit 408;
+      NumberArr@6085577 : ARRAY [10] OF Code[20];
+      TableIDArr@6085578 : ARRAY [10] OF Integer;
+    BEGIN
+      PurchLine.SETRANGE("Document Type",PurchHeader."Document Type");
+      PurchLine.SETRANGE("Document No.",PurchHeader."No.");
+      PurchLine.SETFILTER(Type,'>%1',PurchLine.Type::" ");
+      PurchLine.SETFILTER("No.",'<>%1','');
+
+      IF PurchLine.FINDSET THEN
+        REPEAT
+          TableIDArr[1] := DimMgt.TypeToTableID3(PurchLine.Type);
+          NumberArr[1] := PurchLine."No.";
+          TableIDArr[2] := DATABASE::Job;
+          NumberArr[2] := PurchLine."Job No.";
+          TableIDArr[3] := DATABASE::"Work Center";
+          NumberArr[3] := PurchLine."Work Center No.";
+          IF NOT DimMgt.CheckDimValuePosting(TableIDArr,NumberArr,PurchLine."Dimension Set ID") THEN
+            ERROR(
+              DimensionsInvalidErr,
+              PurchHeader."Document Type",PurchHeader."No.",PurchLine."Line No.",DimMgt.GetDimValuePostingErr);
+
+          IF NOT DimMgt.CheckDimIDComb(PurchLine."Dimension Set ID") THEN
+            ERROR(
+              DimCombinationBlockedErr,
+              PurchHeader."Document Type",PurchHeader."No.",PurchLine."Line No.",DimMgt.GetDimCombErr);
+        UNTIL PurchLine.NEXT = 0;
+    END;
+
+    PROCEDURE IsPurchLineEqualArchive@6085586(PurchLine@6085573 : Record 39;PurchLineArchive@6085574 : Record 5110) : Boolean;
+    BEGIN
+      IF (PurchLine.Type = PurchLineArchive.Type) AND
+        (PurchLine."No." = PurchLineArchive."No.") AND
+        (PurchLine."Location Code" = PurchLineArchive."Location Code") AND
+        (PurchLine.Description = PurchLineArchive.Description) AND
+        (PurchLine."Description 2" = PurchLineArchive."Description 2") AND
+        (PurchLine."Unit of Measure" = PurchLineArchive."Unit of Measure") AND
+        (PurchLine."Job No." = PurchLineArchive."Job No.") AND
+        (PurchLine.Quantity = PurchLineArchive.Quantity) AND
+        (PurchLine."Direct Unit Cost" = PurchLineArchive."Direct Unit Cost") AND
+        (PurchLine."VAT %" = PurchLineArchive."VAT %") AND
+        (PurchLine."Line Discount %" = PurchLineArchive."Line Discount %") AND
+        (PurchLine."Shortcut Dimension 1 Code" = PurchLineArchive."Shortcut Dimension 1 Code") AND
+        (PurchLine."Shortcut Dimension 2 Code" = PurchLineArchive."Shortcut Dimension 2 Code") AND
+        (PurchLine."Gen. Prod. Posting Group" = PurchLineArchive."Gen. Prod. Posting Group") AND
+        (PurchLine."VAT Prod. Posting Group" = PurchLineArchive."VAT Prod. Posting Group") AND
+        (PurchLine."Dimension Set ID" = PurchLineArchive."Dimension Set ID") AND
+        (PurchLine."Variant Code" = PurchLineArchive."Variant Code")
+      THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE CanApproverApprovePOLine@6085590(PurchLine@6085573 : Record 39;Type@6085574 : 'G/L Account,Item,Resource,Fixed Asset,Charge (Item),Dimension,Job';ApproverID@6085575 : Code[50]) : Boolean;
+    VAR
+      DimensionSetEntry@6085576 : Record 480;
+      ApprovalUserGroupMgt@6085577 : Codeunit 6085630;
+    BEGIN
+      IF NOT ApprovalUserGroupMgt.CanUserApproveAcccountOrDim(ApproverID,Type,PurchLine."No.",'',1) THEN
+        EXIT(FALSE);
+
+      IF PurchLine."Job No." <> '' THEN
+        IF NOT ApprovalUserGroupMgt.CanUserApproveAcccountOrDim(ApproverID,Type::Job,PurchLine."Job No.",'',1)
+        THEN
+          EXIT(FALSE);
+
+      DimensionSetEntry.SETRANGE("Dimension Set ID",PurchLine."Dimension Set ID");
+      IF DimensionSetEntry.FINDSET THEN
+        REPEAT
+          IF NOT ApprovalUserGroupMgt.CanUserApproveAcccountOrDim(ApproverID,Type::Dimension,
+            DimensionSetEntry."Dimension Value Code",DimensionSetEntry."Dimension Code",1)
+          THEN
+            EXIT(FALSE);
+        UNTIL DimensionSetEntry.NEXT = 0;
+
+      EXIT(TRUE);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

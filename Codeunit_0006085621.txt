@@ -1,0 +1,127 @@
+OBJECT Codeunit 6085621 Open Document or File
+{
+  OBJECT-PROPERTIES
+  {
+    Date=06/26/18;
+    Time=[ 1:00:00 AM];
+    Version List=DCW13.70.00.5.00.01;
+  }
+  PROPERTIES
+  {
+    TableNo=6085636;
+    OnRun=VAR
+            Document@1000 : Record 6085590;
+            DocumentUIC@1160040000 : Record 6085601;
+          BEGIN
+            CASE Status OF
+              Status::"Files for OCR",Status::"Files for Import",Status::"Files with Error":
+                OpenFile(Status,"Document Category Code");
+              Status::"Open Documents",Status::"Registered Documents",Status::"Rejected Documents":
+                BEGIN
+                  Document.SETCURRENTKEY("Document Category Code",Status);
+                  Document.SETRANGE("Document Category Code","Document Category Code");
+                  CASE Status OF
+                    Status::"Open Documents":
+                      Document.SETRANGE(Status,Document.Status::Open);
+                    Status::"Registered Documents":
+                      Document.SETRANGE(Status,Document.Status::Registered);
+                    Status::"Rejected Documents":
+                      Document.SETRANGE(Status,Document.Status::Rejected);
+                  END;
+                  PAGE.RUN(PAGE::"Document List With Image",Document);
+                END;
+              Status::"UIC Documents":
+                BEGIN
+                  DocumentUIC.SETCURRENTKEY("Document Category Code");
+                  DocumentUIC.SETRANGE("Document Category Code","Document Category Code");
+                  DocumentUIC.SETRANGE(Status,DocumentUIC.Status::Open);
+                  PAGE.RUN(PAGE::"Document List (UIC)",DocumentUIC);
+                END;
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1160040001 : TextConst 'ENU=[No E-Mail]';
+      Text001@1160040000 : TextConst 'ENU=[No Subject]';
+
+    PROCEDURE OpenFile@1160040008(Status@1160040009 : 'Files for OCR,Files for Import,Files with Error,Open Documents,Registered Documents,Rejected Documents,UIC Documents';DocCatCode@1160040010 : Code[10]);
+    VAR
+      TempDoc@1160040001 : TEMPORARY Record 6085772;
+      DocCat@1160040000 : Record 6085575;
+      FileSysMgt@1160040002 : Codeunit 6085584;
+      FileInfo@1000 : Codeunit 6085666;
+      CODC@1160040006 : Codeunit 6085617;
+      DocCounters@1160040007 : Codeunit 6085618;
+      DocumentImporter@1160040008 : Codeunit 6085577;
+      EntryNo@1160040005 : Integer;
+      FileCount@6085574 : Integer;
+      Files@6085573 : ARRAY [1000] OF Text[250];
+      FilePath@1160040004 : Text[1024];
+      i@6085575 : Integer;
+    BEGIN
+      DocCat.GET(DocCatCode);
+
+      IF NOT CODC.IsCompanyActive2(FALSE,TRUE,TRUE) THEN
+        EXIT;
+
+      IF CODC.IsCloudActive(FALSE) THEN
+        CODC.GetStatusDocuments(DocCat,Status,TempDoc)
+      ELSE BEGIN
+        CASE Status OF
+          Status::"Files for OCR":
+            FilePath := DocCat.GetCategoryPath(1);
+          Status::"Files for Import":
+            FilePath := DocCat.GetCategoryPath(2);
+          Status::"Files with Error":
+            FilePath := DocCat.GetCategoryPath(3);
+        END;
+
+        IF FileSysMgt.DirectoryExists(FilePath) THEN BEGIN
+          IF TempDoc.FINDLAST THEN
+            EntryNo := TempDoc."Entry No.";
+
+          CASE Status OF
+            Status::"Files for OCR",Status::"Files with Error":
+              FileCount := FileSysMgt.GetFilesInDir2(FilePath,'*.pdf',Files);
+            Status::"Files for Import":
+              FileCount := FileSysMgt.GetFilesInDir2(FilePath,'*.tiff',Files);
+          END;
+
+          FOR i := 1 TO FileCount DO BEGIN
+            EntryNo += 1;
+            TempDoc.INIT;
+            TempDoc."Entry No." := EntryNo;
+            TempDoc."Scanned File" := TRUE;
+            TempDoc."Document Category Code" := DocCat.Code;
+            TempDoc."File Name" := FileInfo.GetFilenameWithoutExt(Files[i]);
+            TempDoc."File Name with Extension" := FileInfo.GetFilename(Files[i]);
+            TempDoc."File Path" := FileInfo.GetFilePath(Files[i]);
+            // Update to use file date perhaps.
+            TempDoc."Date/Time" := CURRENTDATETIME;
+            TempDoc.Status := Status;
+            IF TempDoc.Status = TempDoc.Status::Import THEN
+              DocumentImporter.GetDocInfo(
+                FileInfo.GetFilePath(Files[i]) + '\' + TempDoc."File Name" + '.xml',
+                TempDoc."From E-Mail Address",TempDoc."E-Mail Subject",TempDoc."E-Mail Received",TempDoc."OCR Processed");
+            IF TempDoc."From E-Mail Address" = '' THEN
+              TempDoc."From E-Mail Address" := Text000;
+            IF TempDoc."E-Mail Subject" = '' THEN
+              TempDoc."E-Mail Subject" := Text001;
+            TempDoc.INSERT;
+          END;
+        END;
+      END;
+
+      PAGE.RUNMODAL(PAGE::"Display Document List",TempDoc);
+
+      DocCounters.SetForceUpdate(TRUE);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

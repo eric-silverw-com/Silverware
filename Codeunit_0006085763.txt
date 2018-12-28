@@ -1,0 +1,248 @@
+OBJECT Codeunit 6085763 Purch.-Get Return Order
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/22/18;
+    Time=[ 1:00:00 AM];
+    Version List=DCW111.00.00.4.50;
+  }
+  PROPERTIES
+  {
+    TableNo=38;
+    Permissions=TableData 6085702=rimd;
+    OnRun=VAR
+            PurchRetOrderLine@1160040000 : Record 39;
+            GetReturnOrders@1160040001 : Page 6085764;
+          BEGIN
+            PurchHeader := Rec;
+            PurchHeader.TESTFIELD("Document Type",PurchHeader."Document Type"::"Credit Memo");
+            PurchHeader.TESTFIELD(Status,PurchHeader.Status::Open);
+
+            PurchRetOrderLine.SETCURRENTKEY("Document Type","Pay-to Vendor No.");
+            PurchRetOrderLine.SETRANGE("Document Type",PurchRetOrderLine."Document Type"::"Return Order");
+            PurchRetOrderLine.SETRANGE("Pay-to Vendor No.",PurchHeader."Pay-to Vendor No.");
+            PurchRetOrderLine.SETFILTER("Outstanding Quantity",'<>0');
+            PurchRetOrderLine.SETRANGE("Currency Code",PurchHeader."Currency Code");
+
+            GetReturnOrders.SETTABLEVIEW(PurchRetOrderLine);
+            GetReturnOrders.LOOKUPMODE := TRUE;
+            GetReturnOrders.SetPurchHeader(PurchHeader);
+            GetReturnOrders.RUNMODAL;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=The %1 on the %2 %3 and the %4 %5 must be the same.';
+      Text001@1160040000 : TextConst 'ENU=Return Order No. %1:';
+      PurchHeader@1160040002 : Record 38;
+      Text002@1160040003 : TextConst 'ENU="Warehouse handling is required for %1 = %2, %3 = %4, %5 = %6.";ENC="Warehouse handling is required for %1 = %2, %3 = %4, %5 = %6."';
+
+    PROCEDURE CreateInvLines@1(VAR PurchRetOrderLine2@1000 : Record 39);
+    VAR
+      PurchLine@1160040000 : Record 39;
+      PurchRetOrderHeader@1160040001 : Record 38;
+      PurchRetOrderLine@1160040002 : Record 39;
+      TransferLine@1001 : Boolean;
+      Location@1160040003 : Record 14;
+    BEGIN
+      WITH PurchRetOrderLine2 DO BEGIN
+        SETFILTER("Outstanding Quantity",'<>0');
+        IF FINDSET THEN BEGIN
+          PurchLine.LOCKTABLE;
+          PurchLine.SETRANGE("Document Type",PurchHeader."Document Type");
+          PurchLine.SETRANGE("Document No.",PurchHeader."No.");
+          PurchLine."Document Type" := PurchHeader."Document Type";
+          PurchLine."Document No." := PurchHeader."No.";
+
+          REPEAT
+            IF PurchRetOrderHeader."No." <> "Document No." THEN BEGIN
+              PurchRetOrderHeader.GET("Document Type","Document No.");
+              TransferLine := TRUE;
+              IF PurchRetOrderHeader."Currency Code" <> PurchHeader."Currency Code" THEN BEGIN
+                MESSAGE(
+                  Text000,
+                  PurchHeader.FIELDCAPTION("Currency Code"),
+                  PurchHeader.TABLECAPTION, PurchHeader."No.",
+                  PurchRetOrderHeader.TABLECAPTION,PurchRetOrderHeader."No.");
+                TransferLine := FALSE;
+              END;
+              IF PurchRetOrderHeader."Pay-to Vendor No." <> PurchHeader."Pay-to Vendor No." THEN BEGIN
+                MESSAGE(
+                  Text000,
+                  PurchHeader.FIELDCAPTION("Pay-to Vendor No."),
+                  PurchHeader.TABLECAPTION, PurchHeader."No.",
+                  PurchRetOrderHeader.TABLECAPTION,PurchRetOrderHeader."No.");
+                TransferLine := FALSE;
+              END;
+            END;
+
+            IF TransferLine THEN BEGIN
+              IF (PurchRetOrderLine2.Type = PurchRetOrderLine2.Type::Item) AND
+                Location.RequireReceive(PurchRetOrderLine2."Location Code")
+              THEN BEGIN
+                MESSAGE(
+                  Text002,
+                  PurchRetOrderLine2.FIELDCAPTION("Document Type"),
+                  PurchRetOrderLine2."Document Type",
+                  PurchRetOrderLine2.FIELDCAPTION("Document No."),
+                  PurchRetOrderLine2."Document No.",
+                  PurchRetOrderLine2.FIELDCAPTION("Line No."),
+                  PurchRetOrderLine2."Line No.");
+              END ELSE BEGIN
+                PurchRetOrderLine := PurchRetOrderLine2;
+                InsertInvLineFromOrderLine(PurchRetOrderLine,PurchLine,0);
+              END;
+            END;
+          UNTIL NEXT = 0;
+        END;
+      END;
+    END;
+
+    PROCEDURE SetPurchHeader@2(VAR PurchHeader2@1000 : Record 38);
+    BEGIN
+      PurchHeader.GET(PurchHeader2."Document Type",PurchHeader2."No.");
+      PurchHeader.TESTFIELD("Document Type",PurchHeader."Document Type"::"Credit Memo");
+    END;
+
+    PROCEDURE InsertInvLineFromOrderLine@1160040000(PurchRetOrderLine@1160040002 : Record 39;VAR PurchCrMemoLine@1000 : Record 39;MatchQuantity@1160040001 : Decimal);
+    VAR
+      PurchCrMemoHeader@1160040005 : Record 38;
+      PurchRetOrderHeader@1007 : Record 38;
+      TempPurchLine@1003 : Record 39;
+      Currency@1160040003 : Record 4;
+      PurchLineRel@1160040004 : Record 6085702;
+      TransferOldExtLines@1002 : Codeunit 379;
+      ItemTrackingMgt@1004 : Codeunit 6500;
+      LanguageManagement@6085573 : Codeunit 43;
+      NextLineNo@1001 : Integer;
+      ExtTextLine@1006 : Boolean;
+      CreateTextLine@1160040000 : Boolean;
+    BEGIN
+      TempPurchLine := PurchCrMemoLine;
+
+      IF PurchCrMemoLine.FINDLAST THEN
+        NextLineNo := PurchCrMemoLine."Line No." + 10000
+      ELSE
+        NextLineNo := 10000;
+
+      PurchRetOrderHeader.GET(PurchRetOrderLine."Document Type",PurchRetOrderLine."Document No.");
+
+      PurchRetOrderLine.SETRANGE("Document Type",PurchRetOrderLine."Document Type");
+      PurchRetOrderLine.SETRANGE("Document No.",PurchRetOrderLine."Document No.");
+
+      PurchCrMemoLine.SETRANGE("Attached to Line No.",0);
+      IF NOT PurchCrMemoLine.FINDLAST THEN
+        CreateTextLine := TRUE
+      ELSE
+        IF PurchLineRel.GET(PurchCrMemoLine."Document Type",PurchCrMemoLine."Document No.",PurchCrMemoLine."Line No.") THEN
+          CreateTextLine := PurchLineRel."Related Document No." <> PurchRetOrderLine."Document No."
+        ELSE
+          CreateTextLine := TRUE;
+      PurchCrMemoLine.SETRANGE("Attached to Line No.");
+
+      IF CreateTextLine THEN BEGIN
+        PurchCrMemoLine.INIT;
+        PurchCrMemoLine."Line No." := NextLineNo;
+        PurchCrMemoLine."Document Type" := PurchCrMemoLine."Document Type";
+        PurchCrMemoLine."Document No." := PurchCrMemoLine."Document No.";
+        LanguageManagement.SetGlobalLanguageByCode(PurchCrMemoHeader."Language Code");
+        PurchCrMemoLine.Description := STRSUBSTNO(Text001,PurchRetOrderLine."Document No.");
+        LanguageManagement.RestoreGlobalLanguage;
+        PurchCrMemoLine.INSERT;
+        NextLineNo := NextLineNo + 10000;
+      END;
+
+      REPEAT
+        ExtTextLine := (TransferOldExtLines.GetNewLineNumber(PurchRetOrderLine."Attached to Line No.") <> 0);
+
+        IF NOT ExtTextLine THEN BEGIN
+          IF PurchRetOrderHeader."Currency Code" <> '' THEN
+            Currency.GET(PurchRetOrderHeader."Currency Code")
+          ELSE
+            Currency.InitRoundingPrecision;
+
+          PurchCrMemoHeader.GET(PurchRetOrderLine."Document Type",PurchRetOrderLine."Document No.");
+          IF PurchCrMemoHeader."Prices Including VAT" THEN BEGIN
+            IF NOT PurchRetOrderHeader."Prices Including VAT" THEN
+              PurchRetOrderLine."Direct Unit Cost" :=
+                ROUND(
+                  PurchRetOrderLine."Direct Unit Cost" * (1 + PurchRetOrderLine."VAT %" / 100),
+                  Currency."Unit-Amount Rounding Precision");
+          END ELSE BEGIN
+            IF PurchRetOrderHeader."Prices Including VAT" THEN
+              PurchRetOrderLine."Direct Unit Cost" :=
+                ROUND(
+                  PurchRetOrderLine."Direct Unit Cost" / (1 + PurchRetOrderLine."VAT %" / 100),
+                  Currency."Unit-Amount Rounding Precision");
+          END;
+        END;
+
+        PurchCrMemoLine := PurchRetOrderLine;
+        PurchCrMemoLine."Line No." := NextLineNo;
+        PurchCrMemoLine."Document Type" := TempPurchLine."Document Type";
+        PurchCrMemoLine."Document No." := TempPurchLine."Document No.";
+        PurchCrMemoLine."Variant Code" := PurchRetOrderLine."Variant Code";
+        PurchCrMemoLine."Location Code" := PurchRetOrderLine."Location Code";
+        PurchCrMemoLine."Return Reason Code" := PurchRetOrderLine."Return Reason Code";
+        PurchCrMemoLine."Quantity (Base)" := 0;
+        PurchCrMemoLine.Quantity := 0;
+        PurchCrMemoLine."Outstanding Qty. (Base)" := 0;
+        PurchCrMemoLine."Outstanding Quantity" := 0;
+        PurchCrMemoLine."Return Qty. Shipped" := 0;
+        PurchCrMemoLine."Return Qty. Shipped (Base)" := 0;
+        PurchCrMemoLine."Quantity Invoiced" := 0;
+        PurchCrMemoLine."Qty. Invoiced (Base)" := 0;
+        PurchCrMemoLine."Sales Order No." := '';
+        PurchCrMemoLine."Sales Order Line No." := 0;
+        PurchCrMemoLine."Drop Shipment" := FALSE;
+        PurchCrMemoLine."Return Shipment Line No." := 0;
+        PurchCrMemoLine."Appl.-to Item Entry" := 0;
+        PurchCrMemoLine."Prepmt. Amt. Inv." := 0;
+
+        IF NOT ExtTextLine THEN BEGIN
+          PurchLineRel."Document Type" := PurchCrMemoLine."Document Type";
+          PurchLineRel."Document No." := PurchCrMemoLine."Document No.";
+          PurchLineRel."Document Line No." := PurchCrMemoLine."Line No.";
+          PurchLineRel."Related Document Type" := PurchRetOrderLine."Document Type";
+          PurchLineRel."Related Document No." := PurchRetOrderLine."Document No.";
+          PurchLineRel."Related Line No." := PurchRetOrderLine."Line No.";
+          PurchLineRel.INSERT;
+
+          IF MatchQuantity <> 0 THEN
+            PurchCrMemoLine.VALIDATE(Quantity,MatchQuantity)
+          ELSE
+            PurchCrMemoLine.VALIDATE(Quantity,PurchRetOrderLine."Outstanding Quantity");
+          PurchCrMemoLine.VALIDATE("Direct Unit Cost",PurchRetOrderLine."Direct Unit Cost");
+          PurchCrMemoLine.VALIDATE(
+            "Line Discount Amount",
+            ROUND(
+              PurchRetOrderLine."Line Discount Amount" * PurchCrMemoLine.Quantity / PurchRetOrderLine.Quantity,
+              Currency."Amount Rounding Precision"));
+          PurchCrMemoLine.VALIDATE("Line Discount %",PurchRetOrderLine."Line Discount %");
+        END;
+
+        PurchCrMemoLine."Attached to Line No." :=
+          TransferOldExtLines.TransferExtendedText(
+            PurchRetOrderLine."Line No.",
+            NextLineNo,
+            PurchRetOrderLine."Attached to Line No.");
+        PurchCrMemoLine."Shortcut Dimension 1 Code" := PurchRetOrderLine."Shortcut Dimension 1 Code";
+        PurchCrMemoLine."Shortcut Dimension 2 Code" := PurchRetOrderLine."Shortcut Dimension 2 Code";
+        PurchCrMemoLine."Dimension Set ID" := PurchRetOrderLine."Dimension Set ID";
+        PurchCrMemoLine.INSERT;
+
+        ItemTrackingMgt.CopyHandledItemTrkgToInvLine2(PurchRetOrderLine,PurchCrMemoLine);
+
+        NextLineNo := NextLineNo + 10000;
+        IF PurchRetOrderLine."Attached to Line No." = 0 THEN
+          PurchRetOrderLine.SETRANGE("Attached to Line No.",PurchRetOrderLine."Line No.");
+      UNTIL (PurchRetOrderLine.NEXT = 0) OR (PurchRetOrderLine."Attached to Line No." = 0);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

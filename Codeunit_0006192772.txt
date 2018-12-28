@@ -1,0 +1,786 @@
+OBJECT Codeunit 6192772 Continia Online Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=09/06/18;
+    Time=[ 1:00:00 AM];
+    Version List=DCW17.00.00.5.00.03;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      COSetup@6085574 : Record 6192771;
+      FileSysMgt@1003 : Codeunit 6085584;
+      HttpActions@1160040001 : 'PUT,DELETE,GET';
+      Protocol@1160040004 : 'IMAP,ContiniaMail';
+      Text001@1160040000 : TextConst 'ENU=The client credentials for Continia Online are invalid or missing.';
+      Text002@1160040002 : TextConst 'ENU=Successfully connected to Continia Online.';
+      BatchUploadContent@6085573 : DotNet "'System.Net.Http, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Net.Http.MultipartFormDataContent";
+      BatchStreamContent@1000 : ARRAY [100] OF DotNet "'System.Net.Http, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Net.Http.StreamContent";
+      BatchFileHelper@1002 : ARRAY [100] OF DotNet "'mscorlib'.System.IO.File";
+      BatchFileCount@1001 : Integer;
+      AccessTokenRequested@1160040006 : DateTime;
+      GlobalAccessToken@1160040007 : Text[1024];
+      GlobalLastErrorText@1160040003 : Text[1024];
+      RequestHeaders@6085577 : ARRAY [100,2] OF Text[1024];
+      RequestHeaderCounter@6085576 : Integer;
+      DuplicatedCompanyNameErr@6085575 : TextConst 'ENU=The Company you are trying to activate has already been activated in Continia Online: Company Name: %1, Client ID: %2';
+      DuplicatedCompanyCodeErr@6085578 : TextConst 'ENU=The Company Code you are trying to activate has already been activated in Continia Online for another company: Company Code: %1, Client ID: %2';
+      DocumentsExistErr@1160040008 : TextConst 'ENU=It is not possible to deactivate %1 because there are still active OCR documents in Continia Online.\\Files for OCR: %2\Files for import: %3\Files with errors: %4';
+
+    PROCEDURE TestConnection@1160040004();
+    VAR
+      XmlDoc@1160040000 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+    BEGIN
+      IsActive(TRUE);
+      GetAccessToken;
+      MESSAGE(Text002);
+    END;
+
+    PROCEDURE IsActive@1160040035(ShowError@1160040001 : Boolean) : Boolean;
+    VAR
+      ContiniaCompanySetup@1160040000 : Record 6192773;
+      ContiniaClientCredentials@6085573 : Record 6192771;
+    BEGIN
+      IF ShowError THEN BEGIN
+        ContiniaCompanySetup.GET;
+        ContiniaCompanySetup.TESTFIELD("Client ID");
+        ContiniaClientCredentials.GET(ContiniaCompanySetup."Client ID");
+        ContiniaClientCredentials.TESTFIELD("Client Password");
+
+        EXIT(TRUE);
+      END ELSE
+        IF ContiniaCompanySetup.GET AND ContiniaClientCredentials.GET(ContiniaCompanySetup."Client ID") THEN
+          IF (ContiniaClientCredentials."Client ID" <> '') AND (ContiniaClientCredentials."Client Password" <> '') THEN
+            EXIT(TRUE);
+    END;
+
+    PROCEDURE ExecuteRequest@1160050008(Url@1160050005 : Text[1024];HttpAction@1160050002 : 'PUT,DELETE,GET';ShowError@1160050003 : Boolean;VAR XmlDoc@1160050001 : Codeunit 6192800) : Boolean;
+    VAR
+      ErrorNodeList@1003 : Codeunit 6192802;
+      HttpWebRequest@1018 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebRequest";
+      HttpWebResponse@1019 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebResponse";
+      ReqStream@1110 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.MemoryStream";
+      StatusCode@1001 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpStatusCode";
+      WriteStream@1000 : OutStream;
+      ResInStream@1112 : InStream;
+      ErrorText@1004 : Text[1024];
+      i@6085573 : Integer;
+      VarStream@1002 : Variant;
+    BEGIN
+      IsActive(TRUE);
+
+      HttpWebRequest := HttpWebRequest.CreateHttp(Url);
+      HttpWebRequest.Accept := 'application/xml;charset=utf-8';
+      HttpWebRequest.ContentType := 'application/xml';
+      HttpWebRequest.Headers.Add('Authorization','Bearer ' + GetAccessToken);
+      HttpWebRequest.Timeout := GetConnectionTimeOut;
+
+      FOR i := 1 TO RequestHeaderCounter DO
+        HttpWebRequest.Headers.Add(RequestHeaders[i,1],RequestHeaders[i,2]);
+
+      IF HttpAction <> HttpAction::DELETE THEN BEGIN
+        IF HttpAction = HttpAction::PUT THEN BEGIN
+          HttpWebRequest.Method := 'PUT';
+          VarStream := HttpWebRequest.GetRequestStream;
+          XmlDoc.SaveToStream(VarStream);
+        END ELSE
+          IF HttpAction = HttpAction::GET THEN
+            HttpWebRequest.Method := 'GET'
+      END ELSE
+        HttpWebRequest.Method := 'DELETE';
+
+      HttpWebResponse := HttpWebRequest.GetResponse();
+      ResInStream := HttpWebResponse.GetResponseStream();
+
+      CLEAR(HttpWebRequest);
+
+      IF HttpWebResponse.StatusCode.Equals(StatusCode.OK) THEN
+        XmlDoc.LoadFromStream(ResInStream);
+
+      IF XmlDoc.SelectNodes(ErrorNodeList,'Error') THEN
+        IF GetAttribAsText(ErrorNodeList,'Message',0,ErrorText) THEN BEGIN
+          GlobalLastErrorText := TranslateErrorText(COPYSTR(ErrorText,1,1024));
+          IF (ErrorText = '1') OR NOT (ShowError) THEN
+            EXIT(FALSE)
+          ELSE
+            ShowErrorMsg(TranslateErrorText(COPYSTR(ErrorText,1,1024)));
+        END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ExecuteRequestWithoutToken@6(Url@1160050005 : Text[1024];HttpAction@1160050002 : 'PUT,DELETE,GET';ShowError@1160050003 : Boolean;VAR XmlDoc@1160050001 : Codeunit 6192800) : Boolean;
+    VAR
+      ErrorNodeList@1002 : Codeunit 6192802;
+      HttpWebRequest@1018 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebRequest";
+      HttpWebResponse@1019 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebResponse";
+      ReqStream@1110 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.MemoryStream";
+      StatusCode@1001 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpStatusCode";
+      ResInStream@1112 : InStream;
+      ErrorText@1000 : Text[1024];
+      i@6085573 : Integer;
+      VarStream@1003 : Variant;
+    BEGIN
+      IsActive(TRUE);
+
+      HttpWebRequest := HttpWebRequest.CreateHttp(Url);
+      HttpWebRequest.Accept := 'application/xml;charset=utf-8';
+      HttpWebRequest.ContentType := 'application/xml';
+      HttpWebRequest.Timeout := GetConnectionTimeOut;
+
+      FOR i := 1 TO RequestHeaderCounter DO
+        HttpWebRequest.Headers.Add(RequestHeaders[i,1],RequestHeaders[i,2]);
+
+      IF HttpAction <> HttpAction::DELETE THEN BEGIN
+        IF HttpAction = HttpAction::PUT THEN BEGIN
+          HttpWebRequest.Method := 'PUT';
+          VarStream := HttpWebRequest.GetRequestStream();
+          XmlDoc.SaveToStream(VarStream);
+        END ELSE
+          IF HttpAction = HttpAction::GET THEN
+            HttpWebRequest.Method := 'GET'
+      END ELSE
+        HttpWebRequest.Method := 'DELETE';
+
+      HttpWebResponse := HttpWebRequest.GetResponse();
+      ResInStream := HttpWebResponse.GetResponseStream();
+
+      CLEAR(HttpWebRequest);
+
+      IF HttpWebResponse.StatusCode.Equals(StatusCode.OK) THEN
+        XmlDoc.LoadFromStream(ResInStream);
+
+      IF XmlDoc.SelectNodes(ErrorNodeList,'Error') THEN
+        IF GetAttribAsText(ErrorNodeList,'Message',0,ErrorText) THEN BEGIN
+          GlobalLastErrorText := TranslateErrorText(COPYSTR(ErrorText,1,1024));
+          IF (ErrorText = '1') OR NOT (ShowError) THEN
+            EXIT(FALSE)
+          ELSE
+            ShowErrorMsg(TranslateErrorText(COPYSTR(ErrorText,1,1024)));
+        END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ExecuteFilesRequest@6085575(Url@6085582 : Text;ShowError@6085591 : Boolean;ContentFileNames@6085584 : ARRAY [20] OF Text;ContentNames@6085585 : ARRAY [5] OF Text;ContentStringValues@6085587 : ARRAY [5] OF Text;VAR XMLDoc@6085573 : Codeunit 6192800) : Boolean;
+    VAR
+      ErrorNodeList@1000 : Codeunit 6192802;
+      ArgumentStringContent@6085581 : ARRAY [5] OF DotNet "'System.Net.Http, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Net.Http.StringContent";
+      File@6085580 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File";
+      ByteArray@6085579 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array";
+      ByteArrayContent@6085578 : ARRAY [20] OF DotNet "'System.Net.Http, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Net.Http.ByteArrayContent";
+      TimeSpan@6085577 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.TimeSpan";
+      HttpClient@6085576 : DotNet "'System.Net.Http, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Net.Http.HttpClient";
+      MultipartFormDataContent@6085575 : DotNet "'System.Net.Http, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Net.Http.MultipartFormDataContent";
+      HttpResponseMessage@6085574 : DotNet "'System.Net.Http, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Net.Http.HttpResponseMessage";
+      ErrorText@6085590 : Text;
+      XmlSource@6085588 : Text;
+      i@6085586 : Integer;
+    BEGIN
+      MultipartFormDataContent := MultipartFormDataContent.MultipartFormDataContent;
+      FOR i := 1 TO COMPRESSARRAY(ContentNames) DO BEGIN
+        ArgumentStringContent[i] := ArgumentStringContent[i].StringContent(FORMAT(ContentStringValues[i]));
+        MultipartFormDataContent.Add(ArgumentStringContent[i],ContentNames[i]);
+      END;
+
+      FOR i := 1 TO COMPRESSARRAY(ContentFileNames) DO BEGIN
+        ByteArray := File.ReadAllBytes(ContentFileNames[i]);
+        ByteArrayContent[i] := ByteArrayContent[i].ByteArrayContent(ByteArray);
+        MultipartFormDataContent.Add(ByteArrayContent[i],STRSUBSTNO('ContentFiles[%1]',ContentFileNames[i]),ContentFileNames[i]);
+      END;
+
+      HttpClient := HttpClient.HttpClient;
+      HttpClient.Timeout := TimeSpan.TimeSpan(0,0,30);
+      HttpClient.DefaultRequestHeaders.Add('Accept', 'application/xml;charset=utf-8');
+      HttpClient.DefaultRequestHeaders.Add('Authorization','Bearer ' + GetAccessToken);
+      HttpResponseMessage := HttpClient.PostAsync(Url,MultipartFormDataContent).Result;
+
+      XmlSource := FORMAT(HttpResponseMessage.Content.ReadAsStringAsync().Result);
+      XMLDoc.LoadXml(XmlSource);
+
+      IF XMLDoc.SelectNodes(ErrorNodeList,'Error') THEN BEGIN
+        IF GetAttribAsText(ErrorNodeList,'Message',0,ErrorText) THEN BEGIN
+          IF (ErrorText = '1') OR NOT (ShowError) THEN
+            EXIT(FALSE)
+          ELSE
+            ShowErrorMsg(ErrorText);
+        END;
+      END ELSE
+        EXIT(TRUE);
+    END;
+
+    PROCEDURE ExecuteFileRequest@6085581(Url@6085575 : Text;ShowError@6085576 : Boolean;InFile@6085584 : Text;ArgumentName@6085585 : Text;ArgumentValue@6085587 : Text;VAR XMLDoc@6085573 : Codeunit 6192800);
+    VAR
+      FileArray@6085574 : ARRAY [20] OF Text;
+      ArgumentNames@6085578 : ARRAY [5] OF Text;
+      ArgumentValues@6085577 : ARRAY [5] OF Text;
+    BEGIN
+      FileArray[1] := InFile;
+      ArgumentNames[1] := ArgumentName;
+      ArgumentValues[1] := ArgumentValue;
+      ExecuteFilesRequest(Url,TRUE,FileArray,ArgumentNames,ArgumentValues,XMLDoc);
+    END;
+
+    PROCEDURE GetAccessToken@1160040024() AccessToken : Text[1024];
+    VAR
+      XmlDoc@1002 : Codeunit 6192800;
+      TokenNodeList@1001 : Codeunit 6192802;
+      WebClient@1003 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.WebClient";
+      Response@1000 : Text[1024];
+    BEGIN
+      IF AccessTokenRequested > CREATEDATETIME(TODAY,TIME) - (60000 * 60) THEN // Allow the access token to live for 60 minutes
+        EXIT(GlobalAccessToken);
+
+      WebClient := WebClient.WebClient;
+      WebClient.Headers.Set('Accept','application/xml;charset=utf-8');
+      Response := WebClient.UploadString(GetAccessTokenUrl,'POST',GetClientCredentials);
+      CLEAR(WebClient);
+
+      XmlDoc.LoadXml(Response);
+
+      IF NOT XmlDoc.SelectNodes(TokenNodeList,'Token') THEN
+        ERROR(Text001);
+      IF NOT GetAttribAsText(TokenNodeList,'AccessToken',0,AccessToken) THEN
+        ERROR(Text001);
+
+      GlobalAccessToken := AccessToken;
+      AccessTokenRequested := CURRENTDATETIME;
+    END;
+
+    PROCEDURE GetWebSiteUrl@5(ClientID@1000 : Code[20]) : Text[1024];
+    BEGIN
+      CASE TRUE OF
+        CheckIsDev(ClientID):
+          EXIT('https://dev.continiaonline.com');
+        CheckIsDemo(ClientID):
+          EXIT('https://demo.continiaonline.com');
+        ELSE
+          EXIT('https://www.continiaonline.com');
+      END;
+    END;
+
+    PROCEDURE GetBaseUrl@1160040022() : Text[1024];
+    BEGIN
+      CASE TRUE OF
+        IsDev:
+          EXIT('https://devauth.continiaonline.com/api/v1/');
+        IsDemo:
+          EXIT('https://demoauth.continiaonline.com/api/v1/');
+        ELSE
+          EXIT('https://auth.continiaonline.com/api/v1/');
+      END;
+    END;
+
+    PROCEDURE GetAccessTokenUrl@1160040019() : Text[1024];
+    BEGIN
+      EXIT(GetBaseUrl + 'oauth/token');
+    END;
+
+    PROCEDURE GetClientCredentials@1160040023() : Text[1024];
+    VAR
+      ContiniaCompanySetup@6085574 : Record 6192773;
+      ContiniaClientCredentials@6085573 : Record 6192771;
+    BEGIN
+      ContiniaCompanySetup.GET;
+      ContiniaCompanySetup.TESTFIELD("Client ID");
+      ContiniaClientCredentials.GET(ContiniaCompanySetup."Client ID");
+      EXIT('grant_type=password&username=' + ContiniaClientCredentials."Client ID" + '&password=' + ContiniaClientCredentials."Client Password");
+    END;
+
+    PROCEDURE GetCompanyGUID@1160040002() : Text[1024];
+    VAR
+      ContiniaCompanySetup@6085573 : Record 6192773;
+    BEGIN
+      ContiniaCompanySetup.GET;
+      EXIT(GetGUIDAsText(ContiniaCompanySetup."Company GUID"));
+    END;
+
+    PROCEDURE GetClientID@1160040013(ShowError@1160040001 : Boolean) : Code[20];
+    VAR
+      ContiniaCompanySetup@6085573 : Record 6192773;
+    BEGIN
+      ContiniaCompanySetup.GET;
+
+      IF ShowError THEN
+        ContiniaCompanySetup.TESTFIELD("Client ID");
+
+      EXIT(ContiniaCompanySetup."Client ID");
+    END;
+
+    PROCEDURE GetCompanyCode@6085577(ShowError@1160040001 : Boolean) : Code[10];
+    VAR
+      ContiniaCompanySetup@6085573 : Record 6192773;
+    BEGIN
+      ContiniaCompanySetup.GET;
+
+      IF ShowError THEN
+        ContiniaCompanySetup.TESTFIELD("Company Code");
+
+      EXIT(ContiniaCompanySetup."Company Code");
+    END;
+
+    PROCEDURE GetConnectionTimeOut@1160040034() : Integer;
+    VAR
+      ContiniaCompanySetup@6085573 : Record 6192773;
+      ContiniaWebPortal@6085574 : Record 6192774;
+      ContiniaClientCredentials@6085576 : Record 6192771;
+      ContiniaSIStorage@6085575 : Codeunit 6192778;
+    BEGIN
+      IF ContiniaSIStorage.GetConnectionTimeout = 0 THEN BEGIN
+        ContiniaCompanySetup.GET;
+        ContiniaCompanySetup.TESTFIELD("Client ID");
+        ContiniaClientCredentials.GET(ContiniaCompanySetup."Client ID");
+        IF ContiniaClientCredentials."Connection Timeout" > 0 THEN BEGIN
+          ContiniaSIStorage.SetConnectionTimeout(ContiniaClientCredentials."Connection Timeout");
+          EXIT(ContiniaClientCredentials."Connection Timeout");
+        END ELSE BEGIN
+          ContiniaSIStorage.SetConnectionTimeout(30000);
+          EXIT(30000);
+        END;
+      END ELSE
+        EXIT(ContiniaSIStorage.GetConnectionTimeout);
+    END;
+
+    PROCEDURE GetNavLicenseSN@1160040009() : Text[100];
+    VAR
+      LicenseInfo@1160040000 : Record 2000000040;
+    BEGIN
+      LicenseInfo.GET(4);
+      EXIT(COPYSTR(LicenseInfo.Text,STRPOS(LicenseInfo.Text,':') + 2));
+    END;
+
+    PROCEDURE GetGUIDAsText@1160040001(Value@1160040000 : GUID) : Text[50];
+    BEGIN
+      EXIT(DELCHR(Value,'<>','{}'))
+    END;
+
+    PROCEDURE GetIntAsText@1160040005(Value@1160040000 : Integer) : Text[30];
+    BEGIN
+      EXIT(FORMAT(Value));
+    END;
+
+    PROCEDURE GetBoolAsText@1160040000(Value@1160040000 : Boolean) : Text[30];
+    BEGIN
+      IF Value THEN
+        EXIT('1');
+
+      EXIT('0');
+    END;
+
+    PROCEDURE GetTextAsBool@1160040007(Value@1160040000 : Code[10]) : Boolean;
+    BEGIN
+      IF UPPERCASE(Value) IN ['1','TRUE'] THEN
+        EXIT(TRUE);
+    END;
+
+    PROCEDURE GetTextAsGuid@1160040016(Value@1160040000 : Code[250]) NewGuid : GUID;
+    BEGIN
+      EVALUATE(NewGuid,'{' + Value + '}');
+    END;
+
+    PROCEDURE GetAttribAsBool@1160040003(VAR XMLNodeList@1000 : Codeunit 6192802;AttribName@1160040003 : Text[30];Pos@1160040004 : Integer) : Boolean;
+    VAR
+      XmlLib@1160040002 : Codeunit 6085573;
+      AttribText@1160040005 : Text[1024];
+    BEGIN
+      IF GetAttribAsText(XMLNodeList,AttribName,Pos,AttribText) THEN
+        EXIT(GetTextAsBool(AttribText));
+    END;
+
+    PROCEDURE GetAttribAsInt@1160040027(VAR XMLNodeList@1000 : Codeunit 6192802;AttribName@1160040000 : Text[30];Pos@1160040004 : Integer) Result : Integer;
+    VAR
+      XmlLib@1160040002 : Codeunit 6085573;
+      AttribText@1160040005 : Text[1024];
+    BEGIN
+      IF GetAttribAsText(XMLNodeList,AttribName,Pos,AttribText) THEN
+        EVALUATE(Result,AttribText);
+    END;
+
+    PROCEDURE GetAttribAsDecimal@1160040021(VAR XMLNodeList@1000 : Codeunit 6192802;AttribName@1160040003 : Text[30];Pos@1160040004 : Integer) Result : Decimal;
+    VAR
+      XmlLib@1160040002 : Codeunit 6085573;
+      AttribText@1160040005 : Text[1024];
+    BEGIN
+      IF GetAttribAsText(XMLNodeList,AttribName,Pos,AttribText) THEN
+        EXIT(FormatDecimal(AttribText));
+    END;
+
+    PROCEDURE GetAttribAsText@1160040026(XMLNodeList@1000 : Codeunit 6192802;AttribName@1160040003 : Text[30];Pos@1160040004 : Integer;VAR Result@1160040006 : Text[1024]) : Boolean;
+    VAR
+      XmlLib@1160040002 : Codeunit 6085573;
+      XmlNode@1160040000 : Codeunit 6192801;
+      XMLAttrList@1001 : Codeunit 6192804;
+    BEGIN
+      IF NOT XMLNodeList.GetItem(XmlNode,Pos) THEN
+        EXIT;
+
+      IF NOT XmlNode.GetAttributes(XMLAttrList) THEN
+        EXIT;
+
+      IF NOT XMLAttrList.GetNamedItem(XmlNode,AttribName) THEN
+        EXIT;
+
+      Result := COPYSTR(XmlNode.InnerText,1,MAXSTRLEN(Result));
+      EXIT(Result <> '');
+    END;
+
+    PROCEDURE GetAttribAsGuid@1160040015(VAR XMLNodeList@1000 : Codeunit 6192802;AttribName@1160040003 : Text[30];Pos@1160040004 : Integer) : GUID;
+    VAR
+      XmlLib@1160040002 : Codeunit 6085573;
+      AttribText@1160040005 : Text[1024];
+    BEGIN
+      IF GetAttribAsText(XMLNodeList,AttribName,Pos,AttribText) THEN
+        EXIT(GetTextAsGuid(AttribText));
+    END;
+
+    PROCEDURE GetAttribAsCode@1160040014(VAR XMLNodeList@1000 : Codeunit 6192802;AttribName@1160040003 : Text[30];Pos@1160040004 : Integer) Result : Code[250];
+    VAR
+      XmlLib@1160040002 : Codeunit 6085573;
+      AttribText@1160040005 : Text[1024];
+    BEGIN
+      IF GetAttribAsText(XMLNodeList,AttribName,Pos,AttribText) THEN
+        EVALUATE(Result,AttribText);
+    END;
+
+    PROCEDURE GetAttribAsDateUTC@1160040017(VAR XMLNodeList@1000 : Codeunit 6192802;AttribName@1160040003 : Text[30];Pos@1160040004 : Integer) Result : Date;
+    VAR
+      XmlLib@1160040002 : Codeunit 6085573;
+      DateParserMgt@1160040000 : Codeunit 6085586;
+      AttribText@1160040005 : Text[1024];
+    BEGIN
+      IF NOT GetAttribAsText(XMLNodeList,AttribName,Pos,AttribText) THEN
+        EXIT;
+
+      DateParserMgt.ParseUTC(AttribText);
+      Result := DateParserMgt.GetDate;
+    END;
+
+    PROCEDURE GetAttribAsDateTime@4(VAR XMLNodeList@1000 : Codeunit 6192802;AttribName@1160040003 : Text[30];Pos@1160040004 : Integer) Result : DateTime;
+    VAR
+      XmlLib@1160040002 : Codeunit 6085573;
+      DateParserMgt@1160040000 : Codeunit 6085586;
+      AttribText@1160040005 : Text[1024];
+    BEGIN
+      IF NOT GetAttribAsText(XMLNodeList,AttribName,Pos,AttribText) THEN
+        EXIT;
+
+      DateParserMgt.ParseUTC(AttribText);
+      Result := DateParserMgt.GetDatetime;
+    END;
+
+    PROCEDURE GetAttribAsDateZulu@3(VAR XMLNodeList@1000 : Codeunit 6192802;AttribName@1160040003 : Text[30];Pos@1160040004 : Integer) Result : Date;
+    VAR
+      XmlLib@1160040002 : Codeunit 6085573;
+      AttribText@1160040005 : Text[1024];
+    BEGIN
+      IF NOT GetAttribAsText(XMLNodeList,AttribName,Pos,AttribText) THEN
+        EXIT;
+
+      IF EVALUATE(Result,AttribText,9) THEN
+        EXIT(Result)
+    END;
+
+    PROCEDURE DownloadFile@1160040011(FromUrl@1160040001 : Text[1024];ToName@1004 : Text[1024];VAR TempFile@1005 : TEMPORARY Record 6085608;IncludeToken@6085573 : Boolean);
+    VAR
+      WebClient@1000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.WebClient";
+      ByteArray@1001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array";
+      MemStream@1003 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.MemoryStream";
+      File@1002 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File";
+    BEGIN
+      WebClient := WebClient.WebClient;
+      WebClient.Headers.Set('Accept','application/xml;charset=utf-8');
+
+      IF IncludeToken THEN
+        WebClient.Headers.Set('Authorization','Bearer ' + GetAccessToken);
+
+      ByteArray := WebClient.DownloadData(FromUrl);
+      MemStream := MemStream.MemoryStream(ByteArray);
+      TempFile.CreateFromStream(ToName,MemStream);
+      CLEAR(WebClient);
+    END;
+
+    PROCEDURE UploadFile@1(VAR TempFile@6085576 : TEMPORARY Record 6085608;ToUrl@1003 : Text[1024];ShowError@1013 : Boolean;IncludeToken@6085573 : Boolean) Success : Boolean;
+    VAR
+      HttpClient@6085579 : DotNet "'System.Net.Http, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Net.Http.HttpClient";
+      HttpResponseMessage@6085584 : DotNet "'System.Net.Http, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Net.Http.HttpResponseMessage";
+      MultipartFormDataContent@6085580 : DotNet "'System.Net.Http, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Net.Http.MultipartFormDataContent";
+      TimeSpan@6085582 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.TimeSpan";
+      ByteArray@1000 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array";
+      ByteArrayContent@6085581 : DotNet "'System.Net.Http, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Net.Http.ByteArrayContent";
+      MemStream@6085577 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.MemoryStream";
+      ReadStream@6085578 : InStream;
+      ErrorText@1007 : Text;
+      ResultText@6085575 : Text;
+      IsError@6085574 : Boolean;
+    BEGIN
+      HttpClient := HttpClient.HttpClient;
+      HttpClient.Timeout := TimeSpan.TimeSpan(0,0,30);
+      IF IncludeToken THEN BEGIN
+        HttpClient.DefaultRequestHeaders.Add('Accept', 'application/xml;charset=utf-8');
+        HttpClient.DefaultRequestHeaders.Add('Authorization','Bearer ' + GetAccessToken);
+      END;
+
+      MemStream := MemStream.MemoryStream;
+      TempFile.GetDataStream(ReadStream);
+      COPYSTREAM(MemStream,ReadStream);
+      ByteArray := MemStream.ToArray;
+
+      MultipartFormDataContent := MultipartFormDataContent.MultipartFormDataContent;
+      ByteArrayContent := ByteArrayContent.ByteArrayContent(ByteArray);
+      MultipartFormDataContent.Add(ByteArrayContent,'file',TempFile.Name);
+
+      HttpResponseMessage := HttpClient.PostAsync(ToUrl,MultipartFormDataContent).Result;
+      ResultText := HttpResponseMessage.Content.ReadAsStringAsync().Result;
+
+      IF ResultText <> '' THEN BEGIN
+        HandleWebHelperResponse('',ResultText,IsError,ErrorText);
+        IF IsError THEN BEGIN
+          GlobalLastErrorText := ErrorText;
+          IF ShowError THEN
+            ShowErrorMsg(ErrorText)
+          ELSE
+            Success := FALSE;
+        END ELSE
+          Success := TRUE;
+      END;
+
+      CLEAR(MultipartFormDataContent);
+      CLEAR(HttpClient);
+    END;
+
+    PROCEDURE AddFileToBatchUpload@6085573(FullFilenameAndPath@6085578 : Text[1024];DisplayFilename@6085575 : Text[1024]);
+    VAR
+      FileSysMgt@6085576 : Codeunit 6085584;
+      WebClient@6085574 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.WebClient";
+    BEGIN
+      IF ISNULL(BatchUploadContent) THEN
+        BatchUploadContent := BatchUploadContent.MultipartFormDataContent;
+
+      BatchFileCount := BatchFileCount + 1;
+      BatchStreamContent[BatchFileCount] := BatchStreamContent[BatchFileCount].StreamContent(BatchFileHelper[BatchFileCount].OpenRead(FullFilenameAndPath));
+      BatchStreamContent[BatchFileCount].Headers.Remove('Content-Type');
+      BatchStreamContent[BatchFileCount].Headers.Add('Content-Type','application/octet-stream');
+
+      BatchUploadContent.Add(BatchStreamContent[BatchFileCount],'file',DisplayFilename);
+    END;
+
+    PROCEDURE BatchUploadFiles@6085574(ToUrl@6085573 : Text[1024];IncludeToken@6085574 : Boolean);
+    VAR
+      HttpClient@6085575 : DotNet "'System.Net.Http, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Net.Http.HttpClient";
+      HttpResponseMessage@6085576 : DotNet "'System.Net.Http, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'.System.Net.Http.HttpResponseMessage";
+      i@6085577 : Integer;
+      IsError@6085578 : Boolean;
+      ErrorText@6085579 : Text[1024];
+    BEGIN
+      HttpClient := HttpClient.HttpClient;
+      IF IncludeToken THEN BEGIN
+        HttpClient.DefaultRequestHeaders.Add('Accept','application/xml;charset=utf-8');
+        HttpClient.DefaultRequestHeaders.Add('Authorization','Bearer ' + GetAccessToken);
+      END;
+
+      HttpResponseMessage := HttpClient.PutAsync(ToUrl,BatchUploadContent).Result;
+
+      FOR i := 1 TO BatchFileCount DO
+        BatchStreamContent[i].Dispose;
+      BatchFileCount := 0;
+
+      IF NOT ISNULL(HttpResponseMessage) THEN
+        IF NOT HttpResponseMessage.IsSuccessStatusCode THEN
+          HandleWebHelperResponse(HttpResponseMessage.Content.ReadAsStringAsync.Result,'',IsError,ErrorText)
+        ELSE
+          HandleWebHelperResponse('',HttpResponseMessage.Content.ReadAsStringAsync.Result,IsError,ErrorText);
+
+      IF IsError THEN BEGIN
+        GlobalLastErrorText := ErrorText;
+        ShowErrorMsg(ErrorText);
+      END;
+    END;
+
+    PROCEDURE HandleWebHelperResponse@6085576(LastErrorText@6085577 : Text[1024];LastResponseText@6085575 : Text[1024];VAR IsError@6085574 : Boolean;VAR ErrorText@6085573 : Text[1024]);
+    VAR
+      XmlDoc@6085576 : Codeunit 6192800;
+      EmptyResponseNodeList@1000 : Codeunit 6192802;
+      ErrorNodeList@1001 : Codeunit 6192802;
+      StatusText@6085578 : Text[30];
+    BEGIN
+      IF LastResponseText <> '' THEN BEGIN
+        XmlDoc.LoadXml(LastResponseText);
+
+        IF XmlDoc.SelectNodes(EmptyResponseNodeList,'EmptyResponse') AND GetAttribAsText(EmptyResponseNodeList,'Status',0,StatusText) THEN BEGIN
+          IF StatusText <> 'OK' THEN BEGIN
+            ErrorText := StatusText;
+            IsError := TRUE;
+          END;
+        END ELSE
+          IF XmlDoc.SelectNodes(ErrorNodeList,'Error') AND GetAttribAsText(ErrorNodeList,'Message',0,ErrorText) THEN
+            IsError := TRUE;
+      END;
+    END;
+
+    PROCEDURE FormatDecimal@1000000008(DecAsText@1000000005 : Text[1024]) Result : Decimal;
+    VAR
+      LeftSide@1000000000 : Text[30];
+      RightSide@1000000001 : Text[30];
+      NegNumber@1000000002 : Boolean;
+      PassedDecPoint@1000000003 : Boolean;
+      i@1000000004 : Integer;
+      TempInt@1000000006 : Integer;
+      TempDec@1000000008 : Decimal;
+    BEGIN
+      IF DecAsText = '' THEN
+        EXIT;
+
+      EVALUATE(Result,CONVERTSTR(DecAsText,'.',GetDecimalSeparator));
+    END;
+
+    PROCEDURE GetDecimalSeparator@1000000009() : Text[1];
+    BEGIN
+      EXIT(COPYSTR(FORMAT(1.1),2,1));
+    END;
+
+    PROCEDURE CreateNewCompanyGUID@1160040006();
+    VAR
+      ContiniaCompanySetup@6085573 : Record 6192773;
+    BEGIN
+      ContiniaCompanySetup.GET;
+      ContiniaCompanySetup."Company GUID" := CREATEGUID;
+      ContiniaCompanySetup.MODIFY;
+    END;
+
+    PROCEDURE GetUserWebServiceKey@1160040010(_UserID@1160040000 : Code[50]) : Text[80];
+    VAR
+      User@6085573 : Record 2000000120;
+      UserProperty@1000 : Record 2000000121;
+    BEGIN
+      User.SETRANGE("User Name",_UserID);
+      IF NOT User.FINDFIRST THEN
+        EXIT;
+
+      IF UserProperty.GET(User."User Security ID") THEN
+        EXIT(UserProperty."WebServices Key");
+    END;
+
+    PROCEDURE IsDev@1160040025() : Boolean;
+    VAR
+      ContiniaCompanySetup@6085573 : Record 6192773;
+    BEGIN
+      ContiniaCompanySetup.GET;
+      EXIT(CheckIsDev(ContiniaCompanySetup."Client ID"));
+    END;
+
+    PROCEDURE CheckIsDev@8(ClientID@1000 : Code[20]) : Boolean;
+    BEGIN
+      EXIT(COPYSTR(ClientID,1,4) = 'DEV-');
+    END;
+
+    PROCEDURE IsDemo@1160040029() : Boolean;
+    VAR
+      ContiniaCompanySetup@1160040000 : Record 6192773;
+    BEGIN
+      ContiniaCompanySetup.GET;
+      EXIT(CheckIsDemo(ContiniaCompanySetup."Client ID"));
+    END;
+
+    PROCEDURE CheckIsDemo@9(ClientID@1000 : Code[20]) : Boolean;
+    BEGIN
+      EXIT(COPYSTR(ClientID,1,5) = 'DEMO-');
+    END;
+
+    PROCEDURE ShowErrorMsg@1160040032(ErrorMsg@1160040000 : Text[1024]);
+    BEGIN
+      ERROR(ErrorMsg);
+    END;
+
+    PROCEDURE GetLastErrorText@1160040036() : Text[1024];
+    BEGIN
+      EXIT(GlobalLastErrorText);
+    END;
+
+    PROCEDURE SetRequestHeader@1160040037(Header@1160040000 : Text[1024];Value@1160040001 : Text[1024]);
+    VAR
+      i@1160040002 : Integer;
+    BEGIN
+      RequestHeaderCounter += 1;
+      RequestHeaders[RequestHeaderCounter,1] := Header;
+      RequestHeaders[RequestHeaderCounter,2] := Value;
+    END;
+
+    LOCAL PROCEDURE TranslateErrorText@6085583(ErrorText@6085573 : Text[1024]) : Text[1024];
+    BEGIN
+      CASE TRUE OF
+        (COPYSTR(UPPERCASE(ErrorText),1,43) = GetDuplicatedCompNameErrText):
+          EXIT(STRSUBSTNO(DuplicatedCompanyNameErr,GetTextBetween(ErrorText,'Company Name:',', Client ID:'),
+            GetTextAfter(ErrorText,'Client ID:')));
+        (COPYSTR(UPPERCASE(ErrorText),1,17) = GetCompanyCodeExistErrText):
+          EXIT(STRSUBSTNO(DuplicatedCompanyCodeErr,GetTextBetween(ErrorText,'The CompanyCode ''',''' already exists'),
+            GetTextBetween(ErrorText,'Client ID ''','''.')));
+        (COPYSTR(UPPERCASE(ErrorText),1,44) = GetDocumentsExistErrText):
+          EXIT(STRSUBSTNO(DocumentsExistErr,
+            GetTextBetween(ErrorText,'It is not possible to deactivate the company ''',''', because there are still'),
+            GetTextBetween(ErrorText,'Files for OCR     : ','Files for import'),
+            GetTextBetween(ErrorText,'Files for import  : ','Files with errors'),
+            GetTextAfter(ErrorText,'Files with errors : ')));
+        ELSE
+          EXIT(ErrorText);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetTextBetween@6085591(MessageText@6085574 : Text[1024];TextBefore@6085573 : Text[80];TextAfter@6085576 : Text[80]) : Text[250];
+    VAR
+      PosBefore@6085575 : Integer;
+      PosAfter@6085577 : Integer;
+      StartPos@6085578 : Integer;
+      InBetweenLenght@6085579 : Integer;
+    BEGIN
+      PosBefore := STRPOS(MessageText,TextBefore);
+      PosAfter := STRPOS(MessageText,TextAfter);
+      StartPos := PosBefore + STRLEN(TextBefore);
+      InBetweenLenght := PosAfter - StartPos;
+
+      IF (PosBefore <> 0) AND (PosAfter <> 0) THEN
+        EXIT(DELCHR(COPYSTR(MessageText,StartPos,InBetweenLenght),'<>',' '))
+      ELSE
+        EXIT('');
+    END;
+
+    LOCAL PROCEDURE GetTextAfter@6085592(MessageText@6085574 : Text[1024];TextBefore@6085573 : Text[80]) : Text[250];
+    VAR
+      PosBefore@6085576 : Integer;
+      StartPos@6085575 : Integer;
+    BEGIN
+      PosBefore := STRPOS(MessageText,TextBefore);
+      StartPos := PosBefore + STRLEN(TextBefore);
+
+      IF PosBefore <> 0 THEN
+        EXIT(DELCHR(COPYSTR(MessageText,StartPos),'<>',' '))
+      ELSE
+        EXIT('');
+    END;
+
+    LOCAL PROCEDURE GetDuplicatedCompNameErrText@6085584() : Code[80];
+    BEGIN
+      EXIT('THE COMPANY YOU ARE TRYING TO ACTIVATE HAVE');
+    END;
+
+    LOCAL PROCEDURE GetCompanyCodeExistErrText@6085578() : Code[80];
+    BEGIN
+      EXIT('THE COMPANYCODE ''');
+    END;
+
+    LOCAL PROCEDURE GetDocumentsExistErrText@1160040038() : Code[80];
+    BEGIN
+      EXIT('IT IS NOT POSSIBLE TO DEACTIVATE THE COMPANY');
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

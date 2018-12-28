@@ -1,0 +1,856 @@
+OBJECT Codeunit 6085617 Continia Online - DC
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08/23/18;
+    Time=[ 1:00:00 AM];
+    Version List=DCW13.70.00.5.00.03;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      COMgt@1160040005 : Codeunit 6192772;
+      LicenseMgt@6085573 : Codeunit 6192773;
+      AboutDC@6085574 : Codeunit 6085589;
+      XmlLib@1160040011 : Codeunit 6085573;
+      Window@1001 : Dialog;
+      HttpActions@1160040001 : 'PUT,DELETE,GET';
+      Protocol@1160040004 : 'IMAP,ContiniaMail';
+      Text003@1160040000 : TextConst 'ENU=Cloud OCR is not active.';
+      Text005@1160040002 : TextConst 'ENU=The company information has been updated.';
+      DocumentCountMsg@1160040003 : TextConst 'ENU=No. of Documents: %1';
+      ProductActivateExportConfigMsg@1160040010 : TextConst 'ENU=%1 has been activated for %2.\\Remember to update configurations, such as Connection Endpoints for Document Categories, and export configuration files.';
+      ProductActivateFilePathMsg@6085575 : TextConst 'ENU=%1 has been activated for %2.\\Remember to update configurations, such as Connection Endpoints for Document Categories, and export configuration files.\\Please verify that the file paths for %2 are unique.';
+      Text009@1160040006 : TextConst 'ENU=Uploading OCR Files\%1 #1###################\@2@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@';
+      Text010@1160040007 : TextConst 'ENU=There are local documents which have not been sent to Cloud OCR. Would you like to send them for processing now?';
+      Text011@1160040008 : TextConst 'ENU=Downloading files from Continia Online\Document Category #1######################\Status            @2@@@@@@@@@@@@@@@@@@@@@@';
+      NotActivatedMsg@6085576 : TextConst 'ENU=%1 is not active.';
+
+    PROCEDURE IsCompanyActive@1160040035(ShowError@1160040001 : Boolean) : Boolean;
+    VAR
+      UpdateDCDocCounters@6085573 : Codeunit 6085618;
+    BEGIN
+      EXIT(IsCompanyActive2(ShowError,TRUE,FALSE));
+    END;
+
+    PROCEDURE IsCompanyActive2@6085576(ShowError@6085576 : Boolean;ShowMessage@6085574 : Boolean;ClearCODC@6085575 : Boolean) : Boolean;
+    VAR
+      UpdateDCDocCounters@6085573 : Codeunit 6085618;
+    BEGIN
+      IF LicenseMgt.IsActive2(AboutDC.ProductCode,AboutDC.FullProductName,AboutDC.ShortProductName,ShowError,ShowMessage,
+        AboutDC.ObjectVersion)
+      THEN
+        EXIT(TRUE)
+      ELSE BEGIN
+        IF ClearCODC THEN
+          UpdateDCDocCounters.ClearCODC;
+        EXIT(FALSE);
+      END;
+    END;
+
+    PROCEDURE IsCloudActive@1160040032(ShowError@1160040001 : Boolean) : Boolean;
+    VAR
+      DCSetup@1160040000 : Record 6085573;
+    BEGIN
+      DCSetup.GET;
+
+      IF ShowError THEN
+        DCSetup.TESTFIELD("Use Cloud OCR");
+
+      EXIT(DCSetup."Use Cloud OCR");
+    END;
+
+    PROCEDURE CheckCategoryValid@1160040026(VAR DocCat@1160040000 : Record 6085575);
+    VAR
+      ConnEndpoint@1160040002 : Record 6085620;
+      EmptyGUID@1160040001 : GUID;
+    BEGIN
+      IF DocCat."Document Category GUID" = EmptyGUID THEN BEGIN
+        DocCat."Document Category GUID" := CREATEGUID;
+        DocCat.MODIFY;
+      END;
+
+      DocCat.TESTFIELD("Drag and Drop Category",FALSE);
+      DocCat.TESTFIELD("E-Mail Connection Endpoint");
+      ConnEndpoint.GET(DocCat."E-Mail Connection Endpoint");
+    END;
+
+    PROCEDURE UpdateCompanyCount@1160040004();
+    VAR
+      DCSetup@1160040001 : Record 6085573;
+      XmlDoc@1160040000 : Codeunit 6192800;
+    BEGIN
+      IsCloudActive(TRUE);
+      GetClient(XmlDoc);
+      CLEAR(XmlDoc);
+      MESSAGE(Text005);
+    END;
+
+    PROCEDURE GetClient@1160040028(VAR XmlDoc@1160040001 : Codeunit 6192800);
+    BEGIN
+      CLEAR(XmlDoc);
+      COMgt.ExecuteRequest(GetClientUrl,HttpActions::GET,TRUE,XmlDoc);
+    END;
+
+    PROCEDURE GetCompany@1160040015(VAR XmlDoc@1160040001 : Codeunit 6192800);
+    VAR
+      DCSetup@1160040000 : Record 6085573;
+    BEGIN
+      CLEAR(XmlDoc);
+      COMgt.ExecuteRequest(GetCompanyUrl,HttpActions::GET,TRUE,XmlDoc);
+    END;
+
+    PROCEDURE GetCompanyCode@1160040003(ShowError@1160040001 : Boolean) : Code[10];
+    VAR
+      ContiniaCompanySetup@6085573 : Record 6192773;
+      ContiniaOnlineMgt@6085574 : Codeunit 6192772;
+    BEGIN
+      EXIT(ContiniaOnlineMgt.GetCompanyCode(ShowError));
+    END;
+
+    PROCEDURE ActivateCompany@1160040023();
+    VAR
+      Document@1160040001 : Record 6085590;
+      DCSetup@6085574 : Record 6085573;
+      ContiniaCompanySetup@6085575 : Record 6192773;
+      IsAccept@1160040003 : Boolean;
+      LicenseInfo@1160040004 : ARRAY [100] OF Text[250];
+      i@1160040005 : Integer;
+      UserSelection@6085573 : 'New Company,New Test Company,Reactivate';
+    BEGIN
+      ContiniaCompanySetup.GET;
+      ContiniaCompanySetup.TESTFIELD("Client ID");
+      ContiniaCompanySetup.TESTFIELD("Company Code");
+
+      i := LicenseMgt.GetStandardLicenseInfo(LicenseInfo);
+      LicenseInfo[i+1] := STRSUBSTNO(DocumentCountMsg,Document.COUNT);
+
+      DCSetup.GET;
+      DCSetup.VerifyFilePathsCrossComp;
+      UserSelection := LicenseMgt.ActivateProduct(AboutDC.ProductCode,AboutDC.ObjectVersion,AboutDC.FullProductName,LicenseInfo);
+      COMMIT;
+
+      CASE UserSelection OF
+        UserSelection::"New Company",UserSelection::"New Test Company":
+          BEGIN
+            UpdateCategories(FALSE);
+            MESSAGE(ProductActivateExportConfigMsg,AboutDC.FullProductName,COMPANYNAME);
+          END;
+        UserSelection::Reactivate:
+          BEGIN
+            UpdateCategories(TRUE);
+            MESSAGE(ProductActivateFilePathMsg,AboutDC.FullProductName,COMPANYNAME);
+          END;
+      END;
+    END;
+
+    PROCEDURE ActivateCompanyOffline@6085577();
+    VAR
+      Document@1160040001 : Record 6085590;
+      DCSetup@6085574 : Record 6085573;
+      IsAccept@1160040003 : Boolean;
+      LicenseInfo@1160040004 : ARRAY [100] OF Text[250];
+      i@1160040005 : Integer;
+      UserSelection@6085573 : 'New Company,New Test Company,Reactivate';
+    BEGIN
+      i := LicenseMgt.GetStandardLicenseInfo(LicenseInfo);
+      LicenseInfo[i+1] := STRSUBSTNO(DocumentCountMsg,Document.COUNT);
+
+      DCSetup.GET;
+      DCSetup.VerifyFilePathsCrossComp;
+      LicenseMgt.OfflineActivateProduct(AboutDC.ProductCode,AboutDC.ObjectVersion,AboutDC.FullProductName,LicenseInfo);
+    END;
+
+    PROCEDURE DeactivateCompanyInNAV@6085573(ShowMsg@6085574 : Boolean);
+    VAR
+      AboutDCMgt@6085573 : Codeunit 6085589;
+    BEGIN
+      LicenseMgt.DeactivateCompanyInNAV(ShowMsg);
+    END;
+
+    PROCEDURE UpdateCategories@6085580(IsUpdate@6085573 : Boolean);
+    VAR
+      DCSetup@6085582 : Record 6085573;
+      ContiniaCompanySetup@6085579 : Record 6192773;
+      COMgt@6085578 : Codeunit 6192772;
+      ExportDocCatConfigDC@6085581 : Codeunit 6085616;
+      XmlDoc@6085583 : Codeunit 6192800;
+      XmlNodeList@6085576 : Codeunit 6192802;
+      DocumentElement@6085575 : Codeunit 6192801;
+      DocCatGUID@6085584 : GUID;
+      DocCatCode@6085577 : Code[20];
+      i@6085574 : Integer;
+    BEGIN
+      IF IsUpdate THEN BEGIN
+        // Copy back Category GUIDs from Continia Online and update categories in NAV
+        GetAllCategory(TRUE,XmlDoc);
+        XmlDoc.GetDocumentElement(DocumentElement);
+        DocumentElement.SelectNodes(XmlNodeList,'Category');
+        FOR i := 0 TO XmlNodeList.Count - 1 DO BEGIN
+          DocCatCode := COMgt.GetAttribAsCode(XmlNodeList,'CategoryCode',i);
+          DocCatGUID := COMgt.GetAttribAsGuid(XmlNodeList,'CategoryGUID',i);
+
+          UpdateCategory(DocCatCode,DocCatGUID);
+        END;
+
+        COMMIT;
+      END;
+
+      DCSetup.GET;
+      IF DCSetup."Use Cloud OCR" THEN
+        ExportDocCatConfigDC.ExportAllCategories;
+    END;
+
+    LOCAL PROCEDURE UpdateCategory@6085581(DocCatCode@6085573 : Code[10];DocCatGUID@6085574 : GUID);
+    VAR
+      DCDocumentCategory@6085575 : Record 6085575;
+      TableFilterField@6085576 : Record 6085762;
+      TableFilterField2@6085577 : Record 6085762;
+    BEGIN
+      // If category deleted from NAV then skip. Can always create category in NAV and reactivate to get category updated.
+      IF DCDocumentCategory.GET(DocCatCode) THEN
+        IF DCDocumentCategory."Document Category GUID" <> DocCatGUID THEN BEGIN
+          TableFilterField.SETRANGE("Table Filter GUID",DCDocumentCategory."Document Category GUID");
+          IF TableFilterField.FINDSET(TRUE,TRUE) THEN
+            REPEAT
+              TableFilterField2 := TableFilterField;
+              TableFilterField2.RENAME(DocCatGUID,TableFilterField2."Field No.");
+            UNTIL TableFilterField.NEXT = 0;
+
+          DCDocumentCategory."Document Category GUID" := DocCatGUID;
+          DCDocumentCategory.MODIFY;
+        END;
+    END;
+
+    PROCEDURE ExportConfigurationToCloud@1160040016(VAR DocCat@1160040000 : Record 6085575) : Boolean;
+    VAR
+      DCSetup@1160040008 : Record 6085573;
+      ConnEndpoint@1160040007 : Record 6085620;
+      XmlDoc@1160040005 : Codeunit 6192800;
+      CategoryNode@1160040003 : Codeunit 6192801;
+      EmailNode@1160040002 : Codeunit 6192801;
+      LanguagesNode@1160040006 : Codeunit 6192801;
+      LanguageNode@1160040004 : Codeunit 6192801;
+      Language@1160040001 : Record 6085576;
+    BEGIN
+      IsCompanyActive(TRUE);
+
+      IF DocCat."E-Mail Connection Endpoint" = '' THEN
+        EXIT;
+
+      CheckCategoryValid(DocCat);
+
+      DCSetup.GET;
+      ConnEndpoint.GET(DocCat."E-Mail Connection Endpoint");
+
+      XmlDoc.CreateNode(CategoryNode,'element','Category','');
+      XmlLib.SetXmlNodeAttr(CategoryNode,'CategoryCode',DocCat.Code);
+      XmlLib.SetXmlNodeAttr(CategoryNode,'CategoryGUID',COMgt.GetGUIDAsText(DocCat."Document Category GUID"));
+      XmlLib.SetXmlNodeAttr(CategoryNode,'CompanyGUID',COMgt.GetCompanyGUID);
+      XmlLib.SetXmlNodeAttr(CategoryNode,'CompanyCode',GetCompanyCode(TRUE));
+      XmlLib.SetXmlNodeAttr(CategoryNode,'ArchiveDocuments',COMgt.GetIntAsText(DocCat."Archive Documents in Cloud OCR"));
+      XmlLib.SetXmlNodeAttr(CategoryNode,'MaxNoOfPagesToOCR',COMgt.GetIntAsText(DocCat."Max no. of Pages to Process"));
+
+      CASE DocCat."TIFF Image Colour Mode" OF
+        DocCat."TIFF Image Colour Mode"::"Black & White":
+          XmlLib.SetXmlNodeAttr(CategoryNode,'TiffImageColorMode','BlackWhite');
+        DocCat."TIFF Image Colour Mode"::Gray:
+          XmlLib.SetXmlNodeAttr(CategoryNode,'TiffImageColorMode','Gray');
+        DocCat."TIFF Image Colour Mode"::Colour:
+          XmlLib.SetXmlNodeAttr(CategoryNode,'TiffImageColorMode','Color');
+      END;
+      XmlLib.SetXmlNodeAttr(CategoryNode,'TiffImageResolution',COMgt.GetIntAsText(DocCat."TIFF Image Resolution"));
+
+      XmlLib.SetXmlNodeAttr(CategoryNode,'ExportNewPDF',COMgt.GetBoolAsText(FALSE));
+      XmlLib.SetXmlNodeAttr(CategoryNode,'WordExportCodepage',COMgt.GetIntAsText(DocCat."OCR Export Codepage"));
+      XmlLib.CreateXmlNode(CategoryNode,'Languages','',LanguagesNode);
+
+      Language.SETRANGE("Document Category Code",DocCat.Code);
+      IF Language.FINDSET THEN
+        REPEAT
+          XmlLib.CreateXmlNode(LanguagesNode,'Language',Language."Language Code",LanguageNode);
+        UNTIL Language.NEXT = 0;
+
+      XmlLib.CreateXmlNode(CategoryNode,'Email','',EmailNode);
+      XmlLib.SetXmlNodeAttr(EmailNode,'Type',GetProtocolAsText(ConnEndpoint.Protocol));
+      IF ConnEndpoint.Protocol = ConnEndpoint.Protocol::"Continia Email" THEN
+        XmlLib.SetXmlNodeAttr(EmailNode,'EmailAddress',GetOneCategoryEmail(ConnEndpoint))
+      ELSE BEGIN
+        ConnEndpoint.TESTFIELD("Server Address");
+        ConnEndpoint.TESTFIELD("Protocol Port");
+        ConnEndpoint.TESTFIELD(Username);
+        ConnEndpoint.TESTFIELD(Password);
+
+        XmlLib.SetXmlNodeAttr(EmailNode,'ServerAddress',ConnEndpoint."Server Address");
+        XmlLib.SetXmlNodeAttr(EmailNode,'ServerPort',COMgt.GetIntAsText(ConnEndpoint."Protocol Port"));
+        XmlLib.SetXmlNodeAttr(EmailNode,'UseSSL',COMgt.GetBoolAsText(DCSetup."SMTP Require SSL/TLS"));
+        XmlLib.SetXmlNodeAttr(EmailNode,'Username',ConnEndpoint.Username);
+        XmlLib.SetXmlNodeAttr(EmailNode,'Password',ConnEndpoint.Password);
+        XmlLib.SetXmlNodeAttr(EmailNode,'SubFolder',ConnEndpoint.Subfolder);
+      END;
+
+      XmlDoc.AppendChild(CategoryNode);
+
+      COMgt.ExecuteRequest(GetOneCategoryUrl(DocCat."Document Category GUID"),HttpActions::PUT,TRUE,XmlDoc);
+      CLEAR(XmlDoc);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GetOneCategory@1160040013(DocCat@1160040000 : Record 6085575;ShowError@1160040002 : Boolean;VAR XmlDoc@1160040001 : Codeunit 6192800) : Boolean;
+    BEGIN
+      CLEAR(XmlDoc);
+      COMgt.ExecuteRequest(GetOneCategoryUrl(DocCat."Document Category GUID"),HttpActions::GET,ShowError,XmlDoc);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GetAllCategory@1160040039(ShowError@1160040002 : Boolean;VAR XmlDoc@1160040001 : Codeunit 6192800) : Boolean;
+    BEGIN
+      CLEAR(XmlDoc);
+      COMgt.ExecuteRequest(GetAllCategoryUrl,HttpActions::GET,ShowError,XmlDoc);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GetOneCategoryEmail@1160040001(ConnEndpoint@1160040004 : Record 6085620) : Text[100];
+    VAR
+      DCSetup@1160040007 : Record 6085573;
+    BEGIN
+      DCSetup.GET;
+
+      IF NOT IsCloudActive(FALSE) THEN
+        EXIT(Text003);
+
+      IF NOT IsCompanyActive2(FALSE,FALSE,TRUE) THEN
+        EXIT(STRSUBSTNO(NotActivatedMsg,'Document Capture'));
+
+      EXIT(LOWERCASE(STRSUBSTNO('%1.%2.%3@%4',ConnEndpoint.Code,GetCompanyCode(TRUE),COMgt.GetClientID(TRUE),GetEmailDomain)));
+    END;
+
+    PROCEDURE GetOneCategoryCount@1160040020(VAR DocCat@1160040004 : Record 6085575);
+    VAR
+      XmlDoc@1160040001 : Codeunit 6192800;
+      XMLNodeList@1000 : Codeunit 6192802;
+      DocCatGUID@6085573 : GUID;
+    BEGIN
+      IF NOT GetOneCategory(DocCat,FALSE,XmlDoc) THEN
+        EXIT;
+
+      IF XmlDoc.SelectNodes(XMLNodeList,'Category') THEN BEGIN
+        DocCatGUID := COMgt.GetAttribAsGuid(XMLNodeList,'CategoryGUID',0);
+
+        IF DocCat."Document Category GUID" = DocCatGUID THEN BEGIN
+          DocCat."Documents for OCR" := COMgt.GetAttribAsInt(XMLNodeList,'OCRFiles',0);
+          DocCat."Documents for Import" := COMgt.GetAttribAsInt(XMLNodeList,'ImportFiles',0);
+          DocCat."Documents with Error" := COMgt.GetAttribAsInt(XMLNodeList,'ErrorFiles',0);
+        END ELSE BEGIN
+          DocCat."Documents for OCR" := 0;
+          DocCat."Documents for Import" := 0;
+          DocCat."Documents with Error" := 0;
+        END;
+      END;
+      CLEAR(XmlDoc);
+    END;
+
+    PROCEDURE GetAllCategoryCount@1160040027(VAR TempDocCat@1160040005 : TEMPORARY Record 6085575);
+    VAR
+      XmlDoc@1160040001 : Codeunit 6192800;
+      XmlNodeList@1000 : Codeunit 6192802;
+      DocumentElement@1001 : Codeunit 6192801;
+      DCDocumentCategory@6085573 : Record 6085575;
+      DocCatGUID@6085574 : GUID;
+      DocCatCode@1160040002 : Code[20];
+      i@6085575 : Integer;
+    BEGIN
+      IF NOT GetAllCategory(FALSE,XmlDoc) THEN
+        EXIT;
+
+      XmlDoc.GetDocumentElement(DocumentElement);
+
+      DocumentElement.SelectNodes(XmlNodeList,'Category');
+      FOR i := 0 TO XmlNodeList.Count - 1 DO BEGIN
+        DocCatCode := COMgt.GetAttribAsCode(XmlNodeList,'CategoryCode',i);
+        DocCatGUID := COMgt.GetAttribAsGuid(XmlNodeList,'CategoryGUID',i);
+
+        IF NOT TempDocCat.GET(DocCatCode) THEN BEGIN
+          TempDocCat.Code := DocCatCode;
+          TempDocCat.INSERT;
+        END;
+
+        IF DCDocumentCategory.GET(DocCatCode) THEN BEGIN
+          IF DCDocumentCategory."Document Category GUID" = DocCatGUID THEN BEGIN
+            TempDocCat."Documents for OCR" := COMgt.GetAttribAsInt(XmlNodeList,'OCRFiles',i);
+            TempDocCat."Documents for Import" := COMgt.GetAttribAsInt(XmlNodeList,'ImportFiles',i);
+            TempDocCat."Documents with Error" := COMgt.GetAttribAsInt(XmlNodeList,'ErrorFiles',i);
+          END ELSE BEGIN
+            TempDocCat."Documents for OCR" := 0;
+            TempDocCat."Documents for Import" := 0;
+            TempDocCat."Documents with Error" := 0;
+          END;
+        END ELSE BEGIN
+          TempDocCat."Documents for OCR" := 0;
+          TempDocCat."Documents for Import" := 0;
+          TempDocCat."Documents with Error" := 0;
+        END;
+
+        TempDocCat.MODIFY;
+      END;
+
+      CLEAR(XmlDoc);
+    END;
+
+    PROCEDURE DeleteDocument@1160040033(DocCatCode@1160040002 : Code[10];DocumentID@1160040000 : Text[1024];Status@1160040005 : 'OCR,Import,Error');
+    VAR
+      DocCat@1160040003 : Record 6085575;
+      XmlDoc@1160040001 : Codeunit 6192800;
+      DocumentNode@1160040004 : Codeunit 6192801;
+    BEGIN
+      IsCloudActive(TRUE);
+
+      DocCat.GET(DocCatCode);
+
+      XmlDoc.CreateNode(DocumentNode,'element','Document','');
+      XmlLib.SetXmlNodeAttr(DocumentNode,'RequiredStatus',GetStatusAsText(Status));
+      XmlDoc.AppendChild(DocumentNode);
+
+      COMgt.ExecuteRequest(GetDocumentDeleteUrl(DocCat."Document Category GUID",DocumentID),HttpActions::PUT,TRUE,XmlDoc);
+      CLEAR(XmlDoc);
+    END;
+
+    PROCEDURE DeleteCategory@1160040014(DocCat@1160040000 : Record 6085575);
+    VAR
+      XmlDoc@1160040001 : Codeunit 6192800;
+    BEGIN
+      IF NOT IsCloudActive(FALSE) THEN
+        EXIT;
+
+      COMgt.ExecuteRequest(GetOneCategoryUrl(DocCat."Document Category GUID"),HttpActions::DELETE,TRUE,XmlDoc);
+      CLEAR(XmlDoc);
+    END;
+
+    PROCEDURE UpdateDocument@1160040008(DocCat@1160040000 : Record 6085575;DocID@1160040003 : Code[100]);
+    VAR
+      XmlDoc@1160040005 : Codeunit 6192800;
+      DocumentNode@1160040001 : Codeunit 6192801;
+    BEGIN
+      XmlDoc.CreateNode(DocumentNode,'element','Document','');
+      XmlLib.SetXmlNodeAttr(DocumentNode,'Downloaded',COMgt.GetBoolAsText(TRUE));
+      XmlDoc.AppendChild(DocumentNode);
+
+      COMgt.ExecuteRequest(GetOneDocumentUrl(DocCat."Document Category GUID",DocID),HttpActions::PUT,TRUE,XmlDoc);
+
+      CLEAR(XmlDoc);
+    END;
+
+    PROCEDURE UploadPdfDocsInCategory@1160040017(DocCat@6085573 : Record 6085575);
+    VAR
+      CaptureMgt@1160040006 : Codeunit 6085576;
+      Files@1160040001 : ARRAY [1000] OF Text[250];
+      FileCount@1160040002 : Integer;
+      i@1160040003 : Integer;
+    BEGIN
+      UploadPdfDocsInFolder(DocCat,DocCat.GetCategoryPath(1));
+    END;
+
+    PROCEDURE UploadPdfDocsInFolder@6085574(DocCat@1160040004 : Record 6085575;FolderPath@6085573 : Text[1024]);
+    VAR
+      TempFileStorage@1000 : Codeunit 6085665;
+      CaptureMgt@1160040006 : Codeunit 6085576;
+      TempFile@6085574 : TEMPORARY Record 6085608;
+      Files@1160040001 : ARRAY [10000] OF Text[250];
+      FileCount@1160040002 : Integer;
+      i@1160040003 : Integer;
+    BEGIN
+      IF GUIALLOWED THEN
+        Window.OPEN(CaptureMgt.Replace(Text009,'%1',DocCat.TABLECAPTION,FALSE));
+
+      FileCount := TempFileStorage.GetFilesInDir2(FolderPath,'*.pdf',Files);
+
+      IF GUIALLOWED THEN
+        Window.UPDATE(1,DocCat.Code);
+
+      FOR i := 1 TO FileCount DO BEGIN
+        IF GUIALLOWED THEN
+          Window.UPDATE(2,(i / FileCount * 10000) DIV 1);
+
+        TempFileStorage.GetFile(Files[i],TempFile);
+        COMgt.UploadFile(TempFile,GetOCRUploadCategoryUrl(DocCat."Document Category GUID"),TRUE,TRUE);
+        TempFileStorage.DeleteFile(Files[i]);
+      END;
+
+      IF GUIALLOWED THEN
+        Window.CLOSE;
+    END;
+
+    PROCEDURE IsOnlineDocument@1160040002(Document@1160040000 : Record 6085590) : Boolean;
+    BEGIN
+      EXIT(STRPOS(Document.Filename,'CO-') = 1);
+    END;
+
+    PROCEDURE GetNewDocuments@1160040018();
+    VAR
+      DocCat@1160040002 : Record 6085575;
+      TempFileStorage@1160040003 : Codeunit 6085665;
+      UpdateDCDocCounters@1160040000 : Codeunit 6085618;
+      XmlDoc@1160040001 : Codeunit 6192800;
+    BEGIN
+      IF NOT IsCloudActive(FALSE) THEN
+        EXIT;
+
+      IF GUIALLOWED THEN
+        Window.OPEN(Text011);
+
+      TempFileStorage.Clear;
+
+      DocCat.SETRANGE("Drag and Drop Category",FALSE);
+      IF DocCat.FINDSET THEN
+        REPEAT
+          IF GUIALLOWED THEN
+            IF DocCat.Description <> '' THEN
+              Window.UPDATE(1,DocCat.Description)
+            ELSE
+              Window.UPDATE(1,DocCat.Code);
+
+          IF COMgt.ExecuteRequest(GetNewDocumentUrl(DocCat."Document Category GUID"),HttpActions::GET,FALSE,XmlDoc) THEN
+            GetDocumentFiles(DocCat,XmlDoc,TRUE);
+        UNTIL DocCat.NEXT = 0;
+
+      UpdateDCDocCounters.SetForceUpdate(TRUE);
+
+      IF GUIALLOWED THEN
+        Window.CLOSE;
+    END;
+
+    PROCEDURE GetNewDocument@1160040037(VAR TempDoc@1160040003 : TEMPORARY Record 6085772) DocName : Text[30];
+    VAR
+      DocCat@1160040002 : Record 6085575;
+      UpdateDCDocCounters@1160040000 : Codeunit 6085618;
+      XmlDoc@1160040001 : Codeunit 6192800;
+    BEGIN
+      IF NOT IsCloudActive(FALSE) THEN
+        EXIT;
+
+      IF GUIALLOWED THEN
+        Window.OPEN(Text011);
+
+      DocCat.GET(TempDoc."Document Category Code");
+
+      IF COMgt.ExecuteRequest(GetOneDocumentUrl(DocCat."Document Category GUID",TempDoc."Document ID"),HttpActions::GET,TRUE,XmlDoc)
+      THEN
+        DocName := GetDocumentFiles(DocCat,XmlDoc,TRUE);
+
+      UpdateDCDocCounters.SetForceUpdate(TRUE);
+
+      IF GUIALLOWED THEN
+        Window.CLOSE;
+    END;
+
+    PROCEDURE GetStatusDocuments@1160040031(DocCat@1160040000 : Record 6085575;Status@1160040007 : 'OCR,Import,Error';VAR TempDoc@1160040004 : TEMPORARY Record 6085772);
+    VAR
+      FileInfo@1160040006 : Codeunit 6085666;
+      XmlDoc@1160040001 : Codeunit 6192800;
+      XMLNodeList@1160040002 : Codeunit 6192802;
+      DocumentElement@1000 : Codeunit 6192801;
+      EntryNo@1160040005 : Integer;
+      i@1160040003 : Integer;
+      StatusText@1160040008 : Text[30];
+    BEGIN
+      COMgt.ExecuteRequest(
+        GetStatusDocumentUrl(DocCat."Document Category GUID",GetStatusAsText(Status)),
+        HttpActions::GET,TRUE,XmlDoc);
+
+      XmlDoc.GetDocumentElement(DocumentElement);
+
+      DocumentElement.SelectNodes(XMLNodeList,'Document');
+      FOR i := 0 TO XMLNodeList.Count - 1 DO BEGIN
+        EntryNo += 1;
+        TempDoc.INIT;
+        TempDoc."Entry No." := EntryNo;
+        TempDoc."Scanned File" := TRUE;
+        TempDoc."Document ID" := COMgt.GetAttribAsCode(XMLNodeList,'Id',i);
+        COMgt.GetAttribAsText(XMLNodeList,'Name',i,TempDoc."File Name");
+        TempDoc."File Name with Extension" := FileInfo.GetFilename(TempDoc."File Name");
+        TempDoc."File Name" := FileInfo.GetFilenameWithoutExt(TempDoc."File Name");
+        COMgt.GetAttribAsText(XMLNodeList,'PDFDownloadLink',i,TempDoc."File Path");
+        TempDoc."Date/Time" := COMgt.GetAttribAsDateTime(XMLNodeList,'DocumentDate',i);
+        COMgt.GetAttribAsText(XMLNodeList,'Text',i,TempDoc.Description);
+        COMgt.GetAttribAsText(XMLNodeList,'EMailFromAddress',i,TempDoc."From E-Mail Address");
+        COMgt.GetAttribAsText(XMLNodeList,'EMailSubject',i,TempDoc."E-Mail Subject");
+        TempDoc."E-Mail Received" := COMgt.GetAttribAsDateTime(XMLNodeList,'EMailDateTime',i);
+        IF NOT (Status = Status::Error) THEN
+          TempDoc."OCR Processed" := COMgt.GetAttribAsDateTime(XMLNodeList,'OCRProcessedDateTimeUTC',i);
+        TempDoc."Is Cloud OCR" := TRUE;
+        TempDoc."Document Category Code" := DocCat.Code;
+        TempDoc.Status := Status;
+        TempDoc.INSERT;
+      END;
+    END;
+
+    PROCEDURE GetAllDocuments@1160040019();
+    VAR
+      DocCat@1160040000 : Record 6085575;
+      XmlDoc@1160040001 : Codeunit 6192800;
+    BEGIN
+      IF NOT IsCloudActive(FALSE) THEN
+        EXIT;
+
+      IF GUIALLOWED THEN
+        Window.OPEN(Text011);
+
+      DocCat.SETRANGE("Drag and Drop Category",FALSE);
+      IF DocCat.FINDSET THEN
+        REPEAT
+          IF GUIALLOWED THEN
+            IF DocCat.Description <> '' THEN
+              Window.UPDATE(1,DocCat.Description)
+            ELSE
+              Window.UPDATE(1,DocCat.Code);
+
+          IF COMgt.ExecuteRequest(GetAllDocumentUrl(DocCat."Document Category GUID"),HttpActions::GET,TRUE,XmlDoc) THEN
+            GetDocumentFiles(DocCat,XmlDoc,TRUE);
+        UNTIL DocCat.NEXT = 0;
+
+      IF GUIALLOWED THEN
+        Window.CLOSE;
+    END;
+
+    PROCEDURE GetOneDocument@1160040021(Document@1160040000 : Record 6085590;VAR XmlDoc@1160040003 : Codeunit 6192800);
+    VAR
+      DocCat@1160040001 : Record 6085575;
+    BEGIN
+      DocCat.GET(Document."Document Category Code");
+
+      COMgt.ExecuteRequest(GetOneDocumentUrl(DocCat."Document Category GUID",GetDocumentID(Document)),
+        HttpActions::GET,TRUE,XmlDoc);
+    END;
+
+    PROCEDURE GetDocumentID@1160040011(Document@1160040000 : Record 6085590) DocumentID : Code[100];
+    BEGIN
+      IF IsOnlineDocument(Document) THEN
+        EXIT(DELCHR(Document.Filename,'<','CO-'))
+      ELSE
+        EXIT(Document.Filename);
+    END;
+
+    PROCEDURE GetDocumentFiles@1160040010(DocCat@1160040001 : Record 6085575;XmlDoc@1160040005 : Codeunit 6192800;ShowWindow@1001 : Boolean) LastDocName : Text[30];
+    VAR
+      DCSetup@1003 : Record 6085573;
+      TempFile@1005 : TEMPORARY Record 6085608;
+      XMLNodeList@1160040002 : Codeunit 6192802;
+      DocumentElement@1002 : Codeunit 6192801;
+      TempFileStorage@1004 : Codeunit 6085665;
+      DocID@1160040000 : Text[30];
+      DocPath@1160040003 : Text[1024];
+      Path@1160040008 : Text[1024];
+      FileLink@1160040004 : Text[1024];
+      EmailGuid@1160040009 : Text[50];
+      Total@1000 : Integer;
+      i@1160040010 : Integer;
+    BEGIN
+      XmlDoc.GetDocumentElement(DocumentElement);
+      DocumentElement.SelectNodes(XMLNodeList,'Document');
+
+      DCSetup.GET;
+
+      Path := DocCat.GetCategoryPath(2);
+
+      Total := XMLNodeList.Count;
+
+      FOR i := 0 TO XMLNodeList.Count - 1 DO BEGIN
+        IF ShowWindow AND GUIALLOWED THEN
+          Window.UPDATE(2,(i / Total * 10000) DIV 1);
+
+        COMgt.GetAttribAsText(XMLNodeList,'Id',i,DocID);
+        LastDocName := 'CO-' + DocID;
+        DocPath := Path  + '\' + 'CO-' + DocID;
+
+        COMgt.GetAttribAsText(XMLNodeList,'TIFFDownloadLink',i,FileLink);
+        IF FileLink <> '' THEN BEGIN
+          COMgt.DownloadFile(FileLink,DocPath + '.tiff',TempFile,FALSE);
+          TempFileStorage.AddFile(TempFile);
+        END;
+
+        COMgt.GetAttribAsText(XMLNodeList,'PDFDownloadLink',i,FileLink);
+        IF FileLink <> '' THEN BEGIN
+          COMgt.DownloadFile(FileLink,DocPath + '.pdf',TempFile,FALSE);
+          TempFileStorage.AddFile(TempFile);
+        END;
+
+        COMgt.GetAttribAsText(XMLNodeList,'XMLDownloadLink',i,FileLink);
+        IF FileLink <> '' THEN BEGIN
+          COMgt.DownloadFile(FileLink,DocPath + '.xml',TempFile,FALSE);
+          TempFileStorage.AddFile(TempFile);
+        END;
+
+        IF DocCat."Archive E-mails on Document" THEN BEGIN
+          COMgt.GetAttribAsText(XMLNodeList,'EMLDownloadLink',i,FileLink);
+          IF FileLink <> '' THEN BEGIN
+            COMgt.DownloadFile(FileLink,DocPath + '.eml',TempFile,FALSE);
+            TempFileStorage.AddFile(TempFile);
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE GetProtocolAsText@1160040025(Value@1160040000 : Integer) : Text[30];
+    BEGIN
+      CASE Value OF
+        Protocol::IMAP:
+          EXIT('IMAP');
+        Protocol::ContiniaMail:
+          EXIT('ContiniaMail');
+      END;
+    END;
+
+    PROCEDURE GetEmailDomain@1160040000() : Text[30];
+    BEGIN
+      CASE TRUE OF
+        COMgt.IsDev:
+          EXIT('devcdc.continiaonline.com');
+        COMgt.IsDemo:
+          EXIT('democdc.continiaonline.com')
+        ELSE
+          EXIT('cdc.continiaonline.com');
+      END;
+    END;
+
+    PROCEDURE GetStatusAsText@1160040040(Status@1160040000 : 'OCR,Import,Error') : Text[30];
+    BEGIN
+      CASE Status OF
+        Status::OCR:
+          EXIT('OCRFiles');
+        Status::Import:
+          EXIT('ImportFiles');
+        Status::Error:
+          EXIT('ErrorFiles');
+      END;
+    END;
+
+    PROCEDURE GetBaseUrl@1160040024() : Text[1024];
+    BEGIN
+      CASE TRUE OF
+        COMgt.IsDev:
+          EXIT('https://devcdc.continiaonline.com/api/v1/');
+        COMgt.IsDemo:
+          EXIT('https://democdc.continiaonline.com/api/v1/');
+        ELSE
+          EXIT('https://cdc.continiaonline.com/api/v1/');
+      END;
+    END;
+
+    PROCEDURE GetClientUrl@1160040005() : Text[1024];
+    BEGIN
+      EXIT(GetBaseUrl + 'client');
+    END;
+
+    PROCEDURE GetUserUrl@1160040043() : Text[1024];
+    VAR
+      ContiniaCompanySetup@1160040001 : Record 6192773;
+      ContiniaWebPortal@1160040000 : Record 6192774;
+    BEGIN
+      ContiniaCompanySetup.GET;
+      ContiniaCompanySetup.TESTFIELD("Web Portal Code");
+      ContiniaWebPortal.GET(ContiniaCompanySetup."Web Portal Code");
+
+      IF NOT ContiniaWebPortal."Use Continia Online Web Portal" THEN
+        EXIT(ContiniaWebPortal."Web Site Url" + '/Users/Import');
+
+      EXIT(GetCOUserUrl);
+    END;
+
+    PROCEDURE GetResourceUrl@1() : Text[1024];
+    BEGIN
+      CASE TRUE OF
+        COMgt.IsDev:
+          EXIT('http://download.continiaonline.com/dev/dc');
+        COMgt.IsDemo:
+          EXIT('http://download.continiaonline.com/demo/dc');
+        ELSE
+          EXIT('http://download.continiaonline.com/prod/dc');
+      END;
+    END;
+
+    PROCEDURE GetCOUserUrl@1160040041() : Text[1024];
+    BEGIN
+      CASE TRUE OF
+        COMgt.IsDev:
+          EXIT('https://devauth.continiaonline.com/api/v1/users');
+        COMgt.IsDemo:
+          EXIT('https://demoauth.continiaonline.com/api/v1/users');
+        ELSE
+          EXIT('https://auth.continiaonline.com/api/v1/users');
+      END;
+    END;
+
+    PROCEDURE GetCompanyUrl@1160040029() : Text[1024];
+    BEGIN
+      EXIT(GetBaseUrl + 'company/' + COMgt.GetCompanyGUID);
+    END;
+
+    PROCEDURE GetAllCategoryUrl@1160040030() : Text[1024];
+    BEGIN
+      EXIT(GetCompanyUrl + '/category/all');
+    END;
+
+    PROCEDURE GetOneCategoryUrl@1160040131(GUID@1160040000 : GUID) : Text[1024];
+    BEGIN
+      EXIT(GetCompanyUrl + '/category/' + COMgt.GetGUIDAsText(GUID));
+    END;
+
+    PROCEDURE GetDocumentBaseUrl@1160040022(GUID@1160040000 : GUID) : Text[1024];
+    BEGIN
+      EXIT(GetOneCategoryUrl(GUID) + '/document/');
+    END;
+
+    PROCEDURE GetAllDocumentUrl@1160040006(GUID@1160040000 : GUID) : Text[1024];
+    BEGIN
+      EXIT(GetDocumentBaseUrl(GUID) + 'all');
+    END;
+
+    PROCEDURE GetNewDocumentUrl@1160040007(GUID@1160040000 : GUID) : Text[1024];
+    BEGIN
+      EXIT(GetDocumentBaseUrl(GUID) + 'new');
+    END;
+
+    PROCEDURE GetStatusDocumentUrl@1160040127(GUID@1160040000 : GUID;StatusText@1160040001 : Text[30]) : Text[1024];
+    BEGIN
+      EXIT(GetOneCategoryUrl(GUID) + '/' + StatusText);
+    END;
+
+    PROCEDURE GetOneDocumentUrl@1160040009(GUID@1160040000 : GUID;DocumentID@1160040001 : Text[1024]) : Text[1024];
+    BEGIN
+      EXIT(GetDocumentBaseUrl(GUID) + DocumentID);
+    END;
+
+    PROCEDURE GetDocumentEmailUrl@1160040034(GUID@1160040000 : GUID;DocumentID@1160040001 : Text[1024]) : Text[1024];
+    BEGIN
+      EXIT(GetOneDocumentUrl(GUID,DocumentID) + '/email/' + FORMAT(GLOBALLANGUAGE));
+    END;
+
+    PROCEDURE GetDocumentDeleteUrl@1160040130(GUID@1160040000 : GUID;DocumentID@1160040001 : Text[1024]) : Text[1024];
+    BEGIN
+      EXIT(GetOneDocumentUrl(GUID,DocumentID) + '/delete');
+    END;
+
+    PROCEDURE GetOCRUploadCategoryUrl@1160040012(GUID@1160040000 : GUID) : Text[1024];
+    BEGIN
+      EXIT(GetDocumentBaseUrl(GUID) + 'upload');
+    END;
+
+    PROCEDURE GetFileProcessingUrl@6085575(FileFormat@6085573 : Text[10];FileFunction@6085574 : Text[30]) : Text[1024];
+    BEGIN
+      EXIT(GetBaseUrl + STRSUBSTNO('document/%1/%2',FileFormat,FileFunction));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

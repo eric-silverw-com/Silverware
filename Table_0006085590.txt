@@ -1,0 +1,1194 @@
+OBJECT Table 6085590 DC Document
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08/02/18;
+    Time=[ 1:00:00 AM];
+    Version List=DCW13.70.00.5.00.02;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 6085593=d,
+                TableData 6085594=d,
+                TableData 6085700=d;
+    DataCaptionFields=No.;
+    OnInsert=VAR
+               NoSeriesMgt@1160040000 : Codeunit 396;
+             BEGIN
+               IF "No." = '' THEN BEGIN
+                 GetDCSetup;
+                 DCSetup.TESTFIELD("Document Nos.");
+                 NoSeriesMgt.InitSeries(DCSetup."Document Nos.",xRec."No. Series",0D,"No.","No. Series");
+               END;
+
+               IF "Imported Date-Time" = 0DT THEN BEGIN
+                 "Imported Date-Time" := CURRENTDATETIME;
+                 "Imported by" := USERID;
+                 "Import Day" := DATE2DMY(DT2DATE("Imported Date-Time"),1);
+                 "Import Month" := DATE2DMY(DT2DATE("Imported Date-Time"),2);
+                 "Import Year" := DATE2DMY(DT2DATE("Imported Date-Time"),3);
+               END;
+             END;
+
+    OnDelete=VAR
+               Page@1000000000 : Record 6085591;
+               Value@1000000001 : Record 6085593;
+               PurchDocMatch@161024012 : Record 6085700;
+               DocCat@1160040000 : Record 6085575;
+               DocumentCommentLine@1160040001 : Record 6085577;
+               ContiniaOnlineDC@6085573 : Codeunit 6085617;
+             BEGIN
+               IF NOT "Allow Delete" THEN
+                 IF Status = Status::Registered THEN
+                   ERROR(STRSUBSTNO(RejectedDocsDeleteErr,TABLECAPTION,FIELDCAPTION(Status),Status));
+
+               IF NOT DeleteCheckSuspended THEN BEGIN
+                 IF "Document Category Code" <> '' THEN BEGIN
+                   DocCat.GET("Document Category Code");
+                   IF NOT DocCat."Allow Deleting Documents" THEN
+                     ERROR(Text007,TABLECAPTION,"No.",DocCat.FIELDCAPTION("Allow Deleting Documents"),DocCat.TABLECAPTION,DocCat.Code);
+                 END;
+
+                 ContiniaOnlineDC.IsCompanyActive(TRUE);
+               END;
+
+               Page.SETRANGE("Document No.","No.");
+               Page.DELETEALL(TRUE);
+
+               Value.SETRANGE("Document No.","No.");
+               Value.DELETEALL(TRUE);
+
+               PurchDocMatch.SETRANGE("Document No.","No.");
+               PurchDocMatch.DELETEALL(TRUE);
+
+               DocumentCommentLine.SETRANGE("Table ID",DATABASE::"DC Document");
+               DocumentCommentLine.SETRANGE("No.","No.");
+               DocumentCommentLine.DELETEALL;
+
+               DeleteComments(-2);
+
+               IF "File Type" = "File Type"::OCR THEN BEGIN
+                 ClearEmailFile;
+                 ClearTiffFile;
+                 ClearPdfFile;
+               END ELSE
+                 IF "File Type" = "File Type"::Miscellaneous THEN
+                   ClearMiscFile;
+             END;
+
+    OnRename=BEGIN
+               ERROR(Text001,TABLECAPTION);
+             END;
+
+    CaptionML=ENU=Document;
+    LookupPageID=Page6085598;
+    DrillDownPageID=Page6085598;
+  }
+  FIELDS
+  {
+    { 1   ;   ;No.                 ;Code20        ;CaptionML=ENU=No.;
+                                                   NotBlank=Yes }
+    { 2   ;   ;Document Category Code;Code10      ;TableRelation="DC Document Category";
+                                                   OnValidate=VAR
+                                                                NewDocument@1001 : Record 6085590;
+                                                                TempFile@1000 : TEMPORARY Record 6085608;
+                                                                CopyFiles@1160040000 : Boolean;
+                                                              BEGIN
+                                                                TESTFIELD(Status,Status::Open);
+
+                                                                VALIDATE("Source Record ID Tree ID",0);
+
+                                                                IF "Document Category Code" = xRec."Document Category Code" THEN
+                                                                  EXIT;
+
+                                                                GetDCSetup;
+
+                                                                IF (DCSetup."Document Storage Type" <> DCSetup."Document Storage Type"::"File System") OR NOT DCSetup."Category Code in Archive" THEN
+                                                                  EXIT;
+
+                                                                // Only if using filesystem.
+
+                                                                CopyFiles := FALSE;
+
+                                                                IF xRec.GetTiffFile(TempFile) THEN
+                                                                  IF SetTiffFile(TempFile) THEN
+                                                                    CopyFiles := TRUE;
+
+                                                                IF xRec.GetPdfFile(TempFile) THEN
+                                                                  IF SetPdfFile(TempFile) THEN
+                                                                     CopyFiles := TRUE;
+
+                                                                IF xRec.GetMiscFile(TempFile) THEN
+                                                                  IF SetMiscFile(TempFile) THEN
+                                                                    CopyFiles := TRUE;
+
+                                                                IF xRec.GetEmailFile(TempFile) THEN
+                                                                  IF SetEmailFile(TempFile) THEN
+                                                                    CopyFiles := TRUE;
+
+                                                                COMMIT;
+
+                                                                IF NOT CopyFiles THEN
+                                                                  EXIT;
+
+                                                                IF xRec.HasTiffFile THEN
+                                                                  xRec.ClearTiffFile;
+
+                                                                IF xRec.HasPdfFile THEN
+                                                                  xRec.ClearPdfFile;
+
+                                                                IF xRec.HasMiscFile THEN
+                                                                  xRec.ClearMiscFile;
+
+                                                                IF xRec.HasEmailFile THEN
+                                                                  xRec.ClearEmailFile;
+                                                              END;
+
+                                                   CaptionML=ENU=Document Category Code;
+                                                   NotBlank=Yes }
+    { 3   ;   ;TIFF Image File     ;BLOB          ;CaptionML=ENU=TIFF Image File }
+    { 6   ;   ;Template No.        ;Code20        ;TableRelation=Template WHERE (Category Code=FIELD(Document Category Code),
+                                                                                 Source Record ID Tree ID=FIELD(Source Record ID Tree ID));
+                                                   OnValidate=VAR
+                                                                Value@1160040001 : Record 6085593;
+                                                                PurchDocMatch@1160040000 : Record 6085700;
+                                                              BEGIN
+                                                                TestStatus;
+                                                                OK := FALSE;
+
+                                                                Value.SETRANGE("Document No.","No.");
+                                                                Value.DELETEALL(TRUE);
+
+                                                                DeleteComments(-1);
+
+                                                                PurchDocMatch.SETRANGE("Document No.","No.");
+                                                                PurchDocMatch.DELETEALL(TRUE);
+
+                                                                "Match Status" := "Match Status"::Unmatched;
+                                                                MODIFY(TRUE);
+                                                              END;
+
+                                                   CaptionML=ENU=Template No. }
+    { 7   ;   ;Status              ;Option        ;OnValidate=BEGIN
+                                                                IF Status = Status::Open THEN BEGIN
+                                                                  "Amount Excl. VAT" := 0;
+                                                                  "Amount Incl. VAT" := 0;
+                                                                  "Created Doc. Type" := 0;
+                                                                  "Created Doc. Subtype" := 0;
+                                                                  "Created Doc. ID" := '';
+                                                                  "Created Doc. Ref. No." := 0;
+                                                                  Description := '';
+                                                                  EXIT;
+                                                                END;
+
+                                                                "Date-Time for Register/Reject" := CURRENTDATETIME;
+                                                              END;
+
+                                                   CaptionML=ENU=Status;
+                                                   OptionCaptionML=ENU=Open,Registered,Rejected;
+                                                   OptionString=Open,Registered,Rejected;
+                                                   Editable=No }
+    { 8   ;   ;No. of Pages        ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count("Document Page" WHERE (Document No.=FIELD(No.)));
+                                                   CaptionML=ENU=No. of Pages;
+                                                   Editable=No }
+    { 9   ;   ;OK                  ;Boolean       ;CaptionML=ENU=OK;
+                                                   Editable=No }
+    { 10  ;   ;Filename            ;Code100       ;CaptionML=ENU=Filename;
+                                                   Editable=No }
+    { 11  ;   ;No. Series          ;Code20        ;TableRelation="No. Series";
+                                                   CaptionML=ENU=No. Series;
+                                                   Editable=No }
+    { 12  ;   ;Template Description;Text30        ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(Template.Description WHERE (No.=FIELD(Template No.)));
+                                                   CaptionML=ENU=Template Description;
+                                                   Editable=No }
+    { 13  ;   ;Created Doc. Type   ;Integer       ;CaptionML=ENU=Created Doc. Type;
+                                                   Editable=No }
+    { 14  ;   ;Created Doc. Subtype;Integer       ;CaptionML=ENU=Created Doc. Subtype;
+                                                   Editable=No }
+    { 15  ;   ;Created Doc. ID     ;Code20        ;CaptionML=ENU=Created Doc. ID;
+                                                   Editable=No }
+    { 16  ;   ;Created Doc. Ref. No.;Integer      ;CaptionML=ENU=Created Doc. Ref. No.;
+                                                   Editable=No }
+    { 17  ;   ;Description         ;Text80        ;CaptionML=ENU=Description }
+    { 18  ;   ;Match Status        ;Option        ;CaptionML=ENU=Match Status;
+                                                   OptionCaptionML=ENU=Unmatched,Automatically Matched,Manually Matched;
+                                                   OptionString=Unmatched,Automatically Matched,Manually Matched;
+                                                   Editable=No }
+    { 19  ;   ;Show after Register ;Boolean       ;CaptionML=ENU=Show After Register;
+                                                   Editable=No }
+    { 20  ;   ;PDF File            ;BLOB          ;CaptionML=ENU=PDF File }
+    { 21  ;   ;Misc. File          ;BLOB          ;CaptionML=ENU=Misc. File }
+    { 25  ;   ;Imported by         ;Code50        ;CaptionML=ENU=Imported by;
+                                                   Editable=No }
+    { 26  ;   ;Imported Date-Time  ;DateTime      ;CaptionML=ENU=Imported Date-Time;
+                                                   Editable=No }
+    { 27  ;   ;Date-Time for Register/Reject;DateTime;
+                                                   CaptionML=ENU=Date-Time for Register/Reject;
+                                                   Editable=No }
+    { 28  ;   ;File Type           ;Option        ;CaptionML=ENU=File Type;
+                                                   OptionCaptionML=ENU=OCR,,,,Miscellaneous;
+                                                   OptionString=OCR,,,,Miscellaneous;
+                                                   Editable=No }
+    { 29  ;   ;File Extension      ;Text30        ;CaptionML=ENU=File Extension;
+                                                   Editable=No }
+    { 30  ;   ;Allow Delete        ;Boolean       ;CaptionML=ENU=Allow Delete;
+                                                   Editable=No }
+    { 31  ;   ;From E-Mail Address ;Text200       ;CaptionML=ENU=From E-Mail Address;
+                                                   Editable=No }
+    { 32  ;   ;From E-Mail Name    ;Text200       ;CaptionML=ENU=From E-Mail Name;
+                                                   Editable=No }
+    { 33  ;   ;To E-Mail Address   ;Text200       ;CaptionML=ENU=To E-Mail Address;
+                                                   Editable=No }
+    { 34  ;   ;To E-Mail Name      ;Text200       ;CaptionML=ENU=To E-Mail Name;
+                                                   Editable=No }
+    { 35  ;   ;E-Mail Date         ;DateTime      ;CaptionML=ENU=E-Mail Date;
+                                                   Editable=No }
+    { 36  ;   ;E-Mail Inbox Subfolder;Text200     ;CaptionML=ENU=Inbox Subfolder;
+                                                   Editable=No }
+    { 37  ;   ;E-Mail Subject      ;Text200       ;CaptionML=ENU=E-Mail Subject;
+                                                   Editable=No }
+    { 38  ;   ;E-Mail GUID         ;GUID          ;CaptionML=ENU=E-Mail GUID;
+                                                   Editable=No }
+    { 39  ;   ;Batch Register      ;Boolean       ;CaptionML=ENU=Batch Register;
+                                                   Editable=No }
+    { 40  ;   ;PDF File Hash       ;Text50        ;CaptionML=ENU=PDF File Hash;
+                                                   Editable=No }
+    { 41  ;   ;Status Code         ;Code10        ;TableRelation="Document Status Code";
+                                                   OnValidate=VAR
+                                                                DocumentCommentLine@1160040000 : Record 6085577;
+                                                              BEGIN
+                                                                IF xRec."Status Code" <> "Status Code" THEN BEGIN
+                                                                  DocumentCommentLine.INIT;
+                                                                  DocumentCommentLine."Table ID" := DATABASE::"DC Document";
+                                                                  DocumentCommentLine."No." := "No.";
+                                                                  DocumentCommentLine."Line No." := 0;
+                                                                  DocumentCommentLine.INSERT(TRUE);
+                                                                  DocumentCommentLine.Type := DocumentCommentLine.Type::"Status Code";
+                                                                  DocumentCommentLine.Comment := STRSUBSTNO(Text010,FIELDCAPTION("Status Code"),xRec."Status Code","Status Code",USERID);
+                                                                  DocumentCommentLine.MODIFY;
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ENU=Status Code }
+    { 42  ;   ;OCR Process Completed;DateTime     ;CaptionML=ENU=OCR Process Completed;
+                                                   Editable=No }
+    { 45  ;   ;Source Record Table ID;Integer     ;CaptionML=ENU=Source Record Table ID;
+                                                   NotBlank=No }
+    { 46  ;   ;Source Record No.   ;Code50        ;CaptionML=ENU=Source Record No. }
+    { 47  ;   ;Source Record Name  ;Text100       ;CaptionML=ENU=Source Record Name;
+                                                   Editable=No }
+    { 48  ;   ;Version             ;Integer       ;CaptionML=ENU=Version;
+                                                   Editable=No }
+    { 50  ;   ;Amount Excl. VAT    ;Decimal       ;CaptionML=[ENU=Amount Excl. VAT;
+                                                              ENC=Amount Excl. Tax];
+                                                   Editable=No }
+    { 51  ;   ;Amount Incl. VAT    ;Decimal       ;CaptionML=[ENU=Amount Incl. VAT;
+                                                              ENC=Amount Incl. Tax];
+                                                   Editable=No }
+    { 53  ;   ;Import Day          ;Integer       ;CaptionML=ENU=Import Day;
+                                                   Editable=No }
+    { 54  ;   ;Import Month        ;Integer       ;CaptionML=ENU=Import Month;
+                                                   Editable=No }
+    { 55  ;   ;Import Year         ;Integer       ;CaptionML=ENU=Import Year }
+    { 60  ;   ;Identification Barcode;Code50      ;CaptionML=ENU=Identification Barcode;
+                                                   Editable=No }
+    { 61  ;   ;Source Record ID Tree ID;Integer   ;TableRelation="Record ID Tree";
+                                                   OnValidate=VAR
+                                                                RecRef@6085573 : RecordRef;
+                                                                RecIDMgt@6085574 : Codeunit 6085604;
+                                                                RecID@6085575 : RecordID;
+                                                              BEGIN
+                                                                TestStatus;
+
+                                                                "Source Record Table ID" := 0;
+                                                                "Source Record No." := '';
+                                                                "Source Record Name" := '';
+
+                                                                IF "Source Record ID Tree ID" = 0 THEN
+                                                                  VALIDATE("Template No.",'')
+                                                                ELSE BEGIN
+                                                                  RecIDMgt.GetRecIDFromTreeID("Source Record ID Tree ID",RecID);
+                                                                  RecRef := RecID.GETRECORD;
+                                                                  IF RecIDMgt.KeyIsOneFieldCodeType(RecRef) THEN BEGIN
+                                                                    "Source Record Table ID" := RecRef.NUMBER;
+                                                                    "Source Record No." := COPYSTR(GetSourceID,1,MAXSTRLEN("Source Record No."));
+                                                                    "Source Record Name" := GetSourceName;
+                                                                  END;
+                                                                  VALIDATE("Template No.",GetDefaultTemplate(FALSE));
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ENU=Source Record ID Tree ID;
+                                                   Editable=No }
+    { 62  ;   ;Document Status Text;Text100       ;CaptionML=ENU=Document Status Text;
+                                                   Editable=No }
+    { 63  ;   ;Comment             ;Boolean       ;FieldClass=FlowField;
+                                                   CalcFormula=Exist("Document Comment Line" WHERE (Table ID=CONST(6085590),
+                                                                                                    No.=FIELD(No.),
+                                                                                                    Type=CONST(User)));
+                                                   CaptionML=ENU=Comment;
+                                                   Editable=No }
+  }
+  KEYS
+  {
+    {    ;No.                                     ;Clustered=Yes }
+    {    ;Status                                   }
+    {    ;Document Category Code,Status            }
+    {    ;Template No.,Status                      }
+    {    ;Source Record ID Tree ID                 }
+    {    ;Filename                                 }
+    {    ;Created Doc. Type,Created Doc. Subtype,Created Doc. ID,Created Doc. Ref. No. }
+    {    ;Document Category Code                   }
+    {    ;E-Mail GUID                              }
+    {    ;Source Record Table ID,Source Record No.,Document Category Code }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      DCSetup@1000000002 : Record 6085573;
+      CaptureMgt@1000000006 : Codeunit 6085576;
+      DocumentFileInterface@1002 : Codeunit 6085635;
+      Text001@1160040001 : TextConst 'ENU=You cannot rename a %1.';
+      Text002@1160040000 : TextConst 'ENU=Do you want to reject the document?';
+      Text004@1160040004 : TextConst 'ENU=The %1 %2 is not within the filters of the %3.';
+      IsManual@161024014 : Boolean;
+      Text005@1160040003 : TextConst 'ENU=There are no e-mails associated to this document.';
+      GotDCSetup@1160040005 : Boolean;
+      Text006@1160040006 : TextConst 'ENU=A template for %1 %2 has been found in company %3, do you want to copy this template?';
+      DeleteCheckSuspended@1160040007 : Boolean;
+      Text007@1160040008 : TextConst 'ENU=You cannot delete %1 %2 because %3 in %4 %5 is disabled.';
+      Text008@1000 : TextConst 'ENU=No vendor assigned to this document.\\Do you want to create a new vendor?';
+      Text009@1001 : TextConst 'ENU=No customer assigned for this document.\\Do you want to create a new customer?';
+      Text010@1160040009 : TextConst 'ENU=%1 changed from ''%2'' to ''%3'' by %4';
+      NoSourceAvailableTxt@6085600 : TextConst 'ENU=N/A';
+      NotOkErr@6085573 : TextConst 'ENU=The document is not ready to be registered.\\Please check the comment section of the document for errors';
+      RejectedDocsDeleteErr@6085574 : TextConst 'ENU=%1 can''t be deleted when %2 is %3';
+
+    PROCEDURE GetSourceNoCaption@1000000001() : Text[50];
+    VAR
+      DocCat@161024012 : Record 6085575;
+      ObjWithCap@161024013 : Record 2000000058;
+    BEGIN
+      IF NOT DocCat.GET("Document Category Code") THEN
+        EXIT;
+
+      IF ObjWithCap.GET(ObjWithCap."Object Type"::Table,DocCat."Source Table No.") THEN
+        EXIT(ObjWithCap."Object Caption")
+      ELSE
+        EXIT(NoSourceAvailableTxt);
+    END;
+
+    PROCEDURE GetSourceNameCaption@1000000003() : Text[50];
+    VAR
+      Fld@161024012 : Record 2000000041;
+      DocCat@161024013 : Record 6085575;
+    BEGIN
+      IF NOT DocCat.GET("Document Category Code") THEN
+        EXIT;
+
+      IF Fld.GET(DocCat."Source Table No.",DocCat."Source Field No. (Name)") THEN
+        EXIT(Fld."Field Caption")
+      ELSE
+        EXIT(NoSourceAvailableTxt);
+    END;
+
+    PROCEDURE GetSourceName@1000000000() : Text[1024];
+    VAR
+      DocCat@1160040000 : Record 6085575;
+      RecIDMgt@1160040001 : Codeunit 6085604;
+      SourceName@1000 : Text[1024];
+    BEGIN
+      IF DocCat.GET("Document Category Code") THEN BEGIN
+        SourceName := RecIDMgt.GetFieldValue("Source Record ID Tree ID",DocCat."Source Field No. (Name)");
+        EXIT(COPYSTR(SourceName,1,MAXSTRLEN("Source Record Name")));
+      END;
+    END;
+
+    PROCEDURE GetDefaultTemplate@1000000002(CreateNew@1000000001 : Boolean) : Code[20];
+    VAR
+      DocCat@1160040000 : Record 6085575;
+      Template@1000000000 : Record 6085579;
+      Template2@1160040004 : Record 6085579;
+      FromCompany@1160040001 : Text[30];
+      SourceName@1160040002 : Text[250];
+      SourceID@1160040003 : Text[250];
+    BEGIN
+      Template.SETRANGE("Category Code","Document Category Code");
+      Template.SETRANGE("Source Record ID Tree ID","Source Record ID Tree ID");
+      Template.SETRANGE(Type,Template.Type::" ");
+      Template.SETRANGE(Default,TRUE);
+      IF Template.FINDFIRST THEN BEGIN
+        IF Template.COUNT = 1 THEN
+          EXIT(Template."No.");
+
+        IF CreateNew THEN
+          EXIT(Template.CreateNew("Document Category Code","Source Record ID Tree ID",FALSE));
+
+        EXIT;
+      END;
+
+      Template.SETRANGE(Default);
+      IF Template.FINDFIRST THEN BEGIN
+        IF Template.COUNT = 1 THEN
+          EXIT(Template."No.");
+
+        IF CreateNew THEN
+          EXIT(Template.CreateNew("Document Category Code","Source Record ID Tree ID",FALSE));
+
+        EXIT;
+      END ELSE
+        IF IsManual OR CreateNew THEN BEGIN
+          DocCat.GET("Document Category Code");
+          IF NOT DocCat.HasMasterTemplate THEN
+            EXIT;
+
+          SourceName := GetSourceName;
+          SourceID := GetSourceID;
+
+          IF FindTemplateInCompanies(FromCompany,Template,SourceName) THEN
+            IF CONFIRM(Text006,TRUE,SourceID,SourceName,FromCompany) THEN BEGIN
+              Template2.GET(Template.Clone(FromCompany,Template,Template."Category Code",'',Template.Type,TRUE,FALSE));
+              Template2.VALIDATE("Source Record ID Tree ID","Source Record ID Tree ID");
+              Template2.MODIFY;
+              EXIT(Template2."No.");
+            END;
+
+          EXIT(Template.CreateNew("Document Category Code","Source Record ID Tree ID",FALSE));
+        END;
+    END;
+
+    PROCEDURE DeleteComments@1000000004(Area@1000000001 : Integer);
+    VAR
+      Comment@1000000000 : Record 6085594;
+    BEGIN
+      Comment.SETCURRENTKEY("Document No.");
+      Comment.SETRANGE("Document No.","No.");
+      IF Area = -2 THEN
+        Comment.SETFILTER(Area,'<>%1',Comment.Area::Import)
+      ELSE
+        IF Area >= 0 THEN
+          Comment.SETRANGE(Area,Area);
+      Comment.DELETEALL;
+    END;
+
+    PROCEDURE HasWarningComments@1160040013() : Boolean;
+    VAR
+      Comment@1000000000 : Record 6085594;
+    BEGIN
+      Comment.SETCURRENTKEY("Document No.");
+      Comment.SETRANGE("Document No.","No.");
+      Comment.SETRANGE("Comment Type",Comment."Comment Type"::Warning);
+      EXIT(NOT Comment.ISEMPTY);
+    END;
+
+    PROCEDURE HasDocumentLines@6085573() : Boolean;
+    VAR
+      DocValue@6085573 : Record 6085593;
+    BEGIN
+      DocValue.SETRANGE("Document No.","No.");
+      DocValue.SETRANGE(Type,DocValue.Type::Line);
+      DocValue.SETRANGE("Is Value",TRUE);
+      EXIT(NOT(DocValue.ISEMPTY));
+    END;
+
+    PROCEDURE BuildTempLinesTable@1000000005(VAR DocumentLine@1000000001 : Record 6085596);
+    VAR
+      Template@1000000006 : Record 6085579;
+      Value@1000000000 : Record 6085593;
+      Field@1000000004 : Record 6085580;
+      FieldCodes@1000000005 : ARRAY [20] OF Code[20];
+      NoOfLines@1000000002 : Integer;
+      i@1000000003 : Integer;
+    BEGIN
+      IF "Template No." = '' THEN
+        EXIT;
+
+      Field.SETCURRENTKEY("Template No.",Type,"Sort Order");
+      Field.SETRANGE("Template No.","Template No.");
+      Field.SETRANGE(Type,Field.Type::Line);
+      IF Field.FINDSET THEN
+        REPEAT
+          i := i + 1;
+          FieldCodes[i] := Field.Code;
+        UNTIL (Field.NEXT = 0) OR (i = 20);
+
+      Value.SETCURRENTKEY("Document No.","Is Value",Type,"Line No.");
+      Value.SETRANGE("Document No.","No.");
+      Value.SETRANGE("Is Value",TRUE);
+      Value.SETRANGE(Type,Value.Type::Line);
+      IF NOT Value.FINDLAST THEN
+        EXIT;
+
+      NoOfLines := Value."Line No.";
+
+      Template.GET("Template No.");
+
+      FOR i := 1 TO NoOfLines DO BEGIN
+        DocumentLine.INIT;
+        DocumentLine."Document No." := "No.";
+        DocumentLine."Template No." := "Template No.";
+        DocumentLine."Line No." := i;
+        Value.SETRANGE("Document No.","No.");
+        Value.SETRANGE("Line No.",i);
+        IF Value.FINDFIRST THEN BEGIN
+          DocumentLine."Page No." := Value."Page No.";
+
+          DocumentLine."Field Value 1" := GetValueAsText(FieldCodes[1],i);
+          DocumentLine."Field Value 2" := GetValueAsText(FieldCodes[2],i);
+          DocumentLine."Field Value 3" := GetValueAsText(FieldCodes[3],i);
+          DocumentLine."Field Value 4" := GetValueAsText(FieldCodes[4],i);
+          DocumentLine."Field Value 5" := GetValueAsText(FieldCodes[5],i);
+          DocumentLine."Field Value 6" := GetValueAsText(FieldCodes[6],i);
+          DocumentLine."Field Value 7" := GetValueAsText(FieldCodes[7],i);
+          DocumentLine."Field Value 8" := GetValueAsText(FieldCodes[8],i);
+          DocumentLine."Field Value 9" := GetValueAsText(FieldCodes[9],i);
+          DocumentLine."Field Value 10" := GetValueAsText(FieldCodes[10],i);
+          DocumentLine."Field Value 11" := GetValueAsText(FieldCodes[11],i);
+          DocumentLine."Field Value 12" := GetValueAsText(FieldCodes[12],i);
+          DocumentLine."Field Value 13" := GetValueAsText(FieldCodes[13],i);
+          DocumentLine."Field Value 14" := GetValueAsText(FieldCodes[14],i);
+          DocumentLine."Field Value 15" := GetValueAsText(FieldCodes[15],i);
+          DocumentLine."Field Value 16" := GetValueAsText(FieldCodes[16],i);
+          DocumentLine."Field Value 17" := GetValueAsText(FieldCodes[17],i);
+          DocumentLine."Field Value 18" := GetValueAsText(FieldCodes[18],i);
+          DocumentLine."Field Value 19" := GetValueAsText(FieldCodes[19],i);
+          DocumentLine."Field Value 20" := GetValueAsText(FieldCodes[20],i);
+
+          IF Template."Codeunit ID: Line Validation" <> 0 THEN
+            CODEUNIT.RUN(Template."Codeunit ID: Line Validation",DocumentLine)
+          ELSE
+            DocumentLine.OK := TRUE;
+
+          IF NOT DocumentLine.Skip THEN
+            DocumentLine.INSERT;
+        END;
+      END;
+
+      IF DocumentLine.FINDFIRST THEN;
+    END;
+
+    PROCEDURE GetValueAsText@1000000008(FieldCode@1000000000 : Code[20];LineNo@1000000002 : Integer) : Text[250];
+    VAR
+      Field@1000000001 : Record 6085580;
+    BEGIN
+      IF Field.GET("Template No.",Field.Type::Line,FieldCode) THEN
+        EXIT(CaptureMgt.GetValueAsText("No.",LineNo,Field));
+    END;
+
+    PROCEDURE AfterCapture@1000000006();
+    VAR
+      Template@1000000000 : Record 6085579;
+    BEGIN
+      IF Template.GET("Template No.") THEN
+        IF Template."Codeunit ID: After Capture" <> 0 THEN
+          CODEUNIT.RUN(Template."Codeunit ID: After Capture",Rec);
+    END;
+
+    PROCEDURE ValidateDocument@1000000007();
+    VAR
+      DocCat@1160040000 : Record 6085575;
+      Template@1000000000 : Record 6085579;
+    BEGIN
+      TestStatus;
+      CheckSourceTableFilter;
+
+      IF Template.GET("Template No.") THEN BEGIN
+        IF Template."Codeunit ID: Doc. Validation" = 0 THEN BEGIN
+          DeleteComments(1);
+          Rec.OK := TRUE;
+          MODIFY;
+        END ELSE
+          CODEUNIT.RUN(Template."Codeunit ID: Doc. Validation",Rec);
+      END ELSE BEGIN
+        DocCat.GET("Document Category Code");
+        IF ("Source Record ID Tree ID" <> 0) AND (NOT DocCat.HasMasterTemplate ) THEN BEGIN
+          Rec.OK := TRUE;
+          MODIFY;
+        END;
+      END;
+    END;
+
+    PROCEDURE Register@1000000010();
+    VAR
+      DocCat@1160040000 : Record 6085575;
+      Template@1000000000 : Record 6085579;
+    BEGIN
+      TestStatus;
+
+      DocCat.GET("Document Category Code");
+      DocCat.TESTFIELD("Source Table No.");
+
+      IF RegisterWithoutTemplate(TRUE) THEN
+        EXIT;
+
+      TestSourceNoAndTemplNo;
+      Template.GET("Template No.");
+      Template.TESTFIELD("Codeunit ID: Register");
+
+      CODEUNIT.RUN(Template."Codeunit ID: Register",Rec);
+    END;
+
+    PROCEDURE RegisterYN@161024014();
+    VAR
+      DocCat@1160040000 : Record 6085575;
+      Template@1000000000 : Record 6085579;
+    BEGIN
+      TestStatus;
+
+      IF RegisterWithoutTemplate(TRUE) THEN
+        EXIT;
+
+      DocCat.GET("Document Category Code");
+      IF DocCat."Source Table No." <> 0 THEN
+        TestSourceNoAndTemplNo;
+
+      Template.GET("Template No.");
+      Template.TESTFIELD("Codeunit ID: Register (Y/N)");
+
+      CODEUNIT.RUN(Template."Codeunit ID: Register (Y/N)",Rec);
+    END;
+
+    LOCAL PROCEDURE RegisterWithoutTemplate@1(HideErrors@1000 : Boolean) : Boolean;
+    VAR
+      DocCat@1001 : Record 6085575;
+      TempKeyField@1160040001 : TEMPORARY Record 2000000041;
+      RecIDMgt@1160040000 : Codeunit 6085604;
+      RecIDText@1160040002 : Text[250];
+      FieldValueAsText@1160040003 : Text[250];
+    BEGIN
+      DocCat.GET("Document Category Code");
+      IF DocCat.HasMasterTemplate THEN
+        EXIT;
+
+      IF NOT HideErrors THEN
+        TESTFIELD("Source Record ID Tree ID")
+      ELSE
+        IF "Source Record ID Tree ID" = 0 THEN
+          EXIT;
+
+      "Created Doc. Type" := DocCat."Source Table No.";
+      "Created Doc. Subtype" := GetSubType;
+      "Created Doc. ID" := GetSourceID;
+
+      IF Description = '' THEN BEGIN
+        RecIDMgt.GetKeyFields(DocCat."Source Table No.",TempKeyField);
+        IF TempKeyField.FINDSET THEN
+          REPEAT
+            FieldValueAsText := RecIDMgt.GetKeyValue("Source Record ID Tree ID",TempKeyField."No.");
+            IF TempKeyField.Type = TempKeyField.Type::Option THEN
+              FieldValueAsText := RecIDMgt.IntToOptionText(DocCat."Source Table No.",TempKeyField."No.",FieldValueAsText);
+
+            IF FieldValueAsText <> '' THEN BEGIN
+              IF Description = '' THEN
+                Description := FieldValueAsText
+              ELSE
+                Description := Description + ', ' + FieldValueAsText;
+            END;
+          UNTIL TempKeyField.NEXT = 0;
+
+        IF DocCat.Description <> '' THEN
+          Description := STRSUBSTNO('%1 (%2)',DocCat.Description,Description);
+      END;
+
+      VALIDATE(Status,Status::Registered);
+      MODIFY;
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE RegisterHideErrors@1160040012() : Boolean;
+    VAR
+      DocCat@1160040000 : Record 6085575;
+      Template@1000000000 : Record 6085579;
+    BEGIN
+      IF Status <> Status::Open THEN
+        EXIT;
+
+      IF NOT DocCat.GET("Document Category Code") THEN
+        EXIT;
+
+      IF RegisterWithoutTemplate(FALSE) THEN
+        EXIT(TRUE);
+
+      IF DocCat."Source Table No." <> 0 THEN BEGIN
+        IF "Source Record ID Tree ID" = 0 THEN
+          EXIT;
+        IF NOT Template.GET("Template No.") THEN
+          EXIT;
+      END;
+
+      IF Template."Codeunit ID: Register" = 0 THEN
+        EXIT;
+
+      IF HasWarningComments THEN
+        EXIT;
+
+      EXIT(CODEUNIT.RUN(Template."Codeunit ID: Register",Rec));
+    END;
+
+    PROCEDURE Reject@1000000011();
+    VAR
+      PurchDocMatch@1160040000 : Record 6085700;
+    BEGIN
+      TestStatus;
+
+      IF NOT CONFIRM(Text002) THEN
+        EXIT;
+
+      PurchDocMatch.SETRANGE("Document No.","No.");
+      PurchDocMatch.DELETEALL(TRUE);
+
+      VALIDATE(Status,Status::Rejected);
+      MODIFY(TRUE);
+    END;
+
+    PROCEDURE Reopen@161024013();
+    VAR
+      DocCat@161024012 : Record 6085575;
+    BEGIN
+      DocCat.GET("Document Category Code");
+      IF DocCat."Codeunit ID: Reopen" = 0 THEN
+        CODEUNIT.RUN(CODEUNIT::"Purch. Doc. - Reopen",Rec)
+      ELSE
+        CODEUNIT.RUN(DocCat."Codeunit ID: Reopen",Rec);
+    END;
+
+    PROCEDURE OpenTiffImageFile@1000000015();
+    VAR
+      TempFile@1000 : Record 6085608;
+    BEGIN
+      GetTiffFile(TempFile);
+      TempFile.Open;
+    END;
+
+    PROCEDURE OpenPdfFile@1000000014();
+    VAR
+      TempFile@1000 : Record 6085608;
+      WebClientMgt@6085573 : Codeunit 6085662;
+    BEGIN
+      IF "File Type" = "File Type"::OCR THEN
+        GetPdfFile(TempFile)
+      ELSE BEGIN
+        GetMiscFile(TempFile);
+        TempFile.Name := Description + '.' + "File Extension";
+      END;
+
+      TempFile.Open;
+    END;
+
+    PROCEDURE OpenEMailFile@1160040004();
+    VAR
+      TempFile@1000 : Record 6085608;
+      EmptyGuid@1160040000 : GUID;
+    BEGIN
+      IF "E-Mail GUID" = EmptyGuid THEN
+        ERROR(Text005);
+
+      GetEmailFile(TempFile);
+      TempFile.Open;
+    END;
+
+    PROCEDURE ShowRegisteredDoc@1160040009();
+    VAR
+      DocCat@1160040000 : Record 6085575;
+    BEGIN
+      DocCat.GET("Document Category Code");
+      DocCat.TESTFIELD("Codeunit ID: Show Reg. Doc.");
+      CODEUNIT.RUN(DocCat."Codeunit ID: Show Reg. Doc.",Rec);
+    END;
+
+    PROCEDURE TestStatus@1000000012();
+    BEGIN
+      TESTFIELD(Status,Status::Open);
+    END;
+
+    PROCEDURE TestSourceNoAndTemplNo@161024012();
+    BEGIN
+      TESTFIELD("Source Record ID Tree ID");
+      TESTFIELD("Template No.");
+    END;
+
+    PROCEDURE GetTiffFileName@1000000017() FullFileName : Text[1024];
+    VAR
+      TempFile@1000 : TEMPORARY Record 6085608;
+    BEGIN
+      IF "No."= '' THEN
+        EXIT('');
+
+      IF GetTiffFile(TempFile) THEN
+        FullFileName := TempFile.GetClientFilePath;
+    END;
+
+    PROCEDURE GetPdfFileName@1000000019() : Text[1024];
+    VAR
+      TempFile@1000 : TEMPORARY Record 6085608;
+    BEGIN
+      IF "No."= '' THEN
+        EXIT('');
+
+      GetPdfFile(TempFile);
+
+      EXIT(TempFile.GetClientFilePath);
+    END;
+
+    PROCEDURE GetMiscFileName@161024015(WriteProtected@1160040000 : Boolean) : Text[1024];
+    VAR
+      TempFile@1000 : TEMPORARY Record 6085608;
+    BEGIN
+      IF "No."= '' THEN
+        EXIT('');
+
+      GetMiscFile(TempFile);
+
+      EXIT(TempFile.GetClientFilePath);
+    END;
+
+    PROCEDURE GetEMailFileName@1160040000() : Text[1024];
+    VAR
+      TempFile@1000 : TEMPORARY Record 6085608;
+    BEGIN
+      IF "No."= '' THEN
+        EXIT('');
+
+      GetEmailFile(TempFile);
+
+      EXIT(TempFile.GetClientFilePath);
+    END;
+
+    PROCEDURE HasTiffFile@13() : Boolean;
+    BEGIN
+      EXIT(DocumentFileInterface.HasTiffFile(Rec));
+    END;
+
+    PROCEDURE HasPdfFile@18() : Boolean;
+    BEGIN
+      EXIT(DocumentFileInterface.HasPdfFile(Rec));
+    END;
+
+    PROCEDURE HasMiscFile@19() : Boolean;
+    BEGIN
+      EXIT(DocumentFileInterface.HasMiscFile(Rec));
+    END;
+
+    PROCEDURE HasEmailFile@20() : Boolean;
+    BEGIN
+      EXIT(DocumentFileInterface.HasEmailFile(Rec));
+    END;
+
+    PROCEDURE ClearTiffFile@17() : Boolean;
+    BEGIN
+      IF DocumentFileInterface.HasTiffFile(Rec) THEN
+        EXIT(DocumentFileInterface.ClearTiffFile(Rec))
+    END;
+
+    PROCEDURE ClearPdfFile@16() : Boolean;
+    BEGIN
+      EXIT(DocumentFileInterface.ClearPdfFile(Rec))
+    END;
+
+    PROCEDURE ClearMiscFile@15() : Boolean;
+    BEGIN
+      EXIT(DocumentFileInterface.ClearMiscFile(Rec))
+    END;
+
+    PROCEDURE ClearEmailFile@14() : Boolean;
+    BEGIN
+      EXIT(DocumentFileInterface.ClearEmailFile(Rec))
+    END;
+
+    PROCEDURE GetTiffFile@22(VAR TempFile@1000 : TEMPORARY Record 6085608) : Boolean;
+    BEGIN
+      EXIT(DocumentFileInterface.GetTiffFile(Rec,TempFile))
+    END;
+
+    PROCEDURE GetPdfFile@23(VAR TempFile@1000 : TEMPORARY Record 6085608) : Boolean;
+    BEGIN
+      EXIT(DocumentFileInterface.GetPdfFile(Rec,TempFile))
+    END;
+
+    PROCEDURE GetMiscFile@24(VAR TempFile@1000 : TEMPORARY Record 6085608) : Boolean;
+    BEGIN
+      EXIT(DocumentFileInterface.GetMiscFile(Rec,TempFile))
+    END;
+
+    PROCEDURE GetEmailFile@25(VAR TempFile@1000 : TEMPORARY Record 6085608) : Boolean;
+    BEGIN
+      EXIT(DocumentFileInterface.GetEmailFile(Rec,TempFile))
+    END;
+
+    PROCEDURE SetTiffFile@29(VAR TempFile@1000 : TEMPORARY Record 6085608) : Boolean;
+    BEGIN
+      EXIT(DocumentFileInterface.SetTiffFile(Rec,TempFile))
+    END;
+
+    PROCEDURE SetPdfFile@28(VAR TempFile@1000 : TEMPORARY Record 6085608) : Boolean;
+    BEGIN
+      EXIT(DocumentFileInterface.SetPdfFile(Rec,TempFile))
+    END;
+
+    PROCEDURE SetMiscFile@27(VAR TempFile@1000 : TEMPORARY Record 6085608) : Boolean;
+    BEGIN
+      EXIT(DocumentFileInterface.SetMiscFile(Rec,TempFile))
+    END;
+
+    PROCEDURE SetEmailFile@26(VAR TempFile@1000 : TEMPORARY Record 6085608) : Boolean;
+    BEGIN
+      EXIT(DocumentFileInterface.SetEmailFile(Rec,TempFile))
+    END;
+
+    PROCEDURE GetEmailGUIDAsText@1160040016() : Text[50];
+    BEGIN
+      EXIT(COPYSTR(FORMAT("E-Mail GUID"),2,36));
+    END;
+
+    PROCEDURE CheckSourceTableFilter@1160040003();
+    VAR
+      DocCat@1160040005 : Record 6085575;
+      Field@1160040006 : Record 6085580;
+      Comment@1160040001 : Record 6085594;
+      RecIDMgt@1160040002 : Codeunit 6085604;
+      RecRef@1160040003 : RecordRef;
+      FieldRef@1160040000 : FieldRef;
+    BEGIN
+      IF "Source Record ID Tree ID" = 0 THEN
+        EXIT;
+
+      RecRef.GETTABLE(Rec);
+
+      DocCat.GET("Document Category Code");
+      IF NOT RecIDMgt.IsValueWithinFilters(DocCat."Source Table No.",DocCat."Source Field No.",
+        DocCat."Document Category GUID",
+        RecIDMgt.GetFieldValue("Source Record ID Tree ID",DocCat."Source Field No."))
+      THEN
+        Comment.Add(Rec,Field,0,Comment.Area::Validation,Comment."Comment Type"::Error,
+          STRSUBSTNO(Text004,RecRef.CAPTION,RecIDMgt.GetFieldValue("Source Record ID Tree ID",DocCat."Source Field No."),
+          DocCat.FIELDCAPTION("Source Table No.")));
+    END;
+
+    PROCEDURE SetAndCreateNewVendor@4();
+    VAR
+      NoSeriesRelationship@1003 : Record 310;
+      PurchSetup@1002 : Record 312;
+      Vendor@1001 : Record 23;
+      NoSeriesMgt@1000 : Codeunit 396;
+      VendorNo@1004 : Code[20];
+    BEGIN
+      IF NOT CONFIRM(Text008,TRUE) THEN
+        EXIT;
+
+      PurchSetup.GET;
+      PurchSetup.TESTFIELD("Vendor Nos.");
+
+      NoSeriesRelationship.SETRANGE(Code,PurchSetup."Vendor Nos.");
+
+      IF NOT NoSeriesRelationship.ISEMPTY THEN
+        IF NoSeriesMgt.SelectSeries(PurchSetup."Vendor Nos.",Vendor."No. Series",Vendor."No. Series") THEN
+          NoSeriesMgt.SetSeries(Vendor."No.")
+        ELSE
+          EXIT;
+
+      Vendor.INSERT(TRUE);
+      VendorNo := Vendor."No.";
+
+      COMMIT;
+
+      PAGE.RUNMODAL(PAGE::"Vendor Card",Vendor);
+
+      IF Vendor.GET(VendorNo) THEN BEGIN
+        SetManual(TRUE);
+        SetSourceID(Vendor."No.");
+      END;
+    END;
+
+    PROCEDURE SetAndCreateNewCustomer@5();
+    VAR
+      NoSeriesRelationship@1007 : Record 310;
+      SalesSetup@1006 : Record 311;
+      Customer@1005 : Record 18;
+      NoSeriesMgt@1004 : Codeunit 396;
+      CustomerNo@1000 : Code[20];
+    BEGIN
+      IF NOT CONFIRM(Text009,TRUE) THEN
+        EXIT;
+
+      SalesSetup.GET;
+      SalesSetup.TESTFIELD("Customer Nos.");
+
+      NoSeriesRelationship.SETRANGE(Code,SalesSetup."Customer Nos.");
+
+      IF NOT NoSeriesRelationship.ISEMPTY THEN
+        IF NoSeriesMgt.SelectSeries(SalesSetup."Customer Nos.",Customer."No. Series",Customer."No. Series") THEN
+          NoSeriesMgt.SetSeries(Customer."No.")
+        ELSE
+          EXIT;
+
+      Customer.INSERT(TRUE);
+      CustomerNo := Customer."No.";
+
+      COMMIT;
+
+      PAGE.RUNMODAL(PAGE::"Customer Card",Customer);
+
+      IF Customer.GET(CustomerNo) THEN BEGIN
+        SetManual(TRUE);
+        SetSourceID(Customer."No.");
+      END;
+    END;
+
+    PROCEDURE SetSourceID@1160040002(KeyValues@1160040000 : Text[250]);
+    VAR
+      DocCat@1160040001 : Record 6085575;
+      RecIDMgt@1160040002 : Codeunit 6085604;
+      SourceID@1160040003 : Integer;
+    BEGIN
+      IF DELCHR(KeyValues,'=',' ') = '' THEN
+        KeyValues := '';
+
+      DocCat.GET("Document Category Code");
+      IF IsManual THEN BEGIN
+        SourceID := RecIDMgt.SetKeyValueWithGUID(DocCat."Source Table No.",DocCat."Source Field No.",DocCat."Source Search Field No.",
+          DocCat."Document Category GUID",KeyValues,TRUE);
+        COMMIT;
+
+        VALIDATE("Source Record ID Tree ID",SourceID);
+      END ELSE
+        VALIDATE("Source Record ID Tree ID",
+          RecIDMgt.SetKeyValueWithGUID(DocCat."Source Table No.",DocCat."Source Field No.",0,
+            DocCat."Document Category GUID",KeyValues,FALSE));
+
+      MODIFY;
+    END;
+
+    PROCEDURE GetSourceID@1160040001() : Text[250];
+    VAR
+      DocCat@1160040001 : Record 6085575;
+      RecIDMgt@1160040000 : Codeunit 6085604;
+    BEGIN
+      IF DocCat.GET("Document Category Code") THEN
+        EXIT(RecIDMgt.GetKeyValue("Source Record ID Tree ID",DocCat."Source Field No."));
+    END;
+
+    PROCEDURE SetManual@161024016(NewIsManual@161024012 : Boolean);
+    BEGIN
+      IsManual := NewIsManual;
+    END;
+
+    PROCEDURE GetDCSetup@1160040005();
+    BEGIN
+      IF NOT GotDCSetup THEN
+        GotDCSetup := DCSetup.GET;
+    END;
+
+    PROCEDURE SetDCSetup@1160040006(VAR NewDCSetup@1160040000 : Record 6085573);
+    BEGIN
+      DCSetup := NewDCSetup;
+      GotDCSetup := TRUE;
+      DocumentFileInterface.SetDCSetup(NewDCSetup);
+    END;
+
+    PROCEDURE SetCurrentCompany@21(NewCompanyName@1000 : Text[50]);
+    BEGIN
+      CHANGECOMPANY(NewCompanyName);
+      DocumentFileInterface.SetCurrentCompany(NewCompanyName);
+    END;
+
+    PROCEDURE UpdateStatusText@1160040008();
+    VAR
+      DocCat@1160040000 : Record 6085575;
+    BEGIN
+      IF DocCat.GET("Document Category Code") THEN
+        IF DocCat."Codeunit ID: Get Doc. Status" <> 0 THEN
+          CODEUNIT.RUN(DocCat."Codeunit ID: Get Doc. Status",Rec);
+    END;
+
+    PROCEDURE GetSourceTableNo@1160040010() : Integer;
+    VAR
+      DocCat@1160040000 : Record 6085575;
+    BEGIN
+      IF "Document Category Code" = '' THEN
+        EXIT;
+
+      DocCat.GET("Document Category Code");
+      EXIT(DocCat."Source Table No.");
+    END;
+
+    PROCEDURE FindTemplateInCompanies@1160040011(VAR FromCompany@1160040001 : Text[30];VAR FromTemplate@1160040006 : Record 6085579;SourceName@1160040000 : Text[250]) : Boolean;
+    VAR
+      Comp@1160040002 : Record 2000000006;
+      DocCat@1160040004 : Record 6085575;
+      RecIDMgt@1160040003 : Codeunit 6085604;
+    BEGIN
+      Comp.SETFILTER(Name,'<>%1',COMPANYNAME);
+      IF Comp.FINDSET THEN
+        REPEAT
+          IF DocCat.CHANGECOMPANY(Comp.Name) THEN BEGIN
+            IF DocCat.READPERMISSION THEN BEGIN
+              IF DocCat.GET("Document Category Code") THEN BEGIN
+                FromTemplate.CHANGECOMPANY(Comp.Name);
+                IF FromTemplate.READPERMISSION THEN BEGIN
+                  FromTemplate.SETRANGE("Category Code","Document Category Code");
+                  FromTemplate.SETFILTER("Source Record ID Tree ID",'>%1',0);
+                  FromTemplate.SETRANGE(Type,FromTemplate.Type::" ");
+                  FromTemplate.SETRANGE(Default,TRUE);
+                  IF FromTemplate.FINDSET THEN;
+                    REPEAT
+                      IF SourceName = RecIDMgt.GetFieldValueInCompany(Comp.Name,FromTemplate."Source Record ID Tree ID",
+                        DocCat."Source Field No. (Name)")
+                      THEN BEGIN
+                        FromCompany := Comp.Name;
+                        EXIT(TRUE);
+                      END;
+                    UNTIL FromTemplate.NEXT = 0;
+
+                  FromTemplate.SETRANGE(Default,FALSE);
+                  IF FromTemplate.FINDSET THEN
+                    REPEAT
+                      IF SourceName = RecIDMgt.GetFieldValueInCompany(Comp.Name,FromTemplate."Source Record ID Tree ID",
+                        DocCat."Source Field No. (Name)")
+                      THEN BEGIN
+                        FromCompany := Comp.Name;
+                        EXIT(TRUE);
+                      END;
+                    UNTIL FromTemplate.NEXT = 0;
+                END;
+              END;
+            END;
+          END;
+        UNTIL Comp.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE GetSubType@2() SubType : Integer;
+    VAR
+      DocCat@1001 : Record 6085575;
+      RecIDMgt@1000 : Codeunit 6085604;
+      TempKeyField@1160040000 : TEMPORARY Record 2000000041;
+    BEGIN
+      IF NOT DocCat.GET("Document Category Code") THEN
+        EXIT;
+
+      RecIDMgt.GetKeyFields(DocCat."Source Table No.",TempKeyField);
+      TempKeyField.SETRANGE(Type,TempKeyField.Type::Option);
+      IF TempKeyField.FINDFIRST THEN
+        IF EVALUATE(SubType,RecIDMgt.GetKeyValue("Source Record ID Tree ID",TempKeyField."No.")) THEN;
+    END;
+
+    PROCEDURE SuspendDeleteCheck@1160040014(Suspend@1160040000 : Boolean);
+    BEGIN
+      DeleteCheckSuspended := Suspend;
+    END;
+
+    PROCEDURE CheckOkToRegister@6085574();
+    BEGIN
+      IF NOT OK THEN
+        ERROR(NotOkErr);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

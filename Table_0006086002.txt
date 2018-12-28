@@ -1,0 +1,1071 @@
+OBJECT Table 6086002 Continia User Setup
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/17/18;
+    Time=[ 1:00:00 AM];
+    Version List=DCW13.70.00.5.00.04;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 6085749=rid;
+    DataCaptionFields=Continia User ID;
+    OnInsert=BEGIN
+               TESTFIELD("Continia User ID");
+
+               "Approval Administrator" := GetIsStandardApprovalAdminUser();
+
+               CopyGlobalApprovalSharings("Continia User ID");
+             END;
+
+    OnDelete=VAR
+               Company@1160040000 : Record 2000000006;
+               ContiniaUser@1160040001 : Record 6086001;
+               TempContiniaUserSetup@1160040004 : Record 6086002;
+               TempCompany@1160040003 : TEMPORARY Record 2000000006;
+               ChangeLogMgt@1160040006 : Codeunit 423;
+               RecordRef@1160040007 : RecordRef;
+               NoOfCompaniesWithAccess@1160040005 : Integer;
+             BEGIN
+               ContiniaUser.GET("Continia User ID");
+               ContiniaUser.GetCompaniesWithContUserSetup(TempCompany);
+               NoOfCompaniesWithAccess := TempCompany.COUNT - 1; // do not count this company
+
+               IF NOT HideUserDeleteConfirmation THEN BEGIN
+                 IF NoOfCompaniesWithAccess = 1 THEN BEGIN
+                   TempCompany.SETFILTER(Name,'<>%1',COMPANYNAME);
+                   TempCompany.FINDFIRST;
+                   IF NOT CONFIRM(Text007,TRUE,"Continia User ID",TempCompany.Name) THEN
+                     ERROR('');
+                 END ELSE
+                   IF NoOfCompaniesWithAccess > 1 THEN BEGIN
+                     IF NOT CONFIRM(Text008,TRUE,"Continia User ID",NoOfCompaniesWithAccess) THEN
+                       ERROR('');
+                   END;
+               END;
+
+               DeleteRelatedUserTables;
+
+               IF NoOfCompaniesWithAccess = 0 THEN
+                 IF NOT ContiniaUserDeleteSuspended THEN BEGIN
+                   ContiniaUser.SuspendContiniaUserSetupDelete(TRUE);
+                   RecordRef.GETTABLE(ContiniaUser);
+                   ContiniaUser.DELETE(TRUE);
+                   ChangeLogMgt.LogDeletion(RecordRef);
+                 END;
+             END;
+
+    OnRename=BEGIN
+               ERROR(Text005,TABLECAPTION);
+             END;
+
+    CaptionML=ENU=Continia User Setup;
+    LookupPageID=Page6086058;
+    DrillDownPageID=Page6086058;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Continia User ID    ;Code50        ;TableRelation="Continia User";
+                                                   CaptionML=ENU=Continia User ID;
+                                                   NotBlank=Yes }
+    { 3   ;   ;Expense Management User;Boolean    ;OnValidate=VAR
+                                                                Cemproxy@1160040001 : Codeunit 6085782;
+                                                                ContiniaUser@1160040000 : Record 6086001;
+                                                              BEGIN
+                                                                ContiniaUser.GET("Continia User ID");
+                                                                ContiniaUser.TESTFIELD("E-Mail");
+                                                                ContiniaUser."Send Welcome E-mail (EM)" := ContiniaUser.IsEMUser(FALSE) OR "Expense Management User";
+                                                                ContiniaUser.MODIFY(TRUE);
+
+                                                                IF "Expense Management User" THEN
+                                                                  Cemproxy.CheckEMSetup;
+                                                              END;
+
+                                                   CaptionML=ENU=Expense Management User }
+    { 4   ;   ;Approval Client     ;Option        ;OnValidate=VAR
+                                                                ContiniaUser@6085574 : Record 6086001;
+                                                                ContiniaUserMgt@6085573 : Codeunit 6085781;
+                                                              BEGIN
+                                                                IF "Approval Client" = "Approval Client"::" " THEN
+                                                                  EXIT;
+
+                                                                ContiniaUserMgt.ValidateNAVLoginTypeForWebUser(Rec);
+
+                                                                ContiniaUser.GET("Continia User ID");
+                                                                ContiniaUser.TESTFIELD("E-Mail");
+                                                                ContiniaUser."Send Welcome E-mail" := ("Approval Client" = "Approval Client"::"Continia Web Portal") OR
+                                                                  ContiniaUser.IsWebApprovalUser(FALSE);
+                                                                ContiniaUser.MODIFY(TRUE);
+                                                                MODIFY(TRUE);
+                                                              END;
+
+                                                   CaptionML=ENU=Approval Client;
+                                                   OptionCaptionML=ENU=" ,NAV Client,NAV Web Client,Continia Web Portal";
+                                                   OptionString=[ ,NAV Client,NAV Web Client,Continia Web Portal] }
+    { 5   ;   ;Employee No.        ;Code50        ;TableRelation=Employee;
+                                                   OnValidate=VAR
+                                                                Employee@1160040000 : Record 5200;
+                                                                ContiniaUser@1160040001 : Record 6086001;
+                                                              BEGIN
+                                                                Employee.CHANGECOMPANY(GetCurrCompanyName);
+
+                                                                IF "Employee No." <> '' THEN BEGIN
+                                                                  IF (GetName = '') OR (GetEmail = '') THEN BEGIN
+                                                                    Employee.GET("Employee No.");
+                                                                    IF (GetName = '') AND (Employee.FullName <> '') THEN
+                                                                      UpdateContiniaUserField(ContiniaUser.FIELDNO(Name),COPYSTR(Employee.FullName,1,MAXSTRLEN(ContiniaUser.Name)));
+
+                                                                    IF (GetEmail = '') AND (Employee."E-Mail" <> '') THEN
+                                                                      UpdateContiniaUserField(ContiniaUser.FIELDNO("E-Mail"),Employee."E-Mail");
+                                                                  END;
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ENU=Employee No. }
+    { 10  ;   ;Can Edit Posting Lines;Boolean     ;CaptionML=ENU=Can Edit Posting Lines }
+    { 11  ;   ;Document Search     ;Option        ;OnValidate=VAR
+                                                                DCSetup@161024012 : Record 6085573;
+                                                                PurchInvHeader@161024013 : Record 122;
+                                                                PurchCrMemoHeader@161024014 : Record 124;
+                                                                PostedApprEntry@161024016 : Record 456;
+                                                                WebDocSearch@161024017 : Record 6086005;
+                                                                WebSearchMgnt@161024015 : Codeunit 6085748;
+                                                                Window@161024018 : Dialog;
+                                                              BEGIN
+                                                                IF "Document Search" = "Document Search"::"Own documents only" THEN BEGIN
+                                                                  Window.OPEN(STRSUBSTNO(Text002,WebDocSearch.TABLECAPTION));
+
+                                                                  DCSetup.CHANGECOMPANY(GetCurrCompanyName);
+                                                                  PostedApprEntry.CHANGECOMPANY(GetCurrCompanyName);
+                                                                  PurchInvHeader.CHANGECOMPANY(GetCurrCompanyName);
+                                                                  PurchCrMemoHeader.CHANGECOMPANY(GetCurrCompanyName);
+
+                                                                  DCSetup.GET;
+                                                                  DCSetup.TESTFIELD("Maintain User Document Search");
+
+                                                                  PostedApprEntry.SETFILTER("Table ID",'%1|%2',DATABASE::"Purch. Inv. Header",DATABASE::"Purch. Cr. Memo Hdr.");
+                                                                  PostedApprEntry.SETRANGE(Status,PostedApprEntry.Status::Approved);
+                                                                  PostedApprEntry.SETRANGE("Approver ID","Continia User ID");
+                                                                  IF PostedApprEntry.FINDSET THEN
+                                                                    REPEAT
+                                                                      IF PostedApprEntry."Table ID" = DATABASE::"Purch. Inv. Header" THEN BEGIN
+                                                                        IF PurchInvHeader.GET(PostedApprEntry."Document No.") THEN BEGIN
+                                                                          IF NOT PurchInvHeader.MARK THEN BEGIN
+                                                                            WebSearchMgnt.UpdateWebSearchFromInvoice(PurchInvHeader,GetCurrCompanyName);
+                                                                            PurchInvHeader.MARK(TRUE);
+                                                                          END;
+                                                                        END;
+                                                                      END ELSE
+                                                                        IF PostedApprEntry."Table ID" = DATABASE::"Purch. Cr. Memo Hdr." THEN BEGIN
+                                                                          IF PurchCrMemoHeader.GET(PostedApprEntry."Document No.") THEN BEGIN
+                                                                            IF NOT PurchCrMemoHeader.MARK THEN BEGIN
+                                                                              WebSearchMgnt.UpdateWebSearchFromCrMemo(PurchCrMemoHeader,GetCurrCompanyName);
+                                                                              PurchCrMemoHeader.MARK(TRUE);
+                                                                            END;
+                                                                          END;
+                                                                        END;
+                                                                    UNTIL PostedApprEntry.NEXT = 0;
+
+                                                                  Window.CLOSE;
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ENU=Document Search;
+                                                   OptionCaptionML=ENU=All documents,Own documents only;
+                                                   OptionString=All documents,Own documents only }
+    { 13  ;   ;Comment             ;Text250       ;CaptionML=ENU=Comment }
+    { 21  ;   ;Approval Administrator;Boolean     ;CaptionML=ENU=Approval Administrator }
+    { 28  ;   ;No. of Approval Groups;Integer     ;FieldClass=FlowField;
+                                                   CalcFormula=Count("Approval User Group Member" WHERE (Continia User ID=FIELD(Continia User ID)));
+                                                   CaptionML=ENU=No. of Approval Groups;
+                                                   BlankZero=Yes;
+                                                   Editable=No }
+    { 29  ;   ;No. of Approval Permissions;Integer;FieldClass=FlowField;
+                                                   CalcFormula=Count("Continia User Permission" WHERE (Continia User ID=FIELD(Continia User ID)));
+                                                   CaptionML=ENU=No. of Approval Permissions;
+                                                   BlankZero=Yes;
+                                                   Editable=No }
+    { 30  ;   ;Vendor No.          ;Code20        ;TableRelation=Vendor;
+                                                   OnValidate=VAR
+                                                                Vendor@1160040000 : Record 23;
+                                                                ContiniaUser@1160040001 : Record 6086001;
+                                                              BEGIN
+                                                                Vendor.CHANGECOMPANY(GetCurrCompanyName);
+
+                                                                IF "Vendor No." <> '' THEN BEGIN
+                                                                  IF GetName = '' THEN BEGIN
+                                                                    CALCFIELDS("Vendor Name");
+                                                                    IF "Vendor Name" <> '' THEN
+                                                                      UpdateContiniaUserField(ContiniaUser.FIELDNO(Name),"Vendor Name");
+                                                                  END;
+
+                                                                  IF GetEmail = '' THEN BEGIN
+                                                                    Vendor.GET("Vendor No.");
+                                                                    IF Vendor."E-Mail" <> '' THEN
+                                                                      UpdateContiniaUserField(ContiniaUser.FIELDNO("E-Mail"),Vendor."E-Mail");
+                                                                  END;
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ENU=Vendor No. }
+    { 31  ;   ;Vendor Name         ;Text50        ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(Vendor.Name WHERE (No.=FIELD(Vendor No.)));
+                                                   CaptionML=ENU=Vendor Name;
+                                                   Editable=No }
+    { 32  ;   ;Shared to this user ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count("Approval Sharing" WHERE (Shared to User ID=FIELD(Continia User ID)));
+                                                   CaptionML=ENU=Shared to this user;
+                                                   BlankZero=Yes;
+                                                   Editable=No }
+    { 33  ;   ;Shared to other users;Integer      ;FieldClass=FlowField;
+                                                   CalcFormula=Count("Approval Sharing" WHERE (Owner User ID=FIELD(Continia User ID)));
+                                                   CaptionML=ENU=Shared to other users;
+                                                   BlankZero=Yes;
+                                                   Editable=No }
+    { 37  ;   ;Expense User Group  ;Code20        ;TableRelation="Expense User Group";
+                                                   CaptionML=ENU=Expense User Group }
+    { 39  ;   ;Expense Reminder Code;Code10       ;TableRelation="EM Reminder Terms";
+                                                   CaptionML=ENU=Expense Reminder Code }
+    { 40  ;   ;No. of Purch. Doc. for Appr.;Integer;
+                                                   FieldClass=FlowField;
+                                                   CalcFormula=Count("Approval Entry" WHERE (Table ID=FILTER(38),
+                                                                                             Approver ID=FIELD(Continia User ID),
+                                                                                             Status=CONST(Open)));
+                                                   CaptionML=ENU=No. of Purch. Doc. for Approval;
+                                                   Editable=No }
+    { 41  ;   ;Expense Amount Approval Limit;Decimal;
+                                                   OnValidate=BEGIN
+                                                                IF "Unlimited Expense Approval" AND ("Expense Amount Approval Limit" <> 0) THEN
+                                                                  ERROR(Text003,FIELDCAPTION("Expense Amount Approval Limit"),FIELDCAPTION("Unlimited Expense Approval"));
+                                                                IF "Expense Amount Approval Limit" < 0 THEN
+                                                                  ERROR(Text004);
+                                                              END;
+
+                                                   CaptionML=ENU=Expense Amount Approval Limit;
+                                                   DecimalPlaces=0:0;
+                                                   BlankZero=Yes }
+    { 42  ;   ;Unlimited Expense Approval;Boolean ;OnValidate=BEGIN
+                                                                IF "Unlimited Expense Approval" THEN
+                                                                  "Expense Amount Approval Limit" := 0;
+                                                              END;
+
+                                                   CaptionML=ENU=Unlimited Expense Approval }
+    { 43  ;   ;No. of Expenses for Approval;Integer;
+                                                   FieldClass=FlowField;
+                                                   CalcFormula=Count("Approval Entry" WHERE (Table ID=FILTER(6086320),
+                                                                                             Approver ID=FIELD(Continia User ID),
+                                                                                             Status=CONST(Open)));
+                                                   CaptionML=ENU=No. of Expenses for Approval;
+                                                   Editable=No }
+    { 59  ;   ;Vendor Balance (LCY);Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=-Sum("Detailed Vendor Ledg. Entry"."Amount (LCY)" WHERE (Vendor No.=FIELD(Vendor No.)));
+                                                   CaptionML=ENU=Vendor Balance (LCY);
+                                                   Editable=No;
+                                                   AutoFormatType=1 }
+    { 60  ;   ;4-eyes, 2nd Approver ID;Code50     ;TableRelation="Continia User Setup";
+                                                   OnValidate=BEGIN
+                                                                IF "Continia User ID" = "4-eyes, 2nd Approver ID" THEN
+                                                                  ERROR(UserIDEqual4eyesErr,FIELDCAPTION("Continia User ID"),"Continia User ID",
+                                                                    FIELDCAPTION("4-eyes, 2nd Approver ID"),"4-eyes, 2nd Approver ID");
+                                                              END;
+
+                                                   CaptionML=ENU=4-eyes Approval, 2nd Approver ID }
+  }
+  KEYS
+  {
+    {    ;Continia User ID                        ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      Text002@1160040000 : TextConst 'ENU=Updating %1.';
+      Text003@1160040003 : TextConst 'ENU=You cannot have both a %1 and %2.';
+      Text004@1160040002 : TextConst 'ENU=You cannot have approval limits less than zero.';
+      Text005@1160040004 : TextConst 'ENU=You cannot rename a %1.;ENC=You cannot rename a %1.';
+      ContiniaUserDeleteSuspended@1160040005 : Boolean;
+      UserSetupDeleteSuspended@1160040006 : Boolean;
+      Text006@1160040007 : TextConst 'ENU=%1 already exist in company %2\\Do you want to update this user?';
+      Text007@1160040009 : TextConst 'ENU=%1 has also been set up as a user in %2.\\If you delete the user setup for %1 in this company, then %1 will still have access to %2.\\Do you want to continue deleting user setup for %1 in this company?';
+      Text008@1160040008 : TextConst 'ENU=%1 has been set up in %2 other companies.\\If you delete the user setup for %1 in this company, then %1 will still have access to the other companies.\\Do you want to continue deleting user setup for %1 in this company?';
+      HideUserDeleteConfirmation@1160040012 : Boolean;
+      CurrCompanyName@1160040010 : Text[250];
+      Text009@1160040011 : TextConst 'ENU=Salesperson/Purchaser Code is already assigned to User ID %2.';
+      Text010@1160040013 : TextConst 'ENU=%1 %2 does not exist in company %3.';
+      Text011@1160040014 : TextConst 'ENU=When you delete %1 then the user does not have access to any companies.\\Do you want to remove %1 from the system?';
+      UserIDEqual4eyesErr@1160040015 : TextConst 'ENU=%1 (%2) must not be equal to %3 (%4).';
+
+    PROCEDURE ValidateContiniaUserID@1160040008(NewUserID@1160040001 : Code[50]);
+    VAR
+      ContiniaUser@1160040000 : Record 6086001;
+      ChangeLogMgt@1160040003 : Codeunit 423;
+      RecordRef@1160040002 : RecordRef;
+    BEGIN
+      IF NOT ContiniaUser.GET(NewUserID) THEN BEGIN
+        ContiniaUser.INIT;
+        ContiniaUser.VALIDATE("User ID",NewUserID);
+        ContiniaUser.INSERT(TRUE);
+        RecordRef.GETTABLE(ContiniaUser);
+        ChangeLogMgt.LogInsertion(RecordRef);
+      END;
+
+      IF "Continia User ID" <> '' THEN
+        RENAME(NewUserID)
+      ELSE
+        VALIDATE("Continia User ID",NewUserID);
+    END;
+
+    PROCEDURE LookupContiniaUser@1160040007(VAR Text@1160040001 : Text[50]) : Boolean;
+    VAR
+      ContiniaUserMgt@1160040002 : Codeunit 6085781;
+    BEGIN
+      EXIT(ContiniaUserMgt.LookupUser(Text,TRUE,TRUE));
+    END;
+
+    PROCEDURE GetSalesPurchCode@1160040014() : Code[10];
+    VAR
+      UserSetup@1160040000 : Record 91;
+    BEGIN
+      UserSetup.CHANGECOMPANY(GetCurrCompanyName);
+
+      IF UserSetup.GET("Continia User ID") THEN
+        EXIT(UserSetup."Salespers./Purch. Code");
+    END;
+
+    PROCEDURE GetSalesPurchName@1160040003() : Text[250];
+    VAR
+      UserSetup@1160040000 : Record 91;
+      SalesPurchaser@1160040001 : Record 13;
+    BEGIN
+      UserSetup.CHANGECOMPANY(GetCurrCompanyName);
+      SalesPurchaser.CHANGECOMPANY(GetCurrCompanyName);
+
+      IF UserSetup.GET("Continia User ID") THEN
+        IF SalesPurchaser.GET(UserSetup."Salespers./Purch. Code") THEN
+          EXIT(SalesPurchaser.Name);
+    END;
+
+    PROCEDURE DrillDownSalesPurchName@1160040009() : Text[250];
+    VAR
+      UserSetup@1160040002 : Record 91;
+      SalesPurchaser@1160040001 : Record 13;
+    BEGIN
+      UserSetup.CHANGECOMPANY(GetCurrCompanyName);
+      SalesPurchaser.CHANGECOMPANY(GetCurrCompanyName);
+
+      IF UserSetup.GET("Continia User ID") THEN;
+      SalesPurchaser.SETFILTER(Code,UserSetup."Salespers./Purch. Code");
+      PAGE.RUN(0,SalesPurchaser);
+    END;
+
+    PROCEDURE GetEmployeeName@1160040004() : Text[250];
+    VAR
+      Employee@1160040000 : Record 5200;
+    BEGIN
+      Employee.CHANGECOMPANY(GetCurrCompanyName);
+
+      IF Employee.GET("Employee No.") THEN
+        EXIT(Employee.FullName);
+    END;
+
+    PROCEDURE DrillDownEmployeeName@1160040000() : Text[250];
+    VAR
+      Employee@1160040000 : Record 5200;
+    BEGIN
+      Employee.CHANGECOMPANY(GetCurrCompanyName);
+
+      Employee.SETFILTER("No.","Employee No.");
+      PAGE.RUN(0,Employee);
+    END;
+
+    PROCEDURE GetName@1160040001() : Text[250];
+    VAR
+      ContiniaUser@1160040000 : Record 6086001;
+    BEGIN
+      IF ContiniaUser.GET("Continia User ID") THEN
+        EXIT(ContiniaUser.Name);
+    END;
+
+    PROCEDURE GetEmail@1160040012() : Text[250];
+    VAR
+      ContiniaUser@1160040000 : Record 6086001;
+    BEGIN
+      IF ContiniaUser.GET("Continia User ID") THEN
+        EXIT(ContiniaUser."E-Mail");
+    END;
+
+    PROCEDURE UpdateContiniaUserField@1160040002(FieldNumber@1160040000 : Integer;Value@1160040001 : Variant);
+    VAR
+      ContiniaUser@1160040002 : Record 6086001;
+      RecordRef@1160040004 : RecordRef;
+      xRecordRef@1160040006 : RecordRef;
+      FieldRef@1160040003 : FieldRef;
+      ChangeLogMgt@1160040005 : Codeunit 423;
+    BEGIN
+      IF NOT ContiniaUser.GET("Continia User ID") THEN BEGIN
+        ContiniaUser.INIT;
+        ContiniaUser.VALIDATE("User ID","Continia User ID");
+        ContiniaUser.INSERT(TRUE);
+        RecordRef.GETTABLE(ContiniaUser);
+        ChangeLogMgt.LogInsertion(RecordRef);
+      END;
+
+      xRecordRef.GETTABLE(ContiniaUser);
+      RecordRef.GETTABLE(ContiniaUser);
+      FieldRef := RecordRef.FIELD(FieldNumber);
+      FieldRef.VALIDATE(Value);
+      RecordRef.MODIFY(TRUE);
+      ChangeLogMgt.LogModification(RecordRef);
+    END;
+
+    PROCEDURE UpdateUserSetupField@1160040006(FieldNumber@1160040000 : Integer;Value@1160040001 : Variant);
+    VAR
+      ContiniaCompSetup@1160040007 : Record 6192773;
+      ContiniaUser@1160040006 : Record 6086001;
+      UserSetup@1160040002 : Record 91;
+      SalesPurchaser@1160040005 : Record 13;
+      Field@6085573 : Record 2000000041;
+      RecordRef@1160040004 : RecordRef;
+      xRecordRef@1160040008 : RecordRef;
+      FieldRef@1160040003 : FieldRef;
+      ChangeLogMgt@1160040009 : Codeunit 423;
+    BEGIN
+      UserSetup.CHANGECOMPANY(GetCurrCompanyName);
+      SalesPurchaser.CHANGECOMPANY(GetCurrCompanyName);
+      ContiniaCompSetup.CHANGECOMPANY(GetCurrCompanyName);
+
+      IF NOT UserSetup.GET("Continia User ID") THEN BEGIN
+        UserSetup.INIT;
+        UserSetup."User ID" := "Continia User ID";
+        UserSetup.INSERT;
+        RecordRef.GETTABLE(UserSetup);
+        ChangeLogMgt.LogInsertion(RecordRef);
+      END;
+
+      IF NOT Field.GET(DATABASE::"User Setup",FieldNumber) THEN
+        EXIT;
+
+      RecordRef.GETTABLE(UserSetup);
+      FieldRef := RecordRef.FIELD(FieldNumber);
+      IF FORMAT(FieldRef.VALUE) = FORMAT(Value) THEN
+        EXIT;
+
+      xRecordRef.GETTABLE(UserSetup);
+
+      IF FieldNumber <> UserSetup.FIELDNO("Salespers./Purch. Code") THEN BEGIN
+        IF FieldNumber <> FIELDNO("Approval Administrator") THEN
+          FieldRef.VALIDATE(Value)
+        ELSE
+          FieldRef.VALUE := Value;
+        RecordRef.MODIFY;
+        ChangeLogMgt.LogModification(RecordRef);
+      END ELSE BEGIN
+        UserSetup.GET("Continia User ID");
+        UserSetup."Salespers./Purch. Code" := FORMAT(Value);
+        UserSetup.MODIFY;
+        RecordRef.GETTABLE(UserSetup);
+        ChangeLogMgt.LogModification(RecordRef);
+
+        IF UserSetup."Salespers./Purch. Code" <> '' THEN BEGIN
+          SalesPurchaser.GET(UserSetup."Salespers./Purch. Code");
+          UserSetup.SETCURRENTKEY("Salespers./Purch. Code");
+          UserSetup.SETRANGE("Salespers./Purch. Code",UserSetup."Salespers./Purch. Code");
+          UserSetup.SETFILTER("User ID",'<>%1',"Continia User ID");
+          IF UserSetup.FINDFIRST THEN
+            ERROR(Text009,UserSetup."Salespers./Purch. Code",UserSetup."User ID");
+        END;
+
+        IF (GetName = '') OR (GetEmail = '') THEN BEGIN
+          IF UserSetup."Salespers./Purch. Code" <> '' THEN BEGIN
+            IF (SalesPurchaser.Name <> '') AND (GetName = '') THEN
+              UpdateContiniaUserField(ContiniaUser.FIELDNO(Name),SalesPurchaser.Name);
+            IF (SalesPurchaser."E-Mail" <> '') AND (GetEmail = '') THEN
+              UpdateContiniaUserField(ContiniaUser.FIELDNO("E-Mail"),SalesPurchaser."E-Mail");
+          END;
+        END;
+        SetApprovalClient;
+        MODIFY;
+      END;
+    END;
+
+    PROCEDURE DrillDownPurchDocForApproval@1160040005();
+    VAR
+      ApprovalEntry@1160040000 : Record 454;
+    BEGIN
+      ApprovalEntry.FILTERGROUP(4);
+      ApprovalEntry.SETRANGE("Table ID",DATABASE::"Purchase Header");
+      ApprovalEntry.SETRANGE("Approver ID","Continia User ID");
+      ApprovalEntry.SETRANGE(Status,ApprovalEntry.Status::Open);
+      ApprovalEntry.FILTERGROUP(0);
+      PAGE.RUN(PAGE::"Purch. Approval Req. Entries",ApprovalEntry);
+    END;
+
+    PROCEDURE SuspendContiniaUserDelete@1160040010(Suspend@1160040000 : Boolean);
+    BEGIN
+      ContiniaUserDeleteSuspended := Suspend;
+    END;
+
+    PROCEDURE SuspendUserSetupDelete@1160040011(Suspend@1160040000 : Boolean);
+    BEGIN
+      UserSetupDeleteSuspended := Suspend;
+    END;
+
+    PROCEDURE SetHideUserDeleteConfirmation@1160040015(NewHideUserDeleteConfirmation@1160040000 : Boolean);
+    BEGIN
+      HideUserDeleteConfirmation := NewHideUserDeleteConfirmation;
+    END;
+
+    PROCEDURE ResendWelcomeEmail@1160040013();
+    VAR
+      ContiniaUser@1160040000 : Record 6086001;
+    BEGIN
+      ContiniaUser.GET("Continia User ID");
+      ContiniaUser.ResendWelcomeEmail;
+    END;
+
+    PROCEDURE HasCompanyAccess@1160040018(CompName@1160040000 : Text[250]) : Boolean;
+    VAR
+      CompContiniaUserSetup@1160040001 : Record 6086002;
+    BEGIN
+      IF CompName = COMPANYNAME THEN
+        EXIT(TRUE);
+
+      CompContiniaUserSetup.CHANGECOMPANY(CompName);
+      EXIT(CompContiniaUserSetup.GET("Continia User ID"));
+    END;
+
+    PROCEDURE CopyUserSetup@1160040016(CopyToCompany@1160040000 : Text[250];CopyToUserID@1160040006 : Code[50];ForceValues@1160040015 : Boolean);
+    VAR
+      NewContiniaUserSetup@1160040002 : Record 6086002;
+      ContiniaUserSetupComp@6085573 : Record 6086002;
+      UserSetup@1160040001 : Record 91;
+      UserSetup2@1160040007 : Record 91;
+      NewUserSetup@1160040004 : Record 91;
+      SalesPurchaser@1160040008 : Record 13;
+      SalesPurchaserComp@1160040010 : Record 13;
+      VendorComp@1160040011 : Record 23;
+      EMUserGroupComp@1160040013 : Record 6086302;
+      EMReminderTermsComp@1160040014 : Record 6086317;
+      ApprovalUserGroupComp@1160040020 : Record 6085630;
+      ApprovalUserGroupMember@1160040016 : Record 6085631;
+      ContiniaUserPermission@1160040018 : Record 6085634;
+      ContiniaUserPermissionComp@1160040021 : Record 6085634;
+      ContiniaUserPmsSelection@1160040017 : Record 6085635;
+      ContiniaUserPmsSelectionComp@1160040022 : Record 6085635;
+      GLAccountComp@1160040023 : Record 15;
+      ItemComp@1160040029 : Record 27;
+      FAComp@1160040028 : Record 5600;
+      ItemChargeComp@1160040027 : Record 5800;
+      DimComp@1160040031 : Record 348;
+      DimValComp@1160040026 : Record 349;
+      JobComp@1160040025 : Record 167;
+      ResourceComp@1160040024 : Record 156;
+      DCMgt@1160040005 : Codeunit 6085603;
+      AlreadyExist@1160040003 : Boolean;
+      UpdateSalesPurchaser@1160040009 : Boolean;
+      CopyPmsToCompany@1160040030 : Boolean;
+      CopyPmsSelectionToCompany@1160040032 : Boolean;
+    BEGIN
+      IF CopyToCompany <> COMPANYNAME THEN BEGIN
+        NewContiniaUserSetup.CHANGECOMPANY(CopyToCompany);
+        ContiniaUserSetupComp.CHANGECOMPANY(CopyToCompany);
+        NewUserSetup.CHANGECOMPANY(CopyToCompany);
+        UserSetup2.CHANGECOMPANY(CopyToCompany);
+        SalesPurchaserComp.CHANGECOMPANY(CopyToCompany);
+        VendorComp.CHANGECOMPANY(CopyToCompany);
+        EMUserGroupComp.CHANGECOMPANY(CopyToCompany);
+        EMReminderTermsComp.CHANGECOMPANY(CopyToCompany);
+        ApprovalUserGroupComp.CHANGECOMPANY(CopyToCompany);
+        ContiniaUserPermissionComp.CHANGECOMPANY(CopyToCompany);
+        ContiniaUserPmsSelectionComp.CHANGECOMPANY(CopyToCompany);
+        GLAccountComp.CHANGECOMPANY(CopyToCompany);
+        ItemComp.CHANGECOMPANY(CopyToCompany);
+        FAComp.CHANGECOMPANY(CopyToCompany);
+        ItemChargeComp.CHANGECOMPANY(CopyToCompany);
+        DimValComp.CHANGECOMPANY(CopyToCompany);
+        DimComp.CHANGECOMPANY(CopyToCompany);
+        JobComp.CHANGECOMPANY(CopyToCompany);
+        ResourceComp.CHANGECOMPANY(CopyToCompany);
+      END;
+
+      IF UserSetup.GET("Continia User ID") THEN BEGIN
+        IF NOT NewUserSetup.GET(CopyToUserID) THEN BEGIN
+          NewUserSetup."User ID" := CopyToUserID;
+
+          IF UserSetup."Salespers./Purch. Code" <> '' THEN BEGIN
+            SalesPurchaser.GET(UserSetup."Salespers./Purch. Code");
+            IF NOT SalesPurchaserComp.GET(UserSetup."Salespers./Purch. Code") THEN BEGIN
+              SalesPurchaserComp.INIT;
+              SalesPurchaserComp.Code := SalesPurchaser.Code;
+              SalesPurchaserComp.Name := SalesPurchaser.Name;
+              SalesPurchaserComp."E-Mail" := SalesPurchaser."E-Mail";
+              SalesPurchaserComp."Search E-Mail" := SalesPurchaser."Search E-Mail";
+              SalesPurchaserComp.INSERT;
+              UpdateSalesPurchaser := TRUE;
+            END ELSE BEGIN
+              UserSetup2.SETCURRENTKEY("Salespers./Purch. Code");
+              UserSetup2.SETRANGE("Salespers./Purch. Code",UserSetup."Salespers./Purch. Code");
+              UserSetup2.SETFILTER("User ID",'<>%1',"Continia User ID");
+              UpdateSalesPurchaser := UserSetup2.ISEMPTY;
+            END;
+          END ELSE
+            UpdateSalesPurchaser := TRUE;
+
+          IF UpdateSalesPurchaser THEN
+            NewUserSetup."Salespers./Purch. Code" := UserSetup."Salespers./Purch. Code";
+
+          IF UserSetup."Approver ID" <> '' THEN BEGIN
+            IF (UserSetup."Approver ID" = '') OR UserSetup2.GET(UserSetup."Approver ID") THEN
+              NewUserSetup."Approver ID" := UserSetup."Approver ID"
+            ELSE
+              IF ForceValues THEN
+                ERROR(Text010,UserSetup.FIELDCAPTION("User ID"),UserSetup."Approver ID",CopyToCompany);
+          END;
+
+          NewUserSetup."Sales Amount Approval Limit" := UserSetup."Sales Amount Approval Limit";
+          NewUserSetup."Purchase Amount Approval Limit" := UserSetup."Purchase Amount Approval Limit";
+          NewUserSetup."Unlimited Sales Approval" := UserSetup."Unlimited Sales Approval";
+          NewUserSetup."Unlimited Purchase Approval" := UserSetup."Unlimited Purchase Approval";
+          IF UserSetup.Substitute <> '' THEN BEGIN
+            IF (UserSetup.Substitute = '') OR UserSetup2.GET(UserSetup.Substitute) THEN
+              NewUserSetup.Substitute := UserSetup.Substitute
+            ELSE
+              IF ForceValues THEN
+                ERROR(Text010,UserSetup.FIELDCAPTION("User ID"),UserSetup.Substitute,CopyToCompany);
+          END;
+          NewUserSetup."E-Mail" := UserSetup."E-Mail";
+          NewUserSetup."Request Amount Approval Limit" := UserSetup."Request Amount Approval Limit";
+          NewUserSetup."Unlimited Request Approval" := UserSetup."Unlimited Request Approval";
+          NewUserSetup.INSERT;
+        END;
+      END;
+
+      IF NOT NewContiniaUserSetup.GET(CopyToUserID) THEN BEGIN
+        NewContiniaUserSetup.SetCurrCompanyName(CopyToCompany);
+        NewContiniaUserSetup."Continia User ID" := CopyToUserID;
+        NewContiniaUserSetup.INSERT(TRUE);
+      END;
+
+      NewContiniaUserSetup."Expense Management User" := "Expense Management User";
+      NewContiniaUserSetup."Can Edit Posting Lines" := "Can Edit Posting Lines";
+      NewContiniaUserSetup.SetApprovalClient;
+
+      // 4-eyes, 2nd Approver ID
+      IF ("4-eyes, 2nd Approver ID" = '') OR ContiniaUserSetupComp.GET("4-eyes, 2nd Approver ID") THEN
+        NewContiniaUserSetup."4-eyes, 2nd Approver ID" := "4-eyes, 2nd Approver ID"
+      ELSE
+        IF ForceValues THEN
+          ERROR(Text010,FIELDCAPTION("4-eyes, 2nd Approver ID"),"4-eyes, 2nd Approver ID",CopyToCompany);
+
+      // Vendor No.
+      IF ("Vendor No." = '') OR (VendorComp.GET("Vendor No.")) THEN
+        NewContiniaUserSetup."Vendor No." := "Vendor No."
+      ELSE
+        IF ForceValues THEN
+          ERROR(Text010,FIELDCAPTION("Vendor No."),"Vendor No.",CopyToCompany);
+
+      // Expense User Group
+      IF ("Expense User Group" = '') OR EMUserGroupComp.GET("Expense User Group") THEN
+        NewContiniaUserSetup."Expense User Group" := "Expense User Group"
+      ELSE
+        IF ForceValues THEN
+          ERROR(Text010,FIELDCAPTION("Expense User Group"),"Expense User Group",CopyToCompany);
+
+      // Expense Reminder Code
+      IF ("Expense Reminder Code" = '') OR EMReminderTermsComp.GET("Expense Reminder Code") THEN
+        NewContiniaUserSetup."Expense Reminder Code" := "Expense Reminder Code"
+      ELSE
+        IF ForceValues THEN
+          ERROR(Text010,FIELDCAPTION("Expense Reminder Code"),"Expense Reminder Code",CopyToCompany);
+
+      NewContiniaUserSetup."Expense Amount Approval Limit" := "Expense Amount Approval Limit";
+      NewContiniaUserSetup."Unlimited Expense Approval" := "Unlimited Expense Approval";
+      NewContiniaUserSetup.MODIFY;
+
+      ApprovalUserGroupMember.SETRANGE("Continia User ID","Continia User ID");
+      IF ApprovalUserGroupMember.FINDSET THEN
+        REPEAT
+          ApprovalUserGroupComp.SetCurrCompanyNameTbl(CopyToCompany);
+          IF ApprovalUserGroupComp.GET(ApprovalUserGroupMember."Approval User Group Code") THEN
+            ApprovalUserGroupComp.SetUserGroupMembership(NewContiniaUserSetup."Continia User ID",TRUE);
+        UNTIL ApprovalUserGroupMember.NEXT = 0;
+
+      ContiniaUserPermission.SETRANGE("Continia User ID","Continia User ID");
+      ContiniaUserPermission.SETFILTER("Approval User Group Code",'''''');
+      IF ContiniaUserPermission.FINDSET THEN
+        REPEAT
+          CopyPmsToCompany := FALSE;
+
+          IF ContiniaUserPermission.Type = ContiniaUserPermission.Type::Dimension THEN BEGIN
+            ContiniaUserPermission.TESTFIELD("Dimension Code");
+            IF DimComp.GET(ContiniaUserPermission."Dimension Code") THEN
+              CopyPmsToCompany := TRUE;
+          END ELSE
+            CopyPmsToCompany := TRUE;
+
+          IF CopyPmsToCompany THEN BEGIN
+            ContiniaUserPermissionComp.TRANSFERFIELDS(ContiniaUserPermission);
+            ContiniaUserPermissionComp."Continia User ID" := NewContiniaUserSetup."Continia User ID";
+            ContiniaUserPermissionComp.INSERT;
+
+            ContiniaUserPmsSelection.SETRANGE("Continia User ID",ContiniaUserPermission."Continia User ID");
+            ContiniaUserPmsSelection.SETRANGE("Approval User Group Code",ContiniaUserPermission."Approval User Group Code");
+            ContiniaUserPmsSelection.SETRANGE(Type,ContiniaUserPermission.Type);
+            ContiniaUserPmsSelection.SETRANGE("Dimension Code",ContiniaUserPermission."Dimension Code");
+
+            IF ContiniaUserPmsSelection.FINDSET THEN
+              REPEAT
+                CopyPmsSelectionToCompany := FALSE;
+
+                CASE ContiniaUserPmsSelection.Type OF
+                  ContiniaUserPmsSelection.Type::"G/L Account":
+                    BEGIN
+                      IF GLAccountComp.GET(ContiniaUserPmsSelection."Code / No.") THEN BEGIN
+                        IF GLAccountComp."Account Type" = GLAccountComp."Account Type"::Posting THEN BEGIN
+                          IF NOT GLAccountComp.Blocked AND GLAccountComp."Direct Posting" THEN
+                            CopyPmsSelectionToCompany := TRUE;
+                        END ELSE
+                          IF NOT GLAccountComp.Blocked THEN
+                            CopyPmsSelectionToCompany := TRUE;
+                      END;
+                    END;
+
+                  ContiniaUserPmsSelection.Type::Item:
+                    BEGIN
+                      IF ItemComp.GET(ContiniaUserPmsSelection."Code / No.") THEN
+                        IF NOT ItemComp.Blocked THEN
+                          CopyPmsSelectionToCompany := TRUE;
+                    END;
+
+                  ContiniaUserPmsSelection.Type::"Fixed Asset":
+                    BEGIN
+                      IF FAComp.GET(ContiniaUserPmsSelection."Code / No.") THEN
+                        IF NOT FAComp.Blocked THEN
+                          CopyPmsSelectionToCompany := TRUE;
+                    END;
+
+                  ContiniaUserPmsSelection.Type::"Charge (Item)":
+                    BEGIN
+                      IF ItemChargeComp.GET(ContiniaUserPmsSelection."Code / No.") THEN
+                        CopyPmsSelectionToCompany := TRUE;
+                    END;
+
+                  ContiniaUserPmsSelection.Type::Dimension:
+                    BEGIN
+                      IF DimValComp.GET(ContiniaUserPmsSelection."Dimension Code",ContiniaUserPmsSelection."Code / No.") THEN
+                        IF NOT DimValComp.Blocked THEN
+                          CopyPmsSelectionToCompany := TRUE;
+                    END;
+
+                  ContiniaUserPmsSelection.Type::Job:
+                    BEGIN
+                      IF JobComp.GET(ContiniaUserPmsSelection."Code / No.") THEN
+                        IF JobComp.Blocked = JobComp.Blocked::" " THEN
+                          CopyPmsSelectionToCompany := TRUE;
+                    END;
+
+                  ContiniaUserPmsSelection.Type::Resource:
+                    BEGIN
+                      IF ResourceComp.GET(ContiniaUserPmsSelection."Code / No.") THEN
+                        IF NOT ResourceComp.Blocked THEN
+                          CopyPmsSelectionToCompany := TRUE;
+                    END;
+                END;
+
+                IF CopyPmsSelectionToCompany THEN BEGIN
+                  ContiniaUserPmsSelectionComp.TRANSFERFIELDS(ContiniaUserPmsSelection);
+                  ContiniaUserPmsSelectionComp."Continia User ID" := ContiniaUserPermissionComp."Continia User ID";
+                  ContiniaUserPmsSelectionComp.INSERT;
+                END;
+              UNTIL ContiniaUserPmsSelection.NEXT = 0;
+          END;
+        UNTIL ContiniaUserPermission.NEXT = 0;
+    END;
+
+    PROCEDURE CopyGlobalApprovalSharings@1160040025(ContiniaUserID@1160040001 : Code[50]);
+    VAR
+      Company@1160040002 : Record 2000000006;
+      ContiniaUserSetup@1160040004 : Record 6086002;
+      FromApprovalSharing@1160040005 : Record 6085749;
+      ToApprovalSharing@1160040006 : Record 6085749;
+      CopyFromCompany@1160040003 : Text[250];
+    BEGIN
+      Company.SETFILTER(Name,'<>%1',GetCurrCompanyName);
+      IF Company.FINDSET THEN
+        REPEAT
+          ContiniaUserSetup.CHANGECOMPANY(Company.Name);
+          IF ContiniaUserSetup.GET(ContiniaUserID) THEN
+            CopyFromCompany := Company.Name;
+        UNTIL (Company.NEXT = 0) OR (CopyFromCompany <> '');
+
+      IF CopyFromCompany = '' THEN
+        EXIT;
+
+      ToApprovalSharing.CHANGECOMPANY(GetCurrCompanyName);
+      ContiniaUserSetup.CHANGECOMPANY(GetCurrCompanyName);
+      FromApprovalSharing.CHANGECOMPANY(CopyFromCompany);
+      FromApprovalSharing.SETRANGE("Owner User ID",ContiniaUserID);
+      FromApprovalSharing.SETRANGE("Copy to All Companies",TRUE);
+      IF FromApprovalSharing.FINDSET THEN
+        REPEAT
+          IF ContiniaUserSetup.GET(FromApprovalSharing."Shared to User ID") THEN BEGIN
+            ToApprovalSharing.TRANSFERFIELDS(FromApprovalSharing,TRUE);
+            ToApprovalSharing.INSERT;
+          END;
+        UNTIL FromApprovalSharing.NEXT = 0;
+
+      FromApprovalSharing.RESET;
+      FromApprovalSharing.CHANGECOMPANY(CopyFromCompany);
+      FromApprovalSharing.SETCURRENTKEY("Shared to User ID");
+      FromApprovalSharing.SETRANGE("Shared to User ID",ContiniaUserID);
+      FromApprovalSharing.SETRANGE("Copy to All Companies",TRUE);
+      IF FromApprovalSharing.FINDSET THEN
+        REPEAT
+          IF ContiniaUserSetup.GET(FromApprovalSharing."Owner User ID") THEN BEGIN
+            ToApprovalSharing.TRANSFERFIELDS(FromApprovalSharing,TRUE);
+            ToApprovalSharing.INSERT;
+          END;
+        UNTIL FromApprovalSharing.NEXT = 0;
+    END;
+
+    PROCEDURE DeleteRelatedUserTables@1160040022();
+    VAR
+      ApprovalSharing@1160040005 : Record 6085749;
+      ApprovalFlowLine@1160040004 : Record 6085726;
+      ApprovalUser@1160040003 : Record 6085746;
+      ApprovalUserDim@1160040002 : Record 6085748;
+      UserSetup@1160040001 : Record 91;
+      WebUserCompany@1160040006 : Record 6086006;
+      ApprovalUserGroupMember@1160040008 : Record 6085631;
+      ContiniaUserPermission@1160040000 : Record 6085634;
+      ContiniaUserPmsSelection@1160040007 : Record 6085635;
+      ChangeLogMgt@1160040009 : Codeunit 423;
+      RecordRef@1160040010 : RecordRef;
+    BEGIN
+      ApprovalSharing.CHANGECOMPANY(GetCurrCompanyName);
+      ApprovalSharing.SETRANGE("Owner User ID","Continia User ID");
+      ApprovalSharing.DELETEALL;
+      ApprovalSharing.SETRANGE("Owner User ID");
+
+      ApprovalSharing.SETCURRENTKEY("Shared to User ID");
+      ApprovalSharing.SETRANGE("Shared to User ID","Continia User ID");
+      ApprovalSharing.DELETEALL;
+
+      ApprovalFlowLine.CHANGECOMPANY(GetCurrCompanyName);
+      ApprovalFlowLine.SETRANGE("Approver ID","Continia User ID");
+      ApprovalFlowLine.DELETEALL;
+
+      ApprovalUser.CHANGECOMPANY(GetCurrCompanyName);
+      ApprovalUser.SETRANGE("User ID","Continia User ID");
+      IF ApprovalUser.FINDSET(TRUE,FALSE) THEN
+        REPEAT
+          ApprovalUserDim.CHANGECOMPANY(GetCurrCompanyName);
+          ApprovalUserDim.SETRANGE("Approval Group Code",ApprovalUser."Approval Group Code");
+          ApprovalUserDim.SETRANGE("User ID",ApprovalUser."User ID");
+          ApprovalUserDim.SETRANGE("Entry No.",ApprovalUser."Entry No.");
+          ApprovalUserDim.DELETEALL;
+          ApprovalUser.DELETE;
+        UNTIL ApprovalUser.NEXT = 0;
+
+      WebUserCompany.CHANGECOMPANY(GetCurrCompanyName);
+      WebUserCompany.SETRANGE("User ID","Continia User ID");
+      WebUserCompany.DELETEALL;
+
+      IF NOT UserSetupDeleteSuspended THEN BEGIN
+        UserSetup.CHANGECOMPANY(GetCurrCompanyName);
+        IF UserSetup.GET("Continia User ID") THEN BEGIN
+          IF (UserSetup."Allow Posting From" = 0D) AND
+            (UserSetup."Allow Posting To" = 0D) AND
+            (NOT UserSetup."Register Time") AND
+            (UserSetup."Allow FA Posting From" = 0D) AND
+            (UserSetup."Allow FA Posting To" = 0D) AND
+            (UserSetup."Sales Resp. Ctr. Filter" = '') AND
+            (UserSetup."Purchase Resp. Ctr. Filter" = '') AND
+            (UserSetup."Service Resp. Ctr. Filter" = '')
+          THEN BEGIN
+            IF GetCurrCompanyName = COMPANYNAME THEN
+              RecordRef.GETTABLE(UserSetup);
+            UserSetup.Substitute := '!"#-%&/(!';
+
+            IF UserSetup.DELETE THEN
+              IF GetCurrCompanyName = COMPANYNAME THEN
+                ChangeLogMgt.LogDeletion(RecordRef);
+          END;
+        END;
+      END;
+
+      ApprovalUserGroupMember.CHANGECOMPANY(GetCurrCompanyName);
+      ApprovalUserGroupMember.SETRANGE("Continia User ID","Continia User ID");
+      ApprovalUserGroupMember.DELETEALL;
+
+      ContiniaUserPermission.CHANGECOMPANY(GetCurrCompanyName);
+      ContiniaUserPermission.SETRANGE("Continia User ID","Continia User ID");
+      ContiniaUserPermission.DELETEALL;
+
+      ContiniaUserPmsSelection.CHANGECOMPANY(GetCurrCompanyName);
+      ContiniaUserPmsSelection.SETRANGE("Continia User ID","Continia User ID");
+      ContiniaUserPmsSelection.DELETEALL;
+    END;
+
+    LOCAL PROCEDURE GetIsStandardApprovalAdminUser@6085573() : Boolean;
+    VAR
+      UserSetup@6085573 : Record 91;
+      ContiniaUserSetup@6085574 : Record 6086002;
+      Field@6085575 : Record 2000000041;
+      RecRef@6085576 : RecordRef;
+      FieldRef@6085577 : FieldRef;
+    BEGIN
+      IF NOT Field.GET(DATABASE::"User Setup",ContiniaUserSetup.FIELDNO("Approval Administrator")) THEN
+        EXIT(FALSE);
+
+      IF NOT UserSetup.GET("Continia User ID") THEN
+        EXIT(FALSE);
+
+      RecRef.GETTABLE(UserSetup);
+      FieldRef := RecRef.FIELD(ContiniaUserSetup.FIELDNO("Approval Administrator"));
+      EXIT(FieldRef.VALUE);
+    END;
+
+    PROCEDURE GetNoOfAppvlShareToThisUser@1160040020() : Integer;
+    VAR
+      ApprovalSharing@1160040000 : Record 6085749;
+    BEGIN
+      ApprovalSharing.CHANGECOMPANY(GetCurrCompanyName);
+      ApprovalSharing.SETCURRENTKEY("Shared to User ID");
+      ApprovalSharing.SETRANGE("Shared to User ID","Continia User ID");
+      EXIT(ApprovalSharing.COUNT);
+    END;
+
+    PROCEDURE GetNoOfAppvlShareToOtherUsers@1160040017() : Integer;
+    VAR
+      ApprovalSharing@1160040000 : Record 6085749;
+    BEGIN
+      ApprovalSharing.CHANGECOMPANY(GetCurrCompanyName);
+      ApprovalSharing.SETCURRENTKEY("Owner User ID");
+      ApprovalSharing.SETRANGE("Owner User ID","Continia User ID");
+      EXIT(ApprovalSharing.COUNT);
+    END;
+
+    PROCEDURE DrillDownAppvlShareToThisUser@1160040023(CompName@1160040002 : Text[250]);
+    VAR
+      ApprovalSharing@1160040000 : Record 6085749;
+      ApprovalSharingComp@1160040003 : TEMPORARY Record 6085764;
+      ApprovalSharingCompForm@1160040001 : Page 6086064;
+    BEGIN
+      ApprovalSharing.CHANGECOMPANY(GetCurrCompanyName);
+      ApprovalSharing.SETCURRENTKEY("Shared to User ID");
+      ApprovalSharing.SETRANGE("Shared to User ID","Continia User ID");
+      IF CompName = COMPANYNAME THEN
+        PAGE.RUNMODAL(0,ApprovalSharing)
+      ELSE BEGIN
+        IF ApprovalSharing.FINDSET THEN
+          REPEAT
+            ApprovalSharingComp.TRANSFERFIELDS(ApprovalSharing,TRUE);
+            ApprovalSharingComp."Company Name" := CompName;
+            ApprovalSharingComp.INSERT;
+          UNTIL ApprovalSharing.NEXT = 0;
+
+        ApprovalSharingComp.SETRANGE("Shared to User ID","Continia User ID");
+        ApprovalSharingCompForm.SetVars(CompName,ApprovalSharingComp);
+        ApprovalSharingCompForm.RUNMODAL;
+      END;
+    END;
+
+    PROCEDURE DrillDownAppvlShareToOtherUser@1160040021(CompName@1160040001 : Text[250]);
+    VAR
+      ApprovalSharing@1160040003 : Record 6085749;
+      ApprovalSharingComp@1160040002 : TEMPORARY Record 6085764;
+      ApprovalSharingCompForm@1160040000 : Page 6086064;
+    BEGIN
+      ApprovalSharing.CHANGECOMPANY(GetCurrCompanyName);
+      ApprovalSharing.SETCURRENTKEY("Owner User ID");
+      ApprovalSharing.SETRANGE("Owner User ID","Continia User ID");
+      IF CompName = COMPANYNAME THEN
+        PAGE.RUNMODAL(0,ApprovalSharing)
+      ELSE BEGIN
+        IF ApprovalSharing.FINDSET THEN
+          REPEAT
+            ApprovalSharingComp.TRANSFERFIELDS(ApprovalSharing,TRUE);
+            ApprovalSharingComp."Company Name" := CompName;
+            ApprovalSharingComp.INSERT;
+          UNTIL ApprovalSharing.NEXT = 0;
+
+        ApprovalSharingComp.SETRANGE("Owner User ID","Continia User ID");
+        ApprovalSharingCompForm.SetVars(CompName,ApprovalSharingComp);
+        ApprovalSharingCompForm.RUNMODAL;
+      END;
+    END;
+
+    PROCEDURE GetNoOfApprovalGroupMembership@1160040026() : Integer;
+    VAR
+      ApprovalUserGroupMember@1160040000 : Record 6085631;
+    BEGIN
+      ApprovalUserGroupMember.CHANGECOMPANY(GetCurrCompanyName);
+      ApprovalUserGroupMember.SETCURRENTKEY("Continia User ID");
+      ApprovalUserGroupMember.SETRANGE("Continia User ID","Continia User ID");
+      EXIT(ApprovalUserGroupMember.COUNT);
+    END;
+
+    PROCEDURE GetNoOfApprovalPermissions@1160040029() : Integer;
+    VAR
+      ContiniaUserPermission@1160040000 : Record 6085634;
+    BEGIN
+      ContiniaUserPermission.CHANGECOMPANY(GetCurrCompanyName);
+      ContiniaUserPermission.SETRANGE("Continia User ID","Continia User ID");
+      EXIT(ContiniaUserPermission.COUNT);
+    END;
+
+    PROCEDURE SetCurrCompanyName@1160040019(NewCompanyName@1160040000 : Text[250]);
+    BEGIN
+      CurrCompanyName := NewCompanyName;
+    END;
+
+    PROCEDURE GetCurrCompanyName@1160040024() : Text[250];
+    BEGIN
+      IF CurrCompanyName = '' THEN
+        EXIT(COMPANYNAME)
+      ELSE
+        EXIT(CurrCompanyName);
+    END;
+
+    PROCEDURE SetApprovalClient@6085574();
+    VAR
+      ContiniaVersionMgt@6085573 : Codeunit 6192775;
+      ContiniaUser@6085574 : Record 6086001;
+      ver@6085575 : Integer;
+    BEGIN
+      IF UsingWebPortal THEN BEGIN
+        IF (GetSalesPurchCode <> '') AND (GetEmail <> '') AND ((IsNAVLogin) OR (ContiniaVersionMgt.NAVVersion >= 71000)) THEN
+          VALIDATE("Approval Client","Approval Client"::"Continia Web Portal")
+        ELSE
+          "Approval Client" := "Approval Client"::" ";
+      END ELSE
+        IF (GetSalesPurchCode <> '') AND (GetEmail <> '') AND (IsNAVLogin) THEN
+          "Approval Client" := "Approval Client"::"NAV Client"
+        ELSE
+          "Approval Client" := "Approval Client"::" ";
+    END;
+
+    LOCAL PROCEDURE IsNAVLogin@6085575() : Boolean;
+    VAR
+      ContiniaUser@6085573 : Record 6086001;
+    BEGIN
+      ContiniaUser.GET("Continia User ID");
+      EXIT(ContiniaUser."NAV Login Type" IN [ContiniaUser."NAV Login Type"::Windows,ContiniaUser."NAV Login Type"::Database]);
+    END;
+
+    LOCAL PROCEDURE UsingWebPortal@6085586() : Boolean;
+    VAR
+      ContiniaCompSetup@6085573 : Record 6192773;
+    BEGIN
+      ContiniaCompSetup.CHANGECOMPANY(GetCurrCompanyName);
+      EXIT(ContiniaCompSetup.GET AND (ContiniaCompSetup."Web Portal Code" <> ''));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

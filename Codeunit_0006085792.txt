@@ -1,0 +1,132 @@
+OBJECT Codeunit 6085792 DC Purch. Sales Tax Calculate
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/22/18;
+    Time=[ 1:00:00 AM];
+    Version List=DCNA5.00.01.4.50.05;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    PROCEDURE CalculatePurchAmountsNA@6085575(VAR PurchaseHeader@6085576 : Record 38;VAR AssignedAmountExclVAT@6085674 : Decimal;VAR AssignedAmountInclVAT@6085675 : Decimal;VAR AssignedAmountExclVATLCY@6085577 : Decimal;VAR AssignedAmountInclVATLCY@6085578 : Decimal);
+    VAR
+      TotalPurchLine@6085676 : Record 39;
+      TotalPurchLineLCY@6085677 : Record 39;
+      TempSalesTaxLine@6085678 : TEMPORARY Record 10011;
+      PurchPost@6085679 : Codeunit 90;
+      SalesTaxCalculate@6085680 : Codeunit 398;
+      PurchLine@6085681 : Record 39;
+      TempPurchLine@6085682 : TEMPORARY Record 39;
+      TaxArea@6085683 : Record 318;
+      TaxAmount@6085684 : Decimal;
+      TaxAmountText@6085693 : Text[30];
+      TotalAmount1@6085690 : Decimal;
+      TotalAmount2@6085691 : Decimal;
+      TempSalesTaxAmtLine@6085692 : TEMPORARY Record 10011;
+      ExchangeFactor@6085685 : Decimal;
+      CurrExchRate@6085686 : Record 330;
+      UseDate@6085687 : Date;
+    BEGIN
+      // Copied form F10043 - Purchase Stats. from NAV610 NA
+      PurchaseHeader.TESTFIELD("Tax Area Code");
+
+      IF PurchaseHeader."Currency Factor" = 0 THEN
+        ExchangeFactor := 1
+      ELSE
+        ExchangeFactor := PurchaseHeader."Currency Factor";
+
+      IF PurchaseHeader."Document Type" = PurchaseHeader."Document Type"::Quote THEN
+        UseDate := WORKDATE
+      ELSE
+        UseDate := PurchaseHeader."Posting Date";
+
+      AssignedAmountExclVAT := 0;
+      AssignedAmountInclVAT := 0;
+      AssignedAmountExclVATLCY := 0;
+      AssignedAmountInclVATLCY := 0;
+
+      TaxArea.GET(PurchaseHeader."Tax Area Code");
+
+      SalesTaxCalculate.StartSalesTaxCalculation;
+      PurchLine.SETRANGE("Document Type",PurchaseHeader."Document Type");
+      PurchLine.SETRANGE("Document No.",PurchaseHeader."No.");
+      PurchLine.SETFILTER(Type,'>0');
+      PurchLine.SETFILTER(Quantity,'<>0');
+      IF PurchLine.FIND('-') THEN
+        REPEAT
+          TempPurchLine.COPY(PurchLine);
+          TempPurchLine.INSERT;
+          IF NOT TaxArea."Use External Tax Engine" THEN
+            SalesTaxCalculate.AddPurchLine(TempPurchLine);
+        UNTIL PurchLine.NEXT = 0;
+
+      TempSalesTaxLine.DELETEALL;
+      IF TaxArea."Use External Tax Engine" THEN
+        SalesTaxCalculate.CallExternalTaxEngineForPurch(PurchaseHeader,TRUE)
+      ELSE
+        SalesTaxCalculate.EndSalesTaxCalculation(PurchaseHeader."Posting Date");
+      SalesTaxCalculate.GetSalesTaxAmountLineTable(TempSalesTaxLine);
+
+      SalesTaxCalculate.DistTaxOverPurchLines(TempPurchLine);
+      PurchPost.SumPurchLinesTemp(
+        PurchaseHeader,TempPurchLine,0,TotalPurchLine,TotalPurchLineLCY,TaxAmount,TaxAmountText);
+
+      IF PurchaseHeader."Prices Including VAT" THEN BEGIN
+        TotalAmount2 := TotalPurchLine.Amount;
+        TotalAmount1 := TotalPurchLine."Line Amount" - TotalPurchLine."Inv. Discount Amount";
+      END ELSE BEGIN
+        TotalAmount1 := TotalPurchLine.Amount;
+        TotalAmount2 := TotalPurchLine."Amount Including VAT";
+      END;
+
+      SalesTaxCalculate.GetSummarizedSalesTaxTable(TempSalesTaxAmtLine);
+      UpdateTaxBreakdown(TempSalesTaxAmtLine,TaxAmount);
+      UpdateHeaderInfo(PurchaseHeader,TotalPurchLine,TempSalesTaxLine,TotalAmount1,TotalAmount2,TaxAmount,ExchangeFactor);
+
+      AssignedAmountExclVAT := TotalPurchLine."Line Amount";
+      AssignedAmountInclVAT := TotalAmount2;
+
+      AssignedAmountExclVATLCY :=
+        CurrExchRate.ExchangeAmtFCYToLCY(
+          UseDate,PurchaseHeader."Currency Code",AssignedAmountExclVAT,ExchangeFactor);
+      AssignedAmountInclVATLCY :=
+        CurrExchRate.ExchangeAmtFCYToLCY(
+          UseDate,PurchaseHeader."Currency Code",AssignedAmountInclVAT,ExchangeFactor);
+    END;
+
+    LOCAL PROCEDURE UpdateTaxBreakdown@6085574(VAR TempSalesTaxAmtLine@6085575 : TEMPORARY Record 10011;VAR TaxAmount@6085576 : Decimal);
+    BEGIN
+      WITH TempSalesTaxAmtLine DO BEGIN
+        RESET;
+        SETCURRENTKEY("Print Order","Tax Area Code for Key","Tax Jurisdiction Code");
+        IF FIND('-') THEN
+          REPEAT
+            TaxAmount := TaxAmount + "Tax Amount"
+          UNTIL NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateHeaderInfo@6085573(VAR PurchaseHeader@6085576 : Record 38;VAR TotalPurchLine@6085577 : Record 39;VAR TempSalesTaxLine@6085578 : TEMPORARY Record 10011;VAR TotalAmount1@6085579 : Decimal;VAR TotalAmount2@6085580 : Decimal;VAR TaxAmount@6085581 : Decimal;ExchangeFactor@6085582 : Decimal);
+    BEGIN
+      TotalPurchLine."Inv. Discount Amount" := TempSalesTaxLine.GetTotalInvDiscAmount;
+      TotalAmount1 :=
+        TotalPurchLine."Line Amount" - TotalPurchLine."Inv. Discount Amount";
+      TaxAmount := TempSalesTaxLine.GetTotalTaxAmountFCY;
+      IF PurchaseHeader."Prices Including VAT" THEN
+        TotalAmount2 := TotalPurchLine.Amount
+      ELSE
+        TotalAmount2 := TotalAmount1 + TaxAmount;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

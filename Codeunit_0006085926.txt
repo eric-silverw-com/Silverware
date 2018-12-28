@@ -1,0 +1,166 @@
+OBJECT Codeunit 6085926 DC Appr. Comment Line Subscr.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=01/19/18;
+    Time=[ 1:00:00 AM];
+    Version List=DCW19.00.00.5.00;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 455=m,
+                TableData 457=ri;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    [EventSubscriber(Table,455,OnBeforeDeleteEvent,"",Skip)]
+    LOCAL PROCEDURE OnBeforeDelete@6085573(VAR Rec@6085573 : Record 455;RunTrigger@6085574 : Boolean);
+    VAR
+      PurchHeader@6085581 : Record 38;
+      PurchInvHeader@6085576 : Record 122;
+      PurchCrMemoHeader@6085585 : Record 124;
+      ApprovalCommentLine@6085584 : Record 455;
+      PostedApprovalCommentLine@6085582 : Record 457;
+      ApprovalRecID@6085575 : RecordID;
+      PostedRecordID@6085583 : RecordID;
+      ApprovalRecRef@6085580 : RecordRef;
+      ApprovalFieldRef@6085579 : FieldRef;
+      PurchDocType@6085578 : Integer;
+      PurchDocNo@6085577 : Code[20];
+      PostedDocNo@6085587 : Code[20];
+    BEGIN
+      IF Rec.ISTEMPORARY THEN
+        EXIT;
+
+      ApprovalRecID := Rec."Record ID to Approve";
+      IF ApprovalRecID.TABLENO = DATABASE::"Purchase Header" THEN BEGIN
+        ApprovalRecRef := ApprovalRecID.GETRECORD;
+
+        ApprovalFieldRef := ApprovalRecRef.FIELD(PurchHeader.FIELDNO("Document Type"));
+        PurchDocType := ApprovalFieldRef.VALUE;
+
+        ApprovalFieldRef := ApprovalRecRef.FIELD(PurchHeader.FIELDNO("No."));
+        PurchDocNo := ApprovalFieldRef.VALUE;
+
+        CASE PurchDocType OF
+          PurchHeader."Document Type"::Invoice:
+            BEGIN
+              PurchInvHeader.SETCURRENTKEY("Pre-Assigned No.");
+              PurchInvHeader.SETRANGE("Pre-Assigned No.",PurchDocNo);
+            END;
+          PurchHeader."Document Type"::Order:
+            BEGIN
+              PurchInvHeader.SETCURRENTKEY("Order No.");
+              PurchInvHeader.SETRANGE("Order No.",PurchDocNo);
+            END;
+          PurchHeader."Document Type"::"Credit Memo":
+            BEGIN
+              PurchCrMemoHeader.SETCURRENTKEY("Pre-Assigned No.");
+              PurchCrMemoHeader.SETRANGE("Pre-Assigned No.",PurchDocNo);
+            END;
+          PurchHeader."Document Type"::"Return Order":
+            BEGIN
+              PurchCrMemoHeader.SETCURRENTKEY("Return Order No.");
+              PurchCrMemoHeader.SETRANGE("Return Order No.",PurchDocNo);
+            END;
+        END;
+
+        IF PurchDocType IN [PurchHeader."Document Type"::Invoice,PurchHeader."Document Type"::Order] THEN BEGIN
+          IF PurchInvHeader.FINDLAST THEN BEGIN
+            PostedRecordID := PurchInvHeader.RECORDID;
+            PostedDocNo := PurchInvHeader."No.";
+          END;
+        END ELSE BEGIN
+          IF PurchCrMemoHeader.FINDLAST THEN BEGIN
+            PostedRecordID := PurchCrMemoHeader.RECORDID;
+            PostedDocNo := PurchCrMemoHeader."No.";
+          END;
+        END;
+
+        IF PostedDocNo <> '' THEN BEGIN
+          PostedApprovalCommentLine.SETCURRENTKEY("Table ID");
+          PostedApprovalCommentLine.SETRANGE("Table ID",PostedRecordID.TABLENO);
+          PostedApprovalCommentLine.SETRANGE("Document No.",PostedDocNo);
+          PostedApprovalCommentLine.SETRANGE("Posted Record ID",PostedRecordID);
+          IF PostedApprovalCommentLine.ISEMPTY THEN BEGIN
+            ApprovalCommentLine.SETCURRENTKEY("Table ID","Document No.");
+            ApprovalCommentLine.SETRANGE("Table ID",ApprovalRecID.TABLENO);
+            ApprovalCommentLine.SETRANGE("Document Type",PurchDocType);
+            ApprovalCommentLine.SETRANGE("Document No.",PurchDocNo);
+            ApprovalCommentLine.SETRANGE("Record ID to Approve",ApprovalRecID);
+            IF ApprovalCommentLine.FINDSET THEN
+              REPEAT
+                PostedApprovalCommentLine.INIT;
+                PostedApprovalCommentLine.TRANSFERFIELDS(ApprovalCommentLine);
+                PostedApprovalCommentLine."Entry No." := 0;
+                PostedApprovalCommentLine."Table ID" := PostedRecordID.TABLENO;
+                PostedApprovalCommentLine."Document No." := PostedDocNo;
+                PostedApprovalCommentLine."Posted Record ID" := PostedRecordID;
+                PostedApprovalCommentLine.INSERT(TRUE);
+              UNTIL ApprovalCommentLine.NEXT = 0;
+          END;
+        END;
+      END;
+    END;
+
+    [EventSubscriber(Table,455,OnAfterInsertEvent,"",Skip)]
+    LOCAL PROCEDURE OnAfterInsert@7(VAR Rec@1000 : Record 455;RunTrigger@1001 : Boolean);
+    VAR
+      DCApprovalMgmt@1160040000 : Codeunit 6085722;
+      PurchHeader@1002 : Record 38;
+      SalesHeader@1003 : Record 36;
+      RecRef@1005 : RecordRef;
+      RecID@1004 : RecordID;
+    BEGIN
+      IF Rec.ISTEMPORARY THEN
+        EXIT;
+
+      RecID := Rec."Record ID to Approve";
+
+      WITH Rec DO BEGIN
+        IF "Document No." = '' THEN BEGIN
+          FILTERGROUP := 4;
+          "Document No." := GETFILTER("Document No.");
+          FILTERGROUP := 0;
+        END;
+
+        CASE "Table ID" OF
+          DATABASE::"Purchase Header" :
+            BEGIN
+              IF "Document No." <> '' THEN BEGIN
+                IF PurchHeader.GET("Document Type","Document No.") THEN
+                  "Record ID to Approve" := PurchHeader.RECORDID;
+              END ELSE BEGIN
+                RecRef := RecID.GETRECORD;
+                RecRef.SETTABLE(PurchHeader);
+                "Document Type" := PurchHeader."Document Type";
+                "Document No." := PurchHeader."No.";
+              END;
+              MODIFY;
+            END;
+          DATABASE::"Sales Header" :
+            BEGIN
+              IF "Document No." <> '' THEN BEGIN
+                IF SalesHeader.GET("Document Type","Document No.") THEN
+                  "Record ID to Approve" := SalesHeader.RECORDID;
+              END ELSE BEGIN
+                RecRef := RecID.GETRECORD;
+                RecRef.SETTABLE(SalesHeader);
+                "Document Type" := SalesHeader."Document Type";
+                "Document No." := SalesHeader."No.";
+              END;
+              MODIFY;
+            END;
+        END;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

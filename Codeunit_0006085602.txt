@@ -1,0 +1,355 @@
+OBJECT Codeunit 6085602 Document Attachment Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=04/24/18;
+    Time=[ 1:00:00 AM];
+    Version List=DCW13.70.00.5.00;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 6085590=rimd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1160040000 : TextConst 'ENU=Un-registered document (%1)';
+      Text002@1160040001 : TextConst 'ENU=Rejected document (%1)';
+      Text003@6085573 : TextConst 'ENU=You cannot attach a file to an empty record.';
+
+    PROCEDURE CreateTempDocumentList@6085574(VAR TempDoc@6085584 : Record 6085756;RecID@6085574 : RecordID;CreatedDocType@6085578 : Integer;CreatedDocSubtype@6085581 : Integer;CreatedDocID@6085582 : Code[20];CreatedDocRefNo@6085583 : Integer;ShowAllDocs@6085586 : Boolean);
+    VAR
+      Document@6085576 : Record 6085590;
+      Document2@6085575 : TEMPORARY Record 6085590;
+      DocPage@1160040000 : Record 6085591;
+      Value@6085577 : Record 6085593;
+      DocCat@6085580 : Record 6085575;
+      RecIDMgt@161024012 : Codeunit 6085604;
+      RecRef@161024013 : RecordRef;
+      RecIDTreeID@6085573 : Integer;
+      EntryNo@6085579 : Integer;
+      CatDocNo@6085585 : Integer;
+      MaxNoOfDocsPerCat@6085587 : Integer;
+    BEGIN
+      MaxNoOfDocsPerCat := 250;
+
+      TempDoc.RESET;
+      TempDoc.DELETEALL;
+
+      IF (FORMAT(RecID) = '') AND (CreatedDocType = 0) AND (CreatedDocSubtype = 0) AND (CreatedDocID = '') AND
+        (CreatedDocRefNo = 0)
+      THEN BEGIN
+        TempDoc.INIT;
+        TempDoc."Entry No." := 0;
+        TempDoc.INSERT;
+        EXIT;
+      END;
+
+      IF FORMAT(RecID) <> '' THEN BEGIN
+        RecRef := RecID.GETRECORD;
+        RecIDTreeID := RecIDMgt.GetRecIDTreeID(RecRef,FALSE);
+        IF RecIDTreeID = 0 THEN BEGIN
+          IF NOT TempDoc.GET(0) THEN BEGIN
+            TempDoc.INIT;
+            TempDoc."Entry No." := 0;
+            TempDoc.INSERT;
+          END;
+          EXIT;
+        END;
+      END;
+
+      IF RecIDTreeID <> 0 THEN BEGIN
+        Document.SETCURRENTKEY("Source Record ID Tree ID");
+        Document.SETRANGE("Source Record ID Tree ID",RecIDTreeID);
+      END ELSE BEGIN
+        Document.SETCURRENTKEY("Created Doc. Type","Created Doc. Subtype","Created Doc. ID","Created Doc. Ref. No.");
+        Document.SETRANGE("Created Doc. Type",CreatedDocType);
+        Document.SETRANGE("Created Doc. Subtype",CreatedDocSubtype);
+        Document.SETRANGE("Created Doc. ID",CreatedDocID);
+        Document.SETRANGE("Created Doc. Ref. No.",CreatedDocRefNo);
+      END;
+
+      IF Document.FINDSET THEN
+        REPEAT
+          Document2 := Document;
+          Document2.INSERT;
+        UNTIL Document.NEXT = 0;
+
+      IF RecIDTreeID <> 0 THEN BEGIN
+        Value.SETCURRENTKEY("Value (Record ID Tree ID)");
+        Value.SETRANGE("Value (Record ID Tree ID)",RecIDTreeID);
+        IF Value.FINDSET THEN
+          REPEAT
+            IF NOT Document2.GET(Value."Document No.") THEN BEGIN
+              Document.GET(Value."Document No.");
+              Document2 := Document;
+              Document2.INSERT;
+            END;
+          UNTIL Value.NEXT = 0;
+      END;
+
+      TempDoc.DELETEALL;
+      Document2.SETCURRENTKEY("Document Category Code");
+      IF Document2.FINDSET THEN
+        REPEAT
+          IF RecIDTreeID <> 0 THEN BEGIN
+            DocCat.GET(Document2."Document Category Code");
+            EntryNo := EntryNo + 1;
+            TempDoc.INIT;
+            TempDoc."Entry No." := EntryNo;
+            TempDoc."Document Category Code" := Document2."Document Category Code";
+            TempDoc.Description := DocCat.Description;
+            TempDoc.Bold := TRUE;
+            TempDoc."Is Group" := TRUE;
+            TempDoc.INSERT;
+          END;
+
+          Document2.SETRANGE("Document Category Code",Document2."Document Category Code");
+          Document2.ASCENDING(FALSE);
+          Document2.FINDFIRST;
+          CatDocNo := 0;
+          REPEAT
+            EntryNo := EntryNo + 1;
+            CatDocNo := CatDocNo + 1;
+            TempDoc.INIT;
+            TempDoc."Entry No." := EntryNo;
+            TempDoc."No." := Document2."No.";
+            TempDoc."Document Category Code" := Document2."Document Category Code";
+            IF Document2.Description <> '' THEN
+              TempDoc.Description := Document2.Description
+            ELSE BEGIN
+              CASE Document2.Status OF
+                Document2.Status::Open:
+                  TempDoc.Description := STRSUBSTNO(Text001,TempDoc."No.");
+                Document2.Status::Rejected:
+                  TempDoc.Description := STRSUBSTNO(Text002,TempDoc."No.");
+                ELSE
+                  IF DocPage.GET(TempDoc."No.",1) THEN
+                    TempDoc.Description := COPYSTR(DocPage."Original Filename",1,MAXSTRLEN(TempDoc.Description))
+                  ELSE
+                    TempDoc.Description := TempDoc."No.";
+                END;
+            END;
+
+            TempDoc.Indentation := 1;
+
+            IF Document2."File Type" = Document2."File Type"::OCR THEN
+              TempDoc."File Type" := 'pdf'
+            ELSE
+              TempDoc."File Type" := Document2."File Extension";
+            TempDoc."User ID" := Document2."Imported by";
+            TempDoc."Date/Time" := Document2."Imported Date-Time";
+            TempDoc."Allow Modify" := Document2."File Type" = Document2."File Type"::Miscellaneous;
+            TempDoc.INSERT;
+          UNTIL (Document2.NEXT = 0) OR ((CatDocNo = MaxNoOfDocsPerCat) AND (NOT ShowAllDocs));
+
+          Document2.ASCENDING(TRUE);
+          Document2.FINDLAST;
+          Document2.SETRANGE("Document Category Code");
+        UNTIL Document2.NEXT = 0;
+
+      TempDoc.SETRANGE("Is Group",TRUE);
+      IF TempDoc.ISEMPTY THEN BEGIN
+        TempDoc.SETRANGE("Is Group");
+        TempDoc.MODIFYALL(Indentation,0);
+      END ELSE
+        TempDoc.SETRANGE("Is Group");
+
+      IF NOT TempDoc.FINDFIRST THEN BEGIN
+        TempDoc.INIT;
+        TempDoc."Entry No." := 0;
+        TempDoc.INSERT;
+      END;
+    END;
+
+    PROCEDURE CreateTempDocListFromNavigate@6085576(VAR TempDoc@6085573 : Record 6085756;PostingDate@6085574 : Date;DocNo@6085575 : Code[250]);
+    VAR
+      Document@6085583 : TEMPORARY Record 6085590;
+      TempDoc2@6085586 : TEMPORARY Record 6085590;
+      DocPage@6085582 : Record 6085591;
+      DocCat@6085580 : Record 6085575;
+      NavigateDC@6085585 : Codeunit 6085583;
+      EntryNo@6085576 : Integer;
+    BEGIN
+      TempDoc.RESET;
+      TempDoc.DELETEALL;
+
+      NavigateDC.FilterDocuments(TempDoc2,DocNo,FORMAT(PostingDate));
+
+      IF TempDoc2.FINDSET THEN
+        REPEAT
+          Document := TempDoc2;
+          Document.INSERT;
+        UNTIL TempDoc2.NEXT = 0;
+
+      TempDoc.DELETEALL;
+      Document.SETCURRENTKEY("Document Category Code");
+      IF Document.FINDSET THEN
+        REPEAT
+          IF Document."Document Category Code" <> '' THEN BEGIN
+            DocCat.GET(Document."Document Category Code");
+            EntryNo := EntryNo + 1;
+            TempDoc.INIT;
+            TempDoc."Entry No." := EntryNo;
+            TempDoc."Document Category Code" := Document."Document Category Code";
+            TempDoc.Description := DocCat.Description;
+            TempDoc.Bold := TRUE;
+            TempDoc."Is Group" := TRUE;
+            TempDoc.INSERT;
+          END;
+
+          Document.SETRANGE("Document Category Code",Document."Document Category Code");
+          Document.ASCENDING(FALSE);
+          Document.FINDFIRST;
+          REPEAT
+            EntryNo := EntryNo + 1;
+
+            TempDoc.INIT;
+            TempDoc."Entry No." := EntryNo;
+            TempDoc."No." := Document."No.";
+            TempDoc."Document Category Code" := Document."Document Category Code";
+            IF Document.Description <> '' THEN
+              TempDoc.Description := Document.Description
+            ELSE BEGIN
+              CASE Document.Status OF
+                Document.Status::Open:
+                  TempDoc.Description := STRSUBSTNO(Text001,TempDoc."No.");
+                Document.Status::Rejected:
+                  TempDoc.Description := STRSUBSTNO(Text002,TempDoc."No.");
+                ELSE
+                  IF DocPage.GET(TempDoc."No.",1) THEN
+                    TempDoc.Description := COPYSTR(DocPage."Original Filename",1,MAXSTRLEN(TempDoc.Description))
+                  ELSE
+                    TempDoc.Description := TempDoc."No.";
+                END;
+            END;
+
+            TempDoc.Indentation := 1;
+
+            IF Document."File Type" = Document."File Type"::OCR THEN
+              TempDoc."File Type" := 'pdf'
+            ELSE
+              TempDoc."File Type" := Document."File Extension";
+            TempDoc."User ID" := Document."Imported by";
+            TempDoc."Date/Time" := Document."Imported Date-Time";
+            TempDoc."Allow Modify" := Document."File Type" = Document."File Type"::Miscellaneous;
+            TempDoc.INSERT;
+          UNTIL Document.NEXT = 0;
+
+          Document.ASCENDING(TRUE);
+          Document.FINDLAST;
+          Document.SETRANGE("Document Category Code");
+        UNTIL Document.NEXT = 0;
+
+      TempDoc.SETRANGE("Is Group",TRUE);
+      IF TempDoc.ISEMPTY THEN BEGIN
+        TempDoc.SETRANGE("Is Group");
+        TempDoc.MODIFYALL(Indentation,0);
+      END ELSE
+        TempDoc.SETRANGE("Is Group");
+
+      IF NOT TempDoc.FINDFIRST THEN BEGIN
+        TempDoc.INIT;
+        TempDoc."Entry No." := 0;
+        TempDoc.INSERT;
+      END;
+    END;
+
+    PROCEDURE EditDocumentFile@1160040000(TempDoc@1160040000 : Record 6085756);
+    VAR
+      Document@1160040001 : Record 6085590;
+    BEGIN
+      Document.GET(TempDoc."No.");
+      Document.OpenPdfFile;
+    END;
+
+    PROCEDURE DeleteDocument@6085573(TempDoc@6085573 : Record 6085756) : Boolean;
+    VAR
+      Document@6085574 : Record 6085590;
+    BEGIN
+      IF TempDoc."No." = '' THEN
+        EXIT(FALSE);
+
+      IF NOT TempDoc."Allow Modify" THEN
+        EXIT(FALSE);
+
+      Document.GET(TempDoc."No.");
+      Document.TESTFIELD("File Type",Document."File Type"::Miscellaneous);
+      Document.DELETE(TRUE);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ModifyDocument@161024012(TempDoc@6085573 : Record 6085756) : Boolean;
+    VAR
+      Document@6085574 : Record 6085590;
+    BEGIN
+      IF TempDoc."No." = '' THEN
+        EXIT(FALSE);
+
+      IF NOT TempDoc."Allow Modify" THEN
+        EXIT(FALSE);
+
+      Document.GET(TempDoc."No.");
+      Document.TESTFIELD("File Type",Document."File Type"::Miscellaneous);
+      Document.Description := TempDoc.Description;
+      Document.MODIFY(TRUE);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ShowDocumentCard@161024014(TempDoc@6085573 : Record 6085756) : Boolean;
+    VAR
+      Document@6085574 : Record 6085590;
+    BEGIN
+      IF TempDoc."No." = '' THEN
+        EXIT(FALSE);
+
+      Document.GET(TempDoc."No.");
+      IF Document."File Type" = Document."File Type"::OCR THEN
+        PAGE.RUNMODAL(PAGE::"Document Card",Document)
+      ELSE
+        Document.OpenPdfFile;
+    END;
+
+    PROCEDURE CreateDocument@6085575(VAR Document@6085573 : Record 6085590;RecID@6085582 : RecordID;CreatedDocType@6085578 : Integer;CreatedDocSubtype@6085579 : Integer;CreatedDocID@6085580 : Code[20];CreatedDocRefNo@6085581 : Integer;DocCat@6085574 : Code[20];NewDescription@6085575 : Text[1024];NewExtension@6085576 : Text[20]) : Code[20];
+    VAR
+      RecIDMgt@161024012 : Codeunit 6085604;
+      DocCapMgt@161024014 : Codeunit 6085603;
+      FileInfo@6085577 : Codeunit 6085666;
+      RecRef@161024013 : RecordRef;
+    BEGIN
+      IF (FORMAT(RecID) = '') AND (CreatedDocType = 0) THEN
+        ERROR(Text003);
+
+      NewDescription := DELCHR(NewDescription,'<',' ');
+      Document.INSERT(TRUE);
+      IF DocCat <> '' THEN
+        Document.VALIDATE("Document Category Code",DocCat);
+
+      IF FORMAT(RecID) <> '' THEN BEGIN
+        RecRef := RecID.GETRECORD;
+        DocCapMgt.IsLogActive(RecRef.NUMBER,TRUE);
+        Document.VALIDATE("Source Record ID Tree ID",RecIDMgt.GetRecIDTreeID(RecRef,TRUE));
+      END;
+
+      Document."Created Doc. Type" := CreatedDocType;
+      Document."Created Doc. Subtype" := CreatedDocSubtype;
+      Document."Created Doc. ID" := CreatedDocID;
+      Document."Created Doc. Ref. No." := CreatedDocRefNo;
+      Document.VALIDATE(Status,Document.Status::Registered);
+      Document.Description := COPYSTR(NewDescription,1,MAXSTRLEN(Document.Description));
+      Document."File Type" := Document."File Type"::Miscellaneous;
+      Document."File Extension" := DELCHR(NewExtension,'<','.');
+      Document."Allow Delete" := TRUE;
+      Document.MODIFY(TRUE);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

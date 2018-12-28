@@ -1,0 +1,260 @@
+OBJECT Page 6085785 DC Client Addin (UIC)
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/12/18;
+    Time=[ 1:00:00 AM];
+    Version List=DCW17.00.00.5.00;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 6085780=rimd;
+    CaptionML=ENU=Document Capture Client Addin;
+    SourceTable=Table6085601;
+    PageType=CardPart;
+    OnOpenPage=BEGIN
+                 IF ContiniaUserProp.GET(USERID) AND (ContiniaUserProp."Image Zoom" > 0) THEN
+                   CurrZoom := ContiniaUserProp."Image Zoom"
+                 ELSE
+                   CurrZoom := 50;
+               END;
+
+    OnAfterGetRecord=BEGIN
+                       IF (Code <> xRec.Code) THEN BEGIN
+                         UpdateImage;
+                         SendCommand(CaptureXmlDoc);
+                       END ELSE IF (SendAllPendingCommands AND (NOT CaptureXmlDoc.IsEmpty)) THEN BEGIN
+                         SendAllPendingCommands := FALSE;
+                         SendCommand(CaptureXmlDoc);
+                       END;
+                       CLEAR(CaptureXmlDoc);
+                     END;
+
+  }
+  CONTROLS
+  {
+    { 1000000000;;Container;
+                Name=ContentArea;
+                ContainerType=ContentArea }
+
+    { 1000000001;1;Field  ;
+                Name=CaptureUI;
+                SourceExpr=CaptureUISource;
+                ControlAddIn=[Akeyto.DocumentCapture.Dynamics.Nav.UI;PublicKeyToken=0c53e51c0afe7001];
+                OnControlAddIn=BEGIN
+                                 OnControlAddInEvent(Index,Data);
+                               END;
+
+                ShowCaption=No }
+
+  }
+  CODE
+  {
+    VAR
+      ContiniaUserProp@1160040001 : Record 6085780;
+      CaptureAddinLib@1000000013 : Codeunit 6085660;
+      CaptureXmlDoc@6085573 : Codeunit 6192800;
+      CaptureUISource@6085574 : Text;
+      CurrentPageText@1000000005 : Text[250];
+      CurrentZoomText@1000000009 : Text[30];
+      CurrZoom@1000000004 : Decimal;
+      CurrentPageNo@1000000006 : Integer;
+      Text001@1000000002 : TextConst 'ENU=(%1 pages in total)';
+      Text002@1000000001 : TextConst 'ENU=Page %1';
+      SendAllPendingCommands@1000000012 : Boolean;
+
+    PROCEDURE UpdateImage@1000000006();
+    VAR
+      TempDocFileInfo@1000 : Record 6085600;
+      Filename@1001 : Text[250];
+    BEGIN
+      Filename := GetTiffFileName;
+
+      IF Filename = '' THEN BEGIN
+        CaptureAddinLib.BuildClearImageCommand(CaptureXmlDoc);
+        UpdateCurrPageNo(0);
+        EXIT;
+      END;
+
+      CaptureAddinLib.BuildSetImageCommand(Filename,TRUE,CaptureXmlDoc);
+
+      UpdateCurrPageNo(1);
+
+      CaptureAddinLib.BuildScrollTopCommand(CaptureXmlDoc);
+
+      Zoom(CurrZoom,FALSE);
+
+      CaptureAddinLib.BuildTotalNoOfPagesTextCommand(STRSUBSTNO(Text001,"No. of Pages"),CaptureXmlDoc);
+    END;
+
+    PROCEDURE UpdateCurrPageNo@1000000003(PageNo@1000000000 : Integer);
+    BEGIN
+      CALCFIELDS("No. of Pages");
+      CurrentPageNo := PageNo;
+      CurrentPageText := STRSUBSTNO(Text002,CurrentPageNo);
+
+      CaptureAddinLib.BuildSetActivePageCommand(PageNo,CurrentPageText,CaptureXmlDoc);
+    END;
+
+    PROCEDURE ParsePageText@1000000001(PageText@1000000000 : Text[30]);
+    VAR
+      NewPageNo@1000000001 : Integer;
+    BEGIN
+      IF STRPOS(PageText,' ') = 0 THEN BEGIN
+        IF EVALUATE(NewPageNo,PageText) THEN;
+      END ELSE
+        IF EVALUATE(NewPageNo,COPYSTR(PageText,STRPOS(PageText,' '))) THEN;
+
+      CALCFIELDS("No. of Pages");
+      IF (NewPageNo <= 0) OR (NewPageNo > "No. of Pages") THEN
+        UpdateCurrPageNo(CurrentPageNo)
+      ELSE
+        UpdateCurrPageNo(NewPageNo);
+    END;
+
+    PROCEDURE Zoom@1000000000(ZoomPct@1000000000 : Decimal;UpdateUserProp@6085573 : Boolean);
+    BEGIN
+      IF ZoomPct < 1 THEN
+        ZoomPct := 1;
+      CurrZoom := ZoomPct;
+      CurrentZoomText := FORMAT(CurrZoom) + '%';
+
+      IF UpdateUserProp THEN BEGIN
+        IF NOT ContiniaUserProp.GET(USERID) THEN BEGIN
+          ContiniaUserProp."User ID" := USERID;
+          ContiniaUserProp."Image Zoom" := CurrZoom;
+          ContiniaUserProp.INSERT;
+        END ELSE BEGIN
+          IF ContiniaUserProp."Image Zoom" <> CurrZoom THEN BEGIN
+            ContiniaUserProp."Image Zoom" := CurrZoom;
+            ContiniaUserProp.MODIFY;
+          END;
+        END;
+      END;
+
+      CaptureAddinLib.BuildZoomCommand(CurrZoom,CaptureXmlDoc);
+      CaptureAddinLib.BuildZoomTextCommand(CurrentZoomText,CaptureXmlDoc);
+    END;
+
+    PROCEDURE SendCommand@1000000002(VAR XmlDoc@6085573 : Codeunit 6192800);
+    VAR
+      NewXmlDoc@6085574 : Codeunit 6192800;
+    BEGIN
+      CaptureAddinLib.XmlToText(XmlDoc,CaptureUISource);
+      CaptureAddinLib.TextToXml(NewXmlDoc,CaptureUISource);
+    END;
+
+    PROCEDURE HandleSimpleCommand@1000000011(Command@1000000000 : Text[1024]);
+    BEGIN
+      CASE Command OF
+        'ZoomIn':
+          Zoom(CurrZoom + 5,TRUE);
+
+        'ZoomOut':
+          Zoom(CurrZoom - 5,TRUE);
+
+        'FirstPage':
+          BEGIN
+            CALCFIELDS("No. of Pages");
+            IF "No. of Pages" > 0 THEN
+              UpdateCurrPageNo(1);
+          END;
+
+        'NextPage':
+          BEGIN
+            CALCFIELDS("No. of Pages");
+            IF CurrentPageNo < "No. of Pages" THEN
+              UpdateCurrPageNo(CurrentPageNo + 1);
+          END;
+
+        'PrevPage':
+          BEGIN
+            IF CurrentPageNo > 1 THEN
+              UpdateCurrPageNo(CurrentPageNo - 1);
+          END;
+
+        'LastPage':
+          BEGIN
+            CALCFIELDS("No. of Pages");
+            UpdateCurrPageNo("No. of Pages");
+          END;
+      END;
+
+      SendCommand(CaptureXmlDoc);
+      CLEAR(CaptureXmlDoc);
+    END;
+
+    PROCEDURE HandleXmlCommand@1000000007(Command@1000000000 : Text[1024];VAR InXmlDoc@6085573 : Codeunit 6192800);
+    VAR
+      XmlLib@1000000003 : Codeunit 6085573;
+      DocumentElement@1000 : Codeunit 6192801;
+    BEGIN
+      InXmlDoc.GetDocumentElement(DocumentElement);
+
+      CASE Command OF
+        'ZoomTextChanged':
+          BEGIN
+            CurrentZoomText := XmlLib.GetNodeText(DocumentElement,'Text');
+            IF EVALUATE(CurrZoom,DELCHR(CurrentZoomText,'=','%')) THEN;
+            Zoom(CurrZoom,TRUE);
+          END;
+
+        'PageTextChanged':
+          BEGIN
+            CurrentPageText := XmlLib.GetNodeText(DocumentElement,'Text');
+            ParsePageText(CurrentPageText);
+          END;
+
+        'ChangePage':
+          UpdateCurrPageNo(XmlLib.Text2Int(XmlLib.GetNodeText(DocumentElement,'NewPageNo')));
+      END;
+
+      IF NOT CaptureXmlDoc.IsEmpty THEN
+        SendCommand(CaptureXmlDoc);
+      CLEAR(CaptureXmlDoc);
+    END;
+
+    PROCEDURE SetSendAllPendingCommands@1000000005(NewSendAllPendingCommands@1000000000 : Boolean);
+    BEGIN
+      SendAllPendingCommands := NewSendAllPendingCommands;
+    END;
+
+    PROCEDURE ClearImage@1161054000();
+    VAR
+      TempDocFileInfo@1000 : Record 6085600;
+    BEGIN
+      CaptureAddinLib.BuildClearImageCommand(CaptureXmlDoc);
+      UpdateCurrPageNo(0);
+      SendCommand(CaptureXmlDoc);
+      CurrPage.UPDATE(FALSE);
+    END;
+
+    PROCEDURE UpdatePage@1161054001();
+    BEGIN
+      UpdateImage;
+      CaptureAddinLib.BuildCaptureEnabledCommand(FALSE,CaptureXmlDoc);
+      SendCommand(CaptureXmlDoc);
+      CurrPage.UPDATE(FALSE);
+    END;
+
+    PROCEDURE OnControlAddInEvent@1160040000(Index@1160040002 : Integer;Data@1160040000 : Variant);
+    VAR
+      InXmlDoc@6085574 : Codeunit 6192800;
+      DocumentElement@1000 : Codeunit 6192801;
+      XmlLib@6085573 : Codeunit 6085573;
+    BEGIN
+      CLEAR(CaptureXmlDoc);
+      IF Index = 0 THEN
+        HandleSimpleCommand(Data)
+      ELSE BEGIN
+        CaptureAddinLib.TextToXml(InXmlDoc,Data);
+        InXmlDoc.GetDocumentElement(DocumentElement);
+        HandleXmlCommand(XmlLib.GetNodeText(DocumentElement,'Command'),InXmlDoc);
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,1842 @@
+OBJECT Codeunit 6085706 Purch. Doc. - Register
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/02/18;
+    Time=[ 1:00:00 AM];
+    Version List=DCW17.00.00.5.00.04;
+  }
+  PROPERTIES
+  {
+    TableNo=6085590;
+    Permissions=TableData 6085700=rimd;
+    OnRun=VAR
+            DocCat@1160040000 : Record 6085575;
+            Template@1007 : Record 6085579;
+            Field@1006 : Record 6085580;
+            PurchDocMatch@1000 : Record 6085700;
+            OurContToPurchSalesperson@1160040002 : Record 6085778;
+            PurchHeader@1000000002 : Record 38;
+            PurchLine@1000000003 : Record 39;
+            PurchRcptHeader@1004 : Record 120;
+            ReturnShptHeader@1003 : Record 6650;
+            IsInvoice@1001 : Boolean;
+            SkipNextStep@1008 : Boolean;
+            OrderNo@161024016 : Code[100];
+            NextLineNo@1000000018 : Integer;
+            ActionToPerform@1002 : 'CreateWithoutMatch,CreateWithMatch,UpdateOrderWithMatch';
+            MessageText@1160040001 : Text[1024];
+          BEGIN
+            ValidateDocument;
+            COMMIT;
+
+            CheckOkToRegister;
+
+            DocCat.GET("Document Category Code");
+            Template.GET("Template No.");
+
+            IF DocCat."Destination Header Table No." <> 0 THEN
+              DocCat.TESTFIELD("Destination Header Table No.",DATABASE::"Purchase Header");
+
+            IF DocCat."Destination Line Table No." <> 0 THEN
+              DocCat.TESTFIELD("Destination Line Table No.",DATABASE::"Purchase Line");
+
+            IsInvoice := PurchDocMgt.GetIsInvoice(Rec);
+            IF IsInvoice THEN
+              Template.TESTFIELD("Purch. Inv. Reg. Step 1")
+            ELSE
+              Template.TESTFIELD("Purch. Cr.Memo Reg. Step 1");
+
+            PurchDocMatch.SETRANGE("Document No.","No.");
+            IF IsInvoice THEN BEGIN
+              IF (Template."Purch. Inv. Reg. Step 1" = Template."Purch. Inv. Reg. Step 1"::"Match Order & Create Invoice") AND
+                PurchDocMatch.ISEMPTY
+              THEN
+                IF NOT GUIALLOWED THEN
+                  ERROR('')
+                ELSE
+                  IF NOT CONFIRM(Text015,FALSE,
+                    Template.FIELDCAPTION(Template."Purch. Inv. Reg. Step 1"),Template."Purch. Inv. Reg. Step 1")
+                  THEN
+                    ERROR('');
+
+              CASE TRUE OF
+                PurchDocMatch.ISEMPTY:
+                  ActionToPerform := ActionToPerform::CreateWithoutMatch;
+                Template."Purch. Inv. Reg. Step 1" = Template."Purch. Inv. Reg. Step 1"::"Match & Update Order":
+                  ActionToPerform := ActionToPerform::UpdateOrderWithMatch;
+                ELSE
+                  ActionToPerform := ActionToPerform::CreateWithMatch;
+              END;
+            END ELSE BEGIN
+              IF (Template."Purch. Cr.Memo Reg. Step 1" =
+                Template."Purch. Cr.Memo Reg. Step 1"::"Match Return Order & Create Credit Memo") AND PurchDocMatch.ISEMPTY
+              THEN
+                IF NOT GUIALLOWED THEN
+                  ERROR('')
+                ELSE
+                  IF NOT CONFIRM(Text015,FALSE,Template.FIELDCAPTION(Template."Purch. Cr.Memo Reg. Step 1"),
+                    FORMAT(Template."Purch. Inv. Reg. Step 1"::"Match Order & Create Invoice"))
+                  THEN
+                    ERROR('');
+
+              CASE TRUE OF
+                PurchDocMatch.ISEMPTY:
+                  ActionToPerform := ActionToPerform::CreateWithoutMatch;
+                Template."Purch. Cr.Memo Reg. Step 1" = Template."Purch. Cr.Memo Reg. Step 1"::"Match & Update Return Order":
+                  ActionToPerform := ActionToPerform::UpdateOrderWithMatch;
+                ELSE
+                  ActionToPerform := ActionToPerform::CreateWithMatch;
+              END;
+            END;
+
+            IF ActionToPerform = ActionToPerform::UpdateOrderWithMatch THEN BEGIN
+              IF PurchDocMatch.FINDSET THEN
+                REPEAT
+                  CASE PurchDocMatch."Purch. Doc. Type" OF
+                    PurchDocMatch."Purch. Doc. Type"::Receipt:
+                      BEGIN
+                        PurchRcptHeader.GET(PurchDocMatch."Purch. Doc. No.");
+                        IF OrderNo = '' THEN
+                          OrderNo := PurchRcptHeader."Order No."
+                        ELSE
+                          IF OrderNo <> PurchRcptHeader."Order No." THEN
+                            ERROR(Text018,Template.FIELDCAPTION("Purch. Inv. Reg. Step 1"),Template."Purch. Inv. Reg. Step 1");
+                      END;
+
+                    PurchDocMatch."Purch. Doc. Type"::Order:
+                      BEGIN
+                        PurchHeader.GET(PurchHeader."Document Type"::Order,PurchDocMatch."Purch. Doc. No.");
+                        IF OrderNo = '' THEN
+                          OrderNo := PurchHeader."No."
+                        ELSE
+                          IF OrderNo <> PurchHeader."No." THEN
+                            ERROR(Text018,Template.FIELDCAPTION("Purch. Inv. Reg. Step 1"),Template."Purch. Inv. Reg. Step 1");
+                      END;
+
+                    PurchDocMatch."Purch. Doc. Type"::"Return Shipment":
+                      BEGIN
+                        ReturnShptHeader.GET(PurchDocMatch."Purch. Doc. No.");
+                        IF OrderNo = '' THEN
+                          OrderNo := ReturnShptHeader."Return Order No."
+                        ELSE
+                          IF OrderNo <> ReturnShptHeader."Return Order No." THEN
+                            ERROR(Text018,Template.FIELDCAPTION("Purch. Cr.Memo Reg. Step 1"),Template."Purch. Cr.Memo Reg. Step 1");
+                      END;
+
+                    PurchDocMatch."Purch. Doc. Type"::"Return Order":
+                      BEGIN
+                        PurchHeader.GET(PurchHeader."Document Type"::"Return Order",PurchDocMatch."Purch. Doc. No.");
+                        IF OrderNo = '' THEN
+                          OrderNo := PurchHeader."No."
+                        ELSE
+                          IF OrderNo <> PurchHeader."No." THEN
+                            ERROR(Text018,Template.FIELDCAPTION("Purch. Inv. Reg. Step 1"),Template."Purch. Inv. Reg. Step 1");
+                      END;
+                  END;
+                UNTIL PurchDocMatch.NEXT = 0;
+
+              IF OrderNo = '' THEN BEGIN
+                IF NOT GUIALLOWED THEN
+                  ERROR('');
+
+                OrderNo := PurchDocMgt.GetOurDocumentNo(Rec);
+                IF OrderNo = '' THEN BEGIN
+                  IF "Batch Register" THEN
+                    ERROR('');
+
+                  IF IsInvoice THEN BEGIN
+                    IF NOT CONFIRM(Text023,FALSE) THEN
+                      ERROR('');
+                  END ELSE BEGIN
+                    IF NOT CONFIRM(Text024,FALSE) THEN
+                      ERROR('');
+                  END;
+                  ActionToPerform := ActionToPerform::CreateWithoutMatch;
+                END ELSE BEGIN
+                  IF "Batch Register" THEN
+                    ERROR('');
+
+                  IF IsInvoice THEN BEGIN
+                    IF NOT CONFIRM(Text021,FALSE) THEN
+                      ERROR('');
+                  END ELSE BEGIN
+                    IF NOT CONFIRM(Text022,FALSE) THEN
+                      ERROR('');
+                  END;
+                END;
+              END;
+            END;
+
+            // IDENTIFY THE PURCHASER CODE FOR THIS DOCUMENT
+            IF ActionToPerform <> ActionToPerform::UpdateOrderWithMatch THEN BEGIN
+              IF NOT SetupAlias(Rec,OurContToPurchSalesperson,Template,GetSourceID,PurchDocMgt.GetOurContact(Rec)) THEN
+                ERROR('');
+              COMMIT;
+            END;
+
+            // PERFORM STEP 1
+            SkipNextStep := PerformStep1(Rec,Template,PurchHeader,OurContToPurchSalesperson."Salespers./Purch. Code",
+              ActionToPerform,IsInvoice,OrderNo);
+
+            // PERFORM STEP 2
+            IF NOT SkipNextStep THEN
+              SkipNextStep := PerformStep2(Rec,Template,PurchHeader,IsInvoice);
+
+            // SHOW REGISTERED DOCUMENT
+            IF GUIALLOWED AND ("Show after Register" OR SkipNextStep) AND NOT "Batch Register" THEN
+              ShowAfterRegister(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text002@1000000005 : TextConst 'ENU=Select Purchaser from List,Use Purchaser from Vendor (%1),Always use Purchaser from Vendor (%1)';
+      Text003@1160040000 : TextConst 'ENU=Order No. %1:';
+      Text004@1000000009 : TextConst 'ENU="No line translation exists with %1 = ''%2''\\This must be created in order to register the document."';
+      CaptureMgt@1000000008 : Codeunit 6085576;
+      PurchDocMgt@1000000010 : Codeunit 6085709;
+      Text005@161024017 : TextConst 'ENU=No Account has been configured for %1.';
+      Text006@1000000011 : TextConst 'ENU=The following error occurred when performing %1 on %2 %3:\\%4';
+      Text007@1160040001 : TextConst 'ENU=Return Order No. %1:';
+      Text008@1000000014 : TextConst 'ENU=Select Purchaser from List,Change Purchaser on Vendor';
+      Text009@1000000015 : TextConst 'ENU=\\Any subsequent steps will have to be performed manually.';
+      Text011@1160040002 : TextConst 'ENU=Would you like to set up a translation from %1 to Purchaser Code %2?';
+      Text012@1160040003 : TextConst 'ENU=Translate ''%1'' to %2 for all vendors,Translate ''%1'' to %2 for %3 only';
+      Text015@1000000016 : TextConst 'ENU=%1 has been set up to %2, but no lines was matched.\\Do you want to continue the registration?';
+      Text017@161024019 : TextConst 'ENU=%1 has been set up to %2, but no lines were matched.\\Do you want to continue the registration?';
+      Text018@161024020 : TextConst 'ENU="You can only match to one order when %1 = ''%2''."';
+      Text019@161024021 : TextConst 'ENU=WARNING\\%1 is already filled out on order %3, but no invoices have been posted with this %1 (%2).\\Do you want to continue registrering this invoice and thereby overwriting %1 on this order?';
+      Text020@161024022 : TextConst 'ENU=WARNING\\%1 is already filled out on return order %3, but no credit memoes have been posted with this %1 (%2).\\Do you want to continue registrering this credit memo and thereby overwriting %1 on this return order?';
+      Text021@161024023 : TextConst 'ENU=WARNING\\This invoice hasn''t been matched to an order. Therefore all costs will be added as new lines on the order instead of updating existing lines.\\Do you want to continue registrering this invoice?';
+      Text022@161024025 : TextConst 'ENU=WARNING\\This credit memo hasn''t been matched to an order. Therefore all costs will be added as new lines on the return order instead of updating existing lines.\\Do you want to continue registrering this credit memo?';
+      Text023@161024026 : TextConst 'ENU=WARNING\\This invoice hasn''t been matched to an order and no order number has been specified. Do you want to create an invoice instead of updating an existing order?';
+      Text024@161024024 : TextConst 'ENU=WARNING\\This credit memo hasn''t been matched to a return order and no return order number has been specified. Do you wan''t to create a credit memo instead of updating an existing return order?';
+      Text025@1002 : TextConst 'ENU="Warehouse "';
+      Text026@1003 : TextConst 'ENU="%1 is required for %2 = %3."';
+      DCApprovalsBridge@1160040004 : Codeunit 6085790;
+      POLineMatchToReceiptsErr@6085574 : TextConst 'ENU=Purchase Order Line (%1 %2) has been matched to two receipt lines with either a different %3 or %4.';
+      POLineMatchToReturnsErr@6085573 : TextConst 'ENU=Purchase Return Order Line (%1 %2) has been matched to two return shipment lines with either a different %3 or %4.';
+      NotOkErr@6085575 : TextConst 'ENU=The document is not ready to be registered.\\Please, check the comment section of the document for errors.';
+      PartialMatchToReceiptWithTrackingErr@6085576 : TextConst 'ENU=It is not possible to make a partial match between Document %1 and Receipt Line (%2 %3) as multiple tracking lines exist for the receipt line.';
+      PartialMatchToReturnsWithTrackingErr@6085577 : TextConst 'ENU=It is not possible to make a partial match between Document %1 and Return Shipment Line (%2 %3) as multiple tracking lines exist for the return shipment line.';
+
+    PROCEDURE SetupAlias@1000000004(Document@1160040002 : Record 6085590;VAR OurContToPurchSalesperson@1000000003 : Record 6085778;VAR Template@1000000001 : Record 6085579;VendorNo@1000000007 : Code[20];ContactName@1000000000 : Text[200]) : Boolean;
+    VAR
+      Field@1000000005 : Record 6085580;
+      Purchaser@1000000002 : Record 13;
+      Vendor@1000000006 : Record 23;
+      OurContToPurchSalespers@1160040000 : Page 6086059;
+      Selection@1000000004 : ' ,UseVendorPurchCode,AlwaysUseVendorPurchCode,SelectPurchaser,NothingSelected';
+      Selection2@1160040001 : ' ,AllVendors,ThisVendorOnly';
+    BEGIN
+      WHILE TRUE DO BEGIN
+        Vendor.GET(VendorNo);
+        IF Template."Purch. Use Vend. Purch. Code" AND (Vendor."Purchaser Code" <> '') THEN BEGIN
+          OurContToPurchSalesperson.RESET;
+          OurContToPurchSalesperson.INIT;
+          OurContToPurchSalesperson."Salespers./Purch. Code" := Vendor."Purchaser Code";
+          EXIT(TRUE);
+        END;
+
+        OurContToPurchSalesperson.RESET;
+        OurContToPurchSalesperson.SETRANGE(Type,OurContToPurchSalesperson.Type::Vendor);
+        OurContToPurchSalesperson.SETFILTER("Vendor/Customer No.",'%1|%2','',VendorNo);
+        OurContToPurchSalesperson.SETRANGE("Our Contact",UPPERCASE(ContactName));
+        IF OurContToPurchSalesperson.FINDFIRST AND (OurContToPurchSalesperson."Salespers./Purch. Code" <> '') THEN
+          EXIT(TRUE);
+
+        IF ContactName <> '' THEN BEGIN
+          Purchaser.SETFILTER(Name,COPYSTR('@' + CaptureMgt.ReplaceIllegalFilterCharacters(
+            ContactName,FALSE,0),1,MAXSTRLEN(Purchaser.Name)));
+          IF Purchaser.FINDFIRST THEN BEGIN
+            OurContToPurchSalesperson.RESET;
+            OurContToPurchSalesperson.INIT;
+            OurContToPurchSalesperson."Salespers./Purch. Code" := Purchaser.Code;
+            EXIT(TRUE);
+          END ELSE BEGIN
+            Purchaser.SETRANGE(Name);
+            Purchaser.SETRANGE(Code,COPYSTR(ContactName,1,MAXSTRLEN(Purchaser.Code)));
+            IF Purchaser.FINDFIRST THEN BEGIN
+              OurContToPurchSalesperson.RESET;
+              OurContToPurchSalesperson.INIT;
+              OurContToPurchSalesperson."Salespers./Purch. Code" := Purchaser.Code;
+              EXIT(TRUE);
+            END;
+          END;
+        END;
+
+        IF NOT Field.GET(Template."No.",Field.Type::Header,'OURCONTACT') THEN BEGIN
+          OurContToPurchSalesperson.INIT;
+          OurContToPurchSalesperson."Salespers./Purch. Code" := '';
+          EXIT(TRUE);
+        END;
+
+        IF NOT Field.Required THEN
+          EXIT(TRUE);
+
+        IF GUIALLOWED AND NOT Document."Batch Register" THEN
+          CASE TRUE OF
+            Vendor."Purchaser Code" <> '':
+              CASE STRMENU(STRSUBSTNO(Text002,Vendor."Purchaser Code"),1) OF
+                1:
+                  Selection := Selection::SelectPurchaser;
+                2:
+                  Selection := Selection::UseVendorPurchCode;
+                3:
+                  Selection := Selection::AlwaysUseVendorPurchCode;
+                ELSE
+                  Selection := Selection::" ";
+              END;
+
+            ELSE BEGIN
+              CASE STRMENU(Text008) OF
+                1:
+                  Selection := Selection::SelectPurchaser;
+                2:
+                  BEGIN
+                    PAGE.RUNMODAL(PAGE::"Vendor Card",Vendor);
+                    COMMIT;
+                    Vendor.GET(VendorNo);
+                    IF Vendor."Purchaser Code" <> '' THEN
+                      Selection := Selection::AlwaysUseVendorPurchCode
+                    ELSE
+                      Selection := Selection::NothingSelected;
+                  END;
+                ELSE
+                  Selection := Selection::" ";
+              END;
+            END;
+        END;
+
+        CASE Selection OF
+          Selection::" ":
+            EXIT(FALSE);
+
+          Selection::UseVendorPurchCode:
+            BEGIN
+              OurContToPurchSalesperson.RESET;
+              OurContToPurchSalesperson.INIT;
+              OurContToPurchSalesperson."Salespers./Purch. Code" := Vendor."Purchaser Code";
+              EXIT(TRUE);
+            END;
+
+          Selection::AlwaysUseVendorPurchCode:
+            BEGIN
+              Template."Purch. Use Vend. Purch. Code" := TRUE;
+              Template.MODIFY;
+              COMMIT;
+            END;
+
+          Selection::SelectPurchaser:
+            BEGIN
+              Purchaser.RESET;
+              IF PAGE.RUNMODAL(0,Purchaser) = ACTION::LookupOK THEN BEGIN
+                OurContToPurchSalesperson.RESET;
+                OurContToPurchSalesperson.INIT;
+                OurContToPurchSalesperson.Type := OurContToPurchSalesperson.Type::Vendor;
+                OurContToPurchSalesperson."Our Contact" := UPPERCASE(ContactName);
+                OurContToPurchSalesperson."Salespers./Purch. Code" := Purchaser.Code;
+
+                IF ContactName <> '' THEN
+                  IF CONFIRM(Text011,TRUE,ContactName,Purchaser.Code) THEN BEGIN
+                    Selection2 := STRMENU(STRSUBSTNO(Text012,ContactName,Vendor."Purchaser Code",Vendor.Name),1);
+                    CASE Selection2 OF
+                      Selection2::" ":
+                        EXIT(FALSE);
+                      Selection2::AllVendors:
+                        OurContToPurchSalesperson."Vendor/Customer No." := '';
+                      Selection2::ThisVendorOnly:
+                        OurContToPurchSalesperson."Vendor/Customer No." := VendorNo;
+                    END;
+                    OurContToPurchSalesperson.INSERT(TRUE);
+                    COMMIT;
+                  END;
+
+                OurContToPurchSalesperson.RESET;
+                OurContToPurchSalesperson.INIT;
+                OurContToPurchSalesperson."Salespers./Purch. Code" := Purchaser.Code;
+                EXIT(TRUE);
+              END;
+            END;
+        END;
+      END;
+
+      CLEAR(OurContToPurchSalesperson);
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE CreatePurchHeader@1000000001(VAR Document@1000000003 : Record 6085590;VAR PurchHeader@1000000002 : Record 38;IsInvoice@1000000001 : Boolean;PurchaserCode@1000000000 : Code[20]);
+    VAR
+      GLSetup@1000000006 : Record 98;
+      DCSetup@1000000007 : Record 6085573;
+      Template@1000000004 : Record 6085579;
+      Field@1000000005 : Record 6085580;
+      PurchHeaderDCInfo@6085574 : Record 6085767;
+      PurchDocMatch@6085576 : Record 6085700;
+      RelPurchHeader@6085579 : Record 38;
+      PurchRcptHeader@6085578 : Record 120;
+      PurchRetShptHeader@6085577 : Record 6650;
+      DimValueCode@161024012 : Code[20];
+      ApprovalFlowCode@6085575 : Code[20];
+      CurrencyCode@1160040012 : Code[20];
+      OldDimID@1000 : Integer;
+    BEGIN
+      // *********************************************************************************************************************************
+      // CREATE PURCHASE HEADER
+      // *********************************************************************************************************************************
+      GLSetup.GET;
+      DCSetup.GET;
+
+      Template.GET(Document."Template No.");
+      PurchHeader.SetHideValidationDialog(TRUE);
+      PurchHeader.INIT;
+      PurchHeader."No. Series" := CaptureMgt.GetText(Document,Field.Type::Header,'NOSERIES',0);
+      IF IsInvoice THEN
+        PurchHeader.VALIDATE("Document Type",PurchHeader."Document Type"::Invoice)
+      ELSE
+        PurchHeader.VALIDATE("Document Type",PurchHeader."Document Type"::"Credit Memo");
+      PurchHeader.INSERT(TRUE);
+
+      PurchHeader.VALIDATE("Buy-from Vendor No.",Document.GetSourceID);
+
+      TransferDates(PurchHeader,Template,Document,IsInvoice);
+
+      IF IsInvoice THEN
+        PurchHeader.VALIDATE("Vendor Invoice No.",PurchDocMgt.GetDocumentNo(Document))
+      ELSE
+        PurchHeader.VALIDATE("Vendor Cr. Memo No.",PurchDocMgt.GetDocumentNo(Document));
+
+      IF PurchaserCode <> '' THEN
+        PurchHeader.VALIDATE("Purchaser Code",PurchaserCode);
+
+      CurrencyCode := PurchDocMgt.GetCurrencyCode(Document);
+
+      IF (CurrencyCode = GLSetup."LCY Code") AND (NOT DCSetup."Fill-out LCY") THEN
+        PurchHeader.VALIDATE("Currency Code",'')
+      ELSE
+        PurchHeader.VALIDATE("Currency Code",CurrencyCode);
+
+      IF PurchDocMgt.GetResponsibillityCenter(Document) <> '' THEN
+        PurchHeader.VALIDATE("Responsibility Center",PurchDocMgt.GetResponsibillityCenter(Document));
+
+      PurchHeader.VALIDATE("Prices Including VAT",Template."Prices Including VAT");
+
+      ApprovalFlowCode := CaptureMgt.GetText(Document,Field.Type::Header,'APPROVALFLOW',0);
+      IF ApprovalFlowCode = '' THEN
+        ApprovalFlowCode := Template."Approval Flow Code";
+
+      PurchHeaderDCInfo.UpdateApprovalFlowCode(PurchHeader,ApprovalFlowCode);
+
+      // IF HEADER DIMENSIONS HAVE BEEN CONFIGURED TO BE COPIED THE DIMENSIONS FROM
+      // THE FIRST DOCUMENT MATCHED WILL BE COPIED. EXISTING DIMENSIONS WILL BE DELETED
+      IF (Template."Copy Matched Header Dimensions") AND
+        (PurchHeader."Document Type" IN [PurchHeader."Document Type"::Invoice,PurchHeader."Document Type"::"Credit Memo"])
+      THEN BEGIN
+        PurchDocMatch.SETRANGE("Document No.",Document."No.");
+        IF PurchDocMatch.FINDFIRST THEN BEGIN
+
+          CASE PurchDocMatch."Purch. Doc. Type" OF
+            PurchDocMatch."Purch. Doc. Type"::Receipt:
+              BEGIN
+                PurchRcptHeader.GET(PurchDocMatch."Purch. Doc. No.");
+
+                IF PurchaserCode = '' THEN
+                  PurchHeader.VALIDATE("Purchaser Code",PurchRcptHeader."Purchaser Code");
+
+                PurchHeader."Dimension Set ID" := PurchRcptHeader."Dimension Set ID";
+                PurchHeader."Shortcut Dimension 1 Code" := PurchRcptHeader."Shortcut Dimension 1 Code";
+                PurchHeader."Shortcut Dimension 2 Code" := PurchRcptHeader."Shortcut Dimension 2 Code";
+              END;
+
+            PurchDocMatch."Purch. Doc. Type"::"Return Shipment":
+              BEGIN
+                PurchRetShptHeader.GET(PurchDocMatch."Purch. Doc. No.");
+
+                IF PurchaserCode = '' THEN
+                  PurchHeader.VALIDATE("Purchaser Code",PurchRetShptHeader."Purchaser Code");
+
+                PurchHeader."Dimension Set ID" := PurchRetShptHeader."Dimension Set ID";
+                PurchHeader."Shortcut Dimension 1 Code" := PurchRetShptHeader."Shortcut Dimension 1 Code";
+                PurchHeader."Shortcut Dimension 2 Code" := PurchRetShptHeader."Shortcut Dimension 2 Code";
+              END;
+
+            PurchDocMatch."Purch. Doc. Type"::Order,PurchDocMatch."Purch. Doc. Type"::"Return Order":
+              BEGIN
+                IF PurchDocMatch."Purch. Doc. Type" = PurchDocMatch."Purch. Doc. Type"::Order THEN
+                  RelPurchHeader.GET(RelPurchHeader."Document Type"::Order,PurchDocMatch."Purch. Doc. No.")
+                ELSE
+                  RelPurchHeader.GET(RelPurchHeader."Document Type"::"Return Order",PurchDocMatch."Purch. Doc. No.");
+
+                IF PurchaserCode = '' THEN
+                  PurchHeader.VALIDATE("Purchaser Code",RelPurchHeader."Purchaser Code");
+
+                PurchHeader."Dimension Set ID" := RelPurchHeader."Dimension Set ID";
+                PurchHeader."Shortcut Dimension 1 Code" := RelPurchHeader."Shortcut Dimension 1 Code";
+                PurchHeader."Shortcut Dimension 2 Code" := RelPurchHeader."Shortcut Dimension 2 Code";
+              END;
+          END;
+        END;
+      END;
+
+      TransferPurchHeader(PurchHeader,Document);
+
+      PurchHeader.MODIFY(TRUE);
+
+      Field.SETRANGE("Template No.",Document."Template No.");
+      Field.SETRANGE(Type,Field.Type::Header);
+      Field.SETRANGE("Data Type",Field."Data Type"::Lookup);
+      Field.SETRANGE("Source Table No.",DATABASE::"Dimension Value");
+      IF Field.FINDSET THEN BEGIN
+        OldDimID := PurchHeader."Dimension Set ID";
+        REPEAT
+          DimValueCode := CaptureMgt.GetValueAsText(Document."No.",0,Field);
+          IF (DimValueCode <> '') OR Field."Transfer Blank Values" THEN BEGIN
+            CASE TRUE OF
+              Field.Code = GLSetup."Global Dimension 1 Code":
+                PurchHeader.VALIDATE("Shortcut Dimension 1 Code",DimValueCode);
+              Field.Code = GLSetup."Global Dimension 2 Code":
+                PurchHeader.VALIDATE("Shortcut Dimension 2 Code",DimValueCode);
+              ELSE
+                PurchHeader."Dimension Set ID" := UpdateDimension(PurchHeader."Dimension Set ID",Field.Code,DimValueCode);
+            END;
+          END;
+        UNTIL Field.NEXT = 0;
+        IF OldDimID <> PurchHeader."Dimension Set ID" THEN
+          PurchHeader.MODIFY(TRUE);
+      END;
+    END;
+
+    PROCEDURE CreateWithoutMatch@1000000000(VAR Document@1000000012 : Record 6085590;VAR PurchHeader@1000000022 : Record 38;PurchaserCode@1000000019 : Code[20];IsInvoice@1001 : Boolean);
+    VAR
+      Template@1000000024 : Record 6085579;
+      DocumentLine@1000000023 : TEMPORARY Record 6085596;
+      PurchLine@1000000021 : Record 39;
+      Field@1000000020 : Record 6085580;
+      TemplField2@161024016 : Record 6085580;
+      LineTrans@1000000018 : Record 6085584;
+      Item@161024017 : Record 27;
+      ItemVendor@161024019 : Record 99;
+      ItemCrossRef@161024018 : Record 5717;
+      IsValid@1000000006 : Boolean;
+      AccountRequired@1000000005 : Boolean;
+      No@1000000002 : Code[50];
+      SubtractedAmountExclVAT@1000 : Decimal;
+      Quantity@1000000007 : Decimal;
+      UnitCost@1000000001 : Decimal;
+      LineAmount@1000000000 : Decimal;
+      LineSum@1000000025 : Decimal;
+      Amount@161024015 : Decimal;
+      NoOfTextLines@1008 : Integer;
+      NextLineNo@1007 : Integer;
+      i@161024014 : Integer;
+      OurContact@1005 : Text[250];
+      PostingDesc@1004 : Text[250];
+      LineDescription@1003 : Text[250];
+      TextLineArray@1002 : ARRAY [50] OF Text[1024];
+    BEGIN
+      CreatePurchHeader(Document,PurchHeader,IsInvoice,PurchaserCode);
+
+      Template.GET(Document."Template No.");
+
+      PostingDesc := PurchDocMgt.GetPostingDescription(Document);
+      SubtractedAmountExclVAT := PurchDocMgt.GetSubtractedAmountExclVAT(Document);
+
+      // *********************************************************************************************************************************
+      // BUILD TEMP. TABLE TO HOLD LINES. THIS IS DONE TO GET TOTAL NUMBER OF LINES
+      // *********************************************************************************************************************************
+      Document.BuildTempLinesTable(DocumentLine);
+
+      // *********************************************************************************************************************************
+      // FILTER THE LINE TRANSLATION TABLE FOR THIS TEMPLATE
+      // *********************************************************************************************************************************
+      LineTrans.SETRANGE("Template No.",Document."Template No.");
+      LineTrans.SETFILTER("Translate to Type",'>%1',LineTrans."Translate to Type"::" ");
+
+      // *********************************************************************************************************************************
+      // IF LINES HAVE BEEN RECOGNIZED THEN START CREATING EQUIVALENT PURCHASE LINES
+      // *********************************************************************************************************************************
+      IF DocumentLine.FINDSET THEN BEGIN
+        REPEAT
+          No := PurchDocMgt.GetLineAccountNo(Document,DocumentLine."Line No.");
+          Quantity := PurchDocMgt.GetLineQuantity(Document,DocumentLine."Line No.");
+          UnitCost := PurchDocMgt.GetLineUnitCost(Document,DocumentLine."Line No.");
+          LineAmount := PurchDocMgt.GetLineAmount(Document,DocumentLine."Line No.");
+          LineSum := LineSum + LineAmount;
+
+          // If either Quantity, Unit Cost or Line Amount has a value, then an Account No. for this line is required
+          AccountRequired := (Quantity <> 0) OR (UnitCost <> 0) OR (LineAmount <> 0);
+
+          NextLineNo := GetNextLineNo(PurchHeader);
+          PurchLine.INIT;
+          PurchLine."Document Type" := PurchHeader."Document Type";
+          PurchLine.VALIDATE("Document No.",PurchHeader."No.");
+          PurchLine."Line No." := NextLineNo;
+          PurchLine.INSERT(TRUE);
+
+          IF AccountRequired THEN BEGIN
+            // Filter the Line Translation table to find the appropriate account no.
+            IF No <> '' THEN BEGIN
+              LineTrans.SETRANGE(Type,LineTrans.Type::"Line Field");
+              LineTrans.SETRANGE("Field Code",'NO');
+              LineTrans.SETRANGE("Translate From",COPYSTR(No,1,MAXSTRLEN(LineTrans."Translate From")));
+              IF NOT LineTrans.FINDFIRST THEN BEGIN
+                LineTrans.INIT;
+                // Look for the item by searcing the Vendor Item No. on the item card
+                Item.SETCURRENTKEY("Vendor Item No.","Vendor No.");
+                Item.SETRANGE("Vendor Item No.",COPYSTR(No,1,MAXSTRLEN(Item."Vendor Item No.")));
+                Item.SETRANGE("Vendor No.",Document.GetSourceID);
+                IF Item.FINDFIRST THEN BEGIN
+                  LineTrans."Translate to Type" := LineTrans."Translate to Type"::Item;
+                  LineTrans."Translate to No." := Item."No.";
+                  LineTrans."Translate to UOM Code" := Item."Purch. Unit of Measure";
+                END ELSE BEGIN
+                  ItemCrossRef.SETCURRENTKEY("Cross-Reference No.","Cross-Reference Type","Cross-Reference Type No.");
+                  ItemCrossRef.SETRANGE("Cross-Reference No.",COPYSTR(No,1,MAXSTRLEN(ItemCrossRef."Cross-Reference No.")));
+                  ItemCrossRef.SETRANGE("Cross-Reference Type",ItemCrossRef."Cross-Reference Type"::Vendor);
+                  ItemCrossRef.SETRANGE("Cross-Reference Type No.",Document.GetSourceID);
+                  IF ItemCrossRef.FINDFIRST THEN BEGIN
+                    LineTrans."Translate to Type" := LineTrans."Translate to Type"::Item;
+                    LineTrans."Translate to No." := ItemCrossRef."Item No.";
+                    LineTrans."Translate to UOM Code" := ItemCrossRef."Unit of Measure";
+                    LineTrans."Translate to Variant Code" := ItemCrossRef."Variant Code";
+                  END ELSE BEGIN
+                    ItemVendor.SETCURRENTKEY("Vendor No.","Vendor Item No.");
+                    ItemVendor.SETRANGE("Vendor No.",Document.GetSourceID);
+                    ItemVendor.SETRANGE("Vendor Item No.",COPYSTR(No,1,MAXSTRLEN(ItemVendor."Vendor Item No.")));
+                    IF ItemVendor.FINDFIRST THEN BEGIN
+                      LineTrans."Translate to Type" := LineTrans."Translate to Type"::Item;
+                      LineTrans."Translate to No." := ItemVendor."Item No.";
+                      LineTrans."Translate to UOM Code" := Item."Purch. Unit of Measure";
+                      LineTrans."Translate to Variant Code" := ItemVendor."Variant Code";
+                    END ELSE BEGIN
+                      IF Template."Use Vendor/Customer Item Nos." AND (Item.GET(No)) THEN BEGIN
+                        LineTrans."Translate to Type" := LineTrans."Translate to Type"::Item;
+                        LineTrans."Translate to No." := Item."No.";
+                        LineTrans."Translate to UOM Code" := Item."Purch. Unit of Measure";
+                      END ELSE
+                        ERROR(Text004,LineTrans.FIELDCAPTION("Translate From"),No);
+                    END;
+                  END;
+                END;
+              END;
+            END ELSE BEGIN
+              LineTrans.SETRANGE(Type,LineTrans.Type::"Header Field");
+              LineTrans.SETRANGE("Field Code",'AMOUNTEXCLVAT');
+              LineTrans.SETRANGE("Translate From");
+              IF NOT LineTrans.FINDFIRST THEN BEGIN
+                TemplField2.GET(Document."Template No.",Field.Type::Header,'AMOUNTEXCLVAT');
+                ERROR(Text005,TemplField2."Field Name");
+              END;
+            END;
+
+            PurchLine.VALIDATE(Type,LineTrans."Translate to Type");
+            PurchLine.VALIDATE("No.",LineTrans."Translate to No.");
+            IF LineTrans."Transl. to VAT Prod. Post.Grp." <> '' THEN
+              PurchLine.VALIDATE("VAT Prod. Posting Group",LineTrans."Transl. to VAT Prod. Post.Grp.");
+            IF LineTrans."Translate to Variant Code" <> '' THEN
+              PurchLine.VALIDATE("Variant Code",LineTrans."Translate to Variant Code");
+            PurchLine.VALIDATE("Unit of Measure Code",LineTrans."Translate to UOM Code");
+          END ELSE
+            LineTrans."Translate to (Text)" := '';
+
+          LineDescription := PurchDocMgt.GetLineDescription(Document,DocumentLine."Line No.");
+
+          // Determine the description
+          CASE TRUE OF
+            LineTrans."Translate to (Text)" <> '':
+              PurchLine.VALIDATE(Description,COPYSTR(LineTrans."Translate to (Text)",1,MAXSTRLEN(PurchLine.Description)));
+            LineDescription <> '':
+              PurchLine.VALIDATE(Description,COPYSTR(LineDescription,1,MAXSTRLEN(PurchLine.Description)));
+            PostingDesc <> '':
+              PurchLine.VALIDATE(Description,COPYSTR(PostingDesc,1,MAXSTRLEN(PurchLine.Description)));
+          END;
+
+          // Fill-out quantity, unit cost and line amount if present
+          IF Quantity <> PurchLine.Quantity THEN BEGIN
+            PurchLine.VALIDATE(Quantity,Quantity);
+            CheckWMS(PurchLine);
+          END;
+
+          IF PurchLine."Direct Unit Cost" <> UnitCost THEN
+            PurchLine.VALIDATE("Direct Unit Cost",UnitCost);
+
+          IF PurchLine."Line Amount" <> LineAmount THEN
+            PurchLine.VALIDATE("Line Amount",LineAmount);
+
+          TransferPurchLine(PurchLine,Document,DocumentLine."Line No.");
+          PurchLine.MODIFY(TRUE);
+
+          IF AccountRequired THEN
+            TransferLineDim(Document,DocumentLine."Line No.",PurchLine,LineTrans);
+        UNTIL DocumentLine.NEXT = 0;
+
+        IF (LineSum <> SubtractedAmountExclVAT) AND (SubtractedAmountExclVAT <> 0) THEN
+          CreateAmountDifferenceLine(Document,PurchHeader,SubtractedAmountExclVAT - LineSum,PostingDesc);
+
+        CreateHeaderAmounts(Document,PurchHeader,TRUE,PostingDesc);
+      END ELSE BEGIN
+         NoOfTextLines:= CreateTextArray(PostingDesc,MAXSTRLEN(PurchLine.Description),TextLineArray);
+        IF NoOfTextLines > 0 THEN
+          PostingDesc := TextLineArray[1];
+
+        CreateHeaderAmounts(Document,PurchHeader,FALSE,PostingDesc);
+
+        FOR i := 2 TO NoOfTextLines DO
+          CreateTextLine(PurchHeader,TextLineArray[i]);
+      END;
+    END;
+
+    PROCEDURE CreateWithMatch@1000000003(VAR Document@1000000012 : Record 6085590;VAR PurchHeader@1000000022 : Record 38;PurchaserCode@1000000007 : Code[20];IsInvoice@1000 : Boolean);
+    VAR
+      Template@1000000003 : Record 6085579;
+      Field@1000000013 : Record 6085580;
+      PurchDocMatch@1000000000 : Record 6085700;
+      PurchLine@1000000002 : Record 39;
+      PurchLine2@1160040001 : Record 39;
+      PurchOrderLine@1160040002 : Record 39;
+      PurchRcptLine@1000000009 : Record 121;
+      PurchRcptLine2@161024017 : Record 121;
+      ReturnShptLine@1000000008 : Record 6651;
+      ReturnShptLine2@161024016 : Record 6651;
+      PurchLineRel@6085573 : Record 6085702;
+      ReservEntry@6085575 : Record 337;
+      DimMgt@1000000014 : Codeunit 408;
+      PurchGetReceipt@161024014 : Codeunit 74;
+      PurchGetReturnShpmt@161024015 : Codeunit 6648;
+      PurchGetOrder@1160040003 : Codeunit 6085762;
+      PurchGetReturnOrder@6085577 : Codeunit 6085763;
+      PurchDocManagement@6085576 : Codeunit 6085709;
+      LineSum@1000000006 : Decimal;
+      AmountToMatch@161024013 : Decimal;
+      NextLineNo@1002 : Integer;
+      PrevDocNo@1160040000 : Code[20];
+      PurchLineRelUpdated@6085574 : Boolean;
+    BEGIN
+      Template.GET(Document."Template No.");
+
+      CreatePurchHeader(Document,PurchHeader,IsInvoice,PurchaserCode);
+
+      PurchDocMatch.SETCURRENTKEY("Purch. Doc. Type","Purch. Doc. No.","Purch. Line No.");
+      PurchDocMatch.SETRANGE("Document No.",Document."No.");
+      PurchDocMatch.FINDSET;
+      REPEAT
+        PurchDocMatch.DELETE;
+        NextLineNo := GetNextLineNo(PurchHeader);
+
+        PurchLine.SETRANGE("Document Type",PurchHeader."Document Type"); // required by the InsertInvLineFromXXX functions
+        PurchLine.SETRANGE("Document No.",PurchHeader."No."); // required by the InsertInvLineFromXXX functions
+        PurchLine."Document Type" := PurchHeader."Document Type";
+        PurchLine."Document No." := PurchHeader."No.";
+
+        CASE PurchDocMatch."Purch. Doc. Type" OF
+          PurchDocMatch."Purch. Doc. Type"::Order:
+            BEGIN
+              IF PrevDocNo <> PurchDocMatch."Purch. Doc. No." THEN BEGIN
+                NextLineNo := NextLineNo + 10000;
+                PrevDocNo := PurchDocMatch."Purch. Doc. No.";
+              END;
+
+              PurchOrderLine.GET(PurchOrderLine."Document Type"::Order,PurchDocMatch."Purch. Doc. No.",PurchDocMatch."Purch. Line No.");
+              PurchDocManagement.CkeckMatchToWithTracking(PurchOrderLine,PurchDocMatch."Purch. Doc. Type");
+              PurchGetOrder.InsertInvLineFromOrderLine(PurchOrderLine,PurchLine,PurchDocMatch.Quantity);
+
+              PurchLine.GET(PurchLine."Document Type",PurchLine."Document No.",NextLineNo);
+              CheckWMS(PurchLine);
+
+              PurchLine.VALIDATE("Direct Unit Cost",PurchDocMatch."Direct Unit Cost");
+              PurchLine.VALIDATE("Line Discount %",PurchDocMatch."Line Discount %");
+
+              PurchLineRelUpdated := FALSE;
+              IF PurchLineRel.GET(PurchLine."Document Type",PurchLine."Document No.",PurchLine."Line No.") THEN BEGIN
+                PurchLineRel."Suppress Matched Error" := TRUE;
+                PurchLineRel.MODIFY;
+                PurchLineRelUpdated := TRUE;
+              END;
+
+              TransferPurchLine(PurchLine,Document,0);
+
+              IF PurchLineRelUpdated THEN BEGIN
+                PurchLineRel."Suppress Matched Error" := FALSE;
+                PurchLineRel.MODIFY;
+              END;
+
+              PurchLine.MODIFY(TRUE);
+            END;
+
+          PurchDocMatch."Purch. Doc. Type"::Receipt:
+            BEGIN
+              IF PurchLine."Receipt No." <> PurchDocMatch."Purch. Doc. No." THEN
+                NextLineNo := NextLineNo + 10000;
+
+              PurchRcptLine.GET(PurchDocMatch."Purch. Doc. No.",PurchDocMatch."Purch. Line No.");
+              PurchRcptLine2 := PurchRcptLine;
+
+              // InsertInvLineFromRcptLine uses (PurchRcptLine2.Quantity - PurchRcptLine2."Quantity Invoiced") as Quantity on created
+              // Purchase Line and we therefore changed the values here so we get the right quantity set. If the quantity is set
+              // wrong and higher than avaiable we wil get en error.
+              // We change PurchRcptLine2.Quantity and PurchRcptLine2."Quantity Invoiced" as we want to limit modifications to standard
+              // objects
+              PurchRcptLine2.Quantity := PurchDocMatch.Quantity;
+              PurchRcptLine2."Quantity Invoiced" := 0;
+              PurchRcptLine2.InsertInvLineFromRcptLine(PurchLine);
+
+              IF PurchRcptLine.Type = PurchRcptLine.Type::Item THEN BEGIN
+                ReservEntry.RESET;
+                ReservEntry.SETRANGE("Source Type",DATABASE::"Purchase Line");
+                ReservEntry.SETRANGE("Source Subtype",PurchLine."Document Type");
+                ReservEntry.SETRANGE("Source ID",PurchLine."Document No.");
+                ReservEntry.SETRANGE("Source Ref. No.",PurchLine."Line No.");
+
+                IF PurchRcptLine.Quantity <> PurchDocMatch.Quantity THEN
+                  IF NOT ReservEntry.ISEMPTY THEN
+                    IF ReservEntry.COUNT = 1 THEN BEGIN
+                      ReservEntry.FINDFIRST;
+                      IF ReservEntry."Quantity (Base)" <> PurchLine."Quantity (Base)" THEN BEGIN
+                        ReservEntry.VALIDATE("Quantity (Base)",PurchLine."Quantity (Base)");
+                        ReservEntry.MODIFY;
+                      END;
+                    END ELSE
+                      ERROR(PartialMatchToReceiptWithTrackingErr,PurchDocMatch."Document No.",PurchRcptLine."Document No.",PurchRcptLine."Line No.");
+              END;
+
+              PurchLine.GET(PurchLine."Document Type",PurchLine."Document No.",NextLineNo);
+              PurchLine.VALIDATE("Direct Unit Cost",PurchDocMatch."Direct Unit Cost");
+              PurchLine.VALIDATE("Line Discount %",PurchDocMatch."Line Discount %");
+
+              TransferPurchLine(PurchLine,Document,0);
+              PurchLine.MODIFY(TRUE);
+
+              IF PurchLine.Type = PurchLine.Type::"Charge (Item)" THEN
+                PurchGetReceipt.GetItemChargeAssgnt(PurchRcptLine,PurchDocMatch.Quantity);
+          END;
+
+          PurchDocMatch."Purch. Doc. Type"::"Return Order":
+            BEGIN
+              IF PrevDocNo <> PurchDocMatch."Purch. Doc. No." THEN BEGIN
+                NextLineNo := NextLineNo + 10000;
+                PrevDocNo := PurchDocMatch."Purch. Doc. No.";
+              END;
+
+              PurchOrderLine.GET(PurchOrderLine."Document Type"::"Return Order",PurchDocMatch."Purch. Doc. No.",PurchDocMatch."Purch. Line No.");
+              PurchDocManagement.CkeckMatchToWithTracking(PurchOrderLine,PurchDocMatch."Purch. Doc. Type");
+              PurchGetReturnOrder.InsertInvLineFromOrderLine(PurchOrderLine,PurchLine,PurchDocMatch.Quantity);
+
+              PurchLine.GET(PurchLine."Document Type",PurchLine."Document No.",NextLineNo);
+              CheckWMS(PurchLine);
+
+              PurchLine.VALIDATE("Direct Unit Cost",PurchDocMatch."Direct Unit Cost");
+              PurchLine.VALIDATE("Line Discount %",PurchDocMatch."Line Discount %");
+
+              PurchLineRelUpdated := FALSE;
+              IF PurchLineRel.GET(PurchLine."Document Type",PurchLine."Document No.",PurchLine."Line No.") THEN BEGIN
+                PurchLineRel."Suppress Matched Error" := TRUE;
+                PurchLineRel.MODIFY;
+                PurchLineRelUpdated := TRUE;
+              END;
+
+              TransferPurchLine(PurchLine,Document,0);
+
+              IF PurchLineRelUpdated THEN BEGIN
+                PurchLineRel."Suppress Matched Error" := FALSE;
+                PurchLineRel.MODIFY;
+              END;
+
+              PurchLine.MODIFY(TRUE);
+            END;
+
+          PurchDocMatch."Purch. Doc. Type"::"Return Shipment":
+            BEGIN
+              IF PurchLine."Return Shipment No." <> PurchDocMatch."Purch. Doc. No." THEN
+                NextLineNo := NextLineNo + 10000;
+
+              ReturnShptLine.GET(PurchDocMatch."Purch. Doc. No.",PurchDocMatch."Purch. Line No.");
+              ReturnShptLine2 := ReturnShptLine;
+
+              // InsertInvLineFromRetShptLine uses (ReturnShptLine2.Quantity - ReturnShptLine2."Quantity Invoiced") as Quantity on created
+              // Purchase Line and we therefore changed the values here so we get the right quantity set the first. If the quantity is set
+              // wrong and higher than avaiable we wil get en error.
+              // We change ReturnShptLine2.Quantity and ReturnShptLine2."Quantity Invoiced" as we don't want to limit changes to standard
+              // objects
+              ReturnShptLine2.Quantity := PurchDocMatch.Quantity;
+              ReturnShptLine2."Quantity Invoiced" := 0;
+              ReturnShptLine2.InsertInvLineFromRetShptLine(PurchLine);
+
+              IF PurchRcptLine.Type = PurchRcptLine.Type::Item THEN BEGIN
+                ReservEntry.RESET;
+                ReservEntry.SETRANGE("Source Type",DATABASE::"Purchase Line");
+                ReservEntry.SETRANGE("Source Subtype",PurchLine."Document Type");
+                ReservEntry.SETRANGE("Source ID",PurchLine."Document No.");
+                ReservEntry.SETRANGE("Source Ref. No.",PurchLine."Line No.");
+
+                IF ReturnShptLine.Quantity <> PurchDocMatch.Quantity THEN
+                  IF NOT ReservEntry.ISEMPTY THEN
+                    IF ReservEntry.COUNT = 1 THEN BEGIN
+                      ReservEntry.FINDFIRST;
+                      IF ReservEntry."Quantity (Base)" <> PurchLine."Quantity (Base)" THEN BEGIN
+                        ReservEntry.VALIDATE("Quantity (Base)",PurchLine."Quantity (Base)");
+                        ReservEntry.MODIFY;
+                      END;
+                    END ELSE
+                      ERROR(PartialMatchToReturnsWithTrackingErr,PurchDocMatch."Document No.",ReturnShptLine."Document No.",ReturnShptLine."Line No.");
+              END;
+
+              PurchLine.GET(PurchLine."Document Type",PurchLine."Document No.",NextLineNo);
+              PurchLine.VALIDATE("Direct Unit Cost",PurchDocMatch."Direct Unit Cost");
+              PurchLine.VALIDATE("Line Discount %",PurchDocMatch."Line Discount %");
+
+              TransferPurchLine(PurchLine,Document,0);
+              PurchLine.MODIFY(TRUE);
+
+              IF PurchLine.Type = PurchLine.Type::"Charge (Item)" THEN
+                PurchGetReturnShpmt.GetItemChargeAssgnt(ReturnShptLine,PurchDocMatch.Quantity);
+            END;
+          END;
+
+        LineSum := LineSum + PurchLine."Line Amount";
+      UNTIL PurchDocMatch.NEXT = 0;
+
+      AmountToMatch := PurchDocMgt.GetAmountToMatch(Document);
+      IF AmountToMatch <> LineSum THEN BEGIN
+        IF PurchDocMgt.MatchWithinTolerance(Template,PurchHeader."Posting Date",PurchHeader."Currency Code",
+          PurchHeader."Currency Factor",AmountToMatch,LineSum)
+        THEN BEGIN
+          Template.TESTFIELD("Variance Posting Account");
+          CreateMatchVarianceLine(PurchHeader,Document,AmountToMatch - LineSum,PurchHeader."Pay-to Name");
+        END;
+      END;
+
+      CreateHeaderAmounts(Document,PurchHeader,TRUE,'');
+    END;
+
+    PROCEDURE UpdateOrderWithMatch@161024017(VAR Document@1000000012 : Record 6085590;VAR PurchHeader@1000000022 : Record 38;OrderNo@161024018 : Code[100];IsInvoice@1000000004 : Boolean);
+    VAR
+      Template@1000000003 : Record 6085579;
+      Field@1000000013 : Record 6085580;
+      PurchDocMatch@1000000000 : Record 6085700;
+      FirstPurchDocMatch@6085573 : Record 6085700;
+      PurchLine@1000000002 : Record 39;
+      VendLedgEntry@161024016 : Record 25;
+      Currency@6085576 : Record 4;
+      ReleasePurchDoc@161024017 : Codeunit 415;
+      ReleaseDoc@1000 : Boolean;
+      LineSum@1000000006 : Decimal;
+      AmountToMatch@161024013 : Decimal;
+      NextLineNo@1002 : Integer;
+      QtyToInvoice@6085574 : Decimal;
+      AmountRoundingPrecision@6085575 : Decimal;
+    BEGIN
+      Template.GET(Document."Template No.");
+
+      IF IsInvoice THEN
+        PurchHeader.GET(PurchHeader."Document Type"::Order,OrderNo)
+      ELSE
+        PurchHeader.GET(PurchHeader."Document Type"::"Return Order",OrderNo);
+
+      VendLedgEntry.RESET;
+      VendLedgEntry.SETCURRENTKEY("External Document No.");
+      VendLedgEntry.SETRANGE("Vendor No.",PurchHeader."Pay-to Vendor No.");
+
+      IF PurchHeader."Document Type" = PurchHeader."Document Type"::Order THEN BEGIN
+        IF PurchHeader."Vendor Invoice No." <> '' THEN BEGIN
+          VendLedgEntry.SETRANGE("Document Type",VendLedgEntry."Document Type"::Invoice);
+          VendLedgEntry.SETRANGE("External Document No.",PurchHeader."Vendor Invoice No.");
+          IF VendLedgEntry.ISEMPTY THEN
+            IF NOT GUIALLOWED OR Document."Batch Register" THEN
+              ERROR('')
+            ELSE
+              IF NOT CONFIRM(Text019,FALSE,PurchHeader.FIELDCAPTION("Vendor Invoice No."),
+                PurchHeader."Vendor Invoice No.",OrderNo)
+              THEN
+                ERROR('');
+        END;
+
+        PurchHeader.VALIDATE("Vendor Invoice No.",
+          COPYSTR(PurchDocMgt.GetDocumentNo(Document),1,MAXSTRLEN(PurchHeader."Vendor Invoice No.")));
+      END ELSE BEGIN
+        IF PurchHeader."Vendor Cr. Memo No." <> '' THEN BEGIN
+          VendLedgEntry.SETRANGE("Document Type",VendLedgEntry."Document Type"::"Credit Memo");
+          VendLedgEntry.SETRANGE("External Document No.",PurchHeader."Vendor Cr. Memo No.");
+          IF VendLedgEntry.ISEMPTY THEN
+            IF NOT GUIALLOWED OR Document."Batch Register" THEN
+              ERROR('')
+            ELSE
+              IF NOT CONFIRM(Text020,FALSE,PurchHeader.FIELDCAPTION("Vendor Cr. Memo No."),
+                PurchHeader."Vendor Cr. Memo No.",OrderNo)
+              THEN
+                ERROR('');
+        END;
+
+        PurchHeader.VALIDATE("Vendor Cr. Memo No.",
+          COPYSTR(PurchDocMgt.GetDocumentNo(Document),1,MAXSTRLEN(PurchHeader."Vendor Cr. Memo No.")));
+      END;
+
+      IF PurchHeader.Status <> PurchHeader.Status::Open THEN BEGIN
+        DCApprovalsBridge.CheckPendingApproval(PurchHeader);
+
+        ReleasePurchDoc.Reopen(PurchHeader);
+        ReleaseDoc := TRUE;
+      END;
+
+      TransferDates(PurchHeader,Template,Document,IsInvoice);
+
+      TransferPurchHeader(PurchHeader,Document);
+      PurchHeader.MODIFY(TRUE);
+
+      PurchDocMatch.LOCKTABLE; // Added to prevent deadlocks on Purch. Doc. Match
+      PurchDocMatch.SETRANGE("Document No.",Document."No.");
+
+      PurchLine.SETRANGE("Document Type",PurchHeader."Document Type");
+      PurchLine.SETRANGE("Document No.",PurchHeader."No.");
+      IF PurchLine.FINDSET(TRUE,FALSE) THEN
+        REPEAT
+          QtyToInvoice := 0;
+          PurchDocMatch.SETRANGE("Purch. Line No.",PurchLine."Line No.");
+
+          IF PurchDocMatch.FINDSET THEN BEGIN
+            FirstPurchDocMatch := PurchDocMatch;
+
+            REPEAT
+              IF (FirstPurchDocMatch."Direct Unit Cost" <> PurchDocMatch."Direct Unit Cost") OR
+                (FirstPurchDocMatch."Line Discount %" <> PurchDocMatch."Line Discount %")
+              THEN
+                IF PurchHeader."Document Type" = PurchHeader."Document Type"::Order THEN
+                  ERROR(POLineMatchToReceiptsErr,PurchLine.FIELDCAPTION("Line No."),PurchLine."Line No.",
+                    PurchLine.FIELDCAPTION("Direct Unit Cost"),PurchLine.FIELDCAPTION("Line Discount %"))
+                ELSE
+                  ERROR(POLineMatchToReturnsErr,PurchLine.FIELDCAPTION("Line No."),PurchLine."Line No.",
+                    PurchLine.FIELDCAPTION("Direct Unit Cost"),PurchLine.FIELDCAPTION("Line Discount %"));
+
+              QtyToInvoice := QtyToInvoice + PurchDocMatch.Quantity;
+            UNTIL PurchDocMatch.NEXT = 0;
+
+            IF (PurchLine."Direct Unit Cost" <> PurchDocMatch."Direct Unit Cost") OR
+              (PurchLine."Line Discount %" <> PurchDocMatch."Line Discount %") OR
+              (PurchLine."Qty. to Invoice" <> QtyToInvoice) OR
+              (PurchLine."Qty. to Receive" <> 0) OR
+              (PurchLine."Return Qty. to Ship" <> 0)
+            THEN BEGIN
+              IF PurchHeader.Status = PurchHeader.Status::Released THEN BEGIN
+                ReleasePurchDoc.Reopen(PurchHeader);
+                PurchLine.FIND('=');
+                ReleaseDoc := TRUE;
+              END;
+              PurchLine.SetPurchHeader(PurchHeader);
+              PurchLine.VALIDATE("Direct Unit Cost",PurchDocMatch."Direct Unit Cost");
+              PurchLine.VALIDATE("Line Discount %",PurchDocMatch."Line Discount %");
+              IF PurchLine."Document Type" = PurchLine."Document Type"::Order THEN BEGIN
+                IF PurchDocMatch."Purch. Doc. Type" = PurchDocMatch."Purch. Doc. Type"::Order THEN
+                  PurchLine.VALIDATE("Qty. to Receive",QtyToInvoice)
+                ELSE
+                  PurchLine.VALIDATE("Qty. to Receive",0);
+              END ELSE
+                IF PurchLine."Document Type" = PurchLine."Document Type"::"Return Order" THEN BEGIN
+                  IF PurchDocMatch."Purch. Doc. Type" = PurchDocMatch."Purch. Doc. Type"::"Return Order" THEN
+                    PurchLine.VALIDATE("Return Qty. to Ship",QtyToInvoice)
+                  ELSE
+                    PurchLine.VALIDATE("Return Qty. to Ship",0);
+              END;
+
+              PurchLine.VALIDATE("Qty. to Invoice",QtyToInvoice);
+            END;
+
+            TransferPurchLine(PurchLine,Document,0);
+          END ELSE BEGIN
+            IF PurchLine."Document Type" = PurchLine."Document Type"::Order THEN
+              PurchLine.VALIDATE("Qty. to Receive",0);
+            PurchLine.VALIDATE("Qty. to Invoice",0);
+          END;
+
+          PurchLine.MODIFY(TRUE);
+
+          IF PurchLine."Qty. to Invoice" <> 0 THEN BEGIN
+            IF AmountRoundingPrecision = 0 THEN BEGIN
+              IF PurchHeader."Currency Code" = '' THEN
+                Currency.InitRoundingPrecision
+              ELSE BEGIN
+                PurchHeader.TESTFIELD("Currency Factor");
+                Currency.GET(PurchHeader."Currency Code");
+                Currency.TESTFIELD("Amount Rounding Precision");
+              END;
+
+              AmountRoundingPrecision := Currency."Amount Rounding Precision";
+            END;
+
+            IF PurchLine.Quantity = PurchLine."Qty. to Invoice" THEN
+              LineSum := LineSum + PurchLine."Line Amount"
+            ELSE
+              LineSum := LineSum + ROUND(PurchLine."Line Amount" / PurchLine.Quantity * PurchLine."Qty. to Invoice",
+                AmountRoundingPrecision);
+          END;
+        UNTIL PurchLine.NEXT = 0;
+
+      AmountToMatch := PurchDocMgt.GetAmountToMatch(Document);
+      IF AmountToMatch <> LineSum THEN BEGIN
+        IF PurchDocMgt.MatchWithinTolerance(Template,PurchHeader."Posting Date",PurchHeader."Currency Code",0,AmountToMatch,
+          LineSum)
+        THEN BEGIN
+          Template.TESTFIELD("Variance Posting Account");
+          CreateMatchVarianceLine(PurchHeader,Document,AmountToMatch - LineSum,PurchHeader."Pay-to Name");
+        END;
+      END;
+
+      CreateHeaderAmounts(Document,PurchHeader,TRUE,'');
+
+      IF ReleaseDoc THEN
+        CODEUNIT.RUN(CODEUNIT::"Release Purchase Document",PurchHeader);
+    END;
+
+    PROCEDURE CreateAmountDifferenceLine@161024020(VAR Document@1000000002 : Record 6085590;VAR PurchHeader@1000000001 : Record 38;Amount@161024014 : Decimal;Description@1000000005 : Text[250]);
+    VAR
+      Field@161024012 : Record 6085580;
+    BEGIN
+      Field.GET(Document."Template No.",Field.Type::Header,'AMOUNTEXCLVAT');
+      CreatePurchLine(Document,PurchHeader,Field,Amount,Description,FALSE);
+    END;
+
+    PROCEDURE CreateMatchVarianceLine@161024016(VAR PurchHeader@1000000001 : Record 38;Document@161024012 : Record 6085590;Amount@1000000003 : Decimal;Description@1000000005 : Text[250]);
+    VAR
+      Template@1160040000 : Record 6085579;
+      PurchLine@1000000004 : Record 39;
+      NextLineNo@1000000006 : Integer;
+    BEGIN
+      Template.GET(Document."Template No.");
+      NextLineNo := GetNextLineNo(PurchHeader);
+
+      PurchLine.INIT;
+      PurchLine."Document Type" := PurchHeader."Document Type";
+      PurchLine.VALIDATE("Document No.",PurchHeader."No.");
+      PurchLine."Line No." := NextLineNo;
+      PurchLine.INSERT(TRUE);
+
+      PurchLine.VALIDATE(Type,PurchLine.Type::"G/L Account");
+      PurchLine.VALIDATE("No.",Template."Variance Posting Account");
+      PurchLine.VALIDATE(Description,COPYSTR(Description,1,MAXSTRLEN(PurchLine.Description)));
+      PurchLine.VALIDATE(Quantity,1);
+      PurchLine.VALIDATE("Direct Unit Cost",Amount);
+
+      TransferPurchLine(PurchLine,Document,0);
+      PurchLine.MODIFY(TRUE);
+    END;
+
+    PROCEDURE CreateHeaderAmounts@161024015(VAR Document@1000000002 : Record 6085590;VAR PurchHeader@1000000001 : Record 38;LinesRecognised@1000000007 : Boolean;Description@1000000005 : Text[250]);
+    VAR
+      Template@161024015 : Record 6085579;
+      DataTrans@1000000000 : Record 6085584;
+      Field@161024012 : Record 6085580;
+      Amount@161024013 : Decimal;
+    BEGIN
+      Field.SETRANGE("Template No.",Document."Template No.");
+      Field.SETRANGE(Type,Field.Type::Header);
+      Field.SETRANGE("Data Type",Field."Data Type"::Number);
+      IF LinesRecognised THEN
+        Field.SETRANGE("Transfer Amount to Document",Field."Transfer Amount to Document"::Always)
+      ELSE
+        Field.SETFILTER("Transfer Amount to Document",'<>%1',Field."Transfer Amount to Document"::" ");
+
+      Template.GET(Document."Template No.");
+
+      IF Field.FINDSET THEN
+        REPEAT
+          Amount := CaptureMgt.GetDecimal(Document,Field.Type,Field.Code,0);
+
+      // FIND POTENTIAL AMOUNTS (FROM OTHER TEMPLATE FIELDS) TO BE SUBTRACTED
+          Amount -= CaptureMgt.GetAmountToSubtract(Document,Field);
+
+          IF Amount <> 0 THEN
+            CreatePurchLine(Document,PurchHeader,Field,Amount,Description,Template."Allow Register without Amounts");
+        UNTIL Field.NEXT = 0;
+    END;
+
+    PROCEDURE CreatePurchLine@1000000005(VAR Document@161024016 : Record 6085590;VAR PurchHeader@1000000001 : Record 38;Field@161024013 : Record 6085580;Amount@1000000003 : Decimal;Description@1000000005 : Text[250];CreateIfNoAccountNo@161024017 : Boolean);
+    VAR
+      PurchLine@1000000004 : Record 39;
+      DataTransl@161024012 : Record 6085584;
+      DataTransl2@1160040000 : Record 6085584;
+      TemplField2@161024014 : Record 6085580;
+      LineAction@1160040001 : 'ReplaceLines,KeepLines';
+      AccountNo@161024015 : Code[20];
+      NextLineNo@1000000006 : Integer;
+      FirstLineNo@1160040002 : Integer;
+      IsHeadingLine@1160040003 : Boolean;
+    BEGIN
+      IF Field."G/L Account Field Code" <> '' THEN
+        IF TemplField2.GET(Field."Template No.",Field.Type,Field."G/L Account Field Code") THEN
+          AccountNo := CaptureMgt.GetValueAsText(Document."No.",0,TemplField2);
+
+      DataTransl.INIT;
+      IF DataTransl2.GET(Document."Template No.",Field.Type,Field.Code) THEN BEGIN
+        IF (DataTransl2."Translate to No." <> AccountNo) AND (AccountNo <> '') THEN BEGIN
+          DataTransl."Translate to Type" := DataTransl2."Translate to Type"::"G/L Account";
+          DataTransl."Translate to No." := AccountNo;
+        END ELSE
+          DataTransl := DataTransl2;
+      END ELSE BEGIN
+        IF AccountNo <> '' THEN BEGIN
+          DataTransl."Translate to Type" := DataTransl."Translate to Type"::"G/L Account";
+          DataTransl."Translate to No." := AccountNo;
+        END ELSE
+          IF NOT CreateIfNoAccountNo THEN
+            ERROR(Text005,Field."Field Name")
+          ELSE
+            IF Description = '' THEN
+              EXIT;
+      END;
+
+      NextLineNo := GetNextLineNo(PurchHeader);
+
+      // *********************************************************************************************************************************
+      // CREATE THE PURCHASE LINE
+      // *********************************************************************************************************************************
+      IF DataTransl."Translate to Type" = DataTransl."Translate to Type"::"Amount Distribution Code" THEN BEGIN
+        DataTransl.TESTFIELD("Translate to No.");
+        PurchLine.SETRANGE("Document Type",PurchHeader."Document Type");
+        PurchLine.SETRANGE("Document No.",PurchHeader."No.");
+        IF PurchLine.FINDLAST THEN
+          FirstLineNo := PurchLine."Line No.";
+
+        PurchDocMgt.ApplyAmountDistribution(PurchHeader,DataTransl."Translate to No.",LineAction::KeepLines,Amount);
+
+        IsHeadingLine := TRUE;
+        PurchLine.SETFILTER("Line No.",'>%1',FirstLineNo);
+        IF PurchLine.FINDSET(TRUE,FALSE) THEN
+          REPEAT
+            IF NOT IsHeadingLine THEN BEGIN
+              CASE TRUE OF
+                DataTransl."Translate to (Text)" <> '':
+                  PurchLine.VALIDATE(Description,COPYSTR(DataTransl."Translate to (Text)",1,MAXSTRLEN(PurchLine.Description)));
+                Description <> '':
+                  PurchLine.VALIDATE(Description,COPYSTR(Description,1,MAXSTRLEN(PurchLine.Description)));
+              END;
+            END;
+
+            TransferPurchLine(PurchLine,Document,0);
+            PurchLine.MODIFY(TRUE);
+
+            TransferLineDim(Document,0,PurchLine,DataTransl);
+
+            IsHeadingLine := FALSE;
+          UNTIL PurchLine.NEXT = 0;
+      END ELSE BEGIN
+        PurchLine.INIT;
+        PurchLine."Document Type" := PurchHeader."Document Type";
+        PurchLine.VALIDATE("Document No.",PurchHeader."No.");
+        PurchLine."Line No." := NextLineNo;
+        PurchLine.INSERT(TRUE);
+
+        IF DataTransl."Translate to No." <> '' THEN BEGIN
+          PurchLine.VALIDATE(Type,DataTransl."Translate to Type");
+          PurchLine.VALIDATE("No.",DataTransl."Translate to No.");
+
+          IF DataTransl."Transl. to VAT Prod. Post.Grp." <> '' THEN
+            PurchLine.VALIDATE("VAT Prod. Posting Group",DataTransl."Transl. to VAT Prod. Post.Grp.");
+
+          IF DataTransl."Translate to Variant Code" <> '' THEN
+            PurchLine.VALIDATE("Variant Code",DataTransl."Translate to Variant Code");
+
+          IF DataTransl."Translate to UOM Code" <> '' THEN
+            PurchLine.VALIDATE("Unit of Measure Code",DataTransl."Translate to UOM Code");
+        END;
+
+        CASE TRUE OF
+          DataTransl."Translate to (Text)" <> '':
+            PurchLine.VALIDATE(Description,COPYSTR(DataTransl."Translate to (Text)",1,MAXSTRLEN(PurchLine.Description)));
+          Description <> '':
+            PurchLine.VALIDATE(Description,COPYSTR(Description,1,MAXSTRLEN(PurchLine.Description)));
+        END;
+
+        IF DataTransl."Translate to No." <> '' THEN BEGIN
+          PurchLine.VALIDATE(Quantity,1);
+          PurchLine.VALIDATE("Direct Unit Cost",Amount);
+        END;
+
+        TransferPurchLine(PurchLine,Document,0);
+        PurchLine.MODIFY(TRUE);
+
+        TransferLineDim(Document,0,PurchLine,DataTransl);
+      END;
+    END;
+
+    PROCEDURE AmountsTransfered@161024023(PurchHeader@161024013 : Record 38) : Boolean;
+    VAR
+      PurchLine@161024012 : Record 39;
+    BEGIN
+      PurchLine.RESET;
+      PurchLine.SETRANGE("Document Type",PurchHeader."Document Type");
+      PurchLine.SETRANGE("Document No.",PurchHeader."No.");
+      PurchLine.SETFILTER("Line Amount",'<>%1',0);
+      EXIT(NOT PurchLine.ISEMPTY);
+    END;
+
+    PROCEDURE StoreDocReference@1000000008(VAR Document@1000000003 : Record 6085590;VAR PurchHeader@1000000001 : Record 38);
+    BEGIN
+      // *********************************************************************************************************************************
+      // SAVE A REFERENCE TO THE DOCUMENT CREATE FOR LATER TRACKING ETC.
+      // *********************************************************************************************************************************
+      Document.Description := STRSUBSTNO('%1 %2',PurchHeader."Document Type",PurchHeader."No.");
+      Document."Created Doc. Type" := DATABASE::"Purchase Header";
+      Document."Created Doc. Subtype" := PurchHeader."Document Type";
+      Document."Created Doc. ID" := PurchHeader."No.";
+      Document.MODIFY;
+    END;
+
+    PROCEDURE PerformStep1@58(VAR Document@1000 : Record 6085590;Template@1160040000 : Record 6085579;VAR PurchHeader@1005 : Record 38;PurchaserCode@1003 : Code[20];ActionToPerform@1001 : 'CreateWithoutMatch,CreateWithMatch,UpdateOrderWithMatch';IsInvoice@1002 : Boolean;OrderNo@1004 : Code[100]) SkipNextStep : Boolean;
+    VAR
+      PurchDocMatch@1160040010 : Record 6085700;
+      FieldRule@6085573 : Record 6085583;
+      DCApprMgt@1160040008 : Codeunit 6085722;
+      MessageText@1160040009 : Text[1024];
+      ImportedAmountExclVAT@1160040006 : Decimal;
+      ImportedAmountInclVAT@1160040005 : Decimal;
+      AssignedAmountExclVAT@1160040004 : Decimal;
+      AssignedAmountInclVAT@1160040003 : Decimal;
+    BEGIN
+      CASE ActionToPerform OF
+        ActionToPerform::CreateWithoutMatch:
+          CreateWithoutMatch(Document,PurchHeader,PurchaserCode,IsInvoice);
+        ActionToPerform::UpdateOrderWithMatch:
+          UpdateOrderWithMatch(Document,PurchHeader,OrderNo,IsInvoice);
+        ActionToPerform::CreateWithMatch:
+          CreateWithMatch(Document,PurchHeader,PurchaserCode,IsInvoice);
+      END;
+
+      Document."Amount Excl. VAT" := PurchDocMgt.GetAllAmountsExclVAT(Document);
+      Document."Amount Incl. VAT" := PurchDocMgt.GetAmountInclVAT(Document);
+      StoreDocReference(Document,PurchHeader);
+
+      // CHECK DIFFERENCE ON IMPORTED AMOUNTS VS TOTAL AMOUNT ON THE LINES
+      IF AmountsTransfered(PurchHeader) THEN BEGIN
+        PurchDocMgt.GetPurchStatusAmounts(PurchHeader,ImportedAmountExclVAT,ImportedAmountInclVAT,AssignedAmountExclVAT,
+          AssignedAmountInclVAT);
+
+        MessageText := DCApprMgt.CheckPurchDocAmtAgainstImpAmt(PurchHeader,ImportedAmountExclVAT,ImportedAmountInclVAT,
+          AssignedAmountExclVAT,AssignedAmountInclVAT);
+
+        IF MessageText <> '' THEN BEGIN
+          SkipNextStep := TRUE;
+
+          IF GUIALLOWED THEN BEGIN
+            MessageText += Text009;
+            MESSAGE(MessageText);
+          END;
+        END;
+      END;
+
+      PurchDocMatch.SETRANGE("Document No.",Document."No.");
+      PurchDocMatch.DELETEALL;
+
+      Document.VALIDATE(Status,Document.Status::Registered);
+      Document.MODIFY;
+
+      FieldRule.SETRANGE("Template No.",Document."Template No.");
+      FieldRule.SETRANGE("Created from Master Template",TRUE);
+      IF NOT FieldRule.ISEMPTY THEN
+        FieldRule.MODIFYALL("Created from Master Template",FALSE);
+
+      COMMIT;
+
+      // PERFORM AFTER STEP 1
+      IF Template."Codeunit ID: After Step 1" > 0 THEN BEGIN
+        CLEARLASTERROR;
+        IF NOT CODEUNIT.RUN(Template."Codeunit ID: After Step 1",Document) THEN
+          SkipNextStep := TRUE;
+        COMMIT;
+
+        IF SkipNextStep AND GUIALLOWED THEN
+          ShowSkipNextStepMessage(PurchHeader,Template.FIELDCAPTION("Codeunit ID: After Step 1"));
+      END;
+
+      // POST VARIANCE LINE WHEN UPDATING ORDER
+      IF (ActionToPerform = ActionToPerform::UpdateOrderWithMatch) AND NOT SkipNextStep THEN BEGIN
+        CLEARLASTERROR;
+        SkipNextStep := HandleVariance(Template,PurchHeader);
+        COMMIT;
+
+        IF SkipNextStep THEN
+          IF IsInvoice AND GUIALLOWED THEN
+            ShowSkipNextStepMessage(PurchHeader,Template.FIELDCAPTION("Auto Receive Order Variance"))
+          ELSE
+            ShowSkipNextStepMessage(PurchHeader,Template.FIELDCAPTION("Auto Ship Return Order Var."));
+      END;
+    END;
+
+    PROCEDURE PerformStep2@1000000011(VAR Document@1160040002 : Record 6085590;VAR Template@1000000000 : Record 6085579;VAR PurchHeader@1000000001 : Record 38;IsInvoice@1160040001 : Boolean) SkipNextStep : Boolean;
+    VAR
+      DCSetup@1160040003 : Record 6085573;
+      PurchLine@1160040000 : Record 39;
+      CDCApprovalManagement@1160040004 : Codeunit 6085722;
+      SIStorage@6085573 : Codeunit 6085789;
+    BEGIN
+      PurchHeader.FIND('=');
+      CLEARLASTERROR;
+
+      IF PurchHeader."Document Type" IN [PurchHeader."Document Type"::Order,PurchHeader."Document Type"::Invoice] THEN BEGIN
+        CASE Template."Purch. Inv. Reg. Step 2" OF
+          Template."Purch. Inv. Reg. Step 2"::"Submit for Approval":
+            SkipNextStep := NOT CODEUNIT.RUN(CODEUNIT::"DC Approvals Bridge",Document);
+
+          Template."Purch. Inv. Reg. Step 2"::Release:
+            BEGIN
+              IF DCApprovalsBridge.IsPurchApprovalEnabledDocType(PurchHeader."Document Type") THEN BEGIN
+                IF PurchDocMgt.IsPurchDocMatched(PurchHeader) THEN
+                  SkipNextStep := NOT CDCApprovalManagement.AutoApprove(PurchHeader)
+                ELSE
+                  SkipNextStep := NOT CDCApprovalManagement.ForceApproval(PurchHeader,FALSE);
+              END ELSE
+                SkipNextStep := NOT CODEUNIT.RUN(CODEUNIT::"Release Purchase Document",PurchHeader);
+            END;
+
+          Template."Purch. Inv. Reg. Step 2"::Post:
+            BEGIN
+              SkipNextStep := FALSE;
+              IF DCApprovalsBridge.IsPurchApprovalEnabledDocType(PurchHeader."Document Type") THEN BEGIN
+                IF PurchDocMgt.IsPurchDocMatched(PurchHeader) THEN
+                  SkipNextStep := NOT CDCApprovalManagement.AutoApprove(PurchHeader)
+                ELSE
+                  SkipNextStep := NOT CDCApprovalManagement.ForceApproval(PurchHeader,FALSE);
+              END;
+
+              IF NOT SkipNextStep THEN BEGIN
+                COMMIT;
+                PurchHeader.Receive := FALSE;
+                PurchHeader.Ship := FALSE;
+                PurchHeader.Invoice := TRUE;
+
+                PurchLine.SETRANGE("Document Type",PurchHeader."Document Type");
+                PurchLine.SETRANGE("Document No.",PurchHeader."No.");
+
+                IF PurchHeader."Document Type" = PurchHeader."Document Type"::Order THEN BEGIN
+                  PurchLine.SETFILTER("Qty. to Receive",'>%1',0);
+                  PurchHeader.Receive := NOT PurchLine.ISEMPTY;
+                END;
+
+                IF PurchHeader."Document Type" = PurchHeader."Document Type"::Invoice THEN BEGIN
+                  SIStorage.SetAllowPostRelPurchDocC90(TRUE);
+                  SkipNextStep := NOT CODEUNIT.RUN(CODEUNIT::"Purch.-Post",PurchHeader);
+                  SIStorage.SetAllowPostRelPurchDocC90(FALSE);
+                END ELSE
+                  SkipNextStep := NOT CODEUNIT.RUN(CODEUNIT::"Purch.-Post",PurchHeader);
+              END;
+            END;
+        END;
+      END ELSE BEGIN
+        CASE Template."Purch. Cr.Memo Reg. Step 2" OF
+          Template."Purch. Cr.Memo Reg. Step 2"::"Submit for Approval":
+            SkipNextStep := NOT CODEUNIT.RUN(CODEUNIT::"DC Approvals Bridge",Document);
+
+          Template."Purch. Cr.Memo Reg. Step 2"::Release:
+            BEGIN
+              IF DCApprovalsBridge.IsPurchApprovalEnabledDocType(PurchHeader."Document Type") THEN BEGIN
+                IF PurchDocMgt.IsPurchDocMatched(PurchHeader) THEN
+                  SkipNextStep := NOT CDCApprovalManagement.AutoApprove(PurchHeader)
+                ELSE
+                  SkipNextStep := NOT CDCApprovalManagement.ForceApproval(PurchHeader,FALSE);
+              END ELSE
+                SkipNextStep := NOT CODEUNIT.RUN(CODEUNIT::"Release Purchase Document",PurchHeader);
+            END;
+
+          Template."Purch. Cr.Memo Reg. Step 2"::Post:
+            BEGIN
+              SkipNextStep := FALSE;
+              IF DCApprovalsBridge.IsPurchApprovalEnabledDocType(PurchHeader."Document Type") THEN BEGIN
+                IF PurchDocMgt.IsPurchDocMatched(PurchHeader) THEN
+                  SkipNextStep := NOT CDCApprovalManagement.AutoApprove(PurchHeader)
+                ELSE
+                  SkipNextStep := NOT CDCApprovalManagement.ForceApproval(PurchHeader,FALSE);
+              END;
+
+              IF NOT SkipNextStep THEN BEGIN
+                COMMIT;
+                PurchHeader.Receive := FALSE;
+                PurchHeader.Ship := FALSE;
+                PurchHeader.Invoice := TRUE;
+
+                IF PurchHeader."Document Type" = PurchHeader."Document Type"::"Return Order" THEN BEGIN
+                  PurchLine.SETFILTER("Return Qty. to Ship",'>%1',0);
+                  PurchHeader.Ship := NOT PurchLine.ISEMPTY;
+                END;
+
+                IF PurchHeader."Document Type" = PurchHeader."Document Type"::"Credit Memo" THEN BEGIN
+                  SIStorage.SetAllowPostRelPurchDocC90(TRUE);
+                  SkipNextStep := NOT CODEUNIT.RUN(CODEUNIT::"Purch.-Post",PurchHeader);
+                  SIStorage.SetAllowPostRelPurchDocC90(FALSE);
+                END ELSE
+                  SkipNextStep := NOT CODEUNIT.RUN(CODEUNIT::"Purch.-Post",PurchHeader);
+              END;
+            END;
+        END;
+      END;
+
+      COMMIT;
+
+      IF SkipNextStep AND GUIALLOWED THEN BEGIN
+        IF IsInvoice THEN
+          ShowSkipNextStepMessage(PurchHeader,LOWERCASE(FORMAT(Template."Purch. Inv. Reg. Step 2")))
+        ELSE
+          ShowSkipNextStepMessage(PurchHeader,LOWERCASE(FORMAT(Template."Purch. Cr.Memo Reg. Step 2")));
+      END;
+
+      // PERFORM AFTER STEP 2
+      IF Template."Codeunit ID: After Step 2" > 0 THEN BEGIN
+        CLEARLASTERROR;
+        SkipNextStep := NOT CODEUNIT.RUN(Template."Codeunit ID: After Step 2",Document);
+        COMMIT;
+
+        IF SkipNextStep AND GUIALLOWED THEN
+          ShowSkipNextStepMessage(PurchHeader,Template.FIELDCAPTION("Codeunit ID: After Step 2"));
+      END;
+    END;
+
+    PROCEDURE CreateTextLine@1000000002(VAR PurchHeader@1000000000 : Record 38;Text@1000000002 : Text[1024]);
+    VAR
+      PurchLine@1000000003 : Record 39;
+      LineNo@161024012 : Integer;
+    BEGIN
+      LineNo := GetNextLineNo(PurchHeader);
+
+      PurchLine.INIT;
+      PurchLine."Document Type" := PurchHeader."Document Type";
+      PurchLine.VALIDATE("Document No.",PurchHeader."No.");
+      PurchLine."Line No." := LineNo;
+      PurchLine.INSERT(TRUE);
+      PurchLine.VALIDATE(Description,COPYSTR(Text,1,MAXSTRLEN(PurchLine.Description)));
+      PurchLine.MODIFY(TRUE);
+    END;
+
+    PROCEDURE TransferLineDim@161024014(VAR Document@1160040001 : Record 6085590;LineNo@1160040003 : Integer;VAR PurchLine@161024012 : Record 39;VAR LineTrans@161024013 : Record 6085584);
+    VAR
+      GLSetup@1000 : Record 98;
+      DataTranslDim@161024014 : Record 6085586;
+      Field@6085577 : Record 6085580;
+      DimValueCode@6085578 : Code[20];
+      OldDimID@6085573 : Integer;
+    BEGIN
+      GLSetup.GET;
+
+      DataTranslDim.SETRANGE("Template No.",LineTrans."Template No.");
+      DataTranslDim.SETRANGE("Field Type",LineTrans.Type);
+      DataTranslDim.SETRANGE("Field Code",LineTrans."Field Code");
+      DataTranslDim.SETRANGE("Translate From",LineTrans."Translate From");
+      IF DataTranslDim.FINDSET THEN BEGIN
+        OldDimID := PurchLine."Dimension Set ID";
+        REPEAT
+          CASE TRUE OF
+            DataTranslDim."Dimension Code" = GLSetup."Global Dimension 1 Code":
+              PurchLine.VALIDATE("Shortcut Dimension 1 Code",DataTranslDim."Dimension Value Code");
+            DataTranslDim."Dimension Code" = GLSetup."Global Dimension 2 Code":
+              PurchLine.VALIDATE("Shortcut Dimension 2 Code",DataTranslDim."Dimension Value Code");
+            ELSE
+              PurchLine."Dimension Set ID" := UpdateDimension(PurchLine."Dimension Set ID",DataTranslDim."Dimension Code",DataTranslDim."Dimension Value Code");
+          END;
+        UNTIL DataTranslDim.NEXT = 0;
+        IF OldDimID <> PurchLine."Dimension Set ID" THEN
+          PurchLine.MODIFY(TRUE);
+      END;
+
+      IF LineNo = 0 THEN
+        EXIT;
+
+      Field.SETRANGE("Template No.",Document."Template No.");
+      Field.SETRANGE(Type,Field.Type::Line);
+      Field.SETRANGE("Data Type",Field."Data Type"::Lookup);
+      Field.SETRANGE("Source Table No.",DATABASE::"Dimension Value");
+      IF Field.FINDSET THEN BEGIN
+        OldDimID := PurchLine."Dimension Set ID";
+        REPEAT
+          DimValueCode := CaptureMgt.GetValueAsText(Document."No.",LineNo,Field);
+          IF (DimValueCode <> '') OR Field."Transfer Blank Values" THEN BEGIN
+            CASE TRUE OF
+              Field.Code = GLSetup."Global Dimension 1 Code":
+                PurchLine.VALIDATE("Shortcut Dimension 1 Code",DimValueCode);
+              Field.Code = GLSetup."Global Dimension 2 Code":
+                PurchLine.VALIDATE("Shortcut Dimension 2 Code",DimValueCode);
+              ELSE
+                PurchLine."Dimension Set ID" := UpdateDimension(PurchLine."Dimension Set ID",Field.Code,DimValueCode);
+            END;
+          END;
+        UNTIL Field.NEXT = 0;
+
+        IF OldDimID <> PurchLine."Dimension Set ID" THEN
+          PurchLine.MODIFY(TRUE);
+      END;
+    END;
+
+    PROCEDURE CreateTextArray@161024013(Text@161024012 : Text[1024];MaxLen@161024013 : Integer;VAR Arr@161024014 : ARRAY [50] OF Text[1024]) : Integer;
+    VAR
+      i@161024015 : Integer;
+      Index@161024016 : Integer;
+    BEGIN
+      WHILE Text <> '' DO BEGIN
+        i := i + 1;
+        Text := DELCHR(Text,'<>',' ');
+        IF STRLEN(Text) <= MaxLen THEN BEGIN
+          Arr[i] := Text;
+          EXIT(i);
+        END;
+
+        IF COPYSTR(Text,MaxLen+1,1) <> ' ' THEN
+          Index := LastIndexOf(COPYSTR(Text,1,MaxLen),' ',TRUE)
+        ELSE
+          Index := MaxLen;
+
+        IF Index = 0 THEN
+          Index := MaxLen;
+
+        Arr[i] := DELCHR(COPYSTR(Text,1,Index),'<>',' ');
+
+        Text := COPYSTR(Text,STRLEN(Arr[i])+1);
+      END;
+      EXIT(i);
+    END;
+
+    PROCEDURE LastIndexOf@161024012(Text@161024012 : Text[1024];CharToFind@161024013 : Text[1];IgnoreCase@161024014 : Boolean) : Integer;
+    VAR
+      StartIndex@161024015 : Integer;
+    BEGIN
+      IF IgnoreCase THEN BEGIN
+        Text := UPPERCASE(Text);
+        CharToFind := UPPERCASE(CharToFind);
+      END;
+
+      StartIndex := STRLEN(Text);
+      WHILE StartIndex > 0 DO BEGIN
+        IF COPYSTR(Text,StartIndex,1) = CharToFind THEN
+          EXIT(StartIndex)
+        ELSE
+          StartIndex -= 1;
+      END;
+    END;
+
+    PROCEDURE UpdateDimension@6085573(DimSetID@6085574 : Integer;DimCode@6085575 : Code[20];DimValueCode@6085576 : Code[20]) : Integer;
+    VAR
+      DimSetEntry@6085573 : TEMPORARY Record 480;
+      DimMgt@6085577 : Codeunit 408;
+    BEGIN
+      DimMgt.GetDimensionSet(DimSetEntry,DimSetID);
+
+      IF DimSetEntry.GET(DimSetID,DimCode) THEN BEGIN
+        IF DimSetEntry."Dimension Value Code" <> DimValueCode THEN BEGIN
+          IF DimValueCode <> '' THEN BEGIN
+            DimSetEntry.VALIDATE("Dimension Value Code",DimValueCode);
+            DimSetEntry.MODIFY(TRUE);
+          END ELSE
+            DimSetEntry.DELETE;
+        END;
+      END ELSE BEGIN
+        DimSetEntry.INIT;
+        DimSetEntry."Dimension Set ID" := DimSetID;
+        DimSetEntry.VALIDATE("Dimension Code",DimCode);
+        DimSetEntry.VALIDATE("Dimension Value Code",DimValueCode);
+        DimSetEntry.INSERT(TRUE);
+      END;
+
+      EXIT(DimMgt.GetDimensionSetID(DimSetEntry));
+    END;
+
+    PROCEDURE TransferPurchHeader@1160040009(VAR PurchHeader@1160040000 : Record 38;Document@1160040004 : Record 6085590);
+    VAR
+      RecRef@1160040007 : RecordRef;
+    BEGIN
+      RecRef.GETTABLE(PurchHeader);
+      CaptureMgt.TransferTableFields(RecRef,Document,0,TRUE);
+      RecRef.SETTABLE(PurchHeader);
+    END;
+
+    PROCEDURE TransferPurchLine@1160040001(VAR PurchLine@1160040000 : Record 39;Document@1160040012 : Record 6085590;DocumentLineNo@1160040010 : Integer);
+    VAR
+      RecRef@1160040006 : RecordRef;
+    BEGIN
+      RecRef.GETTABLE(PurchLine);
+      CaptureMgt.TransferTableFields(RecRef,Document,DocumentLineNo,FALSE);
+      RecRef.SETTABLE(PurchLine);
+    END;
+
+    PROCEDURE TransferDates@1160040017(VAR PurchHeader@1160040000 : Record 38;Template@1160040006 : Record 6085579;Document@1160040001 : Record 6085590;IsInvoice@1160040005 : Boolean);
+    VAR
+      DueDate@1160040004 : Date;
+    BEGIN
+      PurchHeader.VALIDATE("Posting Date",PurchDocMgt.GetPurchPostingDate(Document,Template));
+      PurchHeader.VALIDATE("Document Date",PurchDocMgt.GetDocumentDate(Document));
+
+      IF IsInvoice THEN BEGIN
+        DueDate := PurchDocMgt.GetDueDate(Document);
+
+        IF DueDate <> 0D THEN
+          PurchHeader.VALIDATE("Due Date",DueDate);
+      END ELSE
+        PurchHeader.VALIDATE("Due Date",WORKDATE);
+    END;
+
+    PROCEDURE CheckWMS@76(PurchLine@1000 : Record 39);
+    VAR
+      Location@1002 : Record 14;
+      DialogText@1001 : Text[1024];
+    BEGIN
+      DialogText := Text025;
+      IF PurchLine.Type = PurchLine.Type::Item THEN
+        IF PurchLine."Quantity (Base)" <> 0 THEN
+          CASE PurchLine."Document Type" OF
+            PurchLine."Document Type"::Invoice:
+              IF (PurchLine."Receipt No." = '') THEN
+                IF Location.GET(PurchLine."Location Code") AND Location."Directed Put-away and Pick" THEN BEGIN
+                  DialogText += Location.GetRequirementText(Location.FIELDNO("Require Receive"));
+                  ERROR(Text026,DialogText,PurchLine.FIELDCAPTION("Line No."),PurchLine."Line No.");
+                END;
+            PurchLine."Document Type"::"Credit Memo":
+              IF (PurchLine."Return Shipment No." = '') THEN
+                IF Location.GET(PurchLine."Location Code") AND Location."Directed Put-away and Pick" THEN BEGIN
+                  DialogText += Location.GetRequirementText(Location.FIELDNO("Require Shipment"));
+                  ERROR(Text026,DialogText,PurchLine.FIELDCAPTION("Line No."),PurchLine."Line No.");
+                END;
+          END;
+    END;
+
+    PROCEDURE ShowSkipNextStepMessage@61(VAR PurchHeader@1003 : Record 38;MessageToShow@1000 : Text[250]);
+    BEGIN
+      IF GETLASTERRORTEXT = '' THEN
+        EXIT;
+
+      MESSAGE(STRSUBSTNO(Text006,MessageToShow,LOWERCASE(FORMAT(PurchHeader."Document Type")),PurchHeader."No.",
+        GETLASTERRORTEXT) + Text009);
+    END;
+
+    PROCEDURE ShowAfterRegister@2(VAR Document@1000 : Record 6085590);
+    VAR
+      PurchHeader@1002 : Record 38;
+      PurchInvHeader@1005 : Record 122;
+      PurchCrMemoHeader@1004 : Record 124;
+      WebClientMgt@1003 : Codeunit 6085662;
+      PageNoToRun@1001 : Integer;
+    BEGIN
+      IF PurchHeader.GET(Document."Created Doc. Subtype",Document."Created Doc. ID") THEN BEGIN
+        CASE PurchHeader."Document Type" OF
+          PurchHeader."Document Type"::Order:
+            PageNoToRun := PAGE::"Purchase Order";
+          PurchHeader."Document Type"::Invoice:
+            PageNoToRun := PAGE::"Purch. Invoice With Image";
+          PurchHeader."Document Type"::"Return Order":
+            PageNoToRun := PAGE::"Purchase Return Order";
+          PurchHeader."Document Type"::"Credit Memo":
+            PageNoToRun := PAGE::"Purch. Credit Memo With Image";
+        END;
+        IF WebClientMgt.IsWebClient THEN
+          PAGE.RUN(PageNoToRun,PurchHeader)
+        ELSE
+          PAGE.RUNMODAL(PageNoToRun,PurchHeader);
+      END ELSE
+        IF Document."Created Doc. Subtype" IN [PurchHeader."Document Type"::Order,PurchHeader."Document Type"::Invoice] THEN BEGIN
+          PurchInvHeader.SETRANGE("Pre-Assigned No.",Document."Created Doc. ID");
+          IF PurchInvHeader.FINDFIRST THEN
+            IF WebClientMgt.IsWebClient THEN
+              PAGE.RUN(PAGE::"Posted Purchase Invoice",PurchInvHeader)
+            ELSE
+              PAGE.RUNMODAL(PAGE::"Posted Purchase Invoice",PurchInvHeader);
+        END ELSE BEGIN
+          PurchCrMemoHeader.SETRANGE("Pre-Assigned No.",Document."Created Doc. ID");
+          IF PurchCrMemoHeader.FINDFIRST THEN
+            IF WebClientMgt.IsWebClient THEN
+              PAGE.RUN(PAGE::"Posted Purchase Credit Memo",PurchCrMemoHeader)
+            ELSE
+              PAGE.RUNMODAL(PAGE::"Posted Purchase Credit Memo",PurchCrMemoHeader);
+        END;
+    END;
+
+    PROCEDURE HandleVariance@6(VAR Template@1004 : Record 6085579;VAR PurchHeader@1000 : Record 38) SkipNextStep : Boolean;
+    VAR
+      PurchLine@1006 : Record 39;
+      TempPurchLine@1005 : TEMPORARY Record 39;
+    BEGIN
+      IF (PurchHeader."Document Type" = PurchHeader."Document Type"::Order) AND (Template."Auto Receive Order Variance") THEN BEGIN
+        PurchLine.SETRANGE("Document Type",PurchHeader."Document Type");
+        PurchLine.SETRANGE("Document No.",PurchHeader."No.");
+        PurchLine.SETRANGE("No.",Template."Variance Posting Account");
+        PurchLine.SETFILTER("Outstanding Quantity",'<>%1',0);
+        IF PurchLine.FINDSET(TRUE,FALSE) THEN BEGIN
+          REPEAT
+            PurchLine.VALIDATE("Qty. to Receive",PurchLine."Outstanding Quantity");
+            PurchLine.MODIFY(TRUE);
+          UNTIL PurchLine.NEXT = 0;
+
+          PurchLine.SETFILTER("No.",'<>%1',Template."Variance Posting Account");
+          IF PurchLine.FINDSET(TRUE,FALSE) THEN
+            REPEAT
+              IF PurchLine."Qty. to Receive" <> 0 THEN BEGIN
+                TempPurchLine := PurchLine;
+                TempPurchLine.INSERT;
+                PurchLine.VALIDATE("Qty. to Receive",0);
+                PurchLine.MODIFY(TRUE);
+              END;
+            UNTIL PurchLine.NEXT = 0;
+
+          COMMIT;
+          PurchHeader.Receive := TRUE;
+          PurchHeader.Ship := FALSE;
+          PurchHeader.Invoice := FALSE;
+          SkipNextStep := NOT CODEUNIT.RUN(CODEUNIT::"Purch.-Post",PurchHeader);
+
+          IF TempPurchLine.FINDSET THEN
+            REPEAT
+              PurchLine.GET(TempPurchLine."Document Type",TempPurchLine."Document No.",TempPurchLine."Line No.");
+              PurchLine.VALIDATE("Qty. to Receive",TempPurchLine."Qty. to Receive");
+              PurchLine.MODIFY(TRUE);
+            UNTIL TempPurchLine.NEXT = 0;
+        END;
+      END ELSE
+        IF (PurchHeader."Document Type" = PurchHeader."Document Type"::"Return Order") AND
+          (Template."Auto Ship Return Order Var.")
+        THEN BEGIN
+          PurchLine.SETRANGE("Document Type",PurchHeader."Document Type");
+          PurchLine.SETRANGE("Document No.",PurchHeader."No.");
+          PurchLine.SETRANGE("No.",Template."Variance Posting Account");
+          PurchLine.SETFILTER("Outstanding Quantity",'<>%1',0);
+          IF PurchLine.FINDSET(TRUE,FALSE) THEN BEGIN
+            REPEAT
+              PurchLine.VALIDATE("Return Qty. to Ship",PurchLine."Outstanding Quantity");
+              PurchLine.MODIFY(TRUE);
+            UNTIL PurchLine.NEXT = 0;
+
+            PurchLine.SETFILTER("No.",'<>%1',Template."Variance Posting Account");
+            IF PurchLine.FINDSET(TRUE,FALSE) THEN
+              REPEAT
+                IF PurchLine."Return Qty. to Ship" <> 0 THEN BEGIN
+                  TempPurchLine := PurchLine;
+                  TempPurchLine.INSERT;
+                  PurchLine.VALIDATE("Return Qty. to Ship",0);
+                  PurchLine.MODIFY(TRUE);
+                END;
+              UNTIL PurchLine.NEXT = 0;
+
+            COMMIT;
+            PurchHeader.Receive := FALSE;
+            PurchHeader.Ship := TRUE;
+            PurchHeader.Invoice := FALSE;
+            SkipNextStep := NOT CODEUNIT.RUN(CODEUNIT::"Purch.-Post",PurchHeader);
+
+            IF TempPurchLine.FINDSET THEN
+              REPEAT
+                PurchLine.GET(TempPurchLine."Document Type",TempPurchLine."Document No.",TempPurchLine."Line No.");
+                PurchLine.VALIDATE("Return Qty. to Ship",TempPurchLine."Return Qty. to Ship");
+                PurchLine.MODIFY(TRUE);
+              UNTIL TempPurchLine.NEXT = 0;
+          END;
+        END;
+    END;
+
+    PROCEDURE GetNextLineNo@1160040000(PurchHeader@1160040000 : Record 38) : Integer;
+    VAR
+      PurchLine@1160040001 : Record 39;
+    BEGIN
+      PurchLine.SETRANGE("Document Type",PurchHeader."Document Type");
+      PurchLine.SETRANGE("Document No.",PurchHeader."No.");
+      IF PurchLine.FINDLAST THEN
+        EXIT(PurchLine."Line No." + 10000)
+      ELSE
+        EXIT(10000);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

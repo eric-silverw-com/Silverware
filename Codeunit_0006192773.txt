@@ -1,0 +1,882 @@
+OBJECT Codeunit 6192773 Continia Online License Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08/03/18;
+    Time=[ 1:00:00 AM];
+    Version List=DCW17.00.00.5.00.02;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ContiniaOnlineMgt@6192786 : Codeunit 6192772;
+      DatabaseReader@6192785 : Codeunit 6192774;
+      HttpActions@6192787 : 'PUT,DELETE,GET';
+      Text001@1160040003 : TextConst 'ENU=%1 has not been activated correctly. Please activate the company with the function Activate Company on the %1 Setup card.';
+      Text003@1160040000 : TextConst 'ENU=Company GUID: %1';
+      Text004@1160040005 : TextConst 'ENU=Company Name: %1';
+      Text005@1160040009 : TextConst 'ENU=Company Name (Setup): %1';
+      Text006@1160040006 : TextConst 'ENU=VAT Registration No.: %1';
+      Text007@1160040007 : TextConst 'ENU=NAV Version: %1';
+      Text008@1160040008 : TextConst 'ENU=NAV License No.: %1';
+      Text009@1160040012 : TextConst 'ENU=%1 and %2 is linked to the same company registration in Continia Online.\\You must either deactivate one of these companies or activate one of them as a new company.';
+      OfflineActivationQst@6085573 : TextConst 'ENU=Continia Online did not respond and %1 could not be activated.\\Do you want to start an offline activation?';
+      OfflineActivationFailedErr@6085574 : TextConst 'ENU=No offline activation has been started.';
+      InvalidFileErr@6085580 : TextConst 'ENU=The file selected is not a valid response file for offline activation.\\Please select another file.';
+      OfflineActivationWindowSave@6085576 : TextConst 'ENU=Save Offline Activation File';
+      OfflineActivationWindowLoad@6085577 : TextConst 'ENU=Load Offline Activation File';
+      CompleteOfflineActivationLater@6085578 : TextConst 'ENU=When you have received the activation file, please click activate again and import the file.';
+      FinishOfflineActivationQst@6085579 : TextConst 'ENU=An offline activation is currently in progress.\\Do you want to complete it?';
+      CompanyAlreadyActivatedErr@1160040011 : TextConst 'ENU=%1 has already been activated.\\Please deactivate the company before you restart the activation process.';
+      CompanyDeactivatedInNAVMsg@6085575 : TextConst 'ENU=%1 has been deactivated.';
+      CompanyDeletedInCOMsg@6085581 : TextConst 'ENU=%1 has been deleted in Continia Online.';
+      NothingToDeactivate@6085582 : TextConst 'ENU=There is nothing to deactivate for %1.';
+      DeactivateOneProductQst@6085583 : TextConst 'ENU=Are you sure you want to deactivate %1?';
+      DeactivateMultipleProductsQst@6085584 : TextConst 'ENU=More than one product is activated in %1. Are you sure you want to deactivate %1?';
+      DeleteCOActivationQst@6085585 : TextConst 'ENU="Are you sure you want to delete the Continia Online Company Activation for %1 (%2=%3) in Continia Online?"';
+      AlreadyDeletedinCOErr@6085586 : TextConst 'ENU=%1 has already been deleted from Continia Online.';
+      NotActivatedTxt@6085587 : TextConst 'ENU=%1 has not been activated.';
+      PleaseActivateTxt@6085588 : TextConst 'ENU=Please activate the company with the function Activate Company on the Document Capture Setup card.';
+      NeedsReactivationTxt@6085589 : TextConst 'ENU=%1 needs reactivation as the following information has changed:\';
+      AwaitingOffLineActivationTxt@6085590 : TextConst 'ENU=%1 is awaiting completion of offline activation. Offline activation was started on the %2 by %3.';
+      ActivationExpired@6085591 : TextConst 'ENU=%1 needs reactivation as the current activation has expired on the %2.';
+      CurrentTxt@6085592 : TextConst 'ENU=" - Current: %1\"';
+      ActivatedTxt@6085593 : TextConst 'ENU=" - Activated: %1\"';
+      ActivatedMsg@6085594 : TextConst 'ENU=%1 was activated on the %2 by %3.';
+      StartActivationTxt@6085595 : TextConst 'ENU=\Do you want to start the activation wizard now?';
+
+    PROCEDURE IsActive@1160040000(ProductCode@1160040000 : Code[10];FullProductName@1160040003 : Text[250];ShortProductName@6085573 : Text[30];ShowError@1160040001 : Boolean;ObjectVersion@6085578 : Text[30]) : Boolean;
+    BEGIN
+      EXIT(IsActive2(ProductCode,FullProductName,ShortProductName,ShowError,TRUE,ObjectVersion));
+    END;
+
+    PROCEDURE IsActive2@6085578(ProductCode@6085575 : Code[10];FullProductName@6085574 : Text[250];ShortProductName@6085577 : Text[30];ShowError@6085573 : Boolean;ShowMessage@6085576 : Boolean;ObjectVersion@6085578 : Text[30]) : Boolean;
+    VAR
+      ActivationState@6192771 : 'NeverActivated,NeedReactivation,Activated,OfflineStarted';
+    BEGIN
+      ActivationState := GetProductActivationState(ProductCode,COMPANYNAME);
+
+      IF ActivationState = ActivationState::Activated THEN
+        EXIT(TRUE)
+      ELSE
+        IF ShowError THEN
+          ERROR(GetActivationMsg(ActivationState,ProductCode,FullProductName,ShortProductName,FALSE,ObjectVersion))
+        ELSE
+          IF ActivationState = ActivationState::NeedReactivation THEN
+            IF ShowMessage THEN
+              MESSAGE(GetActivationMsg(ActivationState,ProductCode,FullProductName,ShortProductName,FALSE,ObjectVersion));
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE GetProductActivationState@1160040003(ProductCode@1160040004 : Code[10];Company@1160040000 : Text[50]) : Integer;
+    VAR
+      ContiniaCompanySetup@1160040003 : Record 6192773;
+      ContiniaProductActivation@1160040002 : Record 6192772;
+      ActivationState@6085573 : 'NeverActivated,NeedReactivation,Activated,OfflineStarted';
+    BEGIN
+      GetDatabaseReader(Company);
+      ContiniaCompanySetup.CHANGECOMPANY(Company);
+      IF NOT ContiniaCompanySetup.GET THEN
+        EXIT(ActivationState::NeverActivated);
+
+      WITH ContiniaProductActivation DO BEGIN
+        SETRANGE("Product Code",ProductCode);
+        SETRANGE("Company GUID",ContiniaCompanySetup."Company GUID");
+        IF NOT FINDFIRST THEN
+          IF NOT GET(ProductCode,Company) THEN
+            EXIT(ActivationState::NeverActivated);
+
+        IF "Offline Activation Status" = "Offline Activation Status"::Started THEN
+          EXIT(ActivationState::OfflineStarted);
+
+        IF ("Expiration Date" <> 0D) AND ("Expiration Date" < TODAY) THEN
+          EXIT(ActivationState::NeedReactivation);
+
+        IF (Company <> "Company Name") OR ("Client ID" <> ContiniaCompanySetup."Client ID") OR
+          (ContiniaCompanySetup."Company GUID" <> "Company GUID") OR
+          ("Company Code" <> ContiniaCompanySetup."Company Code")
+        THEN
+          EXIT(ActivationState::NeedReactivation);
+
+        IF ("Hashed System Identifier" <> HashValue(Company)) THEN
+          EXIT(ActivationState::NeedReactivation);
+      END;
+
+      EXIT(ActivationState::Activated);
+    END;
+
+    PROCEDURE GetCompanyActivationState@6085586(Company@6192771 : Text[50]) : Integer;
+    VAR
+      ContiniaCompanySetup@6192772 : Record 6192773;
+      ContiniaProductActivation@6192773 : Record 6192772;
+      ActivationState@6085573 : 'NeverActivated,NeedReactivation,Activated,OfflineStarted';
+      NullGUID@6085575 : GUID;
+      OfflineStarted@6192774 : Boolean;
+      OfflineExpired@6192775 : Boolean;
+      NeedReactivation@6192776 : Boolean;
+    BEGIN
+      GetDatabaseReader(Company);
+      ContiniaCompanySetup.CHANGECOMPANY(Company);
+      IF NOT ContiniaCompanySetup.GET THEN
+        EXIT(ActivationState::NeverActivated);
+
+      WITH ContiniaProductActivation DO BEGIN
+        SETRANGE("Company GUID",ContiniaCompanySetup."Company GUID");
+        SETRANGE("Company Name",Company);
+        IF FINDSET THEN BEGIN
+          REPEAT
+            IF "Offline Activation Status" = "Offline Activation Status"::Started THEN BEGIN
+              IF ("Expiration Date" <> 0D) AND ("Expiration Date" < TODAY) THEN
+                OfflineExpired := TRUE
+              ELSE
+                OfflineStarted := TRUE;
+            END ELSE BEGIN
+              // When a Product is Activated the Company is activated
+              IF ("Hashed System Identifier" = HashValue(Company)) THEN
+                EXIT(ActivationState::Activated)
+              ELSE
+                NeedReactivation := TRUE;
+            END;
+          UNTIL NEXT = 0;
+
+          IF OfflineStarted THEN
+            EXIT(ActivationState::OfflineStarted)
+          ELSE   // (when OfflineExpired OR NeedReactivation)
+            EXIT(ActivationState::NeedReactivation);
+        END ELSE BEGIN
+          SETRANGE("Company GUID",ContiniaCompanySetup."Company GUID");
+          SETRANGE("Company Name");
+          IF FINDFIRST THEN
+            EXIT(ActivationState::NeedReactivation)
+          ELSE
+            EXIT(ActivationState::NeverActivated);
+        END;
+      END;
+    END;
+
+    PROCEDURE GetStandardLicenseInfo@1160040001(VAR LicenseInfo@1160040000 : ARRAY [100] OF Text[250]) : Integer;
+    VAR
+      CompInfo@1160040001 : Record 79;
+      AppMgt@1160040002 : Codeunit 417;
+    BEGIN
+      CompInfo.GET;
+
+      LicenseInfo[1] := STRSUBSTNO(Text004,COMPANYNAME);
+      LicenseInfo[2] := STRSUBSTNO(Text005,CompInfo.Name);
+      LicenseInfo[3] := STRSUBSTNO(Text006,CompInfo."VAT Registration No.");
+      LicenseInfo[4] := STRSUBSTNO(Text007,AppMgt.GetApplicationVersion);
+      LicenseInfo[5] := STRSUBSTNO(Text008,ContiniaOnlineMgt.GetNavLicenseSN);
+      LicenseInfo[6] := STRSUBSTNO(Text003,ContiniaOnlineMgt.GetCompanyGUID);
+
+      EXIT(6);
+    END;
+
+    PROCEDURE ActivateProduct@1160040010(ProductCode@1160040000 : Code[10];ProductVersion@1160040001 : Text[250];ProductDescription@1000 : Text[250];LicenseInfo@1160040002 : ARRAY [100] OF Text[250]) : Integer;
+    VAR
+      ContiniaCompanySetup@6085577 : Record 6192773;
+      ActivateProductPage@1160040003 : Page 6192773;
+      UserSelection@6085573 : 'New Company,New Test Company,Reactivate';
+      ActivationState@6085576 : 'NeverActivated,NeedReactivation,Activated,OfflineStarted';
+      ContiniaOnlineActivatedGUID@6085575 : GUID;
+      NullGUID@6085574 : GUID;
+    BEGIN
+      GetDatabaseReader(COMPANYNAME);
+      CASE GetProductActivationState(ProductCode,COMPANYNAME) OF
+        ActivationState::NeverActivated:
+          BEGIN
+            IF NOT ShowAgreement(ProductDescription,LicenseInfo) THEN
+              ERROR('');
+
+            IF GetCompanyActivationState(COMPANYNAME) = ActivationState::NeverActivated THEN
+              ActivateProdAndAcceptAgreement(ProductCode,ProductVersion,ProductDescription,LicenseInfo,FALSE,NullGUID)
+            ELSE BEGIN
+              ContiniaCompanySetup.GET;
+              ContiniaCompanySetup.TESTFIELD("Company GUID");
+              ActivateProdAndAcceptAgreement(ProductCode,ProductVersion,ProductDescription,LicenseInfo,TRUE,
+                ContiniaCompanySetup."Company GUID");
+            END;
+
+            EXIT(UserSelection::"New Company");
+          END;
+
+        ActivationState::OfflineStarted:
+          OfflineActivationFinish(ProductCode,ProductDescription);
+
+        ActivationState::NeedReactivation,ActivationState::Activated:
+          BEGIN
+            ActivateProductPage.InitCard(ProductCode,ProductDescription);
+            ActivateProductPage.LOOKUPMODE(TRUE);
+            IF ActivateProductPage.RUNMODAL IN [ACTION::LookupOK,ACTION::Yes] THEN BEGIN //Support for ConfirmationDialog
+              GetStandardLicenseInfo(LicenseInfo);
+              IF NOT ShowAgreement(ProductDescription,LicenseInfo) THEN
+                ERROR('');
+
+              IF ActivateProductPage.IsNewCompany THEN BEGIN
+                ActivateProdAndAcceptAgreement(ProductCode,ProductVersion,ProductDescription,LicenseInfo,FALSE,NullGUID);
+                EXIT(UserSelection::"New Company");
+              END ELSE BEGIN
+                ActivateProdAndAcceptAgreement(ProductCode,ProductVersion,ProductDescription,LicenseInfo,TRUE,
+                  ActivateProductPage.GetGuid);
+                EXIT(UserSelection::Reactivate);
+              END;
+            END ELSE
+              ERROR('');
+          END;
+      END;
+    END;
+
+    PROCEDURE ActivateProdAndAcceptAgreement@6085580(ProductCode@6085577 : Code[10];ProductVersion@6085576 : Text[250];ProductDescription@6085575 : Text[250];LicenseInfo@6085574 : ARRAY [100] OF Text[250];IsUpdate@6085573 : Boolean;ContiniaOnlineActivatedGUID@6085580 : GUID);
+    VAR
+      ContiniaCompanySetup@6085579 : Record 6192773;
+      COMgt@6085578 : Codeunit 6192772;
+      ExportDocCatConfigDC@6085581 : Codeunit 6085616;
+    BEGIN
+      IF IsUpdate THEN BEGIN
+        ContiniaCompanySetup.GET;
+        ContiniaCompanySetup."Company GUID" := ContiniaOnlineActivatedGUID;
+        ContiniaCompanySetup.MODIFY;
+
+        VerifyGUIDWithProduct(ProductCode,COMPANYNAME);
+        AcceptAgreement(ProductCode,ProductVersion,ProductDescription,LicenseInfo,TRUE);
+      END ELSE BEGIN
+        COMgt.CreateNewCompanyGUID;
+        AcceptAgreement(ProductCode,ProductVersion,ProductDescription,LicenseInfo,FALSE);
+      END;
+    END;
+
+    PROCEDURE OfflineActivateProduct@6085573(ProductCode@1160040000 : Code[10];ProductVersion@1160040001 : Text[250];ProductDescription@1000 : Text[250];LicenseInfo@1160040002 : ARRAY [100] OF Text[250]);
+    VAR
+      ActivateProductPage@1160040003 : Page 6192773;
+      COMgt@1160040004 : Codeunit 6192772;
+      ActivationState@6085573 : 'NeverActivated,NeedReactivation,Activated,OfflineStarted';
+    BEGIN
+      GetDatabaseReader(COMPANYNAME);
+      CASE GetProductActivationState(ProductCode,COMPANYNAME) OF
+        ActivationState::NeverActivated:
+          BEGIN
+            IF NOT ShowAgreement(ProductDescription,LicenseInfo) THEN
+              ERROR('');
+
+            COMgt.CreateNewCompanyGUID;
+            OfflineActivationStart(ProductCode,ProductVersion,ProductDescription,LicenseInfo);
+          END;
+
+        ActivationState::OfflineStarted:
+          OfflineActivationFinish(ProductCode,ProductDescription);
+
+        ActivationState::NeedReactivation,ActivationState::Activated:
+          ERROR(CompanyAlreadyActivatedErr,COMPANYNAME);
+      END;
+    END;
+
+    PROCEDURE DeactivateCompanyInNAV@1160040009(ShowMsg@6085576 : Boolean);
+    VAR
+      ContiniaProductActivation@6085573 : Record 6192772;
+    BEGIN
+      ContiniaProductActivation.SETRANGE("Company Name",COMPANYNAME);
+      IF ContiniaProductActivation.ISEMPTY THEN
+        ERROR(NothingToDeactivate,COMPANYNAME);
+
+      IF ShowMsg THEN
+        IF ContiniaProductActivation.COUNT > 1 THEN BEGIN
+          IF NOT CONFIRM(DeactivateMultipleProductsQst,TRUE,COMPANYNAME) THEN
+            ERROR('');
+        END ELSE BEGIN
+          IF NOT CONFIRM(DeactivateOneProductQst,TRUE,COMPANYNAME) THEN
+            ERROR('');
+        END;
+
+      ContiniaProductActivation.DELETEALL;
+      ContiniaOnlineMgt.CreateNewCompanyGUID;
+
+      IF ShowMsg THEN
+        MESSAGE(CompanyDeactivatedInNAVMsg,COMPANYNAME);
+    END;
+
+    PROCEDURE DeleteActivationInCO@6085583(Company@6085576 : Text[50];CompanyCodeCap@6085577 : Text[80];CompanyCode@6085578 : Code[10];Deactivated@6085579 : Boolean;CompanyGUID@6085573 : GUID;ShowMsg@6085575 : Boolean);
+    VAR
+      XmlDoc@6085574 : Codeunit 6192800;
+    BEGIN
+      IF Deactivated THEN
+        ERROR(AlreadyDeletedinCOErr,Company);
+
+      IF ShowMsg THEN
+        IF NOT CONFIRM(DeleteCOActivationQst,TRUE,Company,CompanyCodeCap,CompanyCode) THEN
+          ERROR('');
+
+      CLEAR(XmlDoc);
+      IF NOT ContiniaOnlineMgt.ExecuteRequest(GetDeactivateUrl(CompanyGUID),HttpActions::PUT,FALSE,XmlDoc) THEN
+        ERROR(ContiniaOnlineMgt.GetLastErrorText);
+
+      IF ShowMsg THEN
+        MESSAGE(CompanyDeletedInCOMsg,Company);
+    END;
+
+    PROCEDURE ShowAgreement@1160040004(ProductVersion@1160040001 : Text[250];LicenseInfo@1160040003 : ARRAY [100] OF Text[250]) : Boolean;
+    VAR
+      ContiniaLicenseTerms@1160040000 : Page 6086501;
+    BEGIN
+      ContiniaLicenseTerms.InitCard(ProductVersion,LicenseInfo);
+      IF ISSERVICETIER THEN BEGIN
+        IF ContiniaLicenseTerms.RUNMODAL = ACTION::OK THEN
+          EXIT(ContiniaLicenseTerms.GetIsAccepted);
+      END ELSE
+        EXIT(ContiniaLicenseTerms.RUNMODAL = ACTION::OK);
+    END;
+
+    PROCEDURE AcceptAgreement@1160040002(ProductCode@1160040011 : Code[10];ProductVersion@1160040009 : Text[250];ProductDescription@1000 : Text[250];LicenseInfo@1160040012 : ARRAY [100] OF Text[250];IsUpdate@1160040013 : Boolean) : Boolean;
+    VAR
+      ContiniaCompanySetup@1160040015 : Record 6192773;
+      ContiniaProductActivation@1160040007 : Record 6192772;
+      XmlDoc@6085578 : Codeunit 6192800;
+      AboutDC@6085573 : Codeunit 6085589;
+    BEGIN
+      ContiniaCompanySetup.GET;
+      ContiniaCompanySetup.TESTFIELD("Client ID");
+      ContiniaCompanySetup.TESTFIELD("Company Code");
+      ContiniaCompanySetup.TESTFIELD("Company GUID");
+
+      GenerateLicenseXML(XmlDoc,ProductCode,ProductVersion,ProductDescription,LicenseInfo,IsUpdate);
+      IF NOT ContiniaOnlineMgt.ExecuteRequest(GetAcceptUrl,HttpActions::PUT,FALSE,XmlDoc) THEN
+        ERROR(ContiniaOnlineMgt.GetLastErrorText);
+
+      CLEAR(XmlDoc);
+
+      WITH ContiniaProductActivation DO BEGIN
+        IF NOT GET(ProductCode,COMPANYNAME) THEN BEGIN
+          SETRANGE("Product Code",ProductCode);
+          SETRANGE("Company GUID",ContiniaCompanySetup."Company GUID");
+          IF FINDFIRST THEN
+            RENAME(ProductCode,COMPANYNAME)
+          ELSE BEGIN
+            "Product Code" := ProductCode;
+            "Company Name" := COMPANYNAME;
+            INSERT;
+          END;
+        END;
+
+        "Hashed System Identifier" := HashValue(COMPANYNAME);
+        IF GetDatabaseReader(COMPANYNAME) THEN BEGIN
+          "Database Name" := DatabaseReader.GetName;
+          "Database Creator" := DatabaseReader.GetCreator;
+          "Database Created" := DatabaseReader.GetCreatedDate;
+        END ELSE BEGIN
+          "Database Name" := '';
+          "Database Creator" := '';
+          "Database Created" := 0D;
+        END;
+
+        "Client ID" := ContiniaCompanySetup."Client ID";
+        "Activation Date" := TODAY;
+        "Activated by User ID" := USERID;
+        "Product Version" := AboutDC.ObjectVersion;
+        "Company GUID" := ContiniaCompanySetup."Company GUID";
+        "Company Code" := ContiniaCompanySetup."Company Code";
+        MODIFY;
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE GenerateLicenseXML@6085574(VAR XmlDoc@6085574 : Codeunit 6192800;ProductCode@6085585 : Code[10];ProductVersion@6085584 : Text[250];ProductDescription@6085583 : Text[250];LicenseInfo@6085582 : ARRAY [100] OF Text[250];IsUpdate@6085580 : Boolean);
+    VAR
+      CompInfo@6085573 : Record 79;
+      AppMgt@6085586 : Codeunit 417;
+      XmlLib@6085581 : Codeunit 6085573;
+      AgreementNode@6085579 : Codeunit 6192801;
+      CompanyNode@6085578 : Codeunit 6192801;
+      InfoNode@6085577 : Codeunit 6192801;
+      LineNode@6085576 : Codeunit 6192801;
+      i@6085575 : Integer;
+    BEGIN
+      CompInfo.GET;
+      XmlDoc.CreateNode(AgreementNode,'element','LicenseAgreement','');
+      XmlLib.SetXmlNodeAttr(AgreementNode,'Update',ContiniaOnlineMgt.GetBoolAsText(IsUpdate));
+
+      XmlLib.CreateXmlNode(AgreementNode,'Company','',CompanyNode);
+      XmlLib.SetXmlNodeAttr(CompanyNode,'CompanyGUID',ContiniaOnlineMgt.GetCompanyGUID);
+      XmlLib.SetXmlNodeAttr(CompanyNode,'CompanyCode',ContiniaOnlineMgt.GetCompanyCode(TRUE));
+      XmlLib.SetXmlNodeAttr(CompanyNode,'CompanyName',COMPANYNAME);
+      XmlLib.SetXmlNodeAttr(CompanyNode,'CompanyInfoName',CompInfo.Name);
+      XmlLib.SetXmlNodeAttr(CompanyNode,'VATRegNo',CompInfo."VAT Registration No.");
+      XmlLib.SetXmlNodeAttr(CompanyNode,'NavVersion',ProductDescription);
+      XmlLib.SetXmlNodeAttr(CompanyNode,'NAVAppVersion',AppMgt.GetApplicationVersion);
+      XmlLib.SetXmlNodeAttr(CompanyNode,'ProductCode',ProductCode);
+      XmlLib.SetXmlNodeAttr(CompanyNode,'ProductVersion',ProductVersion);
+      XmlLib.SetXmlNodeAttr(CompanyNode,'NAVLicenseSN',ContiniaOnlineMgt.GetNavLicenseSN);
+
+      XmlLib.CreateXmlNode(AgreementNode,'LicenseInfo','',InfoNode);
+      FOR i := 1 TO ARRAYLEN(LicenseInfo) DO BEGIN
+        IF LicenseInfo[i] <> '' THEN BEGIN
+          XmlLib.CreateXmlNode(InfoNode,'Line','',LineNode);
+          XmlLib.SetXmlNodeAttr(LineNode,'Text',LicenseInfo[i]);
+        END;
+      END;
+
+      XmlDoc.AppendChild(AgreementNode);
+    END;
+
+    LOCAL PROCEDURE OfflineActivationStart@6085576(ProductCode@6085576 : Code[10];ProductVersion@6085575 : Text[250];ProductDescription@1160040001 : Text[250];LicenseInfo@6085574 : ARRAY [100] OF Text[250]);
+    VAR
+      ContiniaCompanySetup@6085578 : Record 6192773;
+      ContiniaProductActivation@6085579 : Record 6192772;
+      FileSysMgt@1000 : Codeunit 6085584;
+      XmlDoc@6085577 : Codeunit 6192800;
+      AboutDocumentCapture@6085573 : Codeunit 6085589;
+      FileName@6085582 : Text;
+      ServerFile@6085585 : Text;
+    BEGIN
+      ContiniaCompanySetup.GET;
+      ContiniaCompanySetup.TESTFIELD("Company GUID");
+      ContiniaCompanySetup.TESTFIELD("Client ID");
+      ContiniaCompanySetup.TESTFIELD("Company Code");
+
+      WITH ContiniaProductActivation DO BEGIN
+        IF NOT GET(ProductCode,COMPANYNAME) THEN BEGIN
+          SETRANGE("Product Code",ProductCode);
+          SETRANGE("Company GUID",ContiniaCompanySetup."Company GUID");
+          IF FINDFIRST THEN
+            RENAME(ProductCode,COMPANYNAME)
+          ELSE BEGIN
+            "Product Code" := ProductCode;
+            "Company Name" := COMPANYNAME;
+            INSERT;
+          END;
+        END;
+
+        "Hashed System Identifier" := HashValue(COMPANYNAME);
+        IF GetDatabaseReader(COMPANYNAME) THEN BEGIN
+          "Database Name" := DatabaseReader.GetName;
+          "Database Creator" := DatabaseReader.GetCreator;
+          "Database Created" := DatabaseReader.GetCreatedDate;
+        END ELSE BEGIN
+          "Database Name" := '';
+          "Database Creator" := '';
+          "Database Created" := 0D;
+        END;
+
+        "Client ID" := ContiniaCompanySetup."Client ID";
+        "Activation Date" := TODAY;
+        "Activated by User ID" := USERID;
+        "Product Version" := AboutDocumentCapture.ObjectVersion;
+        "Company GUID" := ContiniaCompanySetup."Company GUID";
+        "Company Code" := ContiniaCompanySetup."Company Code";
+        "Offline Activation Status" := "Offline Activation Status"::Started;
+        MODIFY(TRUE);
+      END;
+
+      GenerateLicenseXML(XmlDoc,ProductCode,ProductVersion,ProductDescription,LicenseInfo,FALSE);
+
+      FileName := FileSysMgt.SaveFileDialog(OfflineActivationWindowSave,
+        STRSUBSTNO('Continia Activation Request File - %1.xml',ProductCode),'XML|*.xml');
+      ServerFile := FileSysMgt.GetTempFilename('','xml');
+      XmlDoc.Save(ServerFile);
+      FileSysMgt.GetClientFilename(ServerFile,FALSE);
+
+      MESSAGE(CompleteOfflineActivationLater);
+      EXIT;
+    END;
+
+    LOCAL PROCEDURE OfflineActivationFinish@6085592(ProductCode@6085578 : Code[10];ProductVersion@6085576 : Text[250]);
+    VAR
+      ContiniaProductActivation@6085579 : Record 6192772;
+      TempBlob@6085574 : TEMPORARY Record 99008535;
+      FileSysMgt@6085581 : Codeunit 6085584;
+      XmlDoc@6085575 : Codeunit 6192800;
+      ReadStream@6085577 : InStream;
+      FileName@6085573 : Text[250];
+    BEGIN
+      WITH ContiniaProductActivation DO BEGIN
+        GET(ProductCode,COMPANYNAME);
+        IF "Offline Activation Status" <> "Offline Activation Status"::Started THEN
+          ERROR(OfflineActivationFailedErr);
+
+        IF NOT CONFIRM(FinishOfflineActivationQst,TRUE) THEN
+          ERROR('',ProductVersion);
+
+        FileName := STRSUBSTNO('Continia Activation Response File - %1.xml',ProductCode);
+        IF FileSysMgt.BlobImport(TempBlob,FileName) = '' THEN
+          ERROR('');
+
+        TempBlob.Blob.CREATEINSTREAM(ReadStream);
+        XmlDoc.LoadFromStream(ReadStream);
+
+        IF ValidateOfflineActivation(ContiniaProductActivation,XmlDoc) THEN BEGIN
+          "Offline Activation Status" := "Offline Activation Status"::Active;
+          MODIFY(TRUE);
+        END ELSE
+          ERROR(InvalidFileErr);
+      END;
+    END;
+
+    PROCEDURE UpdateLine@1160040012(LineText@1160040002 : Text[1024];ReplaceText@1160040003 : Text[100];ReplaceToText@1160040000 : Text[100]) : Text[1024];
+    VAR
+      ReplaceLen@1160040001 : Integer;
+      ReplaceToLen@1160040004 : Integer;
+      Count@1160040005 : Integer;
+    BEGIN
+      ReplaceLen := STRLEN(ReplaceText);
+      ReplaceToLen := STRLEN(ReplaceToText);
+      Count := STRPOS(LineText,ReplaceText);
+
+      IF Count <> 0 THEN BEGIN
+        LineText := COPYSTR(LineText,1,Count-1) +
+          ReplaceToText +
+          COPYSTR(LineText,Count+ReplaceLen);
+
+        LineText := COPYSTR(LineText,1,Count-1+ReplaceToLen) +
+          UpdateLine(
+            COPYSTR(LineText,Count+ReplaceToLen),
+            ReplaceText,
+            ReplaceToText);
+      END;
+
+      EXIT(LineText);
+    END;
+
+    PROCEDURE GetLicenseUrl@1160040039() : Text[1024];
+    BEGIN
+      IF ContiniaOnlineMgt.IsDev THEN
+        EXIT('https://devlicense.continiaonline.com/api/v1/LicenseAgreement/')
+      ELSE
+        IF ContiniaOnlineMgt.IsDemo THEN
+          EXIT('https://demolicense.continiaonline.com/api/v1/LicenseAgreement/')
+        ELSE
+          EXIT('https://license.continiaonline.com/api/v1/LicenseAgreement/');
+    END;
+
+    PROCEDURE GetAcceptUrl@1160040040() : Text[1024];
+    BEGIN
+      EXIT(GetLicenseUrl + 'AcceptLicense');
+    END;
+
+    PROCEDURE GetDeactivateUrl@6085582(CompanyGUID@6085573 : GUID) : Text[1024];
+    BEGIN
+      EXIT(GetLicenseUrl + 'company/' + ContiniaOnlineMgt.GetGUIDAsText(CompanyGUID) + '/deactivate');
+    END;
+
+    PROCEDURE GetActivationsURL@6085579() : Text[1024];
+    BEGIN
+      EXIT(GetLicenseUrl + 'Activations');
+    END;
+
+    PROCEDURE HashValue@1160040005(Company@1160040001 : Text[50]) : Text[128];
+    VAR
+      ContiniaCompanySetup@6085573 : Record 6192773;
+      ValueToHash@1160040003 : Text[1024];
+      Cryptography@1160040000 : Codeunit 6085599;
+    BEGIN
+      ContiniaCompanySetup.CHANGECOMPANY(Company);
+      ContiniaCompanySetup.GET;
+
+      IF GetDatabaseReader(Company) THEN
+        ValueToHash := UPPERCASE(STRSUBSTNO('%1-%2-%3-%4-%5-%6',
+          Company,
+          DatabaseReader.GetName,
+          DatabaseReader.GetCreator,
+          DatabaseReader.GetCreatedDateTxt,
+          ContiniaCompanySetup."Client ID",
+          ContiniaCompanySetup."Company Code"))
+      ELSE
+        ValueToHash := UPPERCASE(STRSUBSTNO('%1-%2-%3',Company,ContiniaCompanySetup."Client ID",ContiniaCompanySetup."Company Code"));
+
+      EXIT(Cryptography.HashValueSHA1(
+        '1C7754F1876B9EADA2BAD610E8B4DF18ECFD19F1EE8389D4BEC768A9EB883627' +
+        '983661067DE60965A0C5CB6737AB3E187B5294E64CB1CF3781E8346118148C81',
+        ValueToHash));
+    END;
+
+    PROCEDURE VerifyGUIDWithProduct@6085575(ProductCode@6085577 : Code[10];CurrCompany@1000 : Text[30]);
+    VAR
+      ContiniaCompanySetup@6085576 : Record 6192773;
+      ContiniaCompanySetup2@6085575 : Record 6192773;
+      Company@6085574 : Record 2000000006;
+      ContiniaProductActivation@1160040000 : Record 6192772;
+    BEGIN
+      ContiniaCompanySetup.GET;
+      Company.SETFILTER(Name,'<>%1',CurrCompany);
+      IF Company.FINDFIRST THEN
+        REPEAT
+          ContiniaCompanySetup2.CHANGECOMPANY(Company.Name);
+          IF ContiniaCompanySetup2.GET THEN
+            IF (ContiniaCompanySetup."Company GUID" = ContiniaCompanySetup2."Company GUID") THEN BEGIN
+              ContiniaProductActivation.SETRANGE("Company GUID",ContiniaCompanySetup2."Company GUID");
+              IF NOT ContiniaProductActivation.ISEMPTY THEN
+                ERROR(Text009,Company.Name,CurrCompany);
+            END;
+        UNTIL Company.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE ValidateOfflineActivation@6085581(ContiniaProductActivation@6085574 : Record 6192772;XmlDoc@6085573 : Codeunit 6192800) : Boolean;
+    VAR
+      CompanyInformation@6085584 : Record 79;
+      ContiniaOnlineMgt@6085575 : Codeunit 6192772;
+      Cryptography@6085577 : Codeunit 6085599;
+      XmlNode@6085583 : Codeunit 6192801;
+      CompanyNodeList@1000 : Codeunit 6192802;
+      ActivationNodeList@1001 : Codeunit 6192802;
+      CompanyNameCode@6085579 : Text[30];
+      VATRegNo@6085580 : Text[20];
+      NAVLicenseSN@6085581 : Text[100];
+      CompanyGUID@6085576 : Text[1024];
+      ActivationCode@6085578 : Text[128];
+    BEGIN
+      XmlDoc.SelectSingleNode(XmlNode,'LicenseAgreement');
+      XmlNode.SelectNodes(CompanyNodeList,'Company');
+      XmlNode.SelectNodes(ActivationNodeList,'Activation');
+      CASE FALSE OF
+        ContiniaOnlineMgt.GetAttribAsText(CompanyNodeList,'CompanyName',0,CompanyNameCode),
+        ContiniaOnlineMgt.GetAttribAsText(CompanyNodeList,'VATRegNo',0,VATRegNo),
+        ContiniaOnlineMgt.GetAttribAsText(CompanyNodeList,'NAVLicenseSN',0,NAVLicenseSN),
+        ContiniaOnlineMgt.GetAttribAsText(CompanyNodeList,'CompanyGUID',0,CompanyGUID),
+        ContiniaOnlineMgt.GetAttribAsText(ActivationNodeList,'Code',0,ActivationCode):
+          EXIT(FALSE);
+      END;
+
+      CompanyInformation.GET;
+      CASE FALSE OF
+        CompanyNameCode = COMPANYNAME,
+        VATRegNo = CompanyInformation."VAT Registration No.",
+        NAVLicenseSN = ContiniaOnlineMgt.GetNavLicenseSN,
+        CompanyGUID = ContiniaOnlineMgt.GetCompanyGUID:
+          EXIT(FALSE);
+      END;
+
+      IF ActivationCode <> Cryptography.HashValueSHA1(
+        '1C7754F1876B9EADA2BAD610E8B4DF18ECFD19F1EE8389D4BEC768A9EB883627' +
+        '983661067DE60965A0C5CB6737AB3E187B5294E64CB1CF3781E8346118148C81',
+        ContiniaOnlineMgt.GetCompanyGUID)
+      THEN
+        EXIT(FALSE);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GetDatabaseReader@1(Company@6085576 : Text[50]) : Boolean;
+    VAR
+      ContiniaSIStorage@6085573 : Codeunit 6192778;
+      DatabaseReadable@6085574 : ' ,Not Readable,Readable';
+      ContiniaCompanySetup@6085575 : Record 6192773;
+    BEGIN
+      CASE ContiniaSIStorage.IsDatabaseReadable OF
+        DatabaseReadable::" ":
+          BEGIN
+            ContiniaCompanySetup.CHANGECOMPANY(Company);
+            IF ContiniaCompanySetup.GET THEN
+              IF ContiniaCompanySetup."Exclude DB info.from activa." THEN BEGIN
+                ContiniaSIStorage.SetDatabaseReadable(DatabaseReadable::"Not Readable");
+                EXIT(FALSE);
+            END;
+
+            IF DatabaseReader.RUN THEN
+              ContiniaSIStorage.SetDatabaseReadable(DatabaseReadable::Readable)
+            ELSE BEGIN
+              ContiniaSIStorage.SetDatabaseReadable(DatabaseReadable::"Not Readable");
+              EXIT(FALSE);
+            END;
+          END;
+
+        DatabaseReadable::"Not Readable":
+          EXIT(FALSE);
+
+        DatabaseReadable::Readable:
+          DatabaseReader.RUN;
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GetCompanyActivations@6085577(VAR ClientActivationsBuffer@6085573 : Record 6192775;IncludeDeleted@6085578 : Boolean);
+    VAR
+      XmlDoc@6085574 : Codeunit 6192800;
+      XMLNodeList@6085576 : Codeunit 6192802;
+      XmlNode@6085575 : Codeunit 6192801;
+      i@6085577 : Integer;
+    BEGIN
+      ContiniaOnlineMgt.ExecuteRequest(GetActivationsURL,HttpActions::GET,TRUE,XmlDoc);
+
+      WITH ClientActivationsBuffer DO BEGIN
+        XmlDoc.SelectSingleNode(XmlNode,'Activations');
+        XmlNode.SelectNodes(XMLNodeList,'Activation');
+        FOR i := 0 TO XMLNodeList.Count - 1 DO BEGIN
+          INIT;
+          "Entry No." := i;
+          ContiniaOnlineMgt.GetAttribAsText(XMLNodeList,'CompanyName',i,"Company Name");
+          "Company GUID" := ContiniaOnlineMgt.GetAttribAsGuid(XMLNodeList,'CompanyGUID',i);
+          "Company Code" := ContiniaOnlineMgt.GetAttribAsCode(XMLNodeList,'CompanyCode',i);
+          Deleted := ContiniaOnlineMgt.GetAttribAsBool(XMLNodeList,'Deactivated',i);
+          IF (IncludeDeleted AND Deleted) OR NOT Deleted THEN
+            INSERT;
+        END;
+
+        IF FINDFIRST THEN;
+      END;
+    END;
+
+    PROCEDURE GetContiniaSoftwareLicenseTerm@6085584() : Text[1024];
+    BEGIN
+      EXIT('http://partnerzone.continia.dk/info/Continia-Software-License-Terms.pdf');
+    END;
+
+    PROCEDURE GetActivationMsg@6085585(ActivationState2@6085573 : 'NeverActivated,NeedReactivation,Activated,OfflineStarted';ProductCode@6085579 : Code[10];FullProductName@6085575 : Text[250];ShortProductName@6085580 : Text[30];ShowMessageAndActivate@6085574 : Boolean;ObjectVersion@6085588 : Text[30]) : Text[1024];
+    VAR
+      ContiniaCompanySetup@6085577 : Record 6192773;
+      ContiniaProductActivation@6085578 : Record 6192772;
+      TempText@6085576 : Text[1024];
+      ActivationWizard@6085595 : Page 6192777;
+    BEGIN
+      CASE ActivationState2 OF
+        ActivationState2::NeverActivated:
+          BEGIN
+            TempText := STRSUBSTNO(NotActivatedTxt,FullProductName);
+
+            IF ShowMessageAndActivate THEN BEGIN
+              TempText := TempText + '\' + StartActivationTxt;
+
+              IF CONFIRM(TempText,TRUE) THEN BEGIN
+                ActivationWizard.SetupParameters(FullProductName,ShortProductName,ObjectVersion,ProductCode);
+                ActivationWizard.RUNMODAL;
+              END;
+            END ELSE BEGIN
+              TempText := TempText + ' ' + STRSUBSTNO(PleaseActivateTxt,FullProductName);
+              EXIT(TempText);
+            END;
+          END;
+
+        ActivationState2::NeedReactivation:
+          BEGIN
+            ContiniaCompanySetup.GET;
+            ContiniaProductActivation.SETRANGE("Product Code",ProductCode);
+            ContiniaProductActivation.SETRANGE("Company GUID",ContiniaCompanySetup."Company GUID");
+            IF NOT ContiniaProductActivation.FINDFIRST THEN
+              ContiniaProductActivation.GET(ProductCode,COMPANYNAME);
+
+            IF (ContiniaProductActivation."Expiration Date" <> 0D) AND (ContiniaProductActivation."Expiration Date" < TODAY) THEN BEGIN
+              TempText := STRSUBSTNO(ActivationExpired,FullProductName,ContiniaProductActivation."Expiration Date");
+
+              IF ShowMessageAndActivate THEN BEGIN
+                TempText := TempText + '\' + StartActivationTxt;
+
+                IF CONFIRM(TempText,TRUE) THEN BEGIN
+                  ActivationWizard.SetupParameters(FullProductName,ShortProductName,ObjectVersion,ProductCode);
+                  ActivationWizard.RUNMODAL;
+                END;
+              END ELSE BEGIN
+                TempText := TempText + ' ' + STRSUBSTNO(PleaseActivateTxt,FullProductName);
+                EXIT(TempText);
+              END;
+            END ELSE BEGIN
+              TempText := STRSUBSTNO(NeedsReactivationTxt,FullProductName);
+
+              IF GetDatabaseReader(COMPANYNAME) THEN BEGIN
+                IF COMPANYNAME <> ContiniaProductActivation."Company Name" THEN BEGIN
+                  TempText := TempText + STRSUBSTNO('\%1',ContiniaProductActivation.FIELDCAPTION("Company Name")) + '\';
+                  TempText := TempText + STRSUBSTNO(CurrentTxt,COMPANYNAME);
+                  TempText := TempText + STRSUBSTNO(ActivatedTxt,ContiniaProductActivation."Company Name");
+                END;
+
+                IF ContiniaCompanySetup."Company Code" <> ContiniaProductActivation."Company Code" THEN BEGIN
+                  TempText := TempText + STRSUBSTNO('\%1',ContiniaProductActivation.FIELDCAPTION("Company Code")) + '\';
+                  TempText := TempText + STRSUBSTNO(CurrentTxt,ContiniaCompanySetup."Company Code");
+                  TempText := TempText + STRSUBSTNO(ActivatedTxt,ContiniaProductActivation."Company Code");
+                END;
+
+                IF ContiniaCompanySetup."Client ID" <> ContiniaProductActivation."Client ID" THEN BEGIN
+                  TempText := TempText + STRSUBSTNO('\%1',ContiniaProductActivation.FIELDCAPTION("Client ID")) + '\';
+                  TempText := TempText + STRSUBSTNO(CurrentTxt,ContiniaCompanySetup."Client ID");
+                  TempText := TempText + STRSUBSTNO(ActivatedTxt,ContiniaProductActivation."Client ID");
+                END;
+
+                IF DatabaseReader.GetName <> ContiniaProductActivation."Database Name" THEN BEGIN
+                  TempText := TempText + STRSUBSTNO('\%1',ContiniaProductActivation.FIELDCAPTION("Database Name")) + '\';
+                  TempText := TempText + STRSUBSTNO(CurrentTxt,DatabaseReader.GetName);
+                  TempText := TempText + STRSUBSTNO(ActivatedTxt,ContiniaProductActivation."Database Name");
+                END;
+
+                IF DatabaseReader.GetCreator <> ContiniaProductActivation."Database Creator" THEN BEGIN
+                  TempText := TempText + STRSUBSTNO('\%1',ContiniaProductActivation.FIELDCAPTION("Database Creator")) + '\';
+                  TempText := TempText + STRSUBSTNO(CurrentTxt,DatabaseReader.GetCreator);
+                  TempText := TempText + STRSUBSTNO(ActivatedTxt,ContiniaProductActivation."Database Creator");
+                END;
+
+                IF DatabaseReader.GetCreatedDate <> ContiniaProductActivation."Database Created" THEN BEGIN
+                  TempText := TempText + STRSUBSTNO('\%1',ContiniaProductActivation.FIELDCAPTION("Database Created")) + '\';
+                  TempText := TempText + STRSUBSTNO(CurrentTxt,DatabaseReader.GetCreatedDate);
+                  TempText := TempText + STRSUBSTNO(ActivatedTxt,ContiniaProductActivation."Database Created");
+                END;
+              END ELSE BEGIN
+                IF COMPANYNAME <> ContiniaProductActivation."Company Name" THEN BEGIN
+                  TempText := TempText + STRSUBSTNO('\%1',ContiniaProductActivation.FIELDCAPTION("Company Name")) + '\';
+                  TempText := TempText + STRSUBSTNO(CurrentTxt,COMPANYNAME);
+                  TempText := TempText + STRSUBSTNO(ActivatedTxt,ContiniaProductActivation."Company Name");
+                END;
+
+                IF ContiniaCompanySetup."Company Code" <> ContiniaProductActivation."Company Code" THEN BEGIN
+                  TempText := TempText + STRSUBSTNO('\%1',ContiniaProductActivation.FIELDCAPTION("Company Code")) + '\';
+                  TempText := TempText + STRSUBSTNO(CurrentTxt,ContiniaCompanySetup."Company Code");
+                  TempText := TempText + STRSUBSTNO(ActivatedTxt,ContiniaProductActivation."Company Code");
+                END;
+
+                IF ContiniaCompanySetup."Client ID" <> ContiniaProductActivation."Client ID" THEN BEGIN
+                  TempText := TempText + STRSUBSTNO('\%1',ContiniaProductActivation.FIELDCAPTION("Client ID")) + '\';
+                  TempText := TempText + STRSUBSTNO(CurrentTxt,ContiniaCompanySetup."Client ID");
+                  TempText := TempText + STRSUBSTNO(ActivatedTxt,ContiniaProductActivation."Client ID");
+                END;
+              END;
+
+              IF ShowMessageAndActivate THEN BEGIN
+                TempText := TempText + StartActivationTxt;
+
+                IF CONFIRM(TempText,TRUE) THEN BEGIN
+                  ActivationWizard.SetupParameters(FullProductName,ShortProductName,ObjectVersion,ProductCode);
+                  ActivationWizard.RUNMODAL;
+                END;
+              END ELSE BEGIN
+                TempText := TempText + '\' + STRSUBSTNO(PleaseActivateTxt,FullProductName);
+                EXIT(TempText);
+              END;
+            END;
+          END;
+
+        ActivationState2::Activated:
+          BEGIN
+            // Have copied statement populating TempText to MESSAGE to prevent line break between Domain and user ID
+            ContiniaProductActivation.GET(ProductCode,COMPANYNAME);
+            TempText := STRSUBSTNO(ActivatedMsg,FullProductName,ContiniaProductActivation."Activation Date",
+              ContiniaProductActivation."Activated by User ID");
+
+            IF ShowMessageAndActivate THEN
+              MESSAGE(ActivatedMsg,FullProductName,ContiniaProductActivation."Activation Date",
+                ContiniaProductActivation."Activated by User ID")
+            ELSE
+              EXIT(TempText);
+          END;
+
+        ActivationState2::OfflineStarted:
+          BEGIN
+            // Have copied statement populating TempText to MESSAGE to prevent line break between Domain and user ID
+            ContiniaProductActivation.GET(ProductCode,COMPANYNAME);
+            TempText := STRSUBSTNO(AwaitingOffLineActivationTxt,FullProductName,ContiniaProductActivation."Activation Date",
+              ContiniaProductActivation."Activated by User ID");
+
+            IF ShowMessageAndActivate THEN
+              MESSAGE(AwaitingOffLineActivationTxt,FullProductName,ContiniaProductActivation."Activation Date",
+                ContiniaProductActivation."Activated by User ID")
+            ELSE
+              EXIT(TempText);
+          END;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,188 @@
+OBJECT Codeunit 6085773 Sales Doc. - Full Capture
+{
+  OBJECT-PROPERTIES
+  {
+    Date=09/15/17;
+    Time=[ 1:00:00 AM];
+    Version List=DCW13.70.00.5.00;
+  }
+  PROPERTIES
+  {
+    TableNo=6085590;
+    OnRun=VAR
+            GLSetup@1000000015 : Record 98;
+            DCSetup@1160040000 : Record 6085573;
+            Field@161024020 : Record 6085580;
+            TemplField@161024019 : Record 6085580;
+            TemplField2@1000000006 : Record 6085580;
+            Value@1000000002 : Record 6085593;
+            Template@161024012 : Record 6085579;
+            FieldRule@1000000000 : Record 6085583;
+            DocumentComment@1000000005 : Record 6085594;
+            Customer@1000000003 : Record 18;
+            Salesperson@1001 : Record 13;
+            PurchHeader@161024022 : Record 38;
+            DataTransl@161024018 : Record 6085584;
+            TemplFieldCaption@1002 : Record 6085581;
+            CaptionStartWord@1009 : ARRAY [100] OF Record 6085592;
+            CaptionEndWord@1008 : ARRAY [100] OF Record 6085592;
+            CaptureEngine@1007 : Codeunit 6085575;
+            CaptionFound@1006 : Boolean;
+            CodePart@1005 : Code[250];
+            TopMostCodePart@1004 : Code[250];
+            TopMostY@1003 : Integer;
+            OurContact@1010 : Text[50];
+            CaptionPart@1011 : Text[250];
+          BEGIN
+            DeleteComments(DocumentComment.Area::Capture);
+
+            GLSetup.GET;
+            DCSetup.GET;
+
+            Customer.GET(GetSourceID);
+
+            IF SalesDocMgt.GetOurDocNo(Rec) <> '' THEN BEGIN
+              SalesDocMgt.UpdateDefDocValFromOrder(Rec,SalesDocMgt.GetOurDocNo(Rec));
+              EXIT;
+            END;
+
+            // *********************************************************************************************************************************
+            // IF CURRENCY CODE HAS NOT BEEN RECOGNIZED, THEN GO GET IT FROM THE CUSTOMER
+            // *********************************************************************************************************************************
+            IF Field.GET(Rec."Template No.",Field.Type::Header,'CURRCODE') THEN
+              IF (NOT CaptureMgt.GetFieldValue(Rec,Field,0,Value)) OR (Value."Value (Text)" = '') THEN BEGIN
+                IF Customer."Currency Code" <> '' THEN BEGIN
+                  CaptureMgt.UpdateFieldValue(Rec."No.",0,0,Field,Customer."Currency Code",TRUE,FALSE);
+                  DocumentComment.Add(Rec,Field,0,DocumentComment.Area::Capture,DocumentComment."Comment Type"::Warning,
+                    STRSUBSTNO(Text001,Field."Field Name",LOWERCASE(Customer.TABLECAPTION)));
+                END ELSE
+                  IF DCSetup."Fill-out LCY" THEN
+                    CaptureMgt.UpdateFieldValue("No.",0,0,Field,GLSetup."LCY Code",FALSE,FALSE);
+              END;
+
+            // *********************************************************************************************************************************
+            // FIND THE DOCUMENT TYPE
+            // *********************************************************************************************************************************
+            IF Field.GET("Template No.",Field.Type::Header,'DOCTYPE') THEN
+              IF CaptureMgt.GetText(Rec,Field.Type::Header,Field.Code,0) = '' THEN BEGIN
+                TemplFieldCaption.SETRANGE("Template No.","Template No.");
+                TemplFieldCaption.SETRANGE(Type,Field.Type);
+                TemplFieldCaption.SETRANGE(Code,Field.Code);
+                IF TemplFieldCaption.FINDSET(FALSE,FALSE) THEN
+                  REPEAT
+                    IF STRPOS(TemplFieldCaption.Caption,':') <> 0 THEN BEGIN
+                      CodePart := DELCHR(COPYSTR(TemplFieldCaption.Caption,1,STRPOS(TemplFieldCaption.Caption,':')-1),'<>',' ');
+                      CaptionPart := DELCHR(COPYSTR(TemplFieldCaption.Caption,STRPOS(TemplFieldCaption.Caption,':')+1),'<>',' ');
+                      IF (CodePart <> '') AND (CaptionPart <> '') THEN BEGIN
+                        TemplFieldCaption.Caption := CaptionPart;
+                        IF CaptureEngine.FindCaption("No.",1,Field,TemplFieldCaption,CaptionStartWord,CaptionEndWord) THEN BEGIN
+                          IF (CaptionStartWord[1].Top < TopMostY) OR (TopMostY = 0) THEN BEGIN
+                            TopMostY := CaptionStartWord[1].Top;
+                            TopMostCodePart := CodePart;
+                          END;
+                        END;
+                      END;
+                    END;
+                  UNTIL TemplFieldCaption.NEXT = 0;
+
+                CaptureMgt.UpdateFieldValue("No.",0,0,Field,TopMostCodePart,TRUE,FALSE)
+              END;
+
+            // *********************************************************************************************************************************
+            // IF SALESPERSON HAS NOT BEEN FOUND THEN GET IT FROM FROM NAME OR CUSTOMER
+            // *********************************************************************************************************************************
+            IF Field.GET(Rec."Template No.",Field.Type::Header,'OURCONTACT') THEN BEGIN
+              OurContact := COPYSTR(SalesDocMgt.GetOurContact(Rec),1,MAXSTRLEN(OurContact));
+              IF OurContact <> '' THEN BEGIN
+                IF NOT Salesperson.GET(COPYSTR(OurContact,1,MAXSTRLEN(Salesperson.Code))) THEN BEGIN
+                  Salesperson.SETFILTER(Name,'@' + CaptureMgt.ReplaceIllegalFilterCharacters(OurContact,FALSE,0));
+                  IF Salesperson.FINDFIRST THEN
+                    CaptureMgt.UpdateFieldValue(Rec."No.",0,0,Field,Salesperson.Code,TRUE,FALSE);
+                END;
+              END ELSE
+                IF Customer."Salesperson Code" <> '' THEN
+                  CaptureMgt.UpdateFieldValue(Rec."No.",0,0,Field,Customer."Salesperson Code",TRUE,FALSE);
+            END;
+
+            // *********************************************************************************************************************************
+            // UPDATE POSTING ACCOUNTS FROM DATA TRANSLATION TABLE
+            // *********************************************************************************************************************************
+            Field.SETRANGE("Template No.",Rec."Template No.");
+            Field.SETRANGE(Type,Field.Type::Header);
+            Field.SETFILTER("G/L Account Field Code",'<>%1','');
+            IF Field.FINDSET THEN
+              REPEAT
+                IF TemplField2.GET(Field."Template No.",Field.Type,Field."G/L Account Field Code") THEN
+                  IF (NOT CaptureMgt.GetFieldValue(Rec,TemplField2,0,Value)) OR (Value."Value (Text)" = '') THEN BEGIN
+                    DataTransl.SETRANGE("Template No.","Template No.");
+                    DataTransl.SETRANGE(Type,Field.Type);
+                    DataTransl.SETRANGE("Field Code",Field.Code);
+
+                    IF DataTransl.FINDFIRST AND (DataTransl."Translate to Type" = DataTransl."Translate to Type"::"G/L Account") AND
+                      (DataTransl."Translate to No." <> '')
+                    THEN
+                      CaptureMgt.UpdateFieldValue(Rec."No.",0,0,TemplField2,DataTransl."Translate to No.",TRUE,FALSE);
+                  END;
+              UNTIL Field.NEXT = 0;
+
+            AdjustMissingQty(Rec);
+
+            Template.GET("Template No.");
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1000000000 : TextConst 'ENU=WARNING: %1 was taken from the %2.';
+      SalesDocMgt@1001 : Codeunit 6085770;
+      CaptureMgt@1000 : Codeunit 6085576;
+
+    PROCEDURE AdjustMissingQty@1000000000(VAR Document@1000000000 : Record 6085590);
+    VAR
+      DocumentLine@1000000001 : TEMPORARY Record 6085596;
+      Template@1000000007 : Record 6085579;
+      Field@1000000006 : Record 6085580;
+      UnitCost@1000000002 : Decimal;
+      DiscPct@1000000003 : Decimal;
+      DiscAmount@1000000004 : Decimal;
+      LineAmount@1000000005 : Decimal;
+    BEGIN
+      Document.BuildTempLinesTable(DocumentLine);
+
+      IF DocumentLine.ISEMPTY THEN
+        EXIT;
+
+      Template.GET(Document."Template No.");
+
+      IF DocumentLine.FINDSET THEN
+        REPEAT
+          IF SalesDocMgt.GetLineQuantity(Document,DocumentLine."Line No.") = 0 THEN BEGIN
+            UnitCost := SalesDocMgt.GetLineUnitCost(Document,DocumentLine."Line No.");
+            IF UnitCost <> 0 THEN BEGIN
+              DiscPct := SalesDocMgt.GetLineDiscPct(Document,DocumentLine."Line No.");
+              DiscAmount := SalesDocMgt.GetLineDiscAmount(Document,DocumentLine."Line No.");
+              LineAmount := SalesDocMgt.GetLineAmount(Document,DocumentLine."Line No.");
+
+              IF DiscAmount <> 0 THEN
+                UnitCost := UnitCost - DiscAmount
+              ELSE IF DiscPct <> 0 THEN
+                UnitCost := UnitCost * ((100-DiscPct) / 100);
+
+              IF UnitCost = LineAmount THEN BEGIN
+                Field.GET(Document."Template No.",Field.Type::Line,'QUANTITY');
+                CaptureMgt.UpdateFieldValue(Document."No.",DocumentLine."Page No.",DocumentLine."Line No.",Field,FORMAT(1),TRUE,FALSE);
+              END;
+            END;
+          END;
+        UNTIL DocumentLine.NEXT = 0;
+    END;
+
+    BEGIN
+    {
+      This codeunit performs post-capture actions on sales documents
+    }
+    END.
+  }
+}
+

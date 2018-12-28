@@ -1,0 +1,376 @@
+OBJECT Codeunit 6085748 Web Search Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/24/17;
+    Time=[ 1:00:00 AM];
+    Version List=DCW13.70.00.4.50;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 6086005=rimd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      GLSetup@1160040001 : Record 98;
+      GotGLSetup@1160040002 : Boolean;
+
+    PROCEDURE UpdateWebSearchFromPurchHeader@161024052(PurchHeader@161024013 : Record 38;IsDeleting@161024012 : Boolean);
+    VAR
+      DCSetup@161024014 : Record 6085573;
+      ContiniaCompanySetup@6085573 : Record 6192773;
+      ContiniaWebPortal@1160040000 : Record 6192774;
+      ApprovalEntry@161024015 : Record 454;
+      WebDocSearch@161024020 : Record 6086005;
+    BEGIN
+      IF NOT (PurchHeader."Document Type" IN [PurchHeader."Document Type"::Invoice,PurchHeader."Document Type"::"Credit Memo"]) THEN
+        EXIT;
+
+      IF NOT DCSetup.GET THEN
+        EXIT;
+
+      IF NOT ContiniaCompanySetup.GET THEN
+        EXIT;
+
+      IF NOT ContiniaWebPortal.GET(ContiniaCompanySetup."Web Portal Code") THEN
+        EXIT;
+
+      IF DCSetup."Web: Historical Documents" <> DCSetup."Web: Historical Documents"::"Posted and Un-posted Documents" THEN
+        EXIT;
+
+      IF IsDeleting THEN BEGIN
+        IF PurchHeader."Document Type" = PurchHeader."Document Type"::Invoice THEN
+          WebDocSearch.SETRANGE(Type,WebDocSearch.Type::"Purchase Invoice")
+        ELSE
+          WebDocSearch.SETRANGE(Type,WebDocSearch.Type::"Purchase Credit Memo");
+        WebDocSearch.SETRANGE("No.",PurchHeader."No.");
+        WebDocSearch.DELETEALL(TRUE);
+        EXIT;
+      END;
+
+      ApprovalEntry.SETRANGE("Table ID",DATABASE::"Purchase Header");
+      ApprovalEntry.SETRANGE("Document Type",PurchHeader."Document Type");
+      ApprovalEntry.SETRANGE("Document No.",PurchHeader."No.");
+      ApprovalEntry.SETFILTER(Status,'>%1',ApprovalEntry.Status::Open);
+      IF ApprovalEntry.FINDSET THEN
+        REPEAT
+          UpdateWebSearchFromAppvlEntry(ApprovalEntry,ApprovalEntry."Approver ID");
+
+          // Create an entry for the original approver as well
+          IF NOT (ApprovalEntry."Original Approver ID" IN ['',ApprovalEntry."Approver ID"]) THEN
+            UpdateWebSearchFromAppvlEntry(ApprovalEntry,ApprovalEntry."Original Approver ID");
+        UNTIL ApprovalEntry.NEXT = 0;
+    END;
+
+    PROCEDURE UpdateWebSearchFromAppvlEntry@161024012(ApprovalEntry@161024012 : Record 454;CurrUserId@161024015 : Code[50]);
+    VAR
+      PurchHeader@161024013 : Record 38;
+      ContiniaCompanySetup@6085573 : Record 6192773;
+      ContiniaWebPortal@1160040000 : Record 6192774;
+      DCSetup@161024014 : Record 6085573;
+      WebDocSearch@161024020 : Record 6086005;
+      GLSetup@161024017 : Record 98;
+      ExtDocNo@1160040001 : Code[50];
+      DocType@161024016 : Integer;
+    BEGIN
+      IF CurrUserId = '' THEN
+        EXIT;
+
+      IF ApprovalEntry."Table ID" <> DATABASE::"Purchase Header" THEN
+        EXIT;
+
+      IF NOT PurchHeader.GET(ApprovalEntry."Document Type",ApprovalEntry."Document No.") THEN
+        EXIT;
+
+      IF NOT (PurchHeader."Document Type" IN [PurchHeader."Document Type"::Invoice,PurchHeader."Document Type"::"Credit Memo"]) THEN
+        EXIT;
+
+      IF NOT DCSetup.GET THEN
+        EXIT;
+
+      IF NOT ContiniaCompanySetup.GET THEN
+        EXIT;
+
+      IF NOT ContiniaWebPortal.GET(ContiniaCompanySetup."Web Portal Code") THEN
+        EXIT;
+
+      GLSetup.GET;
+
+      IF DCSetup."Web: Historical Documents" <> DCSetup."Web: Historical Documents"::"Posted and Un-posted Documents" THEN
+        EXIT;
+
+      IF PurchHeader."Document Type" = PurchHeader."Document Type"::Invoice THEN BEGIN
+        DocType := WebDocSearch.Type::"Purchase Invoice";
+        ExtDocNo := PurchHeader."Vendor Invoice No.";
+      END ELSE BEGIN
+        DocType := WebDocSearch.Type::"Purchase Credit Memo";
+        ExtDocNo := PurchHeader."Vendor Cr. Memo No.";
+      END;
+
+      UpdateWebDocSearch(
+        DocType,
+        PurchHeader."No.",
+        CurrUserId,
+        PurchHeader."Pay-to Name",
+        PurchHeader."Posting Date",
+        PurchHeader."Document Date",
+        ExtDocNo,
+        PurchHeader."Currency Code",
+        ApprovalEntry.Amount,
+        ApprovalEntry."Amount Incl. VAT");
+
+      IF ApprovalEntry."Approver ID" <> CurrUserId THEN
+        UpdateWebDocSearch(
+          DocType,
+          PurchHeader."No.",
+          ApprovalEntry."Approver ID",
+          PurchHeader."Pay-to Name",
+          PurchHeader."Posting Date",
+          PurchHeader."Document Date",
+          ExtDocNo,
+          PurchHeader."Currency Code",
+          ApprovalEntry.Amount,
+          ApprovalEntry."Amount Incl. VAT");
+
+      // Create an entry for the original approver as well
+      IF NOT (ApprovalEntry."Original Approver ID" IN ['',ApprovalEntry."Approver ID"]) THEN
+        UpdateWebDocSearch(
+          DocType,
+          PurchHeader."No.",
+          ApprovalEntry."Original Approver ID",
+          PurchHeader."Pay-to Name",
+          PurchHeader."Posting Date",
+          PurchHeader."Document Date",
+          ExtDocNo,
+          PurchHeader."Currency Code",
+          ApprovalEntry.Amount,
+          ApprovalEntry."Amount Incl. VAT");
+    END;
+
+    PROCEDURE UpdateWebSearchFromInvoice@161024044(VAR PurchInvHeader@161024012 : Record 122;CompName@1160040000 : Text[250]);
+    VAR
+      PurchInvLine@1160040001 : Record 123;
+      WebDocSearch@161024013 : Record 6086005;
+      PostedApprEntry@161024014 : Record 456;
+      UserSetup@161024015 : Record 91;
+      GLSetup@161024016 : Record 98;
+      TotalAmt@1160040002 : Decimal;
+      TotalAmtInclVAT@1160040003 : Decimal;
+    BEGIN
+      WebDocSearch.CHANGECOMPANY(CompName);
+      PurchInvLine.CHANGECOMPANY(CompName);
+      PostedApprEntry.CHANGECOMPANY(CompName);
+      UserSetup.CHANGECOMPANY(CompName);
+      GLSetup.CHANGECOMPANY(CompName);
+
+      GLSetup.GET;
+
+      PurchInvLine.SETRANGE("Document No.",PurchInvHeader."No.");
+      IF PurchInvLine.FINDSET THEN
+        REPEAT
+          TotalAmt := TotalAmt + PurchInvLine.Amount;
+          TotalAmtInclVAT := TotalAmtInclVAT + PurchInvLine."Amount Including VAT";
+        UNTIL PurchInvLine.NEXT = 0;
+
+      PostedApprEntry.SETRANGE("Table ID",DATABASE::"Purch. Inv. Header");
+      PostedApprEntry.SETRANGE("Document No.",PurchInvHeader."No.");
+      PostedApprEntry.SETRANGE(Status,PostedApprEntry.Status::Approved);
+      IF PostedApprEntry.FINDSET THEN
+        REPEAT
+          UpdateWebDocSearch(
+            WebDocSearch.Type::"Posted Purch. Invoice",
+            PurchInvHeader."No.",
+            PostedApprEntry."Approver ID",
+            PurchInvHeader."Pay-to Name",
+            PurchInvHeader."Posting Date",
+            PurchInvHeader."Document Date",
+            PurchInvHeader."Vendor Invoice No.",
+            PurchInvHeader."Currency Code",
+            TotalAmt,
+            TotalAmtInclVAT);
+
+          // Create an entry for the original approver as well
+          IF NOT (PostedApprEntry."Original Approver ID" IN ['',PostedApprEntry."Approver ID"]) THEN
+            UpdateWebDocSearch(
+              WebDocSearch.Type::"Posted Purch. Invoice",
+              PurchInvHeader."No.",
+              PostedApprEntry."Original Approver ID",
+              PurchInvHeader."Pay-to Name",
+              PurchInvHeader."Posting Date",
+              PurchInvHeader."Document Date",
+              PurchInvHeader."Vendor Invoice No.",
+              PurchInvHeader."Currency Code",
+              TotalAmt,
+              TotalAmtInclVAT);
+        UNTIL PostedApprEntry.NEXT = 0;
+
+      IF PurchInvHeader."Purchaser Code" = '' THEN
+        EXIT;
+
+      UserSetup.SETRANGE("Salespers./Purch. Code",PurchInvHeader."Purchaser Code");
+      IF UserSetup.FINDFIRST THEN
+        UpdateWebDocSearch(
+          WebDocSearch.Type::"Posted Purch. Invoice",
+          PurchInvHeader."No.",
+          UserSetup."User ID",
+          PurchInvHeader."Pay-to Name",
+          PurchInvHeader."Posting Date",
+          PurchInvHeader."Document Date",
+          PurchInvHeader."Vendor Invoice No.",
+          PurchInvHeader."Currency Code",
+          TotalAmt,
+          TotalAmtInclVAT);
+    END;
+
+    PROCEDURE UpdateWebSearchFromInvoice2@161024046(VAR PurchInvHeader@161024012 : Record 122);
+    VAR
+      DCSetup@1160040001 : Record 6085573;
+      ContiniaCompanySetup@6085573 : Record 6192773;
+      ContiniaWebPortal@1160040000 : Record 6192774;
+    BEGIN
+      IF NOT DCSetup.GET THEN
+        EXIT;
+
+      IF NOT ContiniaCompanySetup.GET THEN
+        EXIT;
+
+      IF NOT ContiniaWebPortal.GET(ContiniaCompanySetup."Web Portal Code") THEN
+        EXIT;
+
+      IF DCSetup."Maintain User Document Search" THEN
+        UpdateWebSearchFromInvoice(PurchInvHeader,COMPANYNAME);
+    END;
+
+    PROCEDURE UpdateWebSearchFromCrMemo@161024047(VAR PurchCrMemoHeader@161024017 : Record 124;CompName@1160040000 : Text[250]);
+    VAR
+      PurchCrMemoLine@1160040001 : Record 125;
+      WebDocSearch@161024013 : Record 6086005;
+      PostedApprEntry@161024014 : Record 456;
+      UserSetup@161024015 : Record 91;
+      GLSetup@161024016 : Record 98;
+      TotalAmt@1160040002 : Decimal;
+      TotalAmtInclVat@1160040003 : Decimal;
+    BEGIN
+      GLSetup.GET;
+
+      PurchCrMemoLine.SETRANGE("Document No.",PurchCrMemoHeader."No.");
+      IF PurchCrMemoLine.FINDSET THEN
+        REPEAT
+          TotalAmt := TotalAmt + PurchCrMemoLine.Amount;
+          TotalAmtInclVat := TotalAmtInclVat + PurchCrMemoLine."Amount Including VAT";
+        UNTIL PurchCrMemoLine.NEXT = 0;
+
+
+      PostedApprEntry.SETRANGE("Table ID",DATABASE::"Purch. Cr. Memo Hdr.");
+      PostedApprEntry.SETRANGE("Document No.",PurchCrMemoHeader."No.");
+      PostedApprEntry.SETRANGE(Status,PostedApprEntry.Status::Approved);
+      IF PostedApprEntry.FINDSET THEN
+        REPEAT
+          UpdateWebDocSearch(
+            WebDocSearch.Type::"Posted Purch. Credit Memo",
+            PurchCrMemoHeader."No.",
+            PostedApprEntry."Approver ID",
+            PurchCrMemoHeader."Pay-to Name",
+            PurchCrMemoHeader."Posting Date",
+            PurchCrMemoHeader."Document Date",
+            PurchCrMemoHeader."Vendor Cr. Memo No.",
+            PurchCrMemoHeader."Currency Code",
+            TotalAmt,
+            TotalAmtInclVat);
+
+          // Create an entry for the original approver as well
+          IF NOT (PostedApprEntry."Original Approver ID" IN ['',PostedApprEntry."Approver ID"]) THEN
+            UpdateWebDocSearch(
+              WebDocSearch.Type::"Posted Purch. Credit Memo",
+              PurchCrMemoHeader."No.",
+              PostedApprEntry."Original Approver ID",
+              PurchCrMemoHeader."Pay-to Name",
+              PurchCrMemoHeader."Posting Date",
+              PurchCrMemoHeader."Document Date",
+              PurchCrMemoHeader."Vendor Cr. Memo No.",
+              PurchCrMemoHeader."Currency Code",
+              TotalAmt,
+              TotalAmtInclVat);
+        UNTIL PostedApprEntry.NEXT = 0;
+
+      IF PurchCrMemoHeader."Purchaser Code" = '' THEN
+        EXIT;
+
+      UserSetup.SETRANGE("Salespers./Purch. Code",PurchCrMemoHeader."Purchaser Code");
+      IF UserSetup.FINDFIRST THEN
+        UpdateWebDocSearch(
+          WebDocSearch.Type::"Posted Purch. Credit Memo",
+          PurchCrMemoHeader."No.",
+          UserSetup."User ID",
+          PurchCrMemoHeader."Pay-to Name",
+          PurchCrMemoHeader."Posting Date",
+          PurchCrMemoHeader."Document Date",
+          PurchCrMemoHeader."Vendor Cr. Memo No.",
+          PurchCrMemoHeader."Currency Code",
+          TotalAmt,
+          TotalAmtInclVat);
+    END;
+
+    PROCEDURE UpdateWebSearchFromCrMemo2@161024045(PurchCrMemoHeader@161024012 : Record 124);
+    VAR
+      DCSetup@161024013 : Record 6085573;
+      ContiniaCompanySetup@6085573 : Record 6192773;
+      ContiniaWebPortal@1160040000 : Record 6192774;
+    BEGIN
+      IF NOT DCSetup.GET THEN
+        EXIT;
+
+      IF NOT ContiniaCompanySetup.GET THEN
+        EXIT;
+
+      IF NOT ContiniaWebPortal.GET(ContiniaCompanySetup."Web Portal Code") THEN
+        EXIT;
+
+      IF DCSetup."Maintain User Document Search" THEN
+        UpdateWebSearchFromCrMemo(PurchCrMemoHeader,COMPANYNAME);
+    END;
+
+    PROCEDURE UpdateWebDocSearch@1160040001(Type@1160040000 : Integer;No@1160040009 : Code[20];_UserID@1160040001 : Code[50];Name@1160040002 : Text[250];PostingDate@1160040003 : Date;DocumentDate@1160040004 : Date;ExtDocNo@1160040005 : Code[50];CurrencyCode@1160040006 : Code[10];AmountExclVAT@1160040007 : Decimal;AmountInclVAT@1160040008 : Decimal);
+    VAR
+      WebDocSearch@1160040010 : Record 6086005;
+    BEGIN
+      GetGLSetup;
+
+      IF NOT WebDocSearch.GET(Type,No,_UserID) THEN BEGIN
+        WebDocSearch.Type := Type;
+        WebDocSearch."No." := No;
+        WebDocSearch."User ID" := _UserID;
+        WebDocSearch.INSERT;
+      END;
+
+      WebDocSearch.Name := Name;
+      WebDocSearch."Posting Date" := PostingDate;
+      WebDocSearch."Document Date" := DocumentDate;
+      WebDocSearch."External Document No." := ExtDocNo;
+      IF CurrencyCode = '' THEN
+        WebDocSearch."Currency Code" := GLSetup."LCY Code"
+      ELSE
+        WebDocSearch."Currency Code" := CurrencyCode;
+      WebDocSearch."Amount Excl. VAT" := AmountExclVAT;
+      WebDocSearch."Amount Incl. VAT" := AmountInclVAT;
+      WebDocSearch.MODIFY;
+    END;
+
+    LOCAL PROCEDURE GetGLSetup@1160040002();
+    BEGIN
+      IF GotGLSetup THEN
+        EXIT;
+
+      GLSetup.GET;
+      GotGLSetup := TRUE;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

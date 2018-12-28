@@ -1,0 +1,270 @@
+OBJECT Codeunit 6085761 Purch. Doc. - Line Rel. Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=01/19/18;
+    Time=[ 1:00:00 AM];
+    Version List=DCW17.00.00.5.00;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 6085702=rimd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1160040001 : TextConst 'ENU=%1 %2, Line No. %3, is matched to %4 %5, Line No. %6, which must be posted or deleted before the order can be received.';
+      Text002@1160040002 : TextConst 'ENU=%1 %2, Line No. %3, is matched to multiple invoices which must be posted or deleted before the order can be received.';
+      Text003@1160040005 : TextConst 'ENU=%1 %2, Line No. %3, is matched to %4 %5 that has been deleted.';
+      Text004@1160040006 : TextConst 'ENU=%1 %2, Line No. %3, is matched to %4 %5, Line No. %6 that has been deleted.';
+      PurchMatchedTxt@6085573 : TextConst 'ENU=%1 %2 is matched to %3 %4.\\';
+      PurchDocPreviewModeErr@6085576 : TextConst 'ENU=You cannot use the Preview Posting function for Purchase Documents that is matched to Purchase Orders or Purchase Return Orders.';
+      PurchInvMatchedToBatchTxt@6085574 : TextConst 'ENU=One or more Purchase Invoices matched to Purchase Orders exist.\\The standard ''%1'' report cannot be used to post these documents. Use the ''%2'' report if you intent to post any of these documents.';
+      PurchCMMatchedToBatchTxt@6085575 : TextConst 'ENU=One or more Purchase Credit Memos matched to Purchase Return Orders exist.\\The standard ''%1'' report cannot be used to post these documents. Use the ''%2'' report if you intent to post any of these documents.';
+
+    PROCEDURE PostRelOrderLines@1160040001(VAR PurchHeader@1160040000 : Record 38);
+    VAR
+      RelPurchHeader@1160040006 : Record 38;
+      PurchLine@1160040001 : Record 39;
+      RelPurchLine@1160040004 : Record 39;
+      PurchLineRel@1160040003 : Record 6085702;
+      PurchPost@1160040002 : Codeunit 90;
+      ReleasePurchDoc@1160040011 : Codeunit 415;
+      SIStorage@6085573 : Codeunit 6085789;
+      ContiniaVersionMgt@6085574 : Codeunit 6192775;
+      PrevDocNo@1160040005 : Code[20];
+      ReleaseDoc@1160040012 : Boolean;
+    BEGIN
+      IF NOT (PurchHeader."Document Type" IN [PurchHeader."Document Type"::Invoice,PurchHeader."Document Type"::"Credit Memo"]) THEN
+        EXIT;
+
+      // Check if any related order/return order lines exist
+      PurchLineRel.SETCURRENTKEY("Document Type","Document No.","Related Document Type","Related Document No.","Related Line No.");
+      PurchLineRel.SETRANGE("Document Type",PurchHeader."Document Type");
+      PurchLineRel.SETRANGE("Document No.",PurchHeader."No.");
+      IF PurchLineRel.ISEMPTY THEN
+        EXIT;
+
+      // Post each order/return order
+      IF PurchLineRel.FINDSET THEN
+        REPEAT
+          IF (PrevDocNo = '') OR (PrevDocNo <> PurchLineRel."Related Document No.") THEN BEGIN
+
+            // Post the order/return order
+            IF PrevDocNo <> '' THEN BEGIN
+              RelPurchHeader.TESTFIELD("Pay-to Vendor No.",PurchHeader."Pay-to Vendor No.");
+              RelPurchHeader.TESTFIELD("Currency Code",PurchHeader."Currency Code");
+
+              RelPurchHeader.Receive := RelPurchHeader."Document Type" = RelPurchHeader."Document Type"::Order;
+              RelPurchHeader.Ship := RelPurchHeader."Document Type" = RelPurchHeader."Document Type"::"Return Order";
+              RelPurchHeader.Invoice := FALSE;
+
+              SIStorage.SetAllowPostPurchRtnOrOrderC90(TRUE);
+              SIStorage.SetRelPurchHeaderForC90(PurchHeader);
+              CLEAR(PurchPost);
+              PurchPost.RUN(RelPurchHeader);
+              SIStorage.SetAllowPostPurchRtnOrOrderC90(FALSE);
+            END;
+
+            // Update order/return order with header information from invoice/credit memo
+            IF NOT RelPurchHeader.GET(PurchLineRel."Related Document Type",PurchLineRel."Related Document No.") THEN
+              ERROR(Text003,PurchLineRel."Document Type",PurchLineRel."Document No.",PurchLineRel."Document Line No.",
+                PurchLineRel."Related Document Type",PurchLineRel."Related Document No.");
+
+            IF RelPurchHeader.Status <> RelPurchHeader.Status::Open THEN BEGIN
+              ReleasePurchDoc.Reopen(RelPurchHeader);
+              ReleaseDoc := TRUE;
+            END;
+
+            RelPurchHeader.SetHideValidationDialog(TRUE);
+
+            IF ContiniaVersionMgt.NAVVersion < 110000 THEN BEGIN
+              RelPurchHeader.VALIDATE("Posting Date",PurchHeader."Posting Date");
+              RelPurchHeader.VALIDATE("Document Date",PurchHeader."Document Date");
+            END;
+
+            RelPurchHeader."Dimension Set ID" := PurchHeader."Dimension Set ID";
+            RelPurchHeader."Shortcut Dimension 1 Code" := PurchHeader."Shortcut Dimension 1 Code";
+            RelPurchHeader."Shortcut Dimension 2 Code" := PurchHeader."Shortcut Dimension 2 Code";
+            RelPurchHeader.MODIFY(TRUE);
+
+            IF ReleaseDoc THEN
+              CODEUNIT.RUN(CODEUNIT::"Release Purchase Document",RelPurchHeader);
+
+            // Set Qty. to Receive or Return Qty. to Ship to 0 on all lines
+            RelPurchLine.SETRANGE("Document Type",RelPurchHeader."Document Type");
+            RelPurchLine.SETRANGE("Document No.",RelPurchHeader."No.");
+            IF RelPurchLine.FINDSET THEN
+              REPEAT
+                IF RelPurchLine."Document Type" = RelPurchLine."Document Type"::Order THEN
+                  RelPurchLine.VALIDATE("Qty. to Receive",0)
+                ELSE
+                  RelPurchLine.VALIDATE("Return Qty. to Ship",0);
+                RelPurchLine.MODIFY(TRUE);
+              UNTIL RelPurchLine.NEXT = 0;
+          END;
+
+          // Set Qty. to Receive or Return Qty. to Ship to the invoice/credit quantity
+          IF NOT PurchLine.GET(PurchLineRel."Document Type",PurchLineRel."Document No.",PurchLineRel."Document Line No.") THEN
+            ERROR(Text004,PurchLineRel."Document Type",PurchLineRel."Document No.",PurchLineRel."Document Line No.",
+              PurchLineRel."Related Document Type",PurchLineRel."Related Document No.",PurchLineRel."Related Line No.");
+
+          RelPurchLine.GET(PurchLineRel."Related Document Type",PurchLineRel."Related Document No.",PurchLineRel."Related Line No.");
+          IF RelPurchLine."Document Type" = RelPurchLine."Document Type"::Order THEN
+            RelPurchLine.VALIDATE("Qty. to Receive",PurchLine.Quantity)
+          ELSE
+            RelPurchLine.VALIDATE("Return Qty. to Ship",PurchLine.Quantity);
+
+          RelPurchLine."Dimension Set ID" := PurchLine."Dimension Set ID";
+          RelPurchLine."Shortcut Dimension 1 Code" := PurchLine."Shortcut Dimension 1 Code";
+          RelPurchLine."Shortcut Dimension 2 Code" := PurchLine."Shortcut Dimension 2 Code";
+          RelPurchLine.MODIFY(TRUE);
+
+          PrevDocNo := RelPurchLine."Document No.";
+        UNTIL PurchLineRel.NEXT = 0;
+
+      // Post the order/return order
+      RelPurchHeader.TESTFIELD("Pay-to Vendor No.",PurchHeader."Pay-to Vendor No.");
+      RelPurchHeader.TESTFIELD("Currency Code",PurchHeader."Currency Code");
+
+      RelPurchHeader.Receive := RelPurchHeader."Document Type" = RelPurchHeader."Document Type"::Order;
+      RelPurchHeader.Ship := RelPurchHeader."Document Type" = RelPurchHeader."Document Type"::"Return Order";
+      RelPurchHeader.Invoice := FALSE;
+
+      SIStorage.SetAllowPostPurchRtnOrOrderC90(TRUE);
+      SIStorage.SetRelPurchHeaderForC90(PurchHeader);
+      CLEAR(PurchPost);
+      PurchPost.RUN(RelPurchHeader);
+      SIStorage.SetAllowPostPurchRtnOrOrderC90(FALSE);
+    END;
+
+    PROCEDURE UpdateRelInvLines@1160040000(VAR RelPurchHeader@1160040003 : Record 38;VAR PurchLine@1160040000 : Record 39;VAR PurchRcptLine@1160040001 : Record 121);
+    VAR
+      PurchLineRel@1160040004 : Record 6085702;
+      PurchInvLine@1160040005 : Record 39;
+    BEGIN
+      IF PurchRcptLine.Quantity = 0 THEN
+        EXIT;
+
+      PurchLineRel.SETCURRENTKEY("Related Document Type","Related Document No.","Related Line No.");
+      PurchLineRel.SETRANGE("Related Document Type",PurchLine."Document Type");
+      PurchLineRel.SETRANGE("Related Document No.",PurchLine."Document No.");
+      PurchLineRel.SETRANGE("Related Line No.",PurchLine."Line No.");
+      IF NOT PurchLineRel.FINDFIRST THEN
+        EXIT;
+
+      IF RelPurchHeader."No." = '' THEN BEGIN
+        IF PurchLineRel.COUNT = 1 THEN BEGIN
+          ERROR(Text001,PurchLine."Document Type",PurchLine."Document No.",PurchLine."Line No.",
+            PurchLineRel."Document Type",PurchLineRel."Document No.",PurchLineRel."Document Line No.")
+        END ELSE
+          ERROR(Text002,PurchLine."Document Type",PurchLine."Document No.",PurchLine."Line No.");
+      END;
+
+      RelPurchHeader.TESTFIELD("Document Type",RelPurchHeader."Document Type"::Invoice);
+
+      PurchLineRel.SETRANGE("Document Type",RelPurchHeader."Document Type");
+      PurchLineRel.SETRANGE("Document No.",RelPurchHeader."No.");
+      IF NOT PurchLineRel.FINDFIRST THEN
+        EXIT;
+
+      PurchInvLine.GET(PurchLineRel."Document Type",PurchLineRel."Document No.",PurchLineRel."Document Line No.");
+      PurchInvLine."Receipt No." := PurchRcptLine."Document No.";
+      PurchInvLine."Receipt Line No." := PurchRcptLine."Line No.";
+      PurchInvLine.MODIFY;
+
+      PurchLineRel.DELETE;
+    END;
+
+    PROCEDURE UpdateRelCrMemoLines@1160040002(VAR RelPurchHeader@1160040003 : Record 38;VAR PurchLine@1160040000 : Record 39;VAR PurchShptLine@1160040001 : Record 6651);
+    VAR
+      PurchLineRel@1160040004 : Record 6085702;
+      PurchInvLine@1160040005 : Record 39;
+    BEGIN
+      IF PurchShptLine.Quantity = 0 THEN
+        EXIT;
+
+      PurchLineRel.SETCURRENTKEY("Related Document Type","Related Document No.","Related Line No.");
+      PurchLineRel.SETRANGE("Related Document Type",PurchLine."Document Type");
+      PurchLineRel.SETRANGE("Related Document No.",PurchLine."Document No.");
+      PurchLineRel.SETRANGE("Related Line No.",PurchLine."Line No.");
+      IF NOT PurchLineRel.FINDFIRST THEN
+        EXIT;
+
+      IF RelPurchHeader."No." = '' THEN BEGIN
+        IF PurchLineRel.COUNT = 1 THEN BEGIN
+          ERROR(Text001,PurchLine."Document Type",PurchLine."Document No.",PurchLine."Line No.",
+            PurchLineRel."Document Type",PurchLineRel."Document No.",PurchLineRel."Document Line No.")
+        END ELSE
+          ERROR(Text002,PurchLine."Document Type",PurchLine."Document No.",PurchLine."Line No.");
+      END;
+
+      RelPurchHeader.TESTFIELD("Document Type",RelPurchHeader."Document Type"::"Credit Memo");
+
+      PurchLineRel.SETRANGE("Document Type",RelPurchHeader."Document Type");
+      PurchLineRel.SETRANGE("Document No.",RelPurchHeader."No.");
+      IF NOT PurchLineRel.FINDFIRST THEN
+        EXIT;
+
+      PurchInvLine.GET(PurchLineRel."Document Type",PurchLineRel."Document No.",PurchLineRel."Document Line No.");
+      PurchInvLine."Return Shipment No." := PurchShptLine."Document No.";
+      PurchInvLine."Return Shipment Line No." := PurchShptLine."Line No.";
+      PurchInvLine.MODIFY;
+
+      PurchLineRel.DELETE;
+    END;
+
+    PROCEDURE PurchDocMatchedToPreviewError@6085573(PurchHeader@6085574 : Record 38);
+    VAR
+      PurchLineRel@6085573 : Record 6085702;
+    BEGIN
+      // In Document Capture it is possible to match a purchase invoice to a purchase order. When this is the case Document Capture
+      // will receive the purchase order as part of posting (invoicing) the invoice.
+      // When using the standard 'Batch Post Purchase Invoices' process it is possible to change the Posting date of the invoices
+      // being posted.
+      // Document Capture uses events, when available, to handle the posting of the purchase order from the related purchase invoice.
+      // It is not possible to detect and thereby use the potential updated posting date when posting using the
+      // 'Batch Post Purchase Invoices' process
+      // The below error have therefore been added.
+      // The error will also be shown if a Post function is added to a new page without calling the DC function SIStorage.SetAllowPostRelPurchDocC90(TRUE);
+      // that enables posting through C90. If the below error is caused by this, then look at the DC implementation of events
+      // related to page 51 on the Post button to avoid the error. These events are stored in codeunit 6085931 - "DC Pg Purch. Invoice Subscr."
+
+      PurchLineRel.SETRANGE("Document Type",PurchHeader."Document Type");
+      PurchLineRel.SETRANGE("Document No.",PurchHeader."No.");
+      IF PurchLineRel.FINDFIRST THEN
+        ERROR(STRSUBSTNO(PurchMatchedTxt,PurchHeader."Document Type",PurchHeader."No.",PurchLineRel."Related Document Type",PurchLineRel."Related Document No.") +
+          PurchDocPreviewModeErr);
+    END;
+
+    PROCEDURE PurchDocMatchedToBatchMsg@6085574(DocType@6085573 : 'Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order');
+    VAR
+      PurchLineRel@6085574 : Record 6085702;
+      AllObjWithCaption1@6085577 : Record 2000000058;
+      AllObjWithCaption2@6085578 : Record 2000000058;
+    BEGIN
+      IF DocType = DocType::Invoice THEN BEGIN
+        PurchLineRel.SETRANGE("Document Type",PurchLineRel."Document Type"::Invoice);
+        IF NOT PurchLineRel.ISEMPTY THEN BEGIN
+          AllObjWithCaption1.GET(AllObjWithCaption1."Object Type"::Report,REPORT::"Batch Post Purchase Invoices");
+          AllObjWithCaption2.GET(AllObjWithCaption2."Object Type"::Report,6085585);  //6085585 = REPORT::"DC Batch Post Purch. Invoices"
+          MESSAGE(PurchInvMatchedToBatchTxt,AllObjWithCaption1."Object Caption",AllObjWithCaption2."Object Caption");
+        END;
+      END ELSE BEGIN
+        PurchLineRel.SETRANGE("Document Type",PurchLineRel."Document Type"::"Credit Memo");
+        IF NOT PurchLineRel.ISEMPTY THEN BEGIN
+          AllObjWithCaption1.GET(AllObjWithCaption1."Object Type"::Report,REPORT::"Batch Post Purch. Credit Memos");
+          AllObjWithCaption2.GET(AllObjWithCaption2."Object Type"::Report,6085586);  //6085586 = REPORT::"DC Batch Post Purch. CMs"
+          MESSAGE(PurchCMMatchedToBatchTxt,AllObjWithCaption1."Object Caption",AllObjWithCaption2."Object Caption");
+        END;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+
