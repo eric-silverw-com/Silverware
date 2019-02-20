@@ -1,0 +1,593 @@
+OBJECT Page 6086384 Expense Settlement List
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/06/17;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.02;
+  }
+  PROPERTIES
+  {
+    Editable=No;
+    CaptionML=ENU=Settlement List;
+    SourceTable=Table6086339;
+    SourceTableView=SORTING(Posted,Posted Date/Time,Document Type,No.)
+                    WHERE(Document Type=CONST(Settlement),
+                          Posted=CONST(No));
+    PageType=List;
+    CardPageID=Expense Settlement Card;
+    PromotedActionCategoriesML=ENU=New,Process,Report,Settlement,Administration;
+    OnInit=BEGIN
+             EnableActions := COUNT > 0;
+           END;
+
+    OnOpenPage=VAR
+                 UserResp@1160040000 : Record 6086379;
+                 EMOnlineMgt@1160040001 : Codeunit 6086305;
+               BEGIN
+                 EMOnlineMgt.IsCompanyActive(FALSE);
+                 EnableFields;
+                 CheckUnProcessedInbox;
+
+                 IF UserResp.GetResponsibilityFilter <> '' THEN BEGIN
+                   FILTERGROUP(2);
+                   SETFILTER("Continia User ID",UserResp.GetResponsibilityFilter);
+                   FILTERGROUP(0);
+                 END;
+               END;
+
+    OnAfterGetRecord=BEGIN
+                       EnableActions := TRUE;
+                       ShortcutFieldFunctions.ShowShortcutFieldValues(ShortcutFieldValues,DATABASE::"Expense Header","Document Type","No.",0);
+                       CALCFIELDS("Expense Total (LCY)","Mileage Total (LCY)");
+                       HasComments := HasApprovalComment OR HasSettlementComment;
+
+                       //DO NOT FORMAT DIFFERENTLY. SEARCH/REPLACE FOR COMPATIBILITY
+                       CASE Status OF
+                         Status::Open: StyleFormat := 'Attention';
+                         Status::Released: StyleFormat := 'Favorable';
+                         ELSE StyleFormat := 'None';
+                       END;
+                     END;
+
+    ActionList=ACTIONS
+    {
+      { 1160040047;  ;ActionContainer;
+                      Name=<Action1900000003>;
+                      ActionContainerType=RelatedInformation }
+      { 1160040046;1 ;ActionGroup;
+                      Name=<Action74>;
+                      CaptionML=ENU=&Settlement }
+      { 1160040045;2 ;Action    ;
+                      Name=<Action1160040022>;
+                      CaptionML=ENU=Approvals;
+                      Enabled=EnableActions;
+                      Image=Approvals;
+                      PromotedCategory=Category4;
+                      OnAction=VAR
+                                 EMAppMgt@1160040000 : Codeunit 6086312;
+                               BEGIN
+                                 EMAppMgt.DrillDownApprovalEntries(DATABASE::"Expense Header","No.");
+                               END;
+                                }
+      { 1160040044;2 ;Action    ;
+                      Name=<Action1160040033>;
+                      CaptionML=ENU=Settlement Inbox;
+                      RunObject=Page 6086389;
+                      Promoted=Yes;
+                      Image=ErrorLog;
+                      PromotedCategory=Category5 }
+      { 1160040043;2 ;Action    ;
+                      Name=<Action1160040032>;
+                      ShortCutKey=Shift+Ctrl+D;
+                      CaptionML=ENU=Dimensions;
+                      Promoted=Yes;
+                      Enabled=EnableActions;
+                      Image=Dimensions;
+                      PromotedCategory=Category4;
+                      OnAction=BEGIN
+                                 LookupDimensions;
+                               END;
+                                }
+      { 1160040042;2 ;Action    ;
+                      Name=<Action1160040046>;
+                      CaptionML=ENU=Extra Fields;
+                      Enabled=EnableActions;
+                      Image=SelectField;
+                      PromotedCategory=Category4;
+                      OnAction=BEGIN
+                                 LookupExtraFields;
+                               END;
+                                }
+      { 1160040041;2 ;Action    ;
+                      Name=<Action78>;
+                      CaptionML=ENU=Co&mments;
+                      RunObject=Page 6086388;
+                      RunPageLink=Table Name=CONST(Expense Header),
+                                  No.=FIELD(No.);
+                      Promoted=Yes;
+                      Image=ViewComments;
+                      PromotedCategory=Category4 }
+      { 1160040040;1 ;ActionGroup;
+                      Name=<Action1160040021>;
+                      CaptionML=ENU=F&unctions }
+      { 1160040039;2 ;Action    ;
+                      Name=<Action1160040055>;
+                      CaptionML=ENU=Re&open;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=ReOpen;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 ExpHeader@1160040003 : Record 6086339;
+                                 ExpHeader2@1160040002 : Record 6086339;
+                                 Question@1160040001 : Text[1024];
+                               BEGIN
+                                 CurrPage.SETSELECTIONFILTER(ExpHeader);
+                                 IF ExpHeader.COUNT = 1 THEN
+                                   Question := STRSUBSTNO(ConfirmReopenSingle)
+                                 ELSE
+                                   Question := STRSUBSTNO(ConfirmReopenMultiple,ExpHeader.COUNT);
+
+                                 IF NOT CONFIRM(Question,TRUE) THEN
+                                   EXIT;
+
+                                 IF ExpHeader.FINDSET(TRUE,FALSE) THEN
+                                   REPEAT
+                                     ExpHeader2 := ExpHeader;
+                                     CODEUNIT.RUN(CODEUNIT::"Exp. Header - Complete",ExpHeader2);
+                                   UNTIL ExpHeader.NEXT = 0;
+                               END;
+                                }
+      { 1160040038;2 ;Action    ;
+                      Name=<Action1160040057>;
+                      ShortCutKey=Shift+Ctrl+X;
+                      CaptionML=ENU=Send to E&xpense User;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=SendTo;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 ExpHeader@1160040005 : Record 6086339;
+                                 ExpHeader2@1160040004 : Record 6086339;
+                                 EmOnlineMgt@1160040003 : Codeunit 6086305;
+                                 NoOfDocsSelected@1160040002 : Integer;
+                                 NoOfDocsSent@1160040001 : Integer;
+                               BEGIN
+                                 CurrPage.SETSELECTIONFILTER(ExpHeader);
+                                 NoOfDocsSelected := ExpHeader.COUNT;
+                                 IF ExpHeader.COUNT > 1 THEN
+                                   IF NOT CONFIRM(ConfirmSendToMultipleUsers,TRUE,ExpHeader.COUNT) THEN
+                                     EXIT;
+
+                                 IF ExpHeader.COUNT = 1 THEN
+                                   CODEUNIT.RUN(CODEUNIT::"Exp. Header - Send to User",Rec)
+                                 ELSE BEGIN
+                                   ExpHeader.FINDSET(TRUE,FALSE);
+                                   REPEAT
+                                     COMMIT;
+                                     ExpHeader2 := ExpHeader;
+                                     IF CODEUNIT.RUN(CODEUNIT::"Exp. Header - Send to User",ExpHeader2) THEN
+                                       NoOfDocsSent += 1;
+                                   UNTIL ExpHeader.NEXT = 0;
+
+                                   MESSAGE(NoOfDocSentToExpUserMsg,NoOfDocsSent,NoOfDocsSelected);
+                                 END;
+                               END;
+                                }
+      { 1160040036;2 ;Action    ;
+                      Name=SendForApproval;
+                      ShortCutKey=Ctrl+S;
+                      CaptionML=ENU=Send for &Approval;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=SendApprovalRequest;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 ExpHeader@1160040000 : Record 6086339;
+                                 EMApprovalsBridge@1160040001 : Codeunit 6086369;
+                               BEGIN
+                                 CurrPage.SETSELECTIONFILTER(ExpHeader);
+                                 EMApprovalsBridge.SendSettlementApprovalRequest(ExpHeader);
+                               END;
+                                }
+      { 1160040035;2 ;Action    ;
+                      Name=<Action1160040031>;
+                      CaptionML=ENU=&Force Approval;
+                      Promoted=Yes;
+                      Image=Approval;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 ExpHeader@1160040004 : Record 6086339;
+                                 EMApprovalsBridge@1160040000 : Codeunit 6086369;
+                                 Question@1160040003 : Text[1024];
+                               BEGIN
+                                 CurrPage.SETSELECTIONFILTER(ExpHeader);
+
+                                 IF ExpHeader.COUNT = 1 THEN BEGIN
+                                   ExpHeader.FINDFIRST;
+                                   Question := STRSUBSTNO(ContForceReleaselSingle,"No.");
+                                 END ELSE
+                                   Question := STRSUBSTNO(ConfirmForceReleaseMultiple,ExpHeader.COUNT);
+
+                                 IF NOT CONFIRM(Question,TRUE) THEN
+                                   EXIT;
+
+                                 IF ExpHeader.FINDSET(TRUE,FALSE) THEN
+                                   REPEAT
+                                     ExpHeader.TESTFIELD(Status,ExpHeader.Status::Open);
+                                     EMApprovalsBridge.CancelApprovalRequest(DATABASE::"Expense Header",FORMAT(ExpHeader."No."));
+                                     EMApprovalsBridge.ForceApproval(DATABASE::"Expense Header",FORMAT(ExpHeader."No."));
+                                   UNTIL ExpHeader.NEXT = 0;
+                               END;
+                                }
+      { 1160040034;2 ;Separator  }
+      { 1160040033;2 ;Action    ;
+                      Name=ForwardApproval;
+                      Ellipsis=Yes;
+                      CaptionML=ENU=&Forward Approval;
+                      Image=Delegate;
+                      OnAction=VAR
+                                 EMApprovalsBridge@1160040000 : Codeunit 6086369;
+                               BEGIN
+                                 EMApprovalsBridge.Forward(DATABASE::"Expense Header","No.");
+                               END;
+                                }
+      { 1160040032;2 ;Separator  }
+      { 1160040037;2 ;Action    ;
+                      Name=<Action3>;
+                      ShortCutKey=Ctrl+F9;
+                      CaptionML=ENU=Synchronize;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=RefreshLines;
+                      PromotedCategory=Category5;
+                      OnAction=BEGIN
+                                 CODEUNIT.RUN(CODEUNIT::"EM Online Mgt.");
+
+                                 CheckUnProcessedInbox;
+                                 CurrPage.UPDATE;
+                               END;
+                                }
+      { 1160040049;2 ;Separator  }
+      { 1160040031;2 ;Action    ;
+                      Name=<Action1160040050>;
+                      CaptionML=ENU=Send Reminder &E-mail;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=SendConfirmation;
+                      PromotedCategory=Category5;
+                      OnAction=VAR
+                                 ExpHeader@1160040000 : Record 6086339;
+                                 ReminderEmail@1160040001 : Codeunit 6086314;
+                                 OptionNo@1160040003 : Integer;
+                               BEGIN
+                                 OptionNo := STRMENU(Options,1,Instructions);
+
+                                 IF OptionNo = 0 THEN
+                                   EXIT;
+
+                                 IF OptionNo = 2 THEN
+                                   CurrPage.SETSELECTIONFILTER(ExpHeader)
+                                 ELSE
+                                   ExpHeader.RESET;
+                                 ReminderEmail.SendExpHeaderNotEmails(ExpHeader,OptionNo = 2);
+                               END;
+                                }
+      { 1160040051;2 ;Action    ;
+                      CaptionML=ENU=Mo&ve to another company;
+                      Image=Intercompany;
+                      OnAction=VAR
+                                 MoveToCompany@1160040000 : Codeunit 6086359;
+                                 RecRef@1160040002 : RecordRef;
+                               BEGIN
+                                 RecRef.GETTABLE(Rec);
+                                 MoveToCompany.HandleMovement(RecRef);
+                               END;
+                                }
+      { 1160040030;1 ;ActionGroup;
+                      Name=<Action73>;
+                      CaptionML=ENU=P&osting }
+      { 1160040029;2 ;Action    ;
+                      Name=<Action1160040059>;
+                      ShortCutKey=F9;
+                      CaptionML=ENU=P&ost;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=NewInvoice;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 CODEUNIT.RUN(CODEUNIT::"Settlement-Post (Yes/No)",Rec);
+                                 CurrPage.UPDATE(FALSE);
+                               END;
+                                }
+      { 1160040028;2 ;Action    ;
+                      Name=<Action1160040030>;
+                      Ellipsis=Yes;
+                      CaptionML=ENU=Post &Batch;
+                      Promoted=Yes;
+                      Image=PostBatch;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 REPORT.RUNMODAL(REPORT::"Batch Post Settlements",TRUE,TRUE,Rec);
+                                 CurrPage.UPDATE(FALSE);
+                               END;
+                                }
+    }
+  }
+  CONTROLS
+  {
+    { 1160040000;0;Container;
+                ContainerType=ContentArea }
+
+    { 1160040001;1;Group  ;
+                Name=Group;
+                GroupType=Repeater }
+
+    { 1160040048;2;Field  ;
+                Name=Comment;
+                CaptionML=ENU=Comments;
+                SourceExpr=HasComments;
+                Editable=false;
+                Style=Attention;
+                StyleExpr=StyleFormat }
+
+    { 1160040002;2;Field  ;
+                SourceExpr="No.";
+                Style=Attention;
+                StyleExpr=StyleFormat }
+
+    { 1160040003;2;Field  ;
+                SourceExpr="Continia User ID";
+                Style=Attention;
+                StyleExpr=StyleFormat;
+                OnLookup=VAR
+                           UserResp@1160040002 : Record 6086379;
+                         BEGIN
+                           EXIT(UserResp.LookupUser(Text));
+                         END;
+                          }
+
+    { 1160040024;2;Field  ;
+                SourceExpr="Continia User Name";
+                Style=Attention;
+                StyleExpr=StyleFormat }
+
+    { 1160040004;2;Field  ;
+                SourceExpr=Description;
+                Style=Attention;
+                StyleExpr=StyleFormat }
+
+    { 1160040052;2;Field  ;
+                SourceExpr="Description 2";
+                Visible=false }
+
+    { 1160040005;2;Field  ;
+                CaptionML=ENU=Details;
+                SourceExpr=GetOverviewDetails;
+                Style=Attention;
+                StyleExpr=StyleFormat }
+
+    { 1160040006;2;Field  ;
+                SourceExpr=Status;
+                Style=Attention;
+                StyleExpr=StyleFormat }
+
+    { 1160040007;2;Field  ;
+                SourceExpr="On Hold";
+                Style=Attention;
+                StyleExpr=StyleFormat }
+
+    { 1160040008;2;Field  ;
+                CaptionML=ENU=Approval by;
+                SourceExpr=EMApprovalMgt.GetNextApproverName(DATABASE::"Expense Header","No.");
+                Style=Attention;
+                StyleExpr=StyleFormat }
+
+    { 1160040009;2;Field  ;
+                SourceExpr="Date Created";
+                Style=Attention;
+                StyleExpr=StyleFormat }
+
+    { 1160040025;2;Field  ;
+                Name=AmountLCY;
+                CaptionML=ENU=Amount (LCY);
+                BlankZero=Yes;
+                SourceExpr="Expense Total (LCY)" + "Mileage Total (LCY)";
+                Style=Attention;
+                StyleExpr=StyleFormat }
+
+    { 1160040010;2;Field  ;
+                SourceExpr="Global Dimension 1 Code";
+                Style=Attention;
+                StyleExpr=StyleFormat }
+
+    { 1160040011;2;Field  ;
+                SourceExpr="Global Dimension 2 Code";
+                Style=Attention;
+                StyleExpr=StyleFormat }
+
+    { 1160040012;2;Field  ;
+                SourceExpr="Job No.";
+                Visible=JobNoVisible;
+                Style=Attention;
+                StyleExpr=StyleFormat }
+
+    { 1160040013;2;Field  ;
+                SourceExpr="Job Task No.";
+                Visible=JobNoVisible;
+                Style=Attention;
+                StyleExpr=StyleFormat }
+
+    { 1160040026;2;Field  ;
+                SourceExpr=Billable;
+                Visible=JobNoVisible;
+                Style=Attention;
+                StyleExpr=StyleFormat }
+
+    { 1160040027;2;Field  ;
+                SourceExpr="Job Line Type";
+                Visible=JobNoVisible;
+                Style=Attention;
+                StyleExpr=StyleFormat }
+
+    { 1160040014;2;Field  ;
+                Name=ShortcutField1;
+                SourceExpr=ShortcutFieldValues[1];
+                CaptionClass=GetShortcutFieldCaption(1);
+                Visible=CustomFieldVisible1;
+                Style=Attention;
+                StyleExpr=StyleFormat }
+
+    { 1160040015;2;Field  ;
+                Name=ShortcutField2;
+                SourceExpr=ShortcutFieldValues[2];
+                CaptionClass=GetShortcutFieldCaption(2);
+                Visible=CustomFieldVisible2;
+                Style=Attention;
+                StyleExpr=StyleFormat }
+
+    { 1160040016;2;Field  ;
+                Name=ShortcutField3;
+                SourceExpr=ShortcutFieldValues[3];
+                CaptionClass=GetShortcutFieldCaption(3);
+                Visible=CustomFieldVisible3;
+                Style=Attention;
+                StyleExpr=StyleFormat }
+
+    { 1160040017;2;Field  ;
+                Name=ShortcutField4;
+                SourceExpr=ShortcutFieldValues[4];
+                CaptionClass=GetShortcutFieldCaption(4);
+                Visible=CustomFieldVisible4;
+                Style=Attention;
+                StyleExpr=StyleFormat }
+
+    { 1160040018;2;Field  ;
+                Name=ShortcutField5;
+                SourceExpr=ShortcutFieldValues[5];
+                CaptionClass=GetShortcutFieldCaption(5);
+                Visible=CustomFieldVisible5;
+                Style=Attention;
+                StyleExpr=StyleFormat }
+
+    { 1160040019;2;Field  ;
+                Name=ShortcutField6;
+                SourceExpr=ShortcutFieldValues[6];
+                CaptionClass=GetShortcutFieldCaption(6);
+                Visible=CustomFieldVisible6;
+                Style=Attention;
+                StyleExpr=StyleFormat }
+
+    { 1160040020;2;Field  ;
+                Name=ShortcutField7;
+                SourceExpr=ShortcutFieldValues[7];
+                CaptionClass=GetShortcutFieldCaption(7);
+                Visible=CustomFieldVisible7;
+                Style=Attention;
+                StyleExpr=StyleFormat }
+
+    { 1160040021;2;Field  ;
+                Name=ShortcutField8;
+                SourceExpr=ShortcutFieldValues[8];
+                CaptionClass=GetShortcutFieldCaption(8);
+                Visible=CustomFieldVisible8;
+                Style=Attention;
+                StyleExpr=StyleFormat }
+
+    { 1160040022;2;Field  ;
+                Name=ShortcutField9;
+                SourceExpr=ShortcutFieldValues[9];
+                CaptionClass=GetShortcutFieldCaption(9);
+                Visible=CustomFieldVisible9;
+                Style=Attention;
+                StyleExpr=StyleFormat }
+
+    { 1160040023;2;Field  ;
+                Name=ShortcutField10;
+                SourceExpr=ShortcutFieldValues[10];
+                CaptionClass=GetShortcutFieldCaption(10);
+                Visible=CustomFieldVisible10;
+                Style=Attention;
+                StyleExpr=StyleFormat }
+
+    { 1160040050;2;Field  ;
+                CaptionML=ENU=Next Reminder;
+                SourceExpr=NextReminderDate;
+                Visible=FALSE }
+
+  }
+  CODE
+  {
+    VAR
+      EMApprovalMgt@1160040000 : Codeunit 6086312;
+      ShortcutFieldFunctions@1160040003 : Codeunit 6086304;
+      CustomFieldNames@1160040028 : ARRAY [10] OF Text[50];
+      ShortcutFieldCaptions@1160040002 : ARRAY [10] OF Text[250];
+      ShortcutFieldValues@1160040001 : ARRAY [10] OF Text[250];
+      JobNoVisible@1160040007 : Boolean INDATASET;
+      ConfirmReopenSingle@1160040016 : TextConst 'ENU=Do you want to reopen this settlement?';
+      ConfirmReopenMultiple@1160040015 : TextConst 'ENU=This will reopen %1 settlements.\\Do you want to continue?';
+      ContForceReleaselSingle@1160040014 : TextConst 'ENU=Do you want to force the approval of Settlement %1?';
+      ConfirmForceReleaseMultiple@1160040013 : TextConst 'ENU=This will force the approval of %1 settlements.\\Do you want to continue?';
+      Options@1160040012 : TextConst 'ENU=Send to All Users,Send to Selected Users only (forced)';
+      ConfirmSendToMultipleUsers@1160040010 : TextConst 'ENU=This will send %1 settlements to the expense user.\\Do you want to continue?';
+      NoOfDocSentToExpUserMsg@1160040009 : TextConst 'ENU=%1 out of %2 sent to expense users.';
+      Instructions@1160040006 : TextConst 'ENU=Do you want to send a status e-mail to all the Users or only to the selected ones?';
+      HasComments@1160040008 : Boolean;
+      StyleFormat@1160040017 : Text[30] INDATASET;
+      CustomFieldVisible1@1160040018 : Boolean INDATASET;
+      CustomFieldVisible2@1160040019 : Boolean INDATASET;
+      CustomFieldVisible3@1160040020 : Boolean INDATASET;
+      CustomFieldVisible4@1160040021 : Boolean INDATASET;
+      CustomFieldVisible5@1160040022 : Boolean INDATASET;
+      CustomFieldVisible6@1160040023 : Boolean INDATASET;
+      CustomFieldVisible7@1160040024 : Boolean INDATASET;
+      CustomFieldVisible8@1160040025 : Boolean INDATASET;
+      CustomFieldVisible9@1160040026 : Boolean INDATASET;
+      CustomFieldVisible10@1160040027 : Boolean INDATASET;
+      EnableActions@1000 : Boolean INDATASET;
+
+    LOCAL PROCEDURE GetShortcutFieldCaption@1160040001(ShortcutFieldNo@1160040000 : Integer) : Text[250];
+    BEGIN
+      IF ShortcutFieldCaptions[1] = '' THEN
+        ShortcutFieldFunctions.GetShortcutFieldCaptionsArray(ShortcutFieldCaptions,DATABASE::"Expense Header");
+
+      EXIT(ShortcutFieldCaptions[ShortcutFieldNo]);
+    END;
+
+    LOCAL PROCEDURE EnableFields@1160040000();
+    VAR
+      EMSetup@1160040000 : Record 6086300;
+    BEGIN
+      EMSetup.GET;
+      CustomFieldNames[1] := EMSetup."Shortcut Field 1 Code (Sttl.)";
+      CustomFieldNames[2] := EMSetup."Shortcut Field 2 Code (Sttl.)";
+      CustomFieldNames[3] := EMSetup."Shortcut Field 3 Code (Sttl.)";
+      CustomFieldNames[4] := EMSetup."Shortcut Field 4 Code (Sttl.)";
+      CustomFieldNames[5] := EMSetup."Shortcut Field 5 Code (Sttl.)";
+      CustomFieldNames[6] := EMSetup."Shortcut Field 6 Code (Sttl.)";
+      CustomFieldNames[7] := EMSetup."Shortcut Field 7 Code (Sttl.)";
+      CustomFieldNames[8] := EMSetup."Shortcut Field 8 Code (Sttl.)";
+      CustomFieldNames[9] := EMSetup."Shortcut Field 9 Code (Sttl.)";
+      CustomFieldNames[10] := EMSetup."Shortcut Field 10 Code (Sttl.)";
+
+      CustomFieldVisible1 := CustomFieldNames[1] <> '';
+      CustomFieldVisible2 := CustomFieldNames[2] <> '';
+      CustomFieldVisible3 := CustomFieldNames[3] <> '';
+      CustomFieldVisible4 := CustomFieldNames[4] <> '';
+      CustomFieldVisible5 := CustomFieldNames[5] <> '';
+      CustomFieldVisible6 := CustomFieldNames[6] <> '';
+      CustomFieldVisible7 := CustomFieldNames[7] <> '';
+      CustomFieldVisible8 := CustomFieldNames[8] <> '';
+      CustomFieldVisible9 := CustomFieldNames[9] <> '';
+      CustomFieldVisible10 := CustomFieldNames[10] <> '';
+
+      JobNoVisible := ShortcutFieldFunctions.JobNoVisible(DATABASE::"Expense Header");
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -2,16 +2,16 @@ OBJECT Page 6085785 DC Client Addin (UIC)
 {
   OBJECT-PROPERTIES
   {
-    Date=02/12/18;
+    Date=02/07/18;
     Time=[ 1:00:00 AM];
-    Version List=DCW17.00.00.5.00;
+    Version List=DCW17.00.00.4.50.05;
   }
   PROPERTIES
   {
     Permissions=TableData 6085780=rimd;
     CaptionML=ENU=Document Capture Client Addin;
     SourceTable=Table6085601;
-    PageType=CardPart;
+    PageType=List;
     OnOpenPage=BEGIN
                  IF ContiniaUserProp.GET(USERID) AND (ContiniaUserProp."Image Zoom" > 0) THEN
                    CurrZoom := ContiniaUserProp."Image Zoom"
@@ -23,7 +23,7 @@ OBJECT Page 6085785 DC Client Addin (UIC)
                        IF (Code <> xRec.Code) THEN BEGIN
                          UpdateImage;
                          SendCommand(CaptureXmlDoc);
-                       END ELSE IF (SendAllPendingCommands AND (NOT CaptureXmlDoc.IsEmpty)) THEN BEGIN
+                       END ELSE IF (SendAllPendingCommands AND (NOT ISNULL(CaptureXmlDoc))) THEN BEGIN
                          SendAllPendingCommands := FALSE;
                          SendCommand(CaptureXmlDoc);
                        END;
@@ -34,18 +34,16 @@ OBJECT Page 6085785 DC Client Addin (UIC)
   CONTROLS
   {
     { 1000000000;;Container;
-                Name=ContentArea;
                 ContainerType=ContentArea }
 
     { 1000000001;1;Field  ;
                 Name=CaptureUI;
                 SourceExpr=CaptureUISource;
-                ControlAddIn=[Akeyto.DocumentCapture.Dynamics.Nav.UI;PublicKeyToken=0c53e51c0afe7001];
+                ControlAddIn=[Akeyto.DocumentCapture.Dynamics.Nav.UI;PublicKeyToken=44fe4ac2c6480df6];
                 OnControlAddIn=BEGIN
-                                 OnControlAddInEvent(Index,Data);
+                                 OnControlAddIn(Index,Data);
                                END;
-
-                ShowCaption=No }
+                                }
 
   }
   CODE
@@ -53,7 +51,9 @@ OBJECT Page 6085785 DC Client Addin (UIC)
     VAR
       ContiniaUserProp@1160040001 : Record 6085780;
       CaptureAddinLib@1000000013 : Codeunit 6085660;
-      CaptureXmlDoc@6085573 : Codeunit 6192800;
+      FileMgt@6085575 : Codeunit 419;
+      CaptureXmlDoc@6085573 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      CurrentFilename@6085576 : Text;
       CaptureUISource@6085574 : Text;
       CurrentPageText@1000000005 : Text[250];
       CurrentZoomText@1000000009 : Text[30];
@@ -76,7 +76,12 @@ OBJECT Page 6085785 DC Client Addin (UIC)
         EXIT;
       END;
 
-      CaptureAddinLib.BuildSetImageCommand(Filename,TRUE,CaptureXmlDoc);
+      IF CurrentFilename <> '' THEN
+        FileMgt.DeleteClientFile(CurrentFilename);
+
+      CurrentFilename := Filename;
+
+      CaptureAddinLib.BuildSetImageCommand(CurrentFilename,TRUE,CaptureXmlDoc);
 
       UpdateCurrPageNo(1);
 
@@ -136,9 +141,9 @@ OBJECT Page 6085785 DC Client Addin (UIC)
       CaptureAddinLib.BuildZoomTextCommand(CurrentZoomText,CaptureXmlDoc);
     END;
 
-    PROCEDURE SendCommand@1000000002(VAR XmlDoc@6085573 : Codeunit 6192800);
+    PROCEDURE SendCommand@1000000002(VAR XmlDoc@6085573 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument");
     VAR
-      NewXmlDoc@6085574 : Codeunit 6192800;
+      NewXmlDoc@6085574 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
     BEGIN
       CaptureAddinLib.XmlToText(XmlDoc,CaptureUISource);
       CaptureAddinLib.TextToXml(NewXmlDoc,CaptureUISource);
@@ -184,32 +189,29 @@ OBJECT Page 6085785 DC Client Addin (UIC)
       CLEAR(CaptureXmlDoc);
     END;
 
-    PROCEDURE HandleXmlCommand@1000000007(Command@1000000000 : Text[1024];VAR InXmlDoc@6085573 : Codeunit 6192800);
+    PROCEDURE HandleXmlCommand@1000000007(Command@1000000000 : Text[1024];VAR InXmlDoc@6085573 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument");
     VAR
       XmlLib@1000000003 : Codeunit 6085573;
-      DocumentElement@1000 : Codeunit 6192801;
     BEGIN
-      InXmlDoc.GetDocumentElement(DocumentElement);
-
       CASE Command OF
         'ZoomTextChanged':
           BEGIN
-            CurrentZoomText := XmlLib.GetNodeText(DocumentElement,'Text');
+            CurrentZoomText := XmlLib.GetNodeText(InXmlDoc.DocumentElement,'Text');
             IF EVALUATE(CurrZoom,DELCHR(CurrentZoomText,'=','%')) THEN;
             Zoom(CurrZoom,TRUE);
           END;
 
         'PageTextChanged':
           BEGIN
-            CurrentPageText := XmlLib.GetNodeText(DocumentElement,'Text');
+            CurrentPageText := XmlLib.GetNodeText(InXmlDoc.DocumentElement,'Text');
             ParsePageText(CurrentPageText);
           END;
 
         'ChangePage':
-          UpdateCurrPageNo(XmlLib.Text2Int(XmlLib.GetNodeText(DocumentElement,'NewPageNo')));
+          UpdateCurrPageNo(XmlLib.Text2Int(XmlLib.GetNodeText(InXmlDoc.DocumentElement,'NewPageNo')));
       END;
 
-      IF NOT CaptureXmlDoc.IsEmpty THEN
+      IF NOT ISNULL(CaptureXmlDoc) THEN
         SendCommand(CaptureXmlDoc);
       CLEAR(CaptureXmlDoc);
     END;
@@ -237,10 +239,9 @@ OBJECT Page 6085785 DC Client Addin (UIC)
       CurrPage.UPDATE(FALSE);
     END;
 
-    PROCEDURE OnControlAddInEvent@1160040000(Index@1160040002 : Integer;Data@1160040000 : Variant);
+    PROCEDURE OnControlAddIn@1160040000(Index@1160040002 : Integer;Data@1160040000 : Variant);
     VAR
-      InXmlDoc@6085574 : Codeunit 6192800;
-      DocumentElement@1000 : Codeunit 6192801;
+      InXmlDoc@6085574 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
       XmlLib@6085573 : Codeunit 6085573;
     BEGIN
       CLEAR(CaptureXmlDoc);
@@ -248,9 +249,32 @@ OBJECT Page 6085785 DC Client Addin (UIC)
         HandleSimpleCommand(Data)
       ELSE BEGIN
         CaptureAddinLib.TextToXml(InXmlDoc,Data);
-        InXmlDoc.GetDocumentElement(DocumentElement);
-        HandleXmlCommand(XmlLib.GetNodeText(DocumentElement,'Command'),InXmlDoc);
+        HandleXmlCommand(XmlLib.GetNodeText(InXmlDoc.DocumentElement,'Command'),InXmlDoc);
       END;
+    END;
+
+    EVENT CaptureXmlDoc@6085573::NodeInserting@94(sender@6085574 : Variant;e@6085573 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT CaptureXmlDoc@6085573::NodeInserted@95(sender@6085574 : Variant;e@6085573 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT CaptureXmlDoc@6085573::NodeRemoving@96(sender@6085574 : Variant;e@6085573 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT CaptureXmlDoc@6085573::NodeRemoved@97(sender@6085574 : Variant;e@6085573 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT CaptureXmlDoc@6085573::NodeChanging@98(sender@6085574 : Variant;e@6085573 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT CaptureXmlDoc@6085573::NodeChanged@99(sender@6085574 : Variant;e@6085573 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
     END;
 
     BEGIN

@@ -1,0 +1,295 @@
+OBJECT Table 6086370 Mileage Rate
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/30/17;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.03;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 6086365=rimd;
+    OnDelete=VAR
+               Mileage@1160040000 : Record 6086338;
+             BEGIN
+               Mileage.SETCURRENTKEY(Posted);
+               Mileage.SETFILTER("Vehicle Code","Vehicle Code");
+               Mileage.SETFILTER("Registration Date",'>=%1',"Start Date");
+               Mileage.SETRANGE(Posted,TRUE);
+               IF Mileage.FINDFIRST THEN
+                 ERROR(NotAllowedToDelete,TABLECAPTION,"Vehicle Code",Mileage.TABLECAPTION);
+             END;
+
+    CaptionML=ENU=Mileage Rate;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Vehicle Code        ;Code20        ;TableRelation=Vehicle;
+                                                   OnValidate=BEGIN
+                                                                IF xRec."Vehicle Code" <> '' THEN
+                                                                  CheckPostedAndRecalc(FIELDCAPTION("Vehicle Code"));
+                                                              END;
+
+                                                   CaptionML=ENU=Vehicle Code;
+                                                   NotBlank=Yes }
+    { 2   ;   ;Start Date          ;Date          ;OnValidate=BEGIN
+                                                                IF xRec."Start Date" <> 0D THEN
+                                                                  CheckPostedAndRecalc(FIELDCAPTION("Start Date"));
+                                                              END;
+
+                                                   CaptionML=ENU=Start Date }
+    { 4   ;   ;Starting Distance   ;Decimal       ;OnValidate=BEGIN
+                                                                IF xRec."Starting Distance" <> 0 THEN
+                                                                  CheckPostedAndRecalc(FIELDCAPTION("Starting Distance"));
+                                                              END;
+
+                                                   CaptionML=ENU=Starting Distance;
+                                                   DecimalPlaces=0:0 }
+    { 5   ;   ;Rate (LCY)          ;Decimal       ;OnValidate=BEGIN
+                                                                IF xRec."Rate (LCY)" <> 0 THEN
+                                                                  CheckPostedAndRecalc(FIELDCAPTION("Rate (LCY)"));
+                                                              END;
+
+                                                   CaptionML=ENU=Rate (LCY) }
+    { 6   ;   ;New Mileage Year    ;Boolean       ;OnValidate=BEGIN
+                                                                CheckPostedAndRecalc(FIELDCAPTION("New Mileage Year"));
+                                                              END;
+
+                                                   CaptionML=ENU=New Mileage Year }
+    { 10  ;   ;Rate ID             ;Code10        ;TableRelation="Mileage Rate ID";
+                                                   CaptionML=ENU=Rate ID }
+  }
+  KEYS
+  {
+    {    ;Vehicle Code,Start Date,Starting Distance;
+                                                   Clustered=Yes }
+    {    ;Vehicle Code,Start Date,New Mileage Year }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      PostedExistsErr@1160040002 : TextConst 'ENU=One or more mileage have been posted after %1 and %2 can therefore not be changed.';
+      NotAllowedToDelete@1160040003 : TextConst 'ENU=It is not allowed to delete %1 %2, because %3 has posted transactions.';
+      MilRate@1160040004 : Record 6086370;
+      RecalculateDetails@1160040006 : TextConst 'ENU=The mileage details need to be updated.';
+
+    PROCEDURE CalcAmount@1160040003(VAR Mileage@1160040000 : Record 6086338;IncludeNotPosted@1160040005 : Boolean);
+    VAR
+      Distance@1160040003 : Decimal;
+      Previous@1160040001 : Decimal;
+      TotalDistance@1160040004 : Decimal;
+    BEGIN
+      Mileage."Amount (LCY)" := 0;
+      InitDetails(Mileage);
+      Previous := PreviousTotal(Mileage,IncludeNotPosted);
+      Distance := Mileage."Total Distance";
+      TotalDistance := Previous + Distance;
+
+      CalcPartAmount(Mileage,Distance,TotalDistance,Previous,GetMilYearStartDate(Mileage."Vehicle Code",Mileage."Registration Date"));
+    END;
+
+    LOCAL PROCEDURE CalcPartAmount@1160040000(VAR Mileage@1160040000 : Record 6086338;VAR Distance@1160040005 : Decimal;VAR TotalDistance@1160040006 : Decimal;StartDistance@1160040004 : Decimal;FinancialYearStartDate@1160040008 : Date);
+    VAR
+      Rate@1160040002 : Record 6086370;
+      Factor@1160040007 : Decimal;
+      MaxDistance@1160040003 : Decimal;
+      Previous@1160040001 : Decimal;
+    BEGIN
+      Previous := StartDistance;
+      Factor := 1;
+      IF Mileage."No Refund" THEN
+        Factor := 0;
+
+      IF FindRate(Previous,Mileage,Distance,TotalDistance,MaxDistance,Rate,FinancialYearStartDate) THEN BEGIN
+        Mileage."Amount (LCY)" := ROUND(Mileage."Amount (LCY)" + Factor * Rate."Rate (LCY)" * (MaxDistance - Previous));
+        InsertDetails(
+          Mileage,Rate,MaxDistance-Previous,Factor * Rate."Rate (LCY)" * (MaxDistance-Previous),Rate."Rate (LCY)",Previous,MaxDistance);
+        CalcPartAmount(Mileage,Distance,TotalDistance,MaxDistance,FinancialYearStartDate);
+      END ELSE BEGIN
+        Mileage."Amount (LCY)" := ROUND(Mileage."Amount (LCY)" + Factor * Rate."Rate (LCY)" * (TotalDistance - Previous));
+        InsertDetails(Mileage,Rate,TotalDistance - Previous,Factor * Rate."Rate (LCY)" * (TotalDistance - Previous),
+          Rate."Rate (LCY)",Previous,TotalDistance);
+      END;
+    END;
+
+    PROCEDURE PreviousTotal@1160040001(Mileage@1160040000 : Record 6086338;IncludeNotPosted@1160040003 : Boolean) Distance : Decimal;
+    VAR
+      Company@1160040004 : Record 2000000006;
+      EMSetup@1160040001 : Record 6086300;
+      StartDate@1160040006 : Date;
+      EndDate@1160040007 : Date;
+    BEGIN
+      StartDate := GetMilYearStartDate(Mileage."Vehicle Code",Mileage."Registration Date");
+      IF GetMilYearEndDate("Vehicle Code",StartDate) <> 0D THEN
+        EndDate := CALCDATE('<-1D>',GetMilYearEndDate("Vehicle Code",StartDate));
+
+      EMSetup.GET;
+      IF EMSetup."Calc. mil. across companies" THEN BEGIN
+        IF Company.FINDSET THEN
+          REPEAT
+            Distance := Distance + GetTotalDistanceInCompany(Company.Name,Mileage,IncludeNotPosted,StartDate,EndDate);
+          UNTIL Company.NEXT = 0;
+      END ELSE
+        Distance := GetTotalDistanceInCompany(COMPANYNAME,Mileage,IncludeNotPosted,StartDate,EndDate);
+    END;
+
+    LOCAL PROCEDURE FindRate@1160040002(StartDistance@1160040002 : Decimal;Mileage@1160040000 : Record 6086338;Distance@1160040005 : Decimal;TotalDistance@1160040006 : Decimal;VAR MaxDistance@1160040003 : Decimal;VAR Rate@1160040001 : Record 6086370;FinancialYearStartDate@1160040007 : Date) : Boolean;
+    VAR
+      NextRate@1160040004 : Record 6086370;
+    BEGIN
+      Rate.SETRANGE("Vehicle Code",Mileage."Vehicle Code");
+      Rate.SETRANGE("Start Date",FinancialYearStartDate,Mileage."Registration Date");
+      Rate.SETFILTER("Starting Distance",'<=%1',Max(StartDistance,0));
+      Rate.FINDLAST;
+
+      NextRate.COPYFILTERS(Rate);
+      NextRate.SETFILTER("Start Date",'>=%1',Rate."Start Date");
+      NextRate.SETFILTER("Starting Distance",'>%1',Rate."Starting Distance");
+      IF NextRate.FINDLAST THEN
+        IF TotalDistance > NextRate."Starting Distance" THEN BEGIN
+          MaxDistance := NextRate."Starting Distance";
+          EXIT(TRUE); // THE DISTANCE SPANS ON MORE THAN ONE RATE
+        END;
+
+      EXIT(FALSE); // THE RATE APPLIES TO THE WHOLE DISTANCE
+    END;
+
+    PROCEDURE InsertDetails@1160040004(Mileage@1160040000 : Record 6086338;Rate@1160040001 : Record 6086370;Distance@1160040002 : Decimal;Amount@1160040003 : Decimal;ActualRate@1160040007 : Decimal;FromDistance@1160040005 : Decimal;ToDistance@1160040006 : Decimal);
+    VAR
+      MileageDetail@1160040004 : Record 6086365;
+    BEGIN
+      MileageDetail."Mileage Entry No." := Mileage."Entry No.";
+      MileageDetail.SETRANGE("Mileage Entry No.",MileageDetail."Mileage Entry No.");
+      IF MileageDetail.FINDLAST THEN;
+
+      MileageDetail."Detail Entry No." := MileageDetail."Detail Entry No." + 1;
+      MileageDetail."Continia User ID" := Mileage."Continia User ID";
+      MileageDetail."Registration Date" := Mileage."Registration Date";
+      MileageDetail."Rate ID" := Rate."Rate ID";
+      MileageDetail.Distance := Distance;
+      MileageDetail.Rate := ActualRate;
+      MileageDetail."Amount (LCY)" := Amount;
+      MileageDetail."Vehicle Code" := Mileage."Vehicle Code";
+      MileageDetail.Posted := FALSE;
+      MileageDetail."From Distance" := FromDistance;
+      MileageDetail."To Distance" := ToDistance;
+      MileageDetail.Reimbursed := FALSE;
+      MileageDetail."Reimbursement Method" := Mileage."Reimbursement Method";
+      MileageDetail.INSERT;
+    END;
+
+    PROCEDURE InitDetails@1160040005(Mileage@1160040000 : Record 6086338);
+    VAR
+      MileageDetail@1160040001 : Record 6086365;
+    BEGIN
+      MileageDetail.SETRANGE("Mileage Entry No.",Mileage."Entry No.");
+      MileageDetail.DELETEALL;
+    END;
+
+    PROCEDURE Max@1160040006(a@1160040000 : Decimal;b@1160040001 : Decimal) : Decimal;
+    BEGIN
+      IF a > b THEN
+        EXIT(a);
+      EXIT(b);
+    END;
+
+    PROCEDURE GetTotalDistanceInCompany@1160040007(CompName@1160040006 : Text[50];Mileage@1160040003 : Record 6086338;IncludeNotPosted@1160040002 : Boolean;PeriodStartDate@1160040004 : Date;PeriodEndDate@1160040005 : Date) : Decimal;
+    VAR
+      OtherMileage@1160040001 : Record 6086338;
+      PostedMileage@1160040000 : Record 6086338;
+    BEGIN
+      PostedMileage.CHANGECOMPANY(CompName);
+      PostedMileage.SETCURRENTKEY("Continia User ID","Registration Date",Posted);
+      PostedMileage.SETRANGE("Continia User ID",Mileage."Continia User ID");
+      PostedMileage.SETRANGE(Posted,TRUE);
+      IF PeriodEndDate <> 0D THEN
+        PostedMileage.SETFILTER("Registration Date",'>=%1&<=%2',PeriodStartDate,PeriodEndDate)
+      ELSE
+        PostedMileage.SETFILTER("Registration Date",'>=%1',PeriodStartDate);
+      PostedMileage.CALCSUMS("Total Distance");
+
+      IF IncludeNotPosted THEN BEGIN
+        OtherMileage.CHANGECOMPANY(CompName);
+        OtherMileage.SETCURRENTKEY("Continia User ID","Registration Date",Posted);
+        OtherMileage.SETRANGE("Continia User ID",Mileage."Continia User ID");
+        OtherMileage.SETRANGE(Posted,FALSE);
+        OtherMileage.SETFILTER("Entry No.",'<%1',Mileage."Entry No.");
+        IF PeriodEndDate <> 0D THEN
+          OtherMileage.SETFILTER("Registration Date",'>=%1&<=%2',PeriodStartDate,PeriodEndDate)
+        ELSE
+          OtherMileage.SETFILTER("Registration Date",'>=%1',PeriodStartDate);
+        OtherMileage.CALCSUMS("Total Distance");
+      END ELSE
+        OtherMileage."Total Distance" := 0;
+
+      EXIT(OtherMileage."Total Distance" + PostedMileage."Total Distance");
+    END;
+
+    PROCEDURE GetMilYearStartDate@1160040008(VehicleCode@1160040003 : Code[20];CheckDate@1160040002 : Date) : Date;
+    VAR
+      Rate@1160040001 : Record 6086370;
+    BEGIN
+      Rate.SETRANGE("Vehicle Code",VehicleCode);
+      Rate.SETFILTER("Start Date",'<=%1',CheckDate);
+      Rate.SETRANGE("New Mileage Year",TRUE);
+      Rate.FINDLAST;
+
+      EXIT(Rate."Start Date");
+    END;
+
+    PROCEDURE GetMilYearEndDate@1160040009(VehicleCode@1160040000 : Code[20];CheckDate@1160040002 : Date) : Date;
+    VAR
+      Rate@1160040001 : Record 6086370;
+    BEGIN
+      Rate.SETRANGE("Vehicle Code",VehicleCode);
+      Rate.SETFILTER("Start Date",'>%1',CheckDate);
+      Rate.SETRANGE("New Mileage Year",TRUE);
+      IF Rate.FINDLAST THEN
+        EXIT(Rate."Start Date");
+    END;
+
+    PROCEDURE CheckPostedAndRecalc@1160040015(FldCaption@1160040002 : Text[50]);
+    VAR
+      Mileage@1160040000 : Record 6086338;
+      MileageRate@1160040001 : Record 6086370;
+    BEGIN
+      Mileage.SETCURRENTKEY(Posted);
+      Mileage.SETRANGE(Posted,TRUE);
+      Mileage.SETRANGE("Vehicle Code","Vehicle Code");
+      Mileage.SETFILTER("Registration Date",'>=%1',"Start Date");
+      IF NOT Mileage.ISEMPTY THEN
+        ERROR(PostedExistsErr,"Start Date",FldCaption);
+
+      Mileage.SETRANGE(Posted,FALSE);
+      Mileage.SETRANGE("Vehicle Code","Vehicle Code");
+      Mileage.SETFILTER("Registration Date",'>=%1',"Start Date");
+      IF NOT Mileage.ISEMPTY THEN
+        MESSAGE(RecalculateDetails);
+    END;
+
+    PROCEDURE RecalculateMileageRate@1160040011(MileageRate@1160040002 : Record 6086370);
+    VAR
+      Mileage@1160040000 : Record 6086338;
+    BEGIN
+      Mileage.SETCURRENTKEY(Posted);
+      Mileage.SETRANGE(Posted,FALSE);
+      Mileage.SETRANGE("Vehicle Code",MileageRate."Vehicle Code");
+      Mileage.SETFILTER("Registration Date",'>=%1',MileageRate."Start Date");
+      IF NOT Mileage.ISEMPTY THEN BEGIN
+        Mileage.LOCKTABLE;
+        IF Mileage.FINDSET THEN
+          REPEAT
+            MileageRate.CalcAmount(Mileage,TRUE);
+            Mileage.MODIFY;
+          UNTIL Mileage.NEXT = 0;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

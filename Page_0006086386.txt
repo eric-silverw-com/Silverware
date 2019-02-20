@@ -1,0 +1,605 @@
+OBJECT Page 6086386 Settlement - Expense Subform
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/06/17;
+    Time=[ 1:00:00 AM];
+    Version List=EMW17.00.00.2.60.02;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Expenses;
+    SourceTable=Table6086320;
+    PageType=ListPart;
+    OnOpenPage=VAR
+                 EMOnlineMgt@1000 : Codeunit 6086305;
+               BEGIN
+                 EMOnlineMgt.IsCompanyActive(FALSE);
+                 EnableFields;
+                 ShowEntryNo := WebClientMgt.IsWebClient;
+               END;
+
+    OnFindRecord=BEGIN
+                   GetExpHeader;
+                   EXIT(FIND(Which));
+                 END;
+
+    OnAfterGetRecord=BEGIN
+                       ShortcutFieldFunctions.ShowShortcutFieldValues(ShortcutFieldValues,DATABASE::Expense,0,'',"Entry No.");
+                     END;
+
+    OnNewRecord=VAR
+                  Expense@1160040002 : Record 6086320;
+                BEGIN
+                  CLEAR(ShortcutFieldValues);
+
+                  GetExpHeader;
+                  IF ExpHeader.Status = ExpHeader.Status::Released THEN
+                    EXIT;
+
+                  "Entry No." := Expense.GetEntryNo;
+                  "Continia User ID" := ExpHeader."Continia User ID";
+                  VALIDATE("Settlement No.",ExpHeader."No.");
+                  "Expense Header GUID" := ExpHeader."Exp. Header GUID";
+                  "Country/Region Code" := ExpHeader."Country/Region Code";
+                  "Currency Code" := ExpHeader."Currency Code";
+                  "Global Dimension 1 Code" := ExpHeader."Global Dimension 1 Code";
+                  "Global Dimension 2 Code" := ExpHeader."Global Dimension 2 Code";
+
+                  IF NOT BelowxRec THEN BEGIN
+                    Expense.RESET;
+                    Expense.SETCURRENTKEY("Settlement No.","Settlement Line No.");
+                    Expense.SETRANGE("Settlement No.",ExpHeader."No.");
+                    Expense.SETFILTER("Settlement Line No.",'<%1',xRec."Settlement Line No.");
+                    IF Expense.FINDLAST THEN
+                      "Settlement Line No." := ROUND((xRec."Settlement Line No." + Expense."Settlement Line No.") / 2,1)
+                    ELSE
+                      "Settlement Line No." := ROUND((xRec."Settlement Line No.") / 2,1);
+
+                  END ELSE
+                    IF Rec.COUNT > 1 THEN
+                      "Settlement Line No." := xRec."Settlement Line No." + 10000
+                    ELSE
+                      "Settlement Line No." := + 10000;
+
+                  "Document Date" := xRec."Document Date";
+                END;
+
+    OnInsertRecord=VAR
+                     Expense@1160040000 : Record 6086320;
+                   BEGIN
+                     "Entry No." := Expense.GetEntryNo;
+                     IF "Document Date" = 0D THEN
+                       "Document Date" := TODAY;
+                     "Cash/Private Card" := TRUE;
+
+                     GetExpHeader;
+                     "Continia User ID" := ExpHeader."Continia User ID";
+                   END;
+
+    OnDeleteRecord=BEGIN
+                     IF NOT "Matched to Bank Transaction" THEN
+                       EXIT(TRUE)
+                     ELSE BEGIN
+                       VALIDATE("Settlement No.",'');
+                       MODIFY(TRUE);
+                       EXIT(FALSE);
+                     END;
+                   END;
+
+    OnAfterGetCurrRecord=BEGIN
+                           IF WebClientMgt.IsWebClient THEN
+                             UpdateImage;
+                         END;
+
+    ActionList=ACTIONS
+    {
+      { 1160040041;  ;ActionContainer;
+                      Name=<Action1160040023>;
+                      ActionContainerType=ActionItems }
+      { 9       ;1   ;ActionGroup;
+                      Name=<Action14>;
+                      CaptionML=ENU=Lines }
+      { 13      ;2   ;Action    ;
+                      Name=<Action1160040056>;
+                      ShortCutKey=Shift+Ctrl+T;
+                      CaptionML=ENU=Attachments;
+                      Image=Attachments;
+                      OnAction=BEGIN
+                                 ShowAttachments;
+                                 CurrPage.UPDATE(FALSE);
+                               END;
+                                }
+      { 12      ;2   ;Action    ;
+                      Name=<Action1160040032>;
+                      ShortCutKey=Shift+Ctrl+D;
+                      CaptionML=ENU=Dimensions;
+                      Image=Dimensions;
+                      OnAction=BEGIN
+                                 Rec.LookupDimensions(TRUE);
+                               END;
+                                }
+      { 11      ;2   ;Action    ;
+                      Name=<Action1160040046>;
+                      CaptionML=ENU=Extra Fields;
+                      Image=SelectField;
+                      OnAction=BEGIN
+                                 Rec.LookupExtraFields(TRUE);
+                               END;
+                                }
+      { 4       ;2   ;Action    ;
+                      Name=<Action1160040073>;
+                      CaptionML=ENU=Attendees;
+                      Image=Users;
+                      OnAction=BEGIN
+                                 Rec.DrillDownAttendees;
+                               END;
+                                }
+      { 10      ;2   ;Action    ;
+                      Name=<Action1160040033>;
+                      CaptionML=ENU=Comments;
+                      Image=ViewComments;
+                      OnAction=BEGIN
+                                 Rec.LookupComments;
+                               END;
+                                }
+      { 1160040040;1 ;ActionGroup;
+                      Name=<Action1160040021>;
+                      CaptionML=ENU=F&unctions }
+      { 1160040034;2 ;Action    ;
+                      Name=<Action1160040035>;
+                      CaptionML=ENU=Merge Expenses;
+                      Image=GetSourceDoc;
+                      OnAction=VAR
+                                 Expense@1160040001 : Record 6086320;
+                                 Expense2@1160040002 : Record 6086320;
+                               BEGIN
+                                 CurrPage.SETSELECTIONFILTER(Expense);
+
+                                 IF Expense.COUNT <> 2 THEN
+                                   ERROR(Select2ExpToMergeErr);
+
+                                 Expense.FINDSET;
+                                 Expense2.GET(Expense."Entry No.");
+                                 Expense.NEXT;
+                                 Expense.MergeExpenses(Expense,Expense2);
+
+                                 CurrPage.UPDATE;
+                               END;
+                                }
+      { 1160040008;2 ;Action    ;
+                      Name=<Action1160040063>;
+                      ShortCutKey=Shift+F11;
+                      Ellipsis=Yes;
+                      CaptionML=ENU=Match Bank Transaction;
+                      Image=SettleOpenTransactions;
+                      OnAction=VAR
+                                 Expense@1160040001 : Record 6086320;
+                               BEGIN
+                                 MatchToBankTrans;
+                               END;
+                                }
+      { 1160040042;2 ;Action    ;
+                      Name=<Action1160040026>;
+                      ShortCutKey=Shift+Ctrl+L;
+                      Ellipsis=Yes;
+                      CaptionML=ENU=Expense Split and Allocation;
+                      Image=Split;
+                      OnAction=BEGIN
+                                 SplitAndAllocate;
+                                 CurrPage.UPDATE;
+                               END;
+                                }
+      { 2       ;2   ;Separator  }
+      { 7       ;2   ;Action    ;
+                      Name=<Action1160040040>;
+                      Ellipsis=Yes;
+                      CaptionML=ENU=Get Expenses;
+                      Image=GetLines;
+                      OnAction=BEGIN
+                                 ExpHeader.AttachExpensesToSettlement;
+                               END;
+                                }
+      { 5       ;2   ;Action    ;
+                      CaptionML=ENU=Detach Expenses;
+                      Image=RemoveLine;
+                      OnAction=VAR
+                                 Expense@1160040001 : Record 6086320;
+                               BEGIN
+                                 CurrPage.SETSELECTIONFILTER(Expense);
+                                 Rec.DetachExpFromSettlement(Expense);
+                               END;
+                                }
+    }
+  }
+  CONTROLS
+  {
+    { 1160040000;0;Container;
+                ContainerType=ContentArea }
+
+    { 1160040001;1;Group  ;
+                Name=Group;
+                Editable=StatusEditable;
+                GroupType=Repeater }
+
+    { 6   ;2   ;Field     ;
+                Name=Comment;
+                CaptionML=ENU=Comments;
+                SourceExpr=HasComments;
+                Editable=false }
+
+    { 1160040003;2;Field  ;
+                SourceExpr="Document Date" }
+
+    { 1160040002;2;Field  ;
+                SourceExpr="Expense Type" }
+
+    { 1160040004;2;Field  ;
+                SourceExpr=Description }
+
+    { 1160040005;2;Field  ;
+                SourceExpr="Currency Code" }
+
+    { 1160040006;2;Field  ;
+                SourceExpr=Amount }
+
+    { 1160040007;2;Field  ;
+                SourceExpr="Amount (LCY)" }
+
+    { 1160040033;2;Field  ;
+                SourceExpr="Allocated Amount (LCY)";
+                OnDrillDown=VAR
+                              ExpenseAllocation@1000 : Record 6086321;
+                            BEGIN
+                              ExpenseAllocation.SETCURRENTKEY("Expense Entry No.");
+                              ExpenseAllocation.SETRANGE("Expense Entry No.","Entry No.");
+                              PAGE.RUNMODAL(PAGE::"Expense Split and Allocation",ExpenseAllocation);
+                              CurrPage.UPDATE(FALSE);
+                            END;
+                             }
+
+    { 1160040009;2;Field  ;
+                SourceExpr="No Refund";
+                Visible=false }
+
+    { 1160040010;2;Field  ;
+                SourceExpr="Bank-Currency Amount";
+                Visible=false }
+
+    { 1160040011;2;Field  ;
+                SourceExpr="Bank Currency Code";
+                Visible=false }
+
+    { 1160040012;2;Field  ;
+                SourceExpr="Cash/Private Card" }
+
+    { 1160040013;2;Field  ;
+                SourceExpr="Matched to Bank Transaction" }
+
+    { 1160040014;2;Field  ;
+                SourceExpr="Global Dimension 1 Code" }
+
+    { 1160040015;2;Field  ;
+                SourceExpr="Global Dimension 2 Code" }
+
+    { 1160040016;2;Field  ;
+                SourceExpr="Job No.";
+                Visible=JobNoVisible }
+
+    { 1160040017;2;Field  ;
+                SourceExpr="Job Task No.";
+                Visible=JobNoVisible }
+
+    { 1   ;2   ;Field     ;
+                SourceExpr=Billable;
+                Visible=false }
+
+    { 3   ;2   ;Field     ;
+                SourceExpr="Job Line Type";
+                Visible=false }
+
+    { 1160040018;2;Field  ;
+                Name=ShortcutField1;
+                SourceExpr=ShortcutFieldValues[1];
+                CaptionClass=GetShortcutFieldCaption(1);
+                Visible=CustomFieldVisible1;
+                OnValidate=BEGIN
+                             ShortcutFieldFunctions.ValidateShortcutFieldValue(1,DATABASE::Expense,0,'',"Entry No.",ShortcutFieldValues[1]);
+                           END;
+
+                OnLookup=BEGIN
+                           EXIT(ShortcutFieldFunctions.LookupShortcutFieldValue(1,DATABASE::Expense,0,'',"Entry No.",Text));
+                         END;
+                          }
+
+    { 1160040019;2;Field  ;
+                Name=ShortcutField2;
+                SourceExpr=ShortcutFieldValues[2];
+                CaptionClass=GetShortcutFieldCaption(2);
+                Visible=CustomFieldVisible2;
+                OnValidate=BEGIN
+                             ShortcutFieldFunctions.ValidateShortcutFieldValue(2,DATABASE::Expense,0,'',"Entry No.",ShortcutFieldValues[2]);
+                           END;
+
+                OnLookup=BEGIN
+                           EXIT(ShortcutFieldFunctions.LookupShortcutFieldValue(2,DATABASE::Expense,0,'',"Entry No.",Text));
+                         END;
+                          }
+
+    { 1160040020;2;Field  ;
+                Name=ShortcutField3;
+                SourceExpr=ShortcutFieldValues[3];
+                CaptionClass=GetShortcutFieldCaption(3);
+                Visible=CustomFieldVisible3;
+                OnValidate=BEGIN
+                             ShortcutFieldFunctions.ValidateShortcutFieldValue(3,DATABASE::Expense,0,'',"Entry No.",ShortcutFieldValues[3]);
+                           END;
+
+                OnLookup=BEGIN
+                           EXIT(ShortcutFieldFunctions.LookupShortcutFieldValue(3,DATABASE::Expense,0,'',"Entry No.",Text));
+                         END;
+                          }
+
+    { 1160040021;2;Field  ;
+                Name=ShortcutField4;
+                SourceExpr=ShortcutFieldValues[4];
+                CaptionClass=GetShortcutFieldCaption(4);
+                Visible=CustomFieldVisible4;
+                OnValidate=BEGIN
+                             ShortcutFieldFunctions.ValidateShortcutFieldValue(4,DATABASE::Expense,0,'',"Entry No.",ShortcutFieldValues[4]);
+                           END;
+
+                OnLookup=BEGIN
+                           EXIT(ShortcutFieldFunctions.LookupShortcutFieldValue(4,DATABASE::Expense,0,'',"Entry No.",Text));
+                         END;
+                          }
+
+    { 1160040022;2;Field  ;
+                Name=ShortcutField5;
+                SourceExpr=ShortcutFieldValues[5];
+                CaptionClass=GetShortcutFieldCaption(5);
+                Visible=CustomFieldVisible5;
+                OnValidate=BEGIN
+                             ShortcutFieldFunctions.ValidateShortcutFieldValue(5,DATABASE::Expense,0,'',"Entry No.",ShortcutFieldValues[5]);
+                           END;
+
+                OnLookup=BEGIN
+                           EXIT(ShortcutFieldFunctions.LookupShortcutFieldValue(5,DATABASE::Expense,0,'',"Entry No.",Text));
+                         END;
+                          }
+
+    { 1160040023;2;Field  ;
+                Name=ShortcutField6;
+                SourceExpr=ShortcutFieldValues[6];
+                CaptionClass=GetShortcutFieldCaption(6);
+                Visible=CustomFieldVisible6;
+                OnValidate=BEGIN
+                             ShortcutFieldFunctions.ValidateShortcutFieldValue(6,DATABASE::Expense,0,'',"Entry No.",ShortcutFieldValues[6]);
+                           END;
+
+                OnLookup=BEGIN
+                           EXIT(ShortcutFieldFunctions.LookupShortcutFieldValue(6,DATABASE::Expense,0,'',"Entry No.",Text));
+                         END;
+                          }
+
+    { 1160040024;2;Field  ;
+                Name=ShortcutField7;
+                SourceExpr=ShortcutFieldValues[7];
+                CaptionClass=GetShortcutFieldCaption(7);
+                Visible=CustomFieldVisible7;
+                OnValidate=BEGIN
+                             ShortcutFieldFunctions.ValidateShortcutFieldValue(7,DATABASE::Expense,0,'',"Entry No.",ShortcutFieldValues[7]);
+                           END;
+
+                OnLookup=BEGIN
+                           EXIT(ShortcutFieldFunctions.LookupShortcutFieldValue(7,DATABASE::Expense,0,'',"Entry No.",Text));
+                         END;
+                          }
+
+    { 1160040025;2;Field  ;
+                Name=ShortcutField8;
+                SourceExpr=ShortcutFieldValues[8];
+                CaptionClass=GetShortcutFieldCaption(8);
+                Visible=CustomFieldVisible8;
+                OnValidate=BEGIN
+                             ShortcutFieldFunctions.ValidateShortcutFieldValue(8,DATABASE::Expense,0,'',"Entry No.",ShortcutFieldValues[8]);
+                           END;
+
+                OnLookup=BEGIN
+                           EXIT(ShortcutFieldFunctions.LookupShortcutFieldValue(8,DATABASE::Expense,0,'',"Entry No.",Text));
+                         END;
+                          }
+
+    { 1160040026;2;Field  ;
+                Name=ShortcutField9;
+                SourceExpr=ShortcutFieldValues[9];
+                CaptionClass=GetShortcutFieldCaption(9);
+                Visible=CustomFieldVisible9;
+                OnValidate=BEGIN
+                             ShortcutFieldFunctions.ValidateShortcutFieldValue(9,DATABASE::Expense,0,'',"Entry No.",ShortcutFieldValues[9]);
+                           END;
+
+                OnLookup=BEGIN
+                           EXIT(ShortcutFieldFunctions.LookupShortcutFieldValue(9,DATABASE::Expense,0,'',"Entry No.",Text));
+                         END;
+                          }
+
+    { 1160040027;2;Field  ;
+                Name=ShortcutField10;
+                SourceExpr=ShortcutFieldValues[10];
+                CaptionClass=GetShortcutFieldCaption(10);
+                Visible=CustomFieldVisible10;
+                OnValidate=BEGIN
+                             ShortcutFieldFunctions.ValidateShortcutFieldValue(10,DATABASE::Expense,0,'',"Entry No.",ShortcutFieldValues[10]);
+                           END;
+
+                OnLookup=BEGIN
+                           EXIT(ShortcutFieldFunctions.LookupShortcutFieldValue(10,DATABASE::Expense,0,'',"Entry No.",Text));
+                         END;
+                          }
+
+    { 8   ;2   ;Field     ;
+                SourceExpr="Expense Account Type";
+                Visible=false }
+
+    { 1160040028;2;Field  ;
+                SourceExpr="Expense Account";
+                Visible=false;
+                OnLookup=BEGIN
+                           EXIT(LookupPostingAccount(Text));
+                         END;
+                          }
+
+    { 1160040029;2;Field  ;
+                CaptionML=ENU=Attendees;
+                SourceExpr=GetAttendeesForDisplay;
+                OnDrillDown=BEGIN
+                              DrillDownAttendees;
+                              CurrPage.UPDATE(FALSE);
+                            END;
+                             }
+
+    { 1160040030;2;Field  ;
+                SourceExpr="Gen. Prod. Posting Group";
+                Visible=false }
+
+    { 1160040031;2;Field  ;
+                Name=<VAT. Prod. Posting Group>;
+                SourceExpr="VAT Prod. Posting Group";
+                Visible=false }
+
+    { 6086300;2;Field     ;
+                SourceExpr="Entry No.";
+                Visible=ShowEntryNo;
+                Editable=False }
+
+  }
+  CODE
+  {
+    VAR
+      ExpHeader@1001 : Record 6086339;
+      ShortcutFieldFunctions@1003 : Codeunit 6086304;
+      WebClientMgt@1000 : Codeunit 6085662;
+      CustomFieldNames@1002 : ARRAY [10] OF Text[50];
+      ShortcutFieldCaptions@1160040001 : ARRAY [10] OF Text[250];
+      ShortcutFieldValues@1160040000 : ARRAY [10] OF Text[250];
+      CustomFieldVisible1@1160040004 : Boolean INDATASET;
+      CustomFieldVisible2@1160040005 : Boolean INDATASET;
+      CustomFieldVisible3@1160040006 : Boolean INDATASET;
+      CustomFieldVisible4@1160040007 : Boolean INDATASET;
+      CustomFieldVisible5@1160040008 : Boolean INDATASET;
+      CustomFieldVisible6@1160040009 : Boolean INDATASET;
+      CustomFieldVisible7@1160040010 : Boolean INDATASET;
+      CustomFieldVisible8@1160040011 : Boolean INDATASET;
+      CustomFieldVisible9@1160040012 : Boolean INDATASET;
+      CustomFieldVisible10@1160040013 : Boolean INDATASET;
+      Select2ExpToMergeErr@1160040014 : TextConst 'ENU=Please select two expenses to merge them.';
+      JobNoVisible@1160040015 : Boolean INDATASET;
+      StatusEditable@6086300 : Boolean INDATASET;
+      ShowEntryNo@6086301 : Boolean;
+
+    LOCAL PROCEDURE GetShortcutFieldCaption@1160040001(ShortcutFieldNo@1160040000 : Integer) : Text[250];
+    BEGIN
+      IF ShortcutFieldCaptions[1] = '' THEN
+        ShortcutFieldFunctions.GetShortcutFieldCaptionsArray(ShortcutFieldCaptions,DATABASE::Expense);
+
+      EXIT(ShortcutFieldCaptions[ShortcutFieldNo]);
+    END;
+
+    PROCEDURE MergeExpenses@1160040007();
+    VAR
+      Expense@1160040001 : Record 6086320;
+      Expense2@1160040000 : Record 6086320;
+    BEGIN
+      CurrPage.SETSELECTIONFILTER(Expense);
+
+      IF Expense.COUNT <> 2 THEN
+        ERROR(Select2ExpToMergeErr);
+
+      Expense.FINDSET;
+      Expense2.GET(Expense."Entry No.");
+      Expense.NEXT;
+      Expense.MergeExpenses(Expense,Expense2);
+
+      CurrPage.UPDATE;
+    END;
+
+    PROCEDURE MatchToBankTransaction@1160040008();
+    BEGIN
+      Rec.MatchToBankTrans;
+    END;
+
+    LOCAL PROCEDURE EnableFields@1160040003();
+    VAR
+      EMSetup@1000 : Record 6086300;
+    BEGIN
+      EMSetup.GET;
+
+      CustomFieldNames[1] := EMSetup."Shortcut Field 1 Code (Exp.)";
+      CustomFieldNames[2] := EMSetup."Shortcut Field 2 Code (Exp.)";
+      CustomFieldNames[3] := EMSetup."Shortcut Field 3 Code (Exp.)";
+      CustomFieldNames[4] := EMSetup."Shortcut Field 4 Code (Exp.)";
+      CustomFieldNames[5] := EMSetup."Shortcut Field 5 Code (Exp.)";
+      CustomFieldNames[6] := EMSetup."Shortcut Field 6 Code (Exp.)";
+      CustomFieldNames[7] := EMSetup."Shortcut Field 7 Code (Exp.)";
+      CustomFieldNames[8] := EMSetup."Shortcut Field 8 Code (Exp.)";
+      CustomFieldNames[9] := EMSetup."Shortcut Field 9 Code (Exp.)";
+      CustomFieldNames[10] := EMSetup."Shortcut Field 10 Code (Exp.)";
+
+      CustomFieldVisible1 := CustomFieldNames[1] <> '';
+      CustomFieldVisible2 := CustomFieldNames[2] <> '';
+      CustomFieldVisible3 := CustomFieldNames[3] <> '';
+      CustomFieldVisible4 := CustomFieldNames[4] <> '';
+      CustomFieldVisible5 := CustomFieldNames[5] <> '';
+      CustomFieldVisible6 := CustomFieldNames[6] <> '';
+      CustomFieldVisible7 := CustomFieldNames[7] <> '';
+      CustomFieldVisible8 := CustomFieldNames[8] <> '';
+      CustomFieldVisible9 := CustomFieldNames[9] <> '';
+      CustomFieldVisible10 := CustomFieldNames[10] <> '';
+
+      JobNoVisible := ShortcutFieldFunctions.JobNoVisible(DATABASE::Expense);
+    END;
+
+    PROCEDURE UpdateImage@1();
+    VAR
+      RecRef@1000 : RecordRef;
+    BEGIN
+      IF ISEMPTY THEN
+        EXIT;
+
+      RecRef.GETTABLE(Rec);
+    END;
+
+    PROCEDURE GetRecordID@3() : Text;
+    VAR
+      RecRef@1000 : RecordRef;
+    BEGIN
+      RecRef.GETTABLE(Rec);
+
+      EXIT(FORMAT(RecRef.RECORDID));
+    END;
+
+    PROCEDURE HasComments@1160040011() : Boolean;
+    BEGIN
+      EXIT(HasExpenseComment OR HasApprovalComment);
+    END;
+
+    LOCAL PROCEDURE GetExpHeader@6();
+    VAR
+      Expense@1000 : Record 6086320;
+    BEGIN
+      Expense.COPY(Rec);
+      Expense.FILTERGROUP(4);
+
+      IF Expense.GETRANGEMIN("Settlement No.") = '' THEN
+        EXIT;
+
+      ExpHeader.GET(ExpHeader."Document Type"::Settlement,Expense.GETRANGEMIN("Settlement No."));
+      StatusEditable := (ExpHeader.Status = ExpHeader.Status::Open) OR (ExpHeader.Status = ExpHeader.Status::"Pending Expense User");
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

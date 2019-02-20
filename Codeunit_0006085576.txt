@@ -4,7 +4,7 @@ OBJECT Codeunit 6085576 Capture Management
   {
     Date=09/04/18;
     Time=[ 1:00:00 AM];
-    Version List=DCW13.70.00.5.00.03;
+    Version List=DCW13.70.00.4.50.07;
   }
   PROPERTIES
   {
@@ -18,7 +18,7 @@ OBJECT Codeunit 6085576 Capture Management
       WordFunc@1000000002 : Codeunit 6085574;
       Text004@1000000004 : TextConst 'ENU=Automatically Created';
       Text005@1000000005 : TextConst 'ENU=The value of the field does not match the current Field Rule.\\Do you wish to update the Field Rule to be ''%1'' (%2)?';
-      Text006@1000000006 : TextConst 'ENU=The value of the field does not match the current Field Rule.\\Do you wish to add the Field Rule to be ''%1''?';
+      Text006@1000000006 : TextConst 'ENU=The value of the field does not match the current Field Rule.\\Do you wish to update the Field Rule to be ''%1''?';
       Text007@161024012 : TextConst 'ENU=Lookup in this field is not possible.';
       Text008@161024013 : TextConst 'ENU=T';
       Text009@161024014 : TextConst 'ENU=The value of the field does not match the current setup. You can change the setup to:\\%1: %2\\This will recognize the date as ''%3'' (local format).\\Do you want to make this change?';
@@ -167,28 +167,14 @@ OBJECT Codeunit 6085576 Capture Management
       END;
 
       Value."Value (Text)" := COPYSTR(Word,1,MAXSTRLEN(Value."Value (Text)"));
-
-      // Delete previous created rules while handling current document
-      IF Value."Value (Text)" = '' THEN
-        DeleteFieldRuleFromCreatedDoc(Field,DocumentNo);
-
       IF NOT Manual THEN BEGIN
-        IF ParseField(Field,Word,FALSE,DocumentNo) THEN BEGIN
+        IF ParseField(Field,Word,FALSE) THEN BEGIN
           CASE Field."Data Type" OF
             Field."Data Type"::Text:
               BEGIN
                 Value."Is Valid" := ParseText(Field,Word,Value."Value (Text)",MAXSTRLEN(Value."Value (Text)"));
                 IF Value."Is Valid" THEN
-                  Value."Is Valid" := IsValidText(Field,Value."Value (Text)",DocumentNo);
-
-                IF Field."Enable Rule Generation" AND UpdatedByUser THEN BEGIN
-                  IF NOT Value."Is Valid" THEN
-                    // Delete previous created rules while handling current document
-                    DeleteFieldRuleFromCreatedDoc(Field,DocumentNo);
-
-                  AutoCreateTextRule(DocumentNo,Word,Value."Is Valid",Field);
-                  Value."Is Valid" := IsValidText(Field,Value."Value (Text)",DocumentNo);
-                END;
+                  Value."Is Valid" := IsValidText(Field,Value."Value (Text)");
               END;
 
             Field."Data Type"::Number:
@@ -200,7 +186,7 @@ OBJECT Codeunit 6085576 Capture Management
 
             Field."Data Type"::Date:
               BEGIN
-                Value."Is Valid" := ParseDate(Field,Word,Value."Value (Date)",DocumentNo);
+                Value."Is Valid" := ParseDate(Field,Word,Value."Value (Date)");
                 IF Value."Is Valid" THEN
                   Value."Is Valid" := IsValidDate(Field,Value."Value (Date)");
               END;
@@ -210,7 +196,7 @@ OBJECT Codeunit 6085576 Capture Management
                 Value."Is Valid" := ParseLookup(Value,Field);
                 IF Value."Is Valid" THEN
                   Value."Is Valid" := IsValidLookup(Field,
-                    RecIDMgt.GetKeyValue(Value."Value (Record ID Tree ID)",Field."Source Field No."),DocumentNo);
+                    RecIDMgt.GetKeyValue(Value."Value (Record ID Tree ID)",Field."Source Field No."));
               END;
 
             Field."Data Type"::Boolean:
@@ -234,15 +220,22 @@ OBJECT Codeunit 6085576 Capture Management
             BEGIN
               Value."Is Valid" := ParseText(Field,Word,Value."Value (Text)",MAXSTRLEN(Value."Value (Text)"));
               IF Value."Is Valid" THEN
-                Value."Is Valid" := IsValidText(Field,Value."Value (Text)",DocumentNo);
+                Value."Is Valid" := IsValidText(Field,Value."Value (Text)");
 
-              IF Field."Enable Rule Generation" AND UpdatedByUser THEN BEGIN
-                IF NOT Value."Is Valid" THEN
-                  // Delete previous created rules while handling current document
-                  DeleteFieldRuleFromCreatedDoc(Field,DocumentNo);
+              FilterRule(Field,FieldRule);
+              IF ((NOT Value."Is Valid") OR (FieldRule.ISEMPTY)) AND (Word <> '') THEN BEGIN
+                IF Field."Enable Rule Generation" THEN BEGIN
+                  IF CONFIRM(Text013,FALSE) THEN BEGIN
+                    IF NOT FieldRule.FINDFIRST THEN
+                      InitRule(Field,FieldRule);
+                    FieldRule.Rule := BuildTextRegExPattern(Word);
+                    FieldRule.Description := Text004;
+                    IF NOT FieldRule.INSERT(TRUE) THEN
+                      FieldRule.MODIFY(TRUE);
+                  END;
+                END;
 
-                AutoCreateTextRule(DocumentNo,Word,Value."Is Valid",Field);
-                Value."Is Valid" := IsValidText(Field,Value."Value (Text)",DocumentNo);
+                Value."Is Valid" := IsValidText(Field,Value."Value (Text)");
               END;
             END;
 
@@ -290,7 +283,7 @@ OBJECT Codeunit 6085576 Capture Management
               Value."Is Valid" := ParseLookup(Value,Field);
               IF Value."Is Valid" THEN
                 Value."Is Valid" := IsValidLookup(Field,
-                  RecIDMgt.GetKeyValue(Value."Value (Record ID Tree ID)",Field."Source Field No."),DocumentNo);
+                  RecIDMgt.GetKeyValue(Value."Value (Record ID Tree ID)",Field."Source Field No."));
             END;
 
           Field."Data Type"::Boolean:
@@ -324,6 +317,9 @@ OBJECT Codeunit 6085576 Capture Management
     VAR
       Caption@1000000002 : Record 6085581;
     BEGIN
+      IF Word = '' THEN
+        EXIT;
+
       IF NOT Field."Auto Update Caption" THEN
         EXIT;
 
@@ -331,9 +327,6 @@ OBJECT Codeunit 6085576 Capture Management
       Caption.SETRANGE(Type,Field.Type);
       Caption.SETRANGE(Code,Field.Code);
       Caption.DELETEALL(TRUE);
-
-      IF Word = '' THEN
-        EXIT;
 
       Caption."Template No." := Field."Template No.";
       Caption.Type := Field.Type;
@@ -369,7 +362,7 @@ OBJECT Codeunit 6085576 Capture Management
       Field.MODIFY(TRUE);
     END;
 
-    LOCAL PROCEDURE UpdateFormulaFields@161024014(DocumentNo@161024012 : Code[20];FieldType@161024015 : Integer;PageNo@161024018 : Integer;LineNo@161024017 : Integer;UpdatedByUser@1160040001 : Boolean);
+    PROCEDURE UpdateFormulaFields@161024014(DocumentNo@161024012 : Code[20];FieldType@161024015 : Integer;PageNo@161024018 : Integer;LineNo@161024017 : Integer;UpdatedByUser@1160040001 : Boolean);
     VAR
       Document@161024013 : Record 6085590;
       Field@161024014 : Record 6085580;
@@ -434,7 +427,7 @@ OBJECT Codeunit 6085576 Capture Management
         UNTIL Field.NEXT = 0;
     END;
 
-    LOCAL PROCEDURE CalcFieldFormula@161024016(Document@161024016 : Record 6085590;CurrentField@161024012 : Record 6085580;LineNo@161024018 : Integer) Result : Text[1024];
+    PROCEDURE CalcFieldFormula@161024016(Document@161024016 : Record 6085590;CurrentField@161024012 : Record 6085580;LineNo@161024018 : Integer) Result : Text[1024];
     VAR
       Field@161024014 : Record 6085580;
       TemplField@161024015 : Record 6085580;
@@ -525,7 +518,7 @@ OBJECT Codeunit 6085576 Capture Management
         END;
     END;
 
-    LOCAL PROCEDURE CheckFieldExists@1160040008(TemplateNo@1160040000 : Code[20];FieldCode@1160040001 : Code[20];FieldDataType@1160040002 : Integer) : Boolean;
+    PROCEDURE CheckFieldExists@1160040008(TemplateNo@1160040000 : Code[20];FieldCode@1160040001 : Code[20];FieldDataType@1160040002 : Integer) : Boolean;
     VAR
       Field@1160040003 : Record 6085580;
     BEGIN
@@ -545,7 +538,15 @@ OBJECT Codeunit 6085576 Capture Management
       EXIT(Value.FINDFIRST);
     END;
 
-    LOCAL PROCEDURE ApplyTranslationToWord@1000000001(VAR Field@1000000001 : Record 6085580;Word@1000000000 : Text[1024]) : Text[1024];
+    PROCEDURE GetFieldValue2@1000000023(Document@1000000007 : Record 6085590;Type@1000000006 : Integer;Code@1000000000 : Code[20];LineNo@1000000005 : Integer;VAR Value@1000000004 : Record 6085593) : Boolean;
+    VAR
+      Field@1000000001 : Record 6085580;
+    BEGIN
+      Field.GET(Document."Template No.",Type,Code);
+      EXIT(GetFieldValue(Document,Field,LineNo,Value));
+    END;
+
+    PROCEDURE ApplyTranslationToWord@1000000001(VAR Field@1000000001 : Record 6085580;Word@1000000000 : Text[1024]) : Text[1024];
     VAR
       FieldTransl@1000000002 : Record 6085582;
       Currency@161024013 : Record 4;
@@ -725,7 +726,7 @@ OBJECT Codeunit 6085576 Capture Management
       EXIT(BestTemplateNo <> '');
     END;
 
-    PROCEDURE ParseField@1000000002(VAR Field@1000000001 : Record 6085580;Word@1000000000 : Text[1024];ValidateValue@1000000006 : Boolean;DocumentNo@6085573 : Code[20]) IsValid : Boolean;
+    PROCEDURE ParseField@1000000002(VAR Field@1000000001 : Record 6085580;Word@1000000000 : Text[1024];ValidateValue@1000000006 : Boolean) IsValid : Boolean;
     VAR
       OutText@1000000002 : Text[1024];
       OutCode@1000000003 : Code[1024];
@@ -738,7 +739,7 @@ OBJECT Codeunit 6085576 Capture Management
           BEGIN
             IsValid := ParseText(Field,Word,OutText,MAXSTRLEN(OutText)) AND ((OutText <> '') OR (NOT Field.Required));
             IF ValidateValue AND IsValid THEN
-              IsValid := IsValidText(Field,OutText,DocumentNo);
+              IsValid := IsValidText(Field,OutText);
           END;
 
         Field."Data Type"::Number:
@@ -750,7 +751,7 @@ OBJECT Codeunit 6085576 Capture Management
 
         Field."Data Type"::Date:
           BEGIN
-            IsValid := ParseDate(Field,Word,OutDate,DocumentNo) AND ((OutDate <> 0D) OR (NOT Field.Required));
+            IsValid := ParseDate(Field,Word,OutDate) AND ((OutDate <> 0D) OR (NOT Field.Required));
             IF ValidateValue AND IsValid THEN
               IsValid := IsValidDate(Field,OutDate);
           END;
@@ -759,7 +760,7 @@ OBJECT Codeunit 6085576 Capture Management
           BEGIN
             IsValid := ParseCode(Field,Word,OutCode,MAXSTRLEN(OutCode));
             IF ValidateValue AND IsValid AND (OutCode <> '') THEN
-              IsValid := IsValidLookup(Field,Word,DocumentNo);
+              IsValid := IsValidLookup(Field,Word);
           END;
 
         Field."Data Type"::Boolean:
@@ -768,6 +769,7 @@ OBJECT Codeunit 6085576 Capture Management
             IF ValidateValue AND IsValid THEN
               IsValid := IsValidBoolean(Field,OutBoolean);
           END;
+
       END;
     END;
 
@@ -780,31 +782,8 @@ OBJECT Codeunit 6085576 Capture Management
       I@1000000004 : Integer;
       TempInt@1000000006 : Integer;
       TempDec@1000000008 : Decimal;
-      NoWrongChars@6085573 : Boolean;
     BEGIN
       Text := DELCHR(Text,'=','$ú› ');
-
-      IF Text = '' THEN BEGIN
-        NewNumber := 0;
-        EXIT(FALSE);
-      END;
-
-      REPEAT
-        IF COPYSTR(Text,1,1) IN [',','.'] THEN
-          Text := COPYSTR(Text,2)
-        ELSE
-          NoWrongChars := TRUE;
-      UNTIL NoWrongChars OR (Text = '');
-
-      NoWrongChars := FALSE;
-      IF Text <> '' THEN
-        REPEAT
-          IF COPYSTR(Text,STRLEN(Text),1) IN [',','.'] THEN
-            Text := COPYSTR(Text,1,STRLEN(Text)-1)
-          ELSE
-            NoWrongChars := TRUE;
-        UNTIL NoWrongChars OR (Text = '');
-
       IF Text = '' THEN BEGIN
         NewNumber := 0;
         EXIT(FALSE);
@@ -849,7 +828,7 @@ OBJECT Codeunit 6085576 Capture Management
       EXIT(FALSE);
     END;
 
-    PROCEDURE ParseDate@1000000005(VAR Field@1000000002 : Record 6085580;Text@1000000001 : Text[1024];VAR NewDate@1000000000 : Date;DocumentNo@6085573 : Code[20]) : Boolean;
+    PROCEDURE ParseDate@1000000005(VAR Field@1000000002 : Record 6085580;Text@1000000001 : Text[1024];VAR NewDate@1000000000 : Date) : Boolean;
     VAR
       FieldRule@1000000008 : Record 6085583;
       Language@1000000003 : Record 8;
@@ -892,16 +871,12 @@ OBJECT Codeunit 6085576 Capture Management
             IF DateParser.ParseExact(Text2,LCID,FieldRule.Rule) THEN BEGIN
               IF DMY2DATE(DateParser.Day,DateParser.Month,DateParser.Year) >= 01011754D THEN BEGIN
                 NewDate := DMY2DATE(DateParser.Day,DateParser.Month,DateParser.Year);
-
                 IF Field."Enable Rule Generation" THEN BEGIN
-                  ClearFldRuleCreatedFromMaster(FieldRule,DocumentNo);
-
-                  // Several rules could have been copied from the master template. Delete these when a rule matches the found value
-                  DelFldRulesCreatedFromMaster(FieldRule."Entry No.");
-
-                  CLEAR(DateParser);
-                  EXIT(TRUE);
+                  FieldRule.SETFILTER("Entry No.",'<>%1',FieldRule."Entry No.");
+                  FieldRule.DELETEALL(TRUE);
                 END;
+                CLEAR(DateParser);
+                EXIT(TRUE);
               END;
             END;
           END;
@@ -919,19 +894,19 @@ OBJECT Codeunit 6085576 Capture Management
         EXIT(TRUE);
     END;
 
-    LOCAL PROCEDURE ParseText@1000000007(VAR Field@1000000002 : Record 6085580;Text@1000000001 : Text[1024];VAR NewText@1000000000 : Text[1024];MaxLen@1000000004 : Integer) : Boolean;
+    PROCEDURE ParseText@1000000007(VAR Field@1000000002 : Record 6085580;Text@1000000001 : Text[1024];VAR NewText@1000000000 : Text[1024];MaxLen@1000000004 : Integer) : Boolean;
     BEGIN
       NewText := COPYSTR(Text,1,MaxLen);
       EXIT(TRUE);
     END;
 
-    LOCAL PROCEDURE ParseCode@1000000033(VAR Field@1000000002 : Record 6085580;Text@1000000001 : Code[1024];VAR NewText@1000000000 : Code[1024];MaxLen@1000000004 : Integer) : Boolean;
+    PROCEDURE ParseCode@1000000033(VAR Field@1000000002 : Record 6085580;Text@1000000001 : Code[1024];VAR NewText@1000000000 : Code[1024];MaxLen@1000000004 : Integer) : Boolean;
     BEGIN
       NewText := COPYSTR(Text,1,MaxLen);
       EXIT(TRUE);
     END;
 
-    LOCAL PROCEDURE ParseDate2@1161054001(DateFormat@161024015 : Integer;DateText@161024014 : Text[1024];LCID@161024013 : Integer) : Date;
+    PROCEDURE ParseDate2@1161054001(DateFormat@161024015 : Integer;DateText@161024014 : Text[1024];LCID@161024013 : Integer) : Date;
     VAR
       Date@161024012 : Record 2000000007;
       TemplField@161024016 : Record 6085580;
@@ -1166,30 +1141,26 @@ OBJECT Codeunit 6085576 Capture Management
       EXIT(TRUE);
     END;
 
-    PROCEDURE TryUpdateFieldRuleFromMaster@1000000030(VAR Field@1000000001 : Record 6085580;Word@1000000000 : Text[1024];DocumentNo@6085573 : Code[20]) : Boolean;
+    PROCEDURE TryUpdateFieldRuleFromMaster@1000000030(VAR Field@1000000001 : Record 6085580;Word@1000000000 : Text[1024]) : Boolean;
     VAR
       Language@1000000002 : Record 8;
       FieldRule@1000000011 : Record 6085583;
-      FieldRule2@6085575 : Record 6085583;
       Template@1000000006 : Record 6085579;
       MasterTemplate@1000000005 : Record 6085579;
       MasterField@1000000004 : Record 6085580;
       Field2@161024014 : Record 6085580;
       MasterFieldRule@1000000007 : Record 6085583;
+      RegEx@1000000009 : Codeunit 6085585;
       DateParser@1000000010 : Codeunit 6085586;
       NewDate@161024013 : Date;
       LCID@1000000003 : Integer;
       i@161024012 : Integer;
-      NextEntryNo@6085574 : Integer;
       ValidRuleFound@1000000008 : Boolean;
     BEGIN
       IF Word = '' THEN
         EXIT;
 
       IF NOT Field."Enable Rule Generation" THEN
-        EXIT(FALSE);
-
-      IF Field."Data Type" <> Field."Data Type"::Date THEN
         EXIT(FALSE);
 
       IF Language.GET(Field."Language Code") THEN
@@ -1210,27 +1181,24 @@ OBJECT Codeunit 6085576 Capture Management
             MasterFieldRule.SETRANGE(Code,MasterField.Code);
             IF MasterFieldRule.FINDSET THEN
               REPEAT
-                ValidRuleFound := DateParser.ParseExact(Word,LCID,MasterFieldRule.Rule);
+                ValidRuleFound := FALSE;
+
+                IF Field."Codeunit ID: Capture Value" <> 0 THEN
+                  ValidRuleFound := TestCaptureValue(Field,MasterFieldRule,Word)
+                ELSE
+                  IF Field."Data Type" = Field."Data Type"::Text THEN
+                    ValidRuleFound := (RegEx.MatchValue(Word,MasterFieldRule.Rule,TRUE) = Word)
+                  ELSE
+                    IF Field."Data Type" = Field."Data Type"::Date THEN
+                      ValidRuleFound := DateParser.ParseExact(Word,LCID,MasterFieldRule.Rule);
 
                 IF ValidRuleFound THEN BEGIN
                   IF CONFIRM(STRSUBSTNO(Text005,MasterFieldRule.Rule,MasterFieldRule.Description),TRUE) THEN BEGIN
-                    DeleteFieldRuleFromCreatedDoc(Field,DocumentNo);
-
+                    FilterRule(Field,FieldRule);
+                    FieldRule.DELETEALL(TRUE);
                     FieldRule := MasterFieldRule;
                     FieldRule."Template No." := Template."No.";
-
-                    FieldRule2.SETRANGE("Template No.",Field."Template No.");
-                    FieldRule2.SETRANGE(Type,Field.Type);
-                    FieldRule2.SETRANGE(Code,Field.Code);
-                    IF FieldRule2.FINDLAST THEN
-                      NextEntryNo := FieldRule2."Entry No." + 10000
-                    ELSE
-                      NextEntryNo := 10000;
-
-                    FieldRule."Entry No." := NextEntryNo;
-                    FieldRule."Document No." := DocumentNo;
                     FieldRule.INSERT(TRUE);
-
                     EXIT(TRUE);
                   END;
                 END;
@@ -1238,67 +1206,52 @@ OBJECT Codeunit 6085576 Capture Management
           END;
         UNTIL MasterTemplate.NEXT = 0;
 
-      FOR i := 1 TO 6 DO BEGIN
-        NewDate := ParseDate2(i,Word,LCID);
-        IF NewDate <> 0D THEN BEGIN
-          Field2."Date Format" := i;
-          IF CONFIRM(Text009,TRUE,Field2.FIELDCAPTION("Date Format"),Field2."Date Format",NewDate) THEN BEGIN
-            Field."Date Format" := i;
-            Field.MODIFY;
+      CLEAR(DateParser);
+      CLEAR(RegEx);
 
-            IF Field.Type = Field.Type::Header THEN BEGIN
-              Field2.SETRANGE("Template No.",Template."No.");
-              Field2.SETRANGE("Data Type",Field2."Data Type"::Date);
-              Field2.SETFILTER("Sort Order",'>%1',Field."Sort Order");
-              Field2.MODIFYALL("Date Format",Field."Date Format");
-            END;
+      IF Field."Data Type" = Field."Data Type"::Text THEN BEGIN
+        IF CONFIRM(STRSUBSTNO(Text006,BuildTextRegExPattern(Word)),TRUE) THEN BEGIN
+          FilterRule(Field,FieldRule);
+          IF Word <> '' THEN BEGIN
+            IF NOT FieldRule.FINDFIRST THEN
+              InitRule(Field,FieldRule);
+            FieldRule.Rule := BuildTextRegExPattern(Word);
+            FieldRule.Description := Text004;
+            IF NOT FieldRule.INSERT(TRUE) THEN
+              FieldRule.MODIFY(TRUE);
             EXIT(TRUE);
-          END ELSE
-            EXIT;
+          END;
         END;
       END;
 
-      Language.SETFILTER("Windows Language ID",'>%1',0);
-      IF Language.FINDSET THEN
-        REPEAT
-          NewDate := ParseDate2(Field."Date Format",Word,Language."Windows Language ID");
-
+      IF Field."Data Type" = Field."Data Type"::Date THEN BEGIN
+        FOR i := 1 TO 6 DO BEGIN
+          NewDate := ParseDate2(i,Word,LCID);
           IF NewDate <> 0D THEN BEGIN
-            IF CONFIRM(Text010,TRUE,Field2.FIELDCAPTION("Language Code"),Language.Code,Language.Name,NewDate) THEN BEGIN
-              IF Field.Type = Field.Type::Header THEN BEGIN
-                Template.GET(Field."Template No.");
-                Template."Language Code" := Language.Code;
-                Template.MODIFY;
-
-                Field2.SETRANGE("Template No.",Template."No.");
-                IF Field2.FINDSET(TRUE,FALSE) THEN
-                  REPEAT
-                    IF NOT ((Field2.Type = Field.Type) AND (Field2.Code = Field.Code)) THEN BEGIN
-                      Field2."Language Code" := Language.Code;
-                      Field2.MODIFY;
-                    END;
-                  UNTIL Field2.NEXT = 0;
-              END;
-
-              Field."Language Code" := Language.Code;
+            Field2."Date Format" := i;
+            IF CONFIRM(Text009,TRUE,Field2.FIELDCAPTION("Date Format"),Field2."Date Format",NewDate) THEN BEGIN
+              Field."Date Format" := i;
               Field.MODIFY;
+
+              IF Field.Type = Field.Type::Header THEN BEGIN
+                Field2.SETRANGE("Template No.",Template."No.");
+                Field2.SETRANGE("Data Type",Field2."Data Type"::Date);
+                Field2.SETFILTER("Sort Order",'>%1',Field."Sort Order");
+                Field2.MODIFYALL("Date Format",Field."Date Format");
+              END;
               EXIT(TRUE);
             END ELSE
               EXIT;
           END;
-        UNTIL Language.NEXT = 0;
+        END;
 
-      FOR i := 1 TO 6 DO BEGIN
         Language.SETFILTER("Windows Language ID",'>%1',0);
         IF Language.FINDSET THEN
           REPEAT
-            NewDate := ParseDate2(i,Word,Language."Windows Language ID");
+            NewDate := ParseDate2(Field."Date Format",Word,Language."Windows Language ID");
 
             IF NewDate <> 0D THEN BEGIN
-              Field2."Date Format" := i;
-              IF CONFIRM(Text011,TRUE,Field2.FIELDCAPTION("Date Format"),Field2."Date Format",
-                Field2.FIELDCAPTION("Language Code"),Language.Code,Language.Name,NewDate)
-              THEN BEGIN
+              IF CONFIRM(Text010,TRUE,Field2.FIELDCAPTION("Language Code"),Language.Code,Language.Name,NewDate) THEN BEGIN
                 IF Field.Type = Field.Type::Header THEN BEGIN
                   Template.GET(Field."Template No.");
                   Template."Language Code" := Language.Code;
@@ -1308,15 +1261,12 @@ OBJECT Codeunit 6085576 Capture Management
                   IF Field2.FINDSET(TRUE,FALSE) THEN
                     REPEAT
                       IF NOT ((Field2.Type = Field.Type) AND (Field2.Code = Field.Code)) THEN BEGIN
-                        IF Field2."Sort Order" > Field."Sort Order" THEN
-                          Field2."Date Format" := i;
                         Field2."Language Code" := Language.Code;
                         Field2.MODIFY;
                       END;
                     UNTIL Field2.NEXT = 0;
                 END;
 
-                Field."Date Format" := i;
                 Field."Language Code" := Language.Code;
                 Field.MODIFY;
                 EXIT(TRUE);
@@ -1324,12 +1274,51 @@ OBJECT Codeunit 6085576 Capture Management
                 EXIT;
             END;
           UNTIL Language.NEXT = 0;
+
+        FOR i := 1 TO 6 DO BEGIN
+          Language.SETFILTER("Windows Language ID",'>%1',0);
+          IF Language.FINDSET THEN
+            REPEAT
+              NewDate := ParseDate2(i,Word,Language."Windows Language ID");
+
+              IF NewDate <> 0D THEN BEGIN
+                Field2."Date Format" := i;
+                IF CONFIRM(Text011,TRUE,Field2.FIELDCAPTION("Date Format"),Field2."Date Format",
+                  Field2.FIELDCAPTION("Language Code"),Language.Code,Language.Name,NewDate)
+                THEN BEGIN
+                  IF Field.Type = Field.Type::Header THEN BEGIN
+                    Template.GET(Field."Template No.");
+                    Template."Language Code" := Language.Code;
+                    Template.MODIFY;
+
+                    Field2.SETRANGE("Template No.",Template."No.");
+                    IF Field2.FINDSET(TRUE,FALSE) THEN
+                      REPEAT
+                        IF NOT ((Field2.Type = Field.Type) AND (Field2.Code = Field.Code)) THEN BEGIN
+                          IF Field2."Sort Order" > Field."Sort Order" THEN
+                            Field2."Date Format" := i;
+                          Field2."Language Code" := Language.Code;
+                          Field2.MODIFY;
+                        END;
+                      UNTIL Field2.NEXT = 0;
+                  END;
+
+                  Field."Date Format" := i;
+                  Field."Language Code" := Language.Code;
+                  Field.MODIFY;
+                  EXIT(TRUE);
+                END ELSE
+                  EXIT;
+              END;
+            UNTIL Language.NEXT = 0;
+        END;
+
       END;
 
       EXIT(FALSE);
     END;
 
-    LOCAL PROCEDURE IsValidNumber@6085574(VAR Field@6085575 : Record 6085580;Number@6085574 : Decimal) : Boolean;
+    PROCEDURE IsValidNumber@6085574(VAR Field@6085575 : Record 6085580;Number@6085574 : Decimal) : Boolean;
     VAR
       FieldRule@6085576 : Record 6085583;
       TempTemplateField@6085573 : TEMPORARY Record 6085580;
@@ -1357,7 +1346,7 @@ OBJECT Codeunit 6085576 Capture Management
       EXIT(TRUE);
     END;
 
-    LOCAL PROCEDURE IsValidDate@1000000014(VAR Field@1000000001 : Record 6085580;Date@1000000000 : Date) : Boolean;
+    PROCEDURE IsValidDate@1000000014(VAR Field@1000000001 : Record 6085580;Date@1000000000 : Date) : Boolean;
     VAR
       FieldRule@161024012 : Record 6085583;
     BEGIN
@@ -1381,7 +1370,7 @@ OBJECT Codeunit 6085576 Capture Management
       EXIT(TRUE);
     END;
 
-    LOCAL PROCEDURE IsValidText@1000000015(VAR Field@1000000001 : Record 6085580;Text@1000000000 : Text[1024];DocumentNo@6085573 : Code[20]) : Boolean;
+    PROCEDURE IsValidText@1000000015(VAR Field@1000000001 : Record 6085580;Text@1000000000 : Text[1024]) : Boolean;
     VAR
       FieldRule@1000000004 : Record 6085583;
       TempWord@161024012 : TEMPORARY Record 6085592;
@@ -1422,10 +1411,8 @@ OBJECT Codeunit 6085576 Capture Management
               IsValid := TRUE;
 
             IF IsValid AND Field."Enable Rule Generation" THEN BEGIN
-              ClearFldRuleCreatedFromMaster(FieldRule,DocumentNo);
-
-              // Several rules could have been copied from the master template. Delete these when a rule matches the found value
-              DelFldRulesCreatedFromMaster(FieldRule."Entry No.");
+              FieldRule.SETFILTER("Entry No.",'<>%1',FieldRule."Entry No.");
+              FieldRule.DELETEALL(TRUE);
             END;
           END;
         END;
@@ -1434,11 +1421,11 @@ OBJECT Codeunit 6085576 Capture Management
       EXIT(IsValid);
     END;
 
-    LOCAL PROCEDURE IsValidLookup@1000000031(Field@1000000001 : Record 6085580;Value@1160040000 : Text[250];DocumentNo@6085573 : Code[20]) : Boolean;
+    PROCEDURE IsValidLookup@1000000031(Field@1000000001 : Record 6085580;Value@1160040000 : Text[250]) : Boolean;
     VAR
       RecIDMgt@1160040001 : Codeunit 6085604;
     BEGIN
-      EXIT(IsValidText(Field,Value,DocumentNo));
+      EXIT(IsValidText(Field,Value));
     END;
 
     PROCEDURE IsValidValue@1000000019(VAR Field@1000000001 : Record 6085580;DocumentNo@1000000000 : Code[20];LineNo@1000000004 : Integer) : Boolean;
@@ -1451,7 +1438,7 @@ OBJECT Codeunit 6085576 Capture Management
       EXIT(Value."Is Valid");
     END;
 
-    LOCAL PROCEDURE IsValidBoolean@1160040016(VAR Field@1000000001 : Record 6085580;Boolean@1000000000 : Boolean) : Boolean;
+    PROCEDURE IsValidBoolean@1160040016(VAR Field@1000000001 : Record 6085580;Boolean@1000000000 : Boolean) : Boolean;
     VAR
       FieldRule@161024012 : Record 6085583;
     BEGIN
@@ -1608,19 +1595,19 @@ OBJECT Codeunit 6085576 Capture Management
       Field.TESTFIELD("Source Table No.");
     END;
 
-    LOCAL PROCEDURE BuildTextRegExPattern@1000000012(Value@1000000001 : Text[1024]) Pattern : Text[1024];
+    PROCEDURE BuildTextRegExPattern@1000000012(Value@1000000001 : Text[1024]) Pattern : Text[1024];
     VAR
       RegEx@1000000000 : Codeunit 6085585;
     BEGIN
       Pattern := RegEx.BuildPattern(Value);
     END;
 
-    LOCAL PROCEDURE GetDecSep@1000000009() : Text[1];
+    PROCEDURE GetDecSep@1000000009() : Text[1];
     BEGIN
       EXIT(COPYSTR(FORMAT(1.1),2,1));
     END;
 
-    LOCAL PROCEDURE GetThousandSep@1160040003() : Text[1];
+    PROCEDURE GetThousandSep@1160040003() : Text[1];
     BEGIN
       EXIT(COPYSTR(FORMAT(1000.1,0),2,1));
     END;
@@ -1680,7 +1667,7 @@ OBJECT Codeunit 6085576 Capture Management
       FieldRule.SETFILTER(Rule,'<>%1','');
     END;
 
-    LOCAL PROCEDURE InitRule@1000000028(VAR Field@1000000001 : Record 6085580;VAR FieldRule@1000000000 : Record 6085583);
+    PROCEDURE InitRule@1000000028(VAR Field@1000000001 : Record 6085580;VAR FieldRule@1000000000 : Record 6085583);
     BEGIN
       FieldRule.INIT;
       FieldRule."Template No." := Field."Template No.";
@@ -1688,7 +1675,7 @@ OBJECT Codeunit 6085576 Capture Management
       FieldRule.Code := Field.Code;
     END;
 
-    LOCAL PROCEDURE CalcExpression@161024012(Expression@161024012 : Text[1024]) Result : Decimal;
+    PROCEDURE CalcExpression@161024012(Expression@161024012 : Text[1024]) Result : Decimal;
     VAR
       Parantheses@161024013 : Integer;
       OperatorNo@161024015 : Integer;
@@ -1853,7 +1840,7 @@ OBJECT Codeunit 6085576 Capture Management
           CheckFieldExists(TemplateNo,FormulaPart,Field."Data Type"::Number);
     END;
 
-    LOCAL PROCEDURE TextContainsLetters@161024015(Text@161024012 : Text[1024]) : Boolean;
+    PROCEDURE TextContainsLetters@161024015(Text@161024012 : Text[1024]) : Boolean;
     VAR
       i@161024013 : Integer;
     BEGIN
@@ -1863,7 +1850,7 @@ OBJECT Codeunit 6085576 Capture Management
           EXIT(TRUE);
     END;
 
-    LOCAL PROCEDURE TestCaptureValue@161024017(Field@161024012 : Record 6085580;Rule@161024013 : Record 6085583;Value@161024014 : Text[1024]) : Boolean;
+    PROCEDURE TestCaptureValue@161024017(Field@161024012 : Record 6085580;Rule@161024013 : Record 6085583;Value@161024014 : Text[1024]) : Boolean;
     VAR
       TempCaptureFieldVal@161024015 : Record 6085597;
     BEGIN
@@ -1888,7 +1875,7 @@ OBJECT Codeunit 6085576 Capture Management
         NoOfOccour := NoOfOccour - 1;
     END;
 
-    LOCAL PROCEDURE IIFInt@161024018(TestValue@1000000000 : Boolean;ValueIfTrue@1000000001 : Integer;ValueIfFalse@1000000002 : Integer) : Decimal;
+    PROCEDURE IIFInt@161024018(TestValue@1000000000 : Boolean;ValueIfTrue@1000000001 : Integer;ValueIfFalse@1000000002 : Integer) : Decimal;
     BEGIN
       IF TestValue THEN
         EXIT(ValueIfTrue)
@@ -1896,7 +1883,7 @@ OBJECT Codeunit 6085576 Capture Management
         EXIT(ValueIfFalse);
     END;
 
-    LOCAL PROCEDURE ParseLookup@1160040000(VAR Value@1160040000 : Record 6085593;Field@1160040002 : Record 6085580) : Boolean;
+    PROCEDURE ParseLookup@1160040000(VAR Value@1160040000 : Record 6085593;Field@1160040002 : Record 6085580) : Boolean;
     VAR
       LookupRecID@1160040003 : Record 6085760;
       RecIDMgt@1160040001 : Codeunit 6085604;
@@ -1925,7 +1912,7 @@ OBJECT Codeunit 6085576 Capture Management
         EXIT(Value."Value (Record ID Tree ID)" <> 0);
     END;
 
-    LOCAL PROCEDURE RoundFromDecPlaces@1160040001(Number@1160040001 : Decimal;DecPlaces@1160040000 : Text[30]) : Decimal;
+    PROCEDURE RoundFromDecPlaces@1160040001(Number@1160040001 : Decimal;DecPlaces@1160040000 : Text[30]) : Decimal;
     BEGIN
       IF DecPlaces = '' THEN
         EXIT(Number);
@@ -1976,7 +1963,7 @@ OBJECT Codeunit 6085576 Capture Management
       TransferDestFields(RecRef,Field,Document,DocumentLineNo,TransHeaderFields);
     END;
 
-    LOCAL PROCEDURE TransferDestFields@1160040007(VAR RecRef@1160040000 : RecordRef;VAR Field@1160040001 : Record 6085580;Document@1160040002 : Record 6085590;LineNo@1160040003 : Integer;TransHeaderFields@1160040006 : Boolean);
+    PROCEDURE TransferDestFields@1160040007(VAR RecRef@1160040000 : RecordRef;VAR Field@1160040001 : Record 6085580;Document@1160040002 : Record 6085590;LineNo@1160040003 : Integer;TransHeaderFields@1160040006 : Boolean);
     VAR
       Value@1160040007 : Record 6085593;
       TableField@1160040011 : Record 2000000041;
@@ -2036,6 +2023,34 @@ OBJECT Codeunit 6085576 Capture Management
         UNTIL Field.NEXT = 0;
     END;
 
+    PROCEDURE RenumberLines@1160040005(Document@1000000002 : Record 6085590);
+    VAR
+      Value@1000000000 : Record 6085593;
+      Value2@1000000004 : Record 6085593;
+      PrevValue@1000000003 : Record 6085593;
+      i2@1000000001 : Integer;
+    BEGIN
+      Value.RESET;
+      Value.SETCURRENTKEY("Document No.","Is Value",Type,"Page No.","Line No.",Code);
+      Value.SETRANGE("Document No.",Document."No.");
+      Value.SETRANGE("Is Value",TRUE);
+      Value.SETRANGE(Type,Value.Type::Line);
+      IF Value.FINDSET(TRUE,FALSE) THEN BEGIN
+        REPEAT
+          IF Value."Line No." <> PrevValue."Line No." THEN
+            i2 := i2 + 1;
+
+          IF (Value."Line No." <> i2) THEN BEGIN
+            Value2 := Value;
+            Value2."Line No." := i2;
+            Value2.INSERT;
+            Value.DELETE;
+          END;
+          PrevValue := Value;
+        UNTIL Value.NEXT = 0;
+      END;
+    END;
+
     PROCEDURE GetAmountToSubtract@1160040010(Document@1160040002 : Record 6085590;Field@1160040000 : Record 6085580) Amount : Decimal;
     VAR
       Field2@1160040001 : Record 6085580;
@@ -2053,29 +2068,20 @@ OBJECT Codeunit 6085576 Capture Management
         UNTIL Field2.NEXT = 0;
     END;
 
-    PROCEDURE ReplaceIllegalFilterCharacters@1160040013(FilterText@1160040000 : Text[1024];ReplaceWithQuestionMark@6085573 : Boolean;MaxLenghtToReturn@6085574 : Integer) : Text[1024];
+    PROCEDURE ReplaceIllegalFilterCharacters@1160040013(FilterText@1160040000 : Text[1024]) : Text[1024];
     VAR
       NewText@1160040001 : Text[1024];
-      ReplaceText@6085575 : Text[1];
     BEGIN
-      IF ReplaceWithQuestionMark THEN
-        ReplaceText := '?';
-
-      NewText := Replace(FilterText,'=',ReplaceText,FALSE);
-      NewText := Replace(NewText,'&',ReplaceText,FALSE);
-      NewText := Replace(NewText,'<',ReplaceText,FALSE);
-      NewText := Replace(NewText,'>',ReplaceText,FALSE);
-      NewText := Replace(NewText,'@',ReplaceText,FALSE);
+      NewText := Replace(FilterText,'=','?',FALSE);
+      NewText := Replace(NewText,'&','?',FALSE);
+      NewText := Replace(NewText,'<','?',FALSE);
+      NewText := Replace(NewText,'>','?',FALSE);
+      NewText := Replace(NewText,'@','?',FALSE);
       NewText := Replace(NewText,'*','',FALSE);
-      NewText := Replace(NewText,'(',ReplaceText,FALSE);
-      NewText := Replace(NewText,')',ReplaceText,FALSE);
-      NewText := Replace(NewText,'''',ReplaceText,FALSE);
-      NewText := Replace(NewText,'"',ReplaceText,FALSE);
-      NewText := Replace(NewText,'..',ReplaceText + ReplaceText,FALSE);
+      NewText := Replace(NewText,'(','?',FALSE);
+      NewText := Replace(NewText,')','?',FALSE);
+      NewText := Replace(NewText,'..','??',FALSE);
       NewText := Replace(NewText,'|','',FALSE);
-
-      IF MaxLenghtToReturn <> 0 THEN
-        NewText := COPYSTR(NewText,1,MaxLenghtToReturn);
       EXIT(NewText);
     END;
 
@@ -2099,62 +2105,6 @@ OBJECT Codeunit 6085576 Capture Management
         EXIT(TRUE)
       ELSE
         EXIT(FALSE);
-    END;
-
-    LOCAL PROCEDURE AutoCreateTextRule@6085575(DocumentNo@6085579 : Code[20];Word@6085574 : Text[1024];ValueIsValid@6085573 : Boolean;Field@6085575 : Record 6085580);
-    VAR
-      FieldRule@6085578 : Record 6085583;
-      FieldRule2@6085576 : Record 6085583;
-      NextEntryNo@6085577 : Integer;
-    BEGIN
-      FilterRule(Field,FieldRule);
-      IF ((NOT ValueIsValid) OR (FieldRule.ISEMPTY)) AND (Word <> '') THEN BEGIN
-        FieldRule2.RESET;
-        FieldRule2.SETRANGE("Template No.",Field."Template No.");
-        FieldRule2.SETRANGE(Type,Field.Type);
-        FieldRule2.SETRANGE(Code,Field.Code);
-        IF FieldRule2.FINDLAST THEN
-          NextEntryNo := FieldRule2."Entry No." + 10000
-        ELSE
-          NextEntryNo := 10000;
-
-        InitRule(Field,FieldRule);
-        FieldRule."Entry No." := NextEntryNo;
-        FieldRule."Document No." := DocumentNo;
-        FieldRule.Rule := BuildTextRegExPattern(Word);
-        FieldRule.Description := Text004;
-        FieldRule.INSERT(TRUE);
-      END;
-    END;
-
-    LOCAL PROCEDURE DeleteFieldRuleFromCreatedDoc@6085576(Field@6085573 : Record 6085580;DocumentNo@6085574 : Code[20]);
-    VAR
-      FieldRule@6085575 : Record 6085583;
-    BEGIN
-      FieldRule.SETRANGE("Template No.",Field."Template No.");
-      FieldRule.SETRANGE(Type,Field.Type);
-      FieldRule.SETRANGE(Code,Field.Code);
-      FieldRule.SETRANGE("Document No.",DocumentNo);
-      FieldRule.DELETEALL(TRUE);
-    END;
-
-    LOCAL PROCEDURE ClearFldRuleCreatedFromMaster@6085577(VAR FieldRule@6085573 : Record 6085583;DocumentNo@6085574 : Code[20]);
-    BEGIN
-      IF FieldRule."Created from Master Template" THEN BEGIN
-        FieldRule."Created from Master Template" := FALSE;
-        FieldRule."Document No." := DocumentNo;
-        FieldRule.MODIFY(TRUE);
-      END;
-    END;
-
-    LOCAL PROCEDURE DelFldRulesCreatedFromMaster@6085579(SkipEntryNo@6085574 : Integer);
-    VAR
-      FieldRule@6085573 : Record 6085583;
-    BEGIN
-      FieldRule.SETRANGE("Created from Master Template",TRUE);
-      FieldRule.SETFILTER("Entry No.",'<>%1',SkipEntryNo);
-      IF NOT FieldRule.ISEMPTY THEN
-        FieldRule.DELETEALL(TRUE);
     END;
 
     BEGIN

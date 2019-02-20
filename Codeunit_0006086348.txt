@@ -1,0 +1,101 @@
+OBJECT Codeunit 6086348 Mileage-Reimburse Batch
+{
+  OBJECT-PROPERTIES
+  {
+    Date=01/27/17;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.50;
+  }
+  PROPERTIES
+  {
+    TableNo=6086338;
+    OnRun=BEGIN
+            Mileage.COPY(Rec);
+            Code;
+            Rec := Mileage;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Mileage@1003 : Record 6086338;
+      MileageReimburse@1004 : Codeunit 6086346;
+      ConfirmNoReimbEntriesQuestion@1160040002 : TextConst 'ENU=There are one or more mileage entries before the earliest date in the date filter that have not yet been reimbursed.\\Do you want to continue?';
+      ConfirmReimburseMultiQuestion@1160040000 : TextConst 'ENU=This will reimburse %1 employees.\\Do you want to continue?';
+      ConfirmReimburseSingleQuestion@1160040001 : TextConst 'ENU=This will reimburse %1 employee.\\Do you want to continue?';
+      NothingToReimburseErr@1160040004 : TextConst 'ENU=There is nothing to reimburse within the filters.';
+
+    LOCAL PROCEDURE Code@1();
+    VAR
+      Mileage2@1160040000 : Record 6086338;
+      ConfirmText@1160040002 : Text[1024];
+      NoOfEmployees@1160040001 : Integer;
+      NonReimbEntryBeforeDateFilter@1160040003 : Boolean;
+    BEGIN
+      WITH Mileage DO BEGIN
+        SETCURRENTKEY("Continia User ID","Registration Date",Posted,Reimbursed,"Reimbursement Method");
+        SETRANGE(Posted,TRUE);
+        SETRANGE(Reimbursed,FALSE);
+        SETRANGE("Reimbursement Method","Reimbursement Method"::"External System");
+
+        IF RECORDLEVELLOCKING THEN
+          LOCKTABLE;
+
+        IF FINDFIRST THEN
+          REPEAT
+            NoOfEmployees := NoOfEmployees + 1;
+
+            IF NOT NonReimbEntryBeforeDateFilter THEN BEGIN
+              Mileage2.COPYFILTERS(Mileage);
+              IF GETFILTER("Registration Date") <> '' THEN BEGIN
+                Mileage2.SETFILTER("Registration Date",'<%1',GetMinDateFromFilter(GETFILTER("Registration Date")));
+                NonReimbEntryBeforeDateFilter := NOT Mileage2.ISEMPTY;
+              END;
+            END;
+
+            SETRANGE("Continia User ID","Continia User ID");
+            FINDLAST;
+            SETRANGE("Continia User ID");
+          UNTIL NEXT = 0;
+
+        CASE NoOfEmployees OF
+          0:
+            ERROR(NothingToReimburseErr);
+          1:
+            ConfirmText := ConfirmReimburseSingleQuestion
+          ELSE
+            ConfirmText := ConfirmReimburseMultiQuestion;
+        END;
+
+        IF NonReimbEntryBeforeDateFilter THEN
+          IF NOT CONFIRM(ConfirmNoReimbEntriesQuestion,FALSE) THEN
+            EXIT;
+
+        IF NOT CONFIRM(ConfirmText,FALSE,NoOfEmployees) THEN
+          EXIT;
+
+        FINDFIRST;
+        REPEAT
+          Mileage2.RESET;
+          Mileage2 := Mileage;
+          MileageReimburse.RUN(Mileage2);
+        UNTIL NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE GetMinDateFromFilter@1160040000(DateFilter@1160040000 : Text[250]) : Date;
+    VAR
+      DateRec@1160040001 : Record 2000000007;
+    BEGIN
+      DateRec.SETRANGE("Period Type",DateRec."Period Type"::Date);
+      DateRec.SETFILTER("Period Start",DateFilter);
+      IF DateRec.FINDFIRST THEN
+        EXIT(DateRec."Period Start");
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

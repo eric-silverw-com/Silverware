@@ -1,0 +1,886 @@
+OBJECT Codeunit 6086369 EM Approvals Bridge
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/06/17;
+    Time=[ 1:00:00 AM];
+    Version List=EMW19.00.00.2.60.02;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 454=rimd,
+                TableData 455=rimd;
+    SingleInstance=Yes;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ConfirmSendMultipleForApproval@1015 : TextConst 'ENU=This will send %1 %2 for approval.\\Do you want to continue?';
+      ConfirmMultipleStllForApproval@1017 : TextConst 'ENU=This will send %1 settlements for approval.\\Do you want to continue?';
+      ExpStatusChangedMsg@1013 : TextConst 'ENU=%1 %2 has been automatically approved.';
+      HasWarningCommentQuestion@1016 : TextConst 'ENU=There are one or more warnings on this %1.\\Do you want to send it for approval anyway?';
+      HasWarningCmtStllQuestion@1018 : TextConst 'ENU=There are one or more warnings on this settlement. \\Do you want to send it for approval anyway?';
+      PendingApprovalMsg@1014 : TextConst 'ENU=An approval request has been sent.';
+      NothingToSend@1012 : TextConst 'ENU=There is nothing to send for approval.';
+      ExpSentForApproval@1011 : TextConst 'ENU=%1 expenses were sent for approval.';
+      MilSentForApproval@1000 : TextConst 'ENU=%1 mileage were sent for approval.';
+      SingleSttlSentForApproval@1010 : TextConst 'ENU=%1 settlement was sent for approval.';
+      MultipleSttlSentForApproval@1002 : TextConst 'ENU=%1 settlements were sent for approval.';
+      MailNotSupported@1001 : TextConst 'ENU=Approval Mail is not supported.';
+      Text002@1003 : TextConst 'ENU=There is no supported workflow for force approval.';
+      Text003@1004 : TextConst 'ENU=The table %1 is not supported for approval in Expense Management.';
+      Text004@1005 : TextConst 'ENU=Approvals for expenses is not enabled.';
+      Text005@1009 : TextConst 'ENU=There is no approval request to delegate.';
+      CurrentUser@1006 : Code[50];
+      WorkflowStepInstance@1007 : Record 1504;
+      WorkflowStepArgument@1008 : Record 1523;
+      NotificationErr@1019 : TextConst 'ENU=Approval Notifications need to be disabled for the limited user %1./Unfortunatelly, a bug exists in In MS Dynamics NAV 2017 and notifications cannot be disabled.';
+
+    PROCEDURE InitializeApprovalEntry@80(TableID@1014 : Integer;DocumentNo@1013 : Code[20];VAR ApprovalEntryArgument@1012 : Record 454);
+    VAR
+      Expense@1009 : Record 6086320;
+      Mileage@1011 : Record 6086338;
+      ExpHeader@1001 : Record 6086339;
+      EMAppMgt@1002 : Codeunit 6086312;
+      RecRef@1000 : RecordRef;
+    BEGIN
+      ApprovalEntryArgument.INIT;
+      ApprovalEntryArgument."Table ID" := TableID;
+      ApprovalEntryArgument."Approval Code" := WorkflowStepInstance."Workflow Code";
+      ApprovalEntryArgument."Workflow Step Instance ID" := WorkflowStepInstance.ID;
+
+      CASE TableID OF
+        DATABASE::Expense:
+          BEGIN
+            Expense.GET(EMAppMgt.Code2Int(DocumentNo));
+            RecRef.GETTABLE(Expense);
+            ApprovalEntryArgument."Record ID to Approve" := RecRef.RECORDID;
+            ApprovalEntryArgument."Document Type" := ApprovalEntryArgument."Document Type"::Invoice;
+            ApprovalEntryArgument."Document No." := FORMAT(Expense."Entry No.");
+            ApprovalEntryArgument.Amount := Expense.Amount;
+            ApprovalEntryArgument."Amount (LCY)" := Expense."Amount (LCY)";
+            ApprovalEntryArgument."Currency Code" := Expense."Currency Code";
+          END;
+
+        DATABASE::Mileage:
+          BEGIN
+            Mileage.GET(EMAppMgt.Code2Int(DocumentNo));
+            RecRef.GETTABLE(Mileage);
+            ApprovalEntryArgument."Record ID to Approve" := RecRef.RECORDID;
+            ApprovalEntryArgument."Document Type" := ApprovalEntryArgument."Document Type"::Invoice;
+            ApprovalEntryArgument."Document No." := FORMAT(Mileage."Entry No.");
+            ApprovalEntryArgument."Amount (LCY)" := Mileage."Amount (LCY)";
+          END;
+
+        DATABASE::"Expense Header":
+          BEGIN
+            ExpHeader.GET(ExpHeader."Document Type"::Settlement,DocumentNo);
+            RecRef.GETTABLE(ExpHeader);
+            ApprovalEntryArgument."Record ID to Approve" := RecRef.RECORDID;
+            ApprovalEntryArgument."Document Type" := ApprovalEntryArgument."Document Type"::Invoice;
+            ApprovalEntryArgument."Document No." := ExpHeader."No.";
+            ApprovalEntryArgument."Amount (LCY)" := ExpHeader.GetAmountLCY;
+          END;
+
+        ELSE
+          ERROR(Text003);
+      END;
+
+      ApprovalEntryArgument.SETRANGE("Workflow Step Instance ID",WorkflowStepInstance.ID);
+    END;
+
+    PROCEDURE GetApprovalType@5() : Integer;
+    VAR
+      ApprovalEntry@1000 : Record 454;
+    BEGIN
+      CASE WorkflowStepArgument."Approver Type" OF
+        WorkflowStepArgument."Approver Type"::"Salesperson/Purchaser":
+          EXIT(ApprovalEntry."Approval Type"::"Sales Pers./Purchaser");
+        WorkflowStepArgument."Approver Type"::Approver:
+          EXIT(ApprovalEntry."Approval Type"::Approver);
+        WorkflowStepArgument."Approver Type"::"Workflow User Group":
+          EXIT(ApprovalEntry."Approval Type"::"Workflow User Group");
+      END;
+    END;
+
+    PROCEDURE GetApprovalDueDate@23() : Date;
+    BEGIN
+      EXIT(CALCDATE(WorkflowStepArgument."Due Date Formula",TODAY));
+    END;
+
+    PROCEDURE GetLastSequenceNo@16(ApprovalEntryArgument@1000 : Record 454) : Integer;
+    VAR
+      ApprovalEntry@1001 : Record 454;
+    BEGIN
+      WITH ApprovalEntry DO BEGIN
+        SETCURRENTKEY("Record ID to Approve","Workflow Step Instance ID","Sequence No.");
+        SETRANGE("Table ID",ApprovalEntryArgument."Table ID");
+        SETRANGE("Record ID to Approve",ApprovalEntryArgument."Record ID to Approve");
+        SETRANGE("Workflow Step Instance ID",ApprovalEntryArgument."Workflow Step Instance ID");
+        IF FINDLAST THEN
+          EXIT("Sequence No.");
+      END;
+      EXIT(0);
+    END;
+
+    PROCEDURE GetLimitType@81() : Integer;
+    VAR
+      ApprovalEntry@1000 : Record 454;
+    BEGIN
+      CASE WorkflowStepArgument."Approver Limit Type" OF
+        WorkflowStepArgument."Approver Limit Type"::"Approver Chain",
+        WorkflowStepArgument."Approver Limit Type"::"First Qualified Approver":
+          EXIT(ApprovalEntry."Limit Type"::"Approval Limits");
+        WorkflowStepArgument."Approver Limit Type"::"Direct Approver":
+          EXIT(ApprovalEntry."Limit Type"::"No Limits");
+      END;
+
+      IF ApprovalEntry."Approval Type" = ApprovalEntry."Approval Type"::"Workflow User Group" THEN
+        EXIT(ApprovalEntry."Limit Type"::"No Limits");
+    END;
+
+    PROCEDURE FinishApprovalEntry@37(VAR ApprovalEntry@1000 : Record 454;ApprovalEntryArgument@1001 : Record 454);
+    BEGIN
+      WITH ApprovalEntry DO BEGIN
+        CASE WorkflowStepArgument."Delegate After" OF
+          WorkflowStepArgument."Delegate After"::Never:
+            EVALUATE("Delegation Date Formula",'');
+          WorkflowStepArgument."Delegate After"::"1 day":
+            EVALUATE("Delegation Date Formula",'<1D>');
+          WorkflowStepArgument."Delegate After"::"2 days":
+            EVALUATE("Delegation Date Formula",'<2D>');
+          WorkflowStepArgument."Delegate After"::"5 days":
+            EVALUATE("Delegation Date Formula",'<5D>');
+          ELSE
+            EVALUATE("Delegation Date Formula",'');
+        END;
+
+        "Record ID to Approve" := ApprovalEntryArgument."Record ID to Approve";
+        "Workflow Step Instance ID" := ApprovalEntryArgument."Workflow Step Instance ID";
+      END;
+    END;
+
+    PROCEDURE OrderByTableIDDocTypeAndSeq@41(VAR ApprovalEntry@1000 : Record 454);
+    BEGIN
+      ApprovalEntry.SETCURRENTKEY("Table ID","Document Type","Document No.","Sequence No.","Record ID to Approve");
+      ApprovalEntry.SETRANGE("Workflow Step Instance ID", WorkflowStepInstance.ID);
+    END;
+
+    PROCEDURE DeleteApprovalEntries@1160040003(TableID@1160040000 : Integer;DocumentNo@1160040001 : Code[20]);
+    VAR
+      DCApprovalsBridge@1000 : Codeunit 6085790;
+      ApprovalEntry@1001 : Record 454;
+    BEGIN
+      DCApprovalsBridge.DeleteApprovalEntry(TableID,ApprovalEntry."Document Type"::Invoice,DocumentNo);
+    END;
+
+    LOCAL PROCEDURE "-- GUI"@5000();
+    BEGIN
+    END;
+
+    PROCEDURE SendExpApprovalRequest@1160040001(VAR Expense@1160040000 : Record 6086320);
+    VAR
+      ApprovalEntry@1001 : Record 454;
+      EMApprovalMgt@1160040002 : Codeunit 6086312;
+      EMCommentMgt@1000 : Codeunit 6086323;
+      CntProcessed@1160040001 : Integer;
+      NoOfRecords@1160040003 : Integer;
+    BEGIN
+      Expense.SETRANGE(Status,Expense.Status::Open);
+      NoOfRecords := Expense.COUNT;
+
+      IF NoOfRecords > 1 THEN
+        IF NOT CONFIRM(ConfirmSendMultipleForApproval,TRUE,Expense.COUNT,Expense.TABLECAPTION) THEN
+          EXIT;
+
+      IF NoOfRecords = 1 THEN BEGIN
+        Expense.FINDSET;
+        EMCommentMgt.HasErrorComments(DATABASE::Expense,0,'',Expense."Entry No.",TRUE,TRUE);
+
+        IF EMCommentMgt.HasWarningComments(DATABASE::Expense,0,'',Expense."Entry No.",FALSE,TRUE) THEN
+          IF NOT CONFIRM(HasWarningCommentQuestion,FALSE,Expense.TABLECAPTION) THEN
+            EXIT;
+
+        SendApprovalRequest(DATABASE::Expense,FORMAT(Expense."Entry No."));
+        CntProcessed := 1;
+      END ELSE
+        IF Expense.FINDSET THEN
+          REPEAT
+            IF NOT (EMCommentMgt.HasWarningComments(DATABASE::Expense,0,'',Expense."Entry No.",FALSE,TRUE) OR
+               EMCommentMgt.HasErrorComments(DATABASE::Expense,0,'',Expense."Entry No.",FALSE,TRUE))
+            THEN BEGIN
+              SendApprovalRequest(DATABASE::Expense,FORMAT(Expense."Entry No."));
+              CntProcessed += 1;
+            END;
+          UNTIL Expense.NEXT = 0;
+
+      IF GUIALLOWED THEN
+        IF CntProcessed = 0 THEN
+          MESSAGE(NothingToSend)
+        ELSE
+          MESSAGE(ExpSentForApproval,CntProcessed);
+    END;
+
+    PROCEDURE SendMilApprovalRequest@28(VAR Mileage@1160040000 : Record 6086338);
+    VAR
+      EMApprovalMgt@1002 : Codeunit 6086312;
+      EMCommentMgt@1003 : Codeunit 6086323;
+      CntProcessed@1001 : Integer;
+      NoOfRecords@1000 : Integer;
+    BEGIN
+      Mileage.SETRANGE(Status,Mileage.Status::Open);
+      NoOfRecords := Mileage.COUNT;
+
+      IF NoOfRecords > 1 THEN
+        IF NOT CONFIRM(ConfirmSendMultipleForApproval,TRUE,Mileage.COUNT,Mileage.TABLECAPTION) THEN
+          EXIT;
+
+      IF NoOfRecords = 1 THEN BEGIN
+        Mileage.FINDSET;
+        EMCommentMgt.HasErrorComments(DATABASE::Mileage,0,'',Mileage."Entry No.",TRUE,TRUE);
+
+        IF EMCommentMgt.HasWarningComments(DATABASE::Mileage,0,'',Mileage."Entry No.",FALSE,TRUE) THEN
+          IF NOT CONFIRM(HasWarningCommentQuestion,FALSE,Mileage.TABLECAPTION) THEN
+            EXIT;
+
+        SendApprovalRequest(DATABASE::Mileage,FORMAT(Mileage."Entry No."));
+        CntProcessed := 1;
+      END ELSE
+        IF Mileage.FINDSET THEN
+          REPEAT
+            IF NOT (EMCommentMgt.HasWarningComments(DATABASE::Mileage,0,'',Mileage."Entry No.",FALSE,TRUE) OR
+               EMCommentMgt.HasErrorComments(DATABASE::Mileage,0,'',Mileage."Entry No.",FALSE,TRUE))
+            THEN BEGIN
+              SendApprovalRequest(DATABASE::Mileage,FORMAT(Mileage."Entry No."));
+              CntProcessed += 1;
+            END;
+          UNTIL Mileage.NEXT = 0;
+
+      IF GUIALLOWED THEN
+        IF CntProcessed = 0 THEN
+          MESSAGE(NothingToSend)
+        ELSE
+          MESSAGE(MilSentForApproval,CntProcessed,Mileage.TABLECAPTION);
+    END;
+
+    PROCEDURE SendSettlementApprovalRequest@1160040010(VAR ExpHeader@1160040007 : Record 6086339);
+    VAR
+      EMCommentMgt@1160040000 : Codeunit 6086323;
+      CntProcessed@1160040001 : Integer;
+      NoOfRecords@1160040003 : Integer;
+    BEGIN
+      ExpHeader.SETRANGE(Status,ExpHeader.Status::Open);
+      NoOfRecords := ExpHeader.COUNT;
+
+      IF NoOfRecords > 1 THEN
+        IF NOT CONFIRM(ConfirmMultipleStllForApproval,TRUE,ExpHeader.COUNT) THEN
+          EXIT;
+
+      IF NoOfRecords = 1 THEN BEGIN
+        ExpHeader.FINDSET;
+        EMCommentMgt.HasErrorComments(DATABASE::"Expense Header",ExpHeader."Document Type",ExpHeader."No.",0,TRUE,TRUE);
+
+        IF EMCommentMgt.HasWarningComments(DATABASE::"Expense Header",ExpHeader."Document Type",ExpHeader."No.",0,FALSE,TRUE) THEN
+          IF NOT CONFIRM(HasWarningCmtStllQuestion,FALSE) THEN
+            EXIT;
+
+        SendApprovalRequest(DATABASE::"Expense Header",ExpHeader."No.");
+
+        CntProcessed := 1;
+      END ELSE
+        IF ExpHeader.FINDSET THEN
+          REPEAT
+            IF NOT (EMCommentMgt.HasWarningComments(DATABASE::"Expense Header",ExpHeader."Document Type",ExpHeader."No.",0,FALSE,TRUE) OR
+               EMCommentMgt.HasErrorComments(DATABASE::"Expense Header",ExpHeader."Document Type",ExpHeader."No.",0,FALSE,TRUE))
+            THEN BEGIN
+              SendApprovalRequest(DATABASE::"Expense Header",ExpHeader."No.");
+              CntProcessed += 1;
+            END;
+          UNTIL ExpHeader.NEXT = 0;
+
+      IF GUIALLOWED THEN
+        IF CntProcessed = 0 THEN
+          MESSAGE(NothingToSend)
+        ELSE
+          IF CntProcessed = 1 THEN
+            MESSAGE(STRSUBSTNO(SingleSttlSentForApproval,CntProcessed))
+          ELSE
+            MESSAGE(STRSUBSTNO(MultipleSttlSentForApproval,CntProcessed));
+    END;
+
+    LOCAL PROCEDURE SendApprovalRequest@8(TableID@1003 : Integer;DocumentNo@1002 : Code[20]);
+    VAR
+      ApprovalsMgmt@1001 : Codeunit 1535;
+      ReturnVariant@1000 : Variant;
+    BEGIN
+      GetVariant(TableID,DocumentNo,ReturnVariant);
+
+      IF CheckApprovalsWorkflowEnabled(TableID,DocumentNo) THEN
+        CASE TableID OF
+          DATABASE::Expense:
+            OnSendExpenseForApproval(ReturnVariant);
+          DATABASE::Mileage:
+            OnSendMileageForApproval(ReturnVariant);
+          DATABASE::"Expense Header":
+            OnSendSettlementForApproval(ReturnVariant);
+        END;
+    END;
+
+    PROCEDURE CancelApprovalRequest@10(TableID@1003 : Integer;DocumentNo@1002 : Code[20]);
+    VAR
+      ApprovalsMgmt@1001 : Codeunit 1535;
+      ReturnVariant@1004 : Variant;
+    BEGIN
+      GetVariant(TableID,DocumentNo,ReturnVariant);
+
+      CASE TableID OF
+        DATABASE::Expense:
+          OnCancelExpenseApprovalRequest(ReturnVariant);
+        DATABASE::Mileage:
+          OnCancelMileageApprovalRequest(ReturnVariant);
+        DATABASE::"Expense Header":
+          OnCancelSettlementApprovalRequest(ReturnVariant);
+      END;
+    END;
+
+    PROCEDURE ForceApproval@11(TableID@1003 : Integer;DocumentNo@1002 : Code[20]);
+    VAR
+      DCApprovalMgmt@1001 : Codeunit 6085722;
+      ReturnVariant@1004 : Variant;
+    BEGIN
+      GetVariant(TableID,DocumentNo,ReturnVariant);
+
+      IF IsForceApprovalsWorkflowEnabled(TableID,DocumentNo) THEN
+        CASE TableID OF
+          DATABASE::Expense:
+            OnExpenseForceApproveApprovalRequest(ReturnVariant);
+          DATABASE::Mileage:
+            OnMileageForceApproveApprovalRequest(ReturnVariant);
+          DATABASE::"Expense Header":
+            OnSettlementForceApproveApprovalRequest(ReturnVariant);
+        END;
+    END;
+
+    PROCEDURE ApproveApprovalRequest@17(ApprovalEntry@1000 : Record 454);
+    VAR
+      ApprovalsMgmt@1002 : Codeunit 1535;
+      DCAppBridge@1001 : Codeunit 6085790;
+    BEGIN
+      DCAppBridge.UpdateApproverOnApprovalEntry(ApprovalEntry);
+      ApprovalEntry.SETRECFILTER;
+      ApprovalsMgmt.ApproveApprovalRequests(ApprovalEntry);
+    END;
+
+    PROCEDURE Approve@12(TableID@1001 : Integer;DocumentNo@1000 : Code[20]);
+    VAR
+      EMApprovalManagement@1002 : Codeunit 6086312;
+    BEGIN
+      EMApprovalManagement.Approve(TableID,DocumentNo);
+    END;
+
+    PROCEDURE Reject@13(TableID@1003 : Integer;DocumentNo@1002 : Code[20]);
+    VAR
+      EMApprovalManagement@1001 : Codeunit 6086312;
+    BEGIN
+      EMApprovalManagement.Reject(TableID,DocumentNo);
+    END;
+
+    PROCEDURE RejectApprovalRequest@34(VAR ApprovalEntry@1000 : Record 454);
+    VAR
+      NotificationSetup@6086301 : Record 1512;
+      ApprovalsMgmt@1001 : Codeunit 1535;
+      ApprovalCmtMgnt@1002 : Codeunit 6085600;
+      ShortcutFieldFunctions@1005 : Codeunit 6086304;
+      EMApprovalMgmt@1003 : Codeunit 6086312;
+      ReasonCodeDummy@1004 : Code[10];
+      LimitedUser@6086300 : Boolean;
+    BEGIN
+      LimitedUser := IsLimitedUser(ApprovalEntry."Approver ID");
+      IF LimitedUser THEN BEGIN
+        NotificationSetup.SETRANGE("User ID",ApprovalEntry."Approver ID");
+        IF NOT NotificationSetup.ISEMPTY THEN
+          ERROR(NotificationErr,ApprovalEntry."Approver ID");
+      END;
+
+      //THROWS ERROR OTHERWISE INCONSISTENCY BECAUSE IT COMMITS ON REJECT WHEN NOTIFICATIONS
+      ShortcutFieldFunctions.GetCommentShortcutFieldNo(ApprovalEntry."Table ID");
+
+      IF GUIALLOWED THEN
+        ApprovalCmtMgnt.RequestComment(
+          ApprovalEntry."Table ID",ApprovalEntry."Document Type",ApprovalEntry."Document No.",
+          ApprovalEntry."Record ID to Approve",'',1,ReasonCodeDummy);
+
+      ApprovalEntry."Remember Approver ID" := ApprovalEntry."Approver ID" ;
+      ApprovalEntry."Approver ID" := USERID;
+      ApprovalEntry.MODIFY;
+      ApprovalEntry.SETRECFILTER;
+
+      ApprovalsMgmt.RejectApprovalRequests(ApprovalEntry);
+
+      ApprovalEntry."Approver ID" := ApprovalEntry."Remember Approver ID";
+      ApprovalEntry."Remember Approver ID" := '';
+      ApprovalEntry.MODIFY;
+
+      IF AutoSubmitForApproval(ApprovalEntry) THEN
+        EMApprovalMgmt.SendAppCmtToExpUser(ApprovalEntry,LimitedUser)
+      ELSE
+        EMApprovalMgmt.SetOpenStatus(ApprovalEntry."Table ID",ApprovalEntry."Document No.");
+    END;
+
+    PROCEDURE Forward@14(TableID@1006 : Integer;DocumentNo@1000 : Code[20]);
+    VAR
+      ApprovalEntry@1003 : Record 454;
+      ApprovalsMgmt@1002 : Codeunit 1535;
+      DCApprovalsBridge@1004 : Codeunit 6085790;
+      DCApprovalMgmt@1001 : Codeunit 6085722;
+      EMApprovalMgmt@1005 : Codeunit 6086312;
+    BEGIN
+      EMApprovalMgmt.Delegate(TableID,DocumentNo);
+    END;
+
+    PROCEDURE CreateAppvlCmtLine@6085573(TableID@1160040000 : Integer;DocType@1160040001 : Integer;DocNo@1160040002 : Code[20];Comment@6085575 : Text[80]);
+    VAR
+      ApprovalEntry@1000 : Record 454;
+      AppCmtMgt@1160040003 : Codeunit 6085600;
+    BEGIN
+      ApprovalEntry.SETCURRENTKEY("Table ID","Document Type","Document No.");
+      ApprovalEntry.SETRANGE("Table ID",TableID);
+      ApprovalEntry.SETRANGE("Document Type",DocType);
+      ApprovalEntry.SETRANGE("Document No.",DocNo);
+      ApprovalEntry.FINDLAST;
+
+      AppCmtMgt.AddComment(TableID,DocType,DocNo,ApprovalEntry."Record ID to Approve",USERID,Comment);
+    END;
+
+    PROCEDURE "--Interfaces--"@1160040006();
+    BEGIN
+    END;
+
+    PROCEDURE SendNonGUIExpApprovalRequest@1160040009(VAR Expense@1160040007 : Record 6086320;RunValidationCheck@1000 : Boolean);
+    VAR
+      ApprovalEntry@1160040005 : Record 454;
+      EMApprovalMgt@1160040002 : Codeunit 6086312;
+      EMCommentMgt@1160040000 : Codeunit 6086323;
+      CntProcessed@1160040001 : Integer;
+      NoOfRecords@1160040003 : Integer;
+    BEGIN
+      IF Expense.Status <> Expense.Status::Open THEN
+        EXIT;
+
+      IF (EMCommentMgt.HasWarningComments(DATABASE::Expense,0,'',Expense."Entry No.",FALSE,RunValidationCheck) OR
+         EMCommentMgt.HasErrorComments(DATABASE::Expense,0,'',Expense."Entry No.",FALSE,RunValidationCheck))
+      THEN
+        EXIT;
+
+      SendApprovalRequest(DATABASE::Expense,FORMAT(Expense."Entry No."));
+    END;
+
+    PROCEDURE SendNonGUIMilApprovalRequest@1160040008(VAR Mileage@1160040007 : Record 6086338;RunValidationCheck@1000 : Boolean);
+    VAR
+      ApprovalEntry@1160040005 : Record 454;
+      EMApprovalMgt@1160040002 : Codeunit 6086312;
+      EMCommentMgt@1160040000 : Codeunit 6086323;
+      CntProcessed@1160040001 : Integer;
+      NoOfRecords@1160040003 : Integer;
+    BEGIN
+      IF Mileage.Status <> Mileage.Status::Open THEN
+        EXIT;
+
+      IF (EMCommentMgt.HasWarningComments(DATABASE::Mileage,0,'',Mileage."Entry No.",FALSE,RunValidationCheck) OR
+         EMCommentMgt.HasErrorComments(DATABASE::Mileage,0,'',Mileage."Entry No.",FALSE,RunValidationCheck))
+      THEN
+        EXIT;
+
+      SendApprovalRequest(DATABASE::Mileage,FORMAT(Mileage."Entry No."));
+    END;
+
+    PROCEDURE SendNonGUISttlApprovalRequest@1160040011(VAR ExpHeader@1160040007 : Record 6086339;RunValidationCheck@1000 : Boolean);
+    VAR
+      ApprovalEntry@1160040005 : Record 454;
+      EMApprovalMgt@1160040002 : Codeunit 6086312;
+      EMCommentMgt@1160040000 : Codeunit 6086323;
+    BEGIN
+      IF ExpHeader.Status <> ExpHeader.Status::Open THEN
+        EXIT;
+
+      IF (EMCommentMgt.HasWarningComments(DATABASE::"Expense Header",ExpHeader."Document Type"::Settlement,ExpHeader."No.",0,FALSE,RunValidationCheck) OR
+         EMCommentMgt.HasErrorComments(DATABASE::"Expense Header",ExpHeader."Document Type"::Settlement,ExpHeader."No.",0,FALSE,RunValidationCheck))
+      THEN
+        EXIT;
+
+      SendApprovalRequest(DATABASE::"Expense Header",ExpHeader."No.");
+    END;
+
+    LOCAL PROCEDURE "-- Core Deprated Function"@24();
+    BEGIN
+    END;
+
+    PROCEDURE SendApprovalsMail@1160040022(TableID@1003 : Integer;DocumentNo@1002 : Code[20];ApprovalEntry@1000 : Record 454);
+    BEGIN
+      MESSAGE(MailNotSupported);
+    END;
+
+    PROCEDURE FillExpenseTemplate@1160040004(VAR Body@1000 : Text[254];TextNo@1001 : Text[30];Header@1002 : Record 6086320;AppEntry@1003 : Record 454);
+    BEGIN
+      // Not used in 90 Bridge. It's here to reserve the ID
+    END;
+
+    LOCAL PROCEDURE "-- Setup Functionality"@25();
+    BEGIN
+    END;
+
+    PROCEDURE CreateEMApprovalTemplate@1160040014();
+    BEGIN
+      EnableWorkflows;
+    END;
+
+    LOCAL PROCEDURE "-- Common Events"@5001();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE ShowExpenseApprovalStatus@5010(Expense@1000 : Record 6086320);
+    BEGIN
+      Expense.FIND;
+
+      CASE Expense.Status OF
+        Expense.Status::Released:
+          MESSAGE(STRSUBSTNO(ExpStatusChangedMsg,Expense.TABLECAPTION,Expense."Entry No."));
+        Expense.Status::"Pending Approval":
+          MESSAGE(PendingApprovalMsg);
+      END;
+    END;
+
+    LOCAL PROCEDURE "-- Check Functions"@5003();
+    BEGIN
+    END;
+
+    PROCEDURE IsApprovalsMailEnabled@30() : Boolean;
+    BEGIN
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE IsWorkflowSupported@40() : Boolean;
+    VAR
+      Object@1000 : Record 2000000001;
+    BEGIN
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE IsForceApprovalsWorkflowEnabled@59(TableID@1003 : Integer;DocumentNo@1004 : Code[20]) : Boolean;
+    VAR
+      WorkflowManagement@1000 : Codeunit 1501;
+      EMWorkflowEventHandling@1001 : Codeunit 6086370;
+      ReturnVariant@1002 : Variant;
+    BEGIN
+      GetVariant(TableID,DocumentNo,ReturnVariant);
+      CASE TableID OF
+        DATABASE::Expense:
+          EXIT(WorkflowManagement.CanExecuteWorkflow(ReturnVariant,EMWorkflowEventHandling.RunWorkflowOnExpenseForceApproveApprovalRequestCode));
+        DATABASE::Mileage:
+          EXIT(WorkflowManagement.CanExecuteWorkflow(ReturnVariant,EMWorkflowEventHandling.RunWorkflowOnMileageForceApproveApprovalRequestCode));
+        DATABASE::"Expense Header":
+          EXIT(WorkflowManagement.CanExecuteWorkflow(ReturnVariant,EMWorkflowEventHandling.RunWorkflowOnSettlementForceApproveApprovalRequestCode));
+      END;
+    END;
+
+    PROCEDURE CheckForceApprovalsWorkflowEnabled@77(TableID@1001 : Integer;DocumentNo@1000 : Code[20]) : Boolean;
+    BEGIN
+      IF NOT IsForceApprovalsWorkflowEnabled(TableID,DocumentNo) THEN
+        ERROR(Text002);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE IsApprovalsWorkflowEnabled@2(TableID@1005 : Integer;DocumentNo@1004 : Code[20]) : Boolean;
+    VAR
+      WorkflowManagement@1000 : Codeunit 1501;
+      EMWorkflowEventHandling@1001 : Codeunit 6086370;
+      ReturnVariant@1003 : Variant;
+    BEGIN
+      GetVariant(TableID,DocumentNo,ReturnVariant);
+      CASE TableID OF
+        DATABASE::Expense:
+          EXIT(WorkflowManagement.CanExecuteWorkflow(ReturnVariant,EMWorkflowEventHandling.RunWorkflowOnSendExpenseForApprovalCode));
+        DATABASE::Mileage:
+          EXIT(WorkflowManagement.CanExecuteWorkflow(ReturnVariant,EMWorkflowEventHandling.RunWorkflowOnSendMileageForApprovalCode));
+        DATABASE::"Expense Header":
+          EXIT(WorkflowManagement.CanExecuteWorkflow(ReturnVariant,EMWorkflowEventHandling.RunWorkflowOnSendSettlementForApprovalCode));
+      END;
+    END;
+
+    PROCEDURE CheckApprovalsWorkflowEnabled@1(TableID@1001 : Integer;DocumentNo@1000 : Code[20]) : Boolean;
+    BEGIN
+      IF NOT IsApprovalsWorkflowEnabled(TableID,DocumentNo) THEN
+        ERROR(Text004);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ApprovalHandlingExists@1160040000() : Boolean;
+    BEGIN
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE AutoSubmitForApproval@1160040005(ApprovalEntry@1160040001 : Record 454) AutoSubmit : Boolean;
+    VAR
+      EMSetup@1160040000 : Record 6086300;
+    BEGIN
+      EMSetup.GET;
+      CASE ApprovalEntry."Table ID" OF
+        DATABASE::Expense:
+          AutoSubmit := EMSetup."Auto Submit Exp. for Approval";
+        DATABASE::Mileage:
+          AutoSubmit := EMSetup."Auto Submit Mil. for Approval";
+        DATABASE::"Expense Header":
+          AutoSubmit := EMSetup."Auto Submit Sttl. for Approval";
+      END;
+    END;
+
+    LOCAL PROCEDURE "-- Publishers"@3();
+    BEGIN
+    END;
+
+    [Integration]
+    PROCEDURE OnSendExpenseForApproval@18(Expense@1000 : Record 6086320);
+    BEGIN
+    END;
+
+    [Integration]
+    PROCEDURE OnExpenseForceApproveApprovalRequest@9(Expense@1000 : Record 6086320);
+    BEGIN
+    END;
+
+    [Integration]
+    PROCEDURE OnExpenseForceRejectApprovalRequest@7(Expense@1000 : Record 6086320);
+    BEGIN
+    END;
+
+    [Integration]
+    PROCEDURE OnCancelExpenseApprovalRequest@4(Expense@1000 : Record 6086320);
+    BEGIN
+    END;
+
+    [Integration]
+    PROCEDURE OnSendMileageForApproval@33(Mileage@1000 : Record 6086338);
+    BEGIN
+    END;
+
+    [Integration]
+    PROCEDURE OnMileageForceApproveApprovalRequest@29(Mileage@1000 : Record 6086338);
+    BEGIN
+    END;
+
+    [Integration]
+    PROCEDURE OnMileageForceRejectApprovalRequest@27(Mileage@1000 : Record 6086338);
+    BEGIN
+    END;
+
+    [Integration]
+    PROCEDURE OnCancelMileageApprovalRequest@26(Mileage@1000 : Record 6086338);
+    BEGIN
+    END;
+
+    [Integration]
+    PROCEDURE OnSendSettlementForApproval@35(ExpHeader@1001 : Record 6086339);
+    BEGIN
+    END;
+
+    [Integration]
+    PROCEDURE OnSettlementForceApproveApprovalRequest@31(ExpHeader@1000 : Record 6086339);
+    BEGIN
+    END;
+
+    [Integration]
+    PROCEDURE OnSettlementeForceRejectApprovalRequest@22(ExpHeader@1001 : Record 6086339);
+    BEGIN
+    END;
+
+    [Integration]
+    PROCEDURE OnCancelSettlementApprovalRequest@21(ExpHeader@1001 : Record 6086339);
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE "-- SubScriber"@20();
+    BEGIN
+    END;
+
+    [EventSubscriber(Codeunit,6086371,OnBeforeExecuteResponseStepInstance)]
+    PROCEDURE OnNewWorkflowStepInstance@19(VAR NewWorkflowStepInstance@1000 : Record 1504);
+    BEGIN
+      WorkflowStepInstance := NewWorkflowStepInstance;
+      WorkflowStepArgument.GET(WorkflowStepInstance.Argument);
+    END;
+
+    [EventSubscriber(Table,455,OnAfterInsertEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE OnAfterInsertApprovalComment@36(VAR Rec@1000 : Record 455;RunTrigger@1001 : Boolean);
+    VAR
+      DCApprovalMgmt@1160040000 : Codeunit 6085722;
+      PurchHeader@1002 : Record 38;
+      Expense@1003 : Record 6086320;
+      Mileage@1006 : Record 6086338;
+      ExpHeader@1007 : Record 6086339;
+      RecRef@1005 : RecordRef;
+      RecID@1004 : RecordID;
+    BEGIN
+      RecID := Rec."Record ID to Approve";
+
+      CASE Rec."Table ID" OF
+
+        DATABASE::"Purchase Header":
+          BEGIN
+            IF Rec."Document No." <> '' THEN BEGIN
+              IF PurchHeader.GET(Rec."Document Type",Rec."Document No.") THEN
+                Rec."Record ID to Approve" := PurchHeader.RECORDID;
+            END ELSE BEGIN
+              RecRef := RecID.GETRECORD;
+              RecRef.SETTABLE(PurchHeader);
+              Rec."Document Type" := PurchHeader."Document Type";
+              Rec."Document No." := PurchHeader."No.";
+            END;
+            Rec.MODIFY;
+          END;
+
+        DATABASE::Expense:
+          BEGIN
+            IF Rec."Document No." <> '' THEN BEGIN
+              IF Expense.GET(Rec."Document No.") THEN
+                Rec."Record ID to Approve" := Expense.RECORDID;
+            END ELSE BEGIN
+              RecRef := RecID.GETRECORD;
+              RecRef.SETTABLE(Expense);
+              Rec."Document Type" := Rec."Document Type"::Invoice;
+              Rec."Document No." := FORMAT(Expense."Entry No.");
+            END;
+            Rec.MODIFY;
+          END;
+
+        DATABASE::Mileage:
+          BEGIN
+            IF Rec."Document No." <> '' THEN BEGIN
+              IF Mileage.GET(Rec."Document No.") THEN
+                Rec."Record ID to Approve" := Mileage.RECORDID;
+            END ELSE BEGIN
+              RecRef := RecID.GETRECORD;
+              RecRef.SETTABLE(Mileage);
+              Rec."Document Type" := Rec."Document Type"::Invoice;
+              Rec."Document No." := FORMAT(Mileage."Entry No.");
+            END;
+            Rec.MODIFY;
+          END;
+
+        DATABASE::"Expense Header":
+          BEGIN
+            IF Rec."Document No." <> '' THEN BEGIN
+              IF ExpHeader.GET(ExpHeader."Document Type"::Settlement,Rec."Document No.") THEN
+                Rec."Record ID to Approve" := ExpHeader.RECORDID;
+            END ELSE BEGIN
+              RecRef := RecID.GETRECORD;
+              RecRef.SETTABLE(ExpHeader);
+              Rec."Document Type" := Rec."Document Type"::Invoice;
+              Rec."Document No." := ExpHeader."No.";
+            END;
+            Rec.MODIFY;
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE "-- Test Functionality"@54();
+    BEGIN
+    END;
+
+    PROCEDURE SetCurrentUser@56(CurrentUserIn@1000 : Code[50]);
+    BEGIN
+      CurrentUser := CurrentUserIn;
+    END;
+
+    LOCAL PROCEDURE GetVariant@32(TableID@1001 : Integer;DocumentNo@1000 : Code[20];VAR ReturnVariant@1002 : Variant);
+    VAR
+      Mileage@1004 : Record 6086338;
+      Expense@1003 : Record 6086320;
+      ExpHeader@1005 : Record 6086339;
+      EMAppMgt@1006 : Codeunit 6086312;
+    BEGIN
+      CASE TableID OF
+        DATABASE::Expense:
+          BEGIN
+            Expense.GET(EMAppMgt.Code2Int(DocumentNo));
+            ReturnVariant := Expense;
+          END;
+
+        DATABASE::Mileage:
+          BEGIN
+            Mileage.GET(EMAppMgt.Code2Int(DocumentNo));
+            ReturnVariant := Mileage;
+          END;
+
+        DATABASE::"Expense Header":
+          BEGIN
+            ExpHeader.GET(ExpHeader."Document Type"::Settlement,DocumentNo);
+            ReturnVariant := ExpHeader;
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE EnableWorkflows@15();
+    VAR
+      WorkflowSetup@1003 : Codeunit 6086372;
+      WorkFlowBuffer@1000 : Record 1500;
+      Workflow@1001 : Record 1501;
+      Workflow2@1002 : Record 1501;
+    BEGIN
+      CODEUNIT.RUN(CODEUNIT::"EM Workflow Setup");
+      Workflow.SETRANGE(Template,FALSE);
+      Workflow.SETRANGE(Category,'CONTINIAEM');
+      IF Workflow.FINDFIRST THEN
+        EXIT;
+
+      Workflow.SETRANGE(Template,TRUE);
+      IF Workflow.FINDFIRST THEN
+        REPEAT
+          WorkFlowBuffer."Category Code":= Workflow.Category;
+          WorkFlowBuffer."Workflow Code" := Workflow.Code;
+          CopyWorkflow(WorkFlowBuffer,Workflow2);
+          Workflow2.VALIDATE(Enabled,TRUE);
+          Workflow2.MODIFY;
+        UNTIL Workflow.NEXT = 0;
+    END;
+
+    PROCEDURE CopyWorkflow@6(WorkflowBuffer@1003 : Record 1500;VAR ToWorkflow@1001 : Record 1501);
+    VAR
+      FromWorkflow@1000 : Record 1501;
+      CopyWorkflow@1002 : Report 1510;
+    BEGIN
+      IF NOT FromWorkflow.GET(WorkflowBuffer."Workflow Code") THEN
+        ERROR('');
+      IF FromWorkflow.Template OR (INCSTR(FromWorkflow.Code) = '') THEN
+        ToWorkflow.Code := COPYSTR(FromWorkflow.Code,1,MAXSTRLEN(ToWorkflow.Code) - 3) + '-01'
+      ELSE
+        ToWorkflow.Code := FromWorkflow.Code;
+      WHILE ToWorkflow.GET(ToWorkflow.Code) DO
+        ToWorkflow.Code := INCSTR(ToWorkflow.Code);
+      ToWorkflow.INIT;
+      ToWorkflow.INSERT;
+      CopyWorkflow.InitCopyWorkflow(FromWorkflow,ToWorkflow);
+      CopyWorkflow.USEREQUESTPAGE(FALSE);
+      CopyWorkflow.RUN;
+      ToWorkflow.GET(ToWorkflow.Code);
+    END;
+
+    PROCEDURE IsLimitedUser@39(_UserID@1001 : Code[50]) : Boolean;
+    VAR
+      User@1000 : Record 2000000120;
+    BEGIN
+      User.SETCURRENTKEY("User Name");
+      User.SETRANGE("User Name",_UserID);
+      IF User.FINDFIRST THEN
+        EXIT(User."License Type" = User."License Type"::"Limited User");
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

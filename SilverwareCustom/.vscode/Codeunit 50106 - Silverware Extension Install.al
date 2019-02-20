@@ -12,8 +12,6 @@ codeunit 50106 "Silverware Custom Install"
     var
         Customer: RecordRef;
         AllField: Record Field;
-        SourceField: FieldRef;
-        DestField: FieldRef;
     begin
         Customer.Open(Database::"Customer");
         AllField.SetRange(TableNo, Customer.Number());
@@ -21,9 +19,7 @@ codeunit 50106 "Silverware Custom Install"
         if not AllField.IsEmpty() then begin
             Customer.Find('-');
             repeat
-                SourceField := Customer.Field(50003);
-                DestField := Customer.Field(50106);
-                DestField.Value := SourceField.Value();
+                Customer.Field(50106).Value := Customer.Field(50003).Value;
                 Customer.Modify();
             until Customer.Next() = 0;
         end;

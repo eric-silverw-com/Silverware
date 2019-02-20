@@ -1,0 +1,391 @@
+OBJECT Codeunit 6086350 Mileage-Post
+{
+  OBJECT-PROPERTIES
+  {
+    Date=06/13/18;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.06;
+  }
+  PROPERTIES
+  {
+    TableNo=6086338;
+    Permissions=TableData 38=rimd,
+                TableData 39=rimd,
+                TableData 81=rimd,
+                TableData 210=rimd,
+                TableData 454=rimd;
+    OnRun=BEGIN
+            RunWithCheck(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      PurchHeader@1160040009 : Record 38;
+      ContiniaUserSetup@1160040007 : Record 6086002;
+      EMSetup@1160040002 : Record 6086300;
+      EMReg@1160040016 : Record 6086367;
+      Settlement@1160040001 : Record 6086339;
+      PostingDate@1160040004 : Date;
+      PostingDateExists@1160040006 : Boolean;
+      ReplacePostingDate@1160040005 : Boolean;
+      AppForcedByTxt@1160040015 : TextConst 'ENU=Approval forced by %1';
+      Group@1160040000 : Boolean;
+      PostingDatePolicy@1160040003 : 'First expense/Mileage date,Last Expense/Mileage Date,Specific date';
+
+    PROCEDURE RunWithCheck@1160040011(VAR Mileage@1160040000 : Record 6086338);
+    VAR
+      CheckLine@1160040001 : Codeunit 6086344;
+    BEGIN
+      CheckLine.RUN(Mileage);
+      Code(Mileage);
+    END;
+
+    PROCEDURE RunWithoutCheck@1160040010(VAR Mileage@1160040000 : Record 6086338);
+    BEGIN
+      Code(Mileage);
+    END;
+
+    PROCEDURE Code@1160040009(VAR Mileage@1160040014 : Record 6086338);
+    VAR
+      PurchLine@1160040009 : Record 39;
+      GenJnlLine@1160040008 : Record 81;
+      JobJnlLine@1160040010 : Record 210;
+      GenJnlBatch@1160040007 : Record 232;
+      ExpenseDimMgt@1160040006 : Codeunit 6086318;
+      PostingFunctions@1160040011 : Codeunit 6086336;
+      DocumentNo@1160040002 : Code[20];
+      DocType@1160040001 : Integer;
+      MileagePosting@1160040003 : 'Use General Journal,Use Purchase Invoice';
+      SettlementPost@1160040000 : Codeunit 6086338;
+    BEGIN
+      EMSetup.GET;
+
+      IF Group AND EMSetup."Enable Settlement" THEN BEGIN
+        IF (Settlement."Continia User ID" <> '') AND (Settlement."Continia User ID" <> Mileage."Continia User ID") THEN BEGIN
+          PostSettlement;
+          CLEAR(Settlement);
+        END;
+        AddToSettlement(Mileage);
+        EXIT; // note that PostSettlement should be called from outside at last too
+      END;
+
+      IF EMSetup."Expense Posting" = EMSetup."Expense Posting"::"Use General Journal" THEN
+        SettlementPost.PostAndBalanceMileage(Mileage,PostingDate)
+      ELSE
+        PostMileageInvoice(Mileage);
+    END;
+
+    PROCEDURE SetPostingDate@1(NewReplacePostingDate@1000 : Boolean;NewPostingDatePolicy@1160040000 : 'First Expense/Mileage Date,Last Expense/Mileage Date,Specific Date';NewPostingDate@1002 : Date);
+    BEGIN
+      PostingDateExists := TRUE;
+      ReplacePostingDate := NewReplacePostingDate;
+      PostingDatePolicy := NewPostingDatePolicy;
+      PostingDate := NewPostingDate;
+    END;
+
+    LOCAL PROCEDURE CreatePurchInvHeader@1160040005(VAR Mileage@1160040005 : Record 6086338;VAR LocalPurchHeader@1160040000 : Record 38;DocumentDate@1160040001 : Date;VendorNo@1160040004 : Code[20]);
+    VAR
+      NoSeriesMgt@1160040002 : Codeunit 396;
+    BEGIN
+      WITH Mileage DO BEGIN
+        //REUSE INVOICE
+        LocalPurchHeader.RESET;
+        LocalPurchHeader.SETRANGE("Document Type",LocalPurchHeader."Document Type"::Invoice);
+        LocalPurchHeader.SETRANGE("Buy-from Vendor No.",VendorNo);
+        LocalPurchHeader.SETFILTER("Vendor Invoice No.",'%1',TABLECAPTION + '*');
+        IF LocalPurchHeader.FINDFIRST THEN BEGIN
+          LocalPurchHeader.VALIDATE(Status,LocalPurchHeader.Status::Open);
+          LocalPurchHeader.MODIFY;
+          EXIT;
+        END;
+
+        CLEAR(LocalPurchHeader);
+        LocalPurchHeader."Document Type" := LocalPurchHeader."Document Type"::Invoice;
+
+        EMSetup.GET;
+        IF EMSetup."Invoice Nos." <> '' THEN BEGIN
+          NoSeriesMgt.InitSeries(EMSetup."Invoice Nos.",
+            LocalPurchHeader."No. Series",
+            TODAY,
+            LocalPurchHeader."No.",
+            LocalPurchHeader."No. Series");
+        END ELSE
+          LocalPurchHeader."No." := '';
+
+        LocalPurchHeader.INSERT(TRUE);
+
+        LocalPurchHeader.SetHideValidationDialog(TRUE);
+        LocalPurchHeader.VALIDATE("Buy-from Vendor No.",VendorNo);
+        LocalPurchHeader.VALIDATE("Posting Date",DocumentDate);
+        LocalPurchHeader.VALIDATE("Shortcut Dimension 1 Code","Global Dimension 1 Code");
+        LocalPurchHeader.VALIDATE("Shortcut Dimension 2 Code","Global Dimension 2 Code");
+        LocalPurchHeader.VALIDATE("Vendor Invoice No.",STRSUBSTNO('%1 %2',TABLECAPTION,"Entry No."));
+
+        LocalPurchHeader.VALIDATE("Prices Including VAT",TRUE);
+        LocalPurchHeader.MODIFY(TRUE);
+      END;
+    END;
+
+    PROCEDURE ForcePIApproval@1160040003();
+    VAR
+      ApprovalEntry@1160040004 : Record 454;
+      DCApprovalMgt@1160040006 : Codeunit 6085722;
+      DCApprovalsBridge@1160040002 : Codeunit 6085790;
+      EMApprovalMgt@1160040000 : Codeunit 6086312;
+      EMApprovalsBridge@1160040007 : Codeunit 6086369;
+      PurchRecRef@1160040001 : RecordRef;
+    BEGIN
+      ForcePIApprovalHeader(PurchHeader);
+    END;
+
+    PROCEDURE ForcePIApprovalHeader@1160040017(PurchHeader@1160040008 : Record 38);
+    VAR
+      ApprovalEntry@1160040004 : Record 454;
+      DCApprovalMgt@1160040006 : Codeunit 6085722;
+      DCApprovalsBridge@1160040002 : Codeunit 6085790;
+      EMApprovalMgt@1160040000 : Codeunit 6086312;
+      EMApprovalsBridge@1160040007 : Codeunit 6086369;
+      PurchRecRef@1160040001 : RecordRef;
+    BEGIN
+      IF PurchHeader.Status <> PurchHeader.Status::Open THEN
+        EXIT;
+
+      IF PurchHeader."No." = '' THEN
+        EXIT;
+
+      CODEUNIT.RUN(CODEUNIT::"Release Purchase Document",PurchHeader);
+
+      IF EMApprovalsBridge.ApprovalHandlingExists THEN BEGIN
+        PurchRecRef.GETTABLE(PurchHeader);
+        DCApprovalsBridge.InitializeApprovalEntry(PurchRecRef,ApprovalEntry,CREATEGUID);
+        DCApprovalMgt.MakeApprovalEntry(ApprovalEntry,0,EMApprovalMgt.GetCurrUserID);
+
+        ApprovalEntry.SETRANGE("Table ID",DATABASE::"Purchase Header");
+        ApprovalEntry.SETRANGE("Document Type",PurchHeader."Document Type");
+        ApprovalEntry.SETRANGE("Document No.",PurchHeader."No.");
+        ApprovalEntry.FINDLAST;
+        ApprovalEntry.Status := ApprovalEntry.Status::Approved;
+        ApprovalEntry.MODIFY;
+
+        EMApprovalsBridge.CreateAppvlCmtLine(
+          DATABASE::"Purchase Header",
+          PurchHeader."Document Type",
+          PurchHeader."No.",
+          STRSUBSTNO(AppForcedByTxt,EMApprovalMgt.GetCurrUserID));
+      END;
+    END;
+
+    LOCAL PROCEDURE GetPostingDesc@1160040016(Mileage@1160040000 : Record 6086338) PostingDesc : Text[1024];
+    VAR
+      ExpPostingDescFields@1160040002 : Record 6086333;
+    BEGIN
+      PostingDesc := EMSetup."Mileage Posting Description";
+      ExpPostingDescFields.ASCENDING(FALSE);
+      IF ExpPostingDescFields.FINDFIRST THEN
+        REPEAT
+          PostingDesc :=
+            Replace(PostingDesc,'%' + FORMAT(ExpPostingDescFields."Parameter No."),
+              ExtractText(Mileage,ExpPostingDescFields."Field Type Code"),FALSE);
+        UNTIL ExpPostingDescFields.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE Replace@1000000003(Text@1000000000 : Text[1024];ReplaceTxt@1000000001 : Text[1024];ReplaceWithTxt@1000000002 : Text[1024];CaseSensitive@1160040000 : Boolean) : Text[1024];
+    VAR
+      i@1000000005 : Integer;
+      ReplaceTxtLen@1000000003 : Integer;
+      ReplaceWithTxtLen@1000000004 : Integer;
+    BEGIN
+      ReplaceTxtLen := STRLEN(ReplaceTxt);
+      ReplaceWithTxtLen := STRLEN(ReplaceWithTxt);
+
+      IF CaseSensitive THEN
+        i := STRPOS(Text,ReplaceTxt)
+      ELSE
+        i := STRPOS(UPPERCASE(Text),UPPERCASE(ReplaceTxt));
+
+      IF i <> 0 THEN BEGIN
+        Text := COPYSTR(Text,1,i-1) + ReplaceWithTxt + COPYSTR(Text,i + ReplaceTxtLen);
+        Text :=
+          COPYSTR(Text,1,i-1 + ReplaceWithTxtLen) +
+            Replace(COPYSTR(Text,i + ReplaceWithTxtLen),ReplaceTxt,ReplaceWithTxt,CaseSensitive);
+      END;
+      EXIT(Text);
+    END;
+
+    PROCEDURE ExtractText@1160040040(Mileage@1160040010 : Record 6086338;FieldTypeCode@1160040001 : Code[20]) : Text[1024];
+    VAR
+      FieldType@1160040008 : Record 6086345;
+      EMDim@1160040007 : Record 6086360;
+      RecRef@1160040003 : RecordRef;
+      FldRef@1160040002 : FieldRef;
+      DimCode@1160040004 : Code[20];
+      i@1160040000 : Integer;
+    BEGIN
+      IF FieldType.GET(FieldTypeCode) THEN
+        IF FieldType.GetSystemFieldMilTableNo(FieldType.Code) > 0 THEN BEGIN
+          RecRef.GETTABLE(Mileage);
+
+          FOR i := 1 TO RecRef.FIELDCOUNT DO BEGIN
+            FldRef := RecRef.FIELDINDEX(i);
+            IF FldRef.NUMBER = FieldType.GetSystemFieldMilTableNo(FieldType.Code) THEN
+              EXIT(FORMAT(FldRef.VALUE));
+          END;
+        END ELSE BEGIN
+          DimCode := FieldType.GetDimCode;
+
+          EMDim.SETCURRENTKEY("Table ID","Document Type","Document No.","Doc. Ref. No.");
+          EMDim.SETRANGE("Table ID",DATABASE::Mileage);
+          EMDim.SETRANGE("Document Type",0);
+          EMDim.SETRANGE("Document No.",'');
+          EMDim.SETRANGE("Doc. Ref. No.",Mileage."Entry No.");
+
+          IF DimCode <> '' THEN BEGIN
+            EMDim.SETRANGE("Dimension Code",DimCode);
+            IF EMDim.FINDFIRST THEN
+              EXIT(EMDim."Dimension Value Code");
+          END ELSE BEGIN
+            EMDim.SETRANGE("Field Code",FieldTypeCode);
+            IF EMDim.FINDFIRST THEN
+              EXIT(EMDim."Field Value");
+          END;
+        END;
+    END;
+
+    PROCEDURE RecalculateMileage@1160040022(VAR Mileage@1160040000 : Record 6086338);
+    VAR
+      MileageRate@1160040001 : Record 6086370;
+    BEGIN
+      MileageRate.CalcAmount(Mileage,FALSE);
+    END;
+
+    PROCEDURE CheckVendorSetup@1160040002(VendorCode@1160040001 : Code[20]);
+    VAR
+      Vendor@1160040000 : Record 23;
+    BEGIN
+      Vendor.GET(ContiniaUserSetup."Vendor No.");
+      Vendor.TESTFIELD("Vendor Posting Group");
+    END;
+
+    PROCEDURE SetGroup@1160040000(Newgroup@1160040000 : Boolean);
+    BEGIN
+      Group := Newgroup;
+    END;
+
+    PROCEDURE AddToSettlement@1160040012(VAR Mileage@1160040000 : Record 6086338);
+    BEGIN
+      IF Settlement."No." = '' THEN BEGIN
+        Settlement."Document Type" := Settlement."Document Type"::Settlement;
+        Settlement.INSERT(TRUE);
+        Settlement.VALIDATE("Continia User ID",Mileage."Continia User ID");
+        IF ReplacePostingDate THEN
+          Settlement.VALIDATE("Posting Date",PostingDate)
+        ELSE
+          Settlement.VALIDATE("Posting Date",WORKDATE);
+        Settlement.Description := Mileage.TABLECAPTION + ' ' + Mileage."Continia User ID";
+        Settlement.MODIFY(TRUE);
+      END;
+      Mileage.VALIDATE("Settlement No.",Settlement."No.");
+      Mileage.MODIFY;
+    END;
+
+    PROCEDURE PostSettlement@1160040008();
+    VAR
+      SettlementPost@1160040000 : Codeunit 6086338;
+    BEGIN
+      IF Settlement."Continia User ID" <> '' THEN BEGIN
+        Settlement.Status := Settlement.Status::Released;
+        IF ReplacePostingDate THEN
+          Settlement.UpdatePostingDate(PostingDatePolicy);
+        Settlement.MODIFY;
+        SettlementPost.RUN(Settlement);
+      END;
+    END;
+
+    PROCEDURE PostMileageInvoice@1160040001(VAR Mileage@1160040000 : Record 6086338);
+    VAR
+      PurchLine@1160040016 : Record 39;
+      Reuse@1160040002 : Boolean;
+    BEGIN
+      EMSetup.GET;
+      ContiniaUserSetup.GET(Mileage."Continia User ID");
+      CheckVendorSetup(ContiniaUserSetup."Vendor No.");
+
+      WITH Mileage DO BEGIN
+        RecalculateMileage(Mileage);
+
+        IF NOT (PostingDateExists AND ReplacePostingDate) THEN
+          PostingDate := "Registration Date";
+
+        IF (PurchHeader."Buy-from Vendor No." <> ContiniaUserSetup."Vendor No.") THEN BEGIN
+          ForcePIApprovalHeader(PurchHeader); // this will force the approval of the previous invoice
+          CreatePurchInvHeader(Mileage,PurchHeader,PostingDate,ContiniaUserSetup."Vendor No.");
+        END;
+
+        AddLineToInvoice(PurchHeader,Mileage,PurchLine);
+
+        IF ReplacePostingDate THEN BEGIN
+          PurchHeader.SetHideValidationDialog(TRUE);
+          PurchHeader.VALIDATE("Posting Date",PostingDate);
+          PurchHeader.MODIFY;
+        END;
+
+        "Created Doc. Type" := DATABASE::"Purchase Line";
+        "Created Doc. Subtype" := PurchLine."Document Type";
+        "Created Doc. ID" := PurchLine."Document No.";
+        "Created Doc. Ref. No." := PurchLine."Line No.";
+
+        VALIDATE(Posted,TRUE);
+        MODIFY;
+      END;
+    END;
+
+    PROCEDURE AddLineToInvoice@1160040019(VAR LocalPurchaseHeader@1160040000 : Record 38;Mileage@1160040001 : Record 6086338;VAR PurchLine@1160040007 : Record 39);
+    VAR
+      ExpenseDimMgt@1160040008 : Codeunit 6086318;
+      PostingFunctions@1160040009 : Codeunit 6086336;
+    BEGIN
+      PurchLine.INIT;
+      PurchLine."Document Type" := LocalPurchaseHeader."Document Type";
+      PurchLine."Document No." := LocalPurchaseHeader."No.";
+      PurchLine."Line No." := PostingFunctions.GetNextPurchLineNo(LocalPurchaseHeader);
+      PurchLine.INSERT(TRUE);
+
+      PurchLine.VALIDATE(Type,PurchLine.Type::"G/L Account");
+      PurchLine.VALIDATE("No.",Mileage."Mileage Account");
+
+      IF Mileage."Gen. Bus. Posting Group" <> '' THEN
+        PurchLine.VALIDATE("Gen. Bus. Posting Group",Mileage."Gen. Bus. Posting Group");
+      IF Mileage."VAT Bus. Posting Group" <> '' THEN
+        PurchLine.VALIDATE("VAT Bus. Posting Group",Mileage."VAT Bus. Posting Group");
+      IF Mileage."Gen. Prod. Posting Group" <> '' THEN
+        PurchLine.VALIDATE("Gen. Prod. Posting Group",Mileage."Gen. Prod. Posting Group");
+      IF Mileage."VAT Prod. Posting Group" <> '' THEN
+        PurchLine.VALIDATE("VAT Prod. Posting Group",Mileage."VAT Prod. Posting Group");
+
+      PurchLine.VALIDATE(Quantity,1);
+
+      PurchLine.VALIDATE("Direct Unit Cost",Mileage."Amount (LCY)");
+
+      PurchLine.VALIDATE(Description,COPYSTR(GetPostingDesc(Mileage),1,MAXSTRLEN(PurchLine.Description)));
+
+      IF Mileage."Job No." <> '' THEN BEGIN
+        PurchLine.VALIDATE("Job No.",Mileage."Job No.");
+        PurchLine.VALIDATE("Job Task No.",Mileage."Job Task No.");
+        PurchLine.VALIDATE("Job Line Type",PurchLine."Job Line Type"::Billable);
+        PurchLine.VALIDATE("Job Unit Price",PurchLine."Unit Cost (LCY)");
+      END;
+
+      PurchLine.VALIDATE("Shortcut Dimension 1 Code",Mileage."Global Dimension 1 Code");
+      PurchLine.VALIDATE("Shortcut Dimension 2 Code",Mileage."Global Dimension 2 Code");
+      ExpenseDimMgt.CopyMilDimToPurchLine(Mileage,PurchLine);
+
+      PurchLine.MODIFY(TRUE);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

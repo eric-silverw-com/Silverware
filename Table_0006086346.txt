@@ -1,0 +1,244 @@
+OBJECT Table 6086346 Configured Field
+{
+  OBJECT-PROPERTIES
+  {
+    Date=01/27/17;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.50;
+  }
+  PROPERTIES
+  {
+    OnInsert=BEGIN
+               CheckConfFieldExists;
+               ForceFieldUpdateInCO;
+             END;
+
+    OnModify=BEGIN
+               CheckConfFieldExists;
+               ForceFieldUpdateInCO;
+             END;
+
+    OnDelete=VAR
+               EMSetup@1160040002 : Record 6086300;
+               FieldType@1160040001 : Record 6086345;
+               ConfigField@1160040000 : Record 6086346;
+             BEGIN
+               ForceFieldUpdateInCO;
+
+               IF NOT FieldType.GET("Field Code") THEN
+                 EXIT;
+
+               EMSetup.GET;
+               IF FieldType.IsRequiredSystemField(Type) THEN
+                 IF (EMSetup."Enable Mileage" AND (Type = Type::Mileage)) OR
+                    (Type = Type::Expense) OR
+                    (EMSetup."Enable Settlement") AND (Type = Type::Settlement)
+                 THEN
+                   ERROR(NotAllowedToDeleteSysFieldErr);
+
+               ConfigField.SETRANGE(Type,Type);
+               ConfigField.SETFILTER("Field Code",'<>%1',"Field Code");
+               IF ConfigField.FINDSET THEN
+                 REPEAT
+                   FieldType.GET(ConfigField."Field Code");
+                   IF FieldType.GetParentFieldTypeCode = "Field Code" THEN
+                     ERROR(UnableToDeleteErr,FieldType.TABLECAPTION,FIELDCAPTION("Field Code"),FieldType.Code);
+                 UNTIL ConfigField.NEXT = 0;
+             END;
+
+    OnRename=BEGIN
+               IF Type <> xRec.Type THEN
+                 ERROR(UnableToRenameErr,TABLECAPTION);
+             END;
+
+    CaptionML=ENU=Configured Field;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Type                ;Option        ;CaptionML=ENU=Type;
+                                                   OptionCaptionML=ENU=Expense,Mileage,Settlement;
+                                                   OptionString=Expense,Mileage,Settlement }
+    { 2   ;   ;Field Order         ;Integer       ;CaptionML=ENU=Field Order }
+    { 10  ;   ;Field Code          ;Code20        ;TableRelation="Field Type";
+                                                   OnValidate=VAR
+                                                                FieldType@1160040001 : Record 6086345;
+                                                                ConfigField@1160040000 : Record 6086346;
+                                                              BEGIN
+                                                                IF NOT FieldType.GET("Field Code") THEN
+                                                                  EXIT;
+
+                                                                IF FieldType.GetParentFieldTypeCode <> '' THEN BEGIN
+                                                                  ConfigField.SETRANGE(Type,Type);
+                                                                  ConfigField.SETRANGE("Field Code",FieldType.GetParentFieldTypeCode);
+                                                                  IF ConfigField.ISEMPTY THEN
+                                                                    ERROR(RelatedFieldMissingErr,"Field Code",FieldType.TABLECAPTION,FieldType.GetParentFieldTypeCode,"Field Code");
+                                                                END;
+
+                                                                IF FieldType.Type = FieldType.Type::Attendees THEN
+                                                                  TESTFIELD(Type,Type::Expense);
+                                                              END;
+
+                                                   CaptionML=ENU=Field Code;
+                                                   NotBlank=Yes }
+    { 11  ;   ;Field Description   ;Text50        ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup("Field Type".Description WHERE (Code=FIELD(Field Code)));
+                                                   CaptionML=ENU=Field Description;
+                                                   Editable=No }
+    { 20  ;   ;Sent to Continia Online;Boolean    ;CaptionML=ENU=Sent to Continia Online;
+                                                   Editable=No }
+  }
+  KEYS
+  {
+    {    ;Type,Field Order                        ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      NotAllowedToDeleteSysFieldErr@1160040003 : TextConst 'ENU=You are not allowed to delete a system field.';
+      RelatedFieldMissingErr@1160040000 : TextConst 'ENU=%1 has a relationship to %2 %3 which must also be added before you can add %4.';
+      UnableToDeleteErr@1160040001 : TextConst 'ENU=%1 cannot be deleted as there is a relationship to %2 %3.';
+      UnableToRenameErr@1160040002 : TextConst 'ENU=You cannot rename a %1.';
+      FieldAlreadyExists@1160040004 : TextConst 'ENU=%1 - %2 already exists.';
+
+    PROCEDURE ForceFieldUpdateInCO@1160040000();
+    VAR
+      EMSetup@1160040000 : Record 6086300;
+    BEGIN
+      EMSetup.GET;
+      EMSetup."Force Field Update in CO" := TRUE;
+      EMSetup.MODIFY;
+    END;
+
+    PROCEDURE AttendeesEnabled@1160040001() : Boolean;
+    VAR
+      FieldType@1160040000 : Record 6086345;
+    BEGIN
+      FieldType.SETRANGE(Type,FieldType.Type::Attendees);
+      IF FieldType.FINDFIRST THEN BEGIN
+        SETRANGE(Type,Type::Expense);
+        SETRANGE("Field Code",FieldType.Code);
+        IF FINDFIRST THEN
+          EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE CheckConfFieldExists@1160040002();
+    VAR
+      ConfiguredField@1160040000 : Record 6086346;
+    BEGIN
+      ConfiguredField.SETRANGE(Type,Type);
+      ConfiguredField.SETRANGE("Field Code","Field Code");
+      ConfiguredField.SETFILTER("Field Order",'<>%1',"Field Order");
+      IF NOT ConfiguredField.ISEMPTY THEN
+        ERROR(FieldAlreadyExists,TABLECAPTION,"Field Code");
+    END;
+
+    PROCEDURE IsConfiguredFieldForTable@1160040003(TableID@1160040000 : Integer;FieldCode@1160040001 : Code[20]) : Boolean;
+    VAR
+      ConfiguredField@1160040002 : Record 6086346;
+    BEGIN
+      CASE TableID OF
+        DATABASE::Expense:
+          ConfiguredField.Type := ConfiguredField.Type::Expense;
+        DATABASE::Mileage:
+          ConfiguredField.Type := ConfiguredField.Type::Mileage;
+        DATABASE::"Expense Header":
+          ConfiguredField.Type := ConfiguredField.Type::Settlement;
+      END;
+
+      ConfiguredField.SETRANGE(Type,ConfiguredField.Type);
+      ConfiguredField.SETRANGE("Field Code",FieldCode);
+      EXIT(NOT ConfiguredField.ISEMPTY);
+    END;
+
+    PROCEDURE SendNewDimToPendingUsers@1160040004();
+    VAR
+      EmOnline@1160040001 : Codeunit 6086305;
+      FieldType@1160040002 : Record 6086345;
+      ConfiguredField@1160040000 : Record 6086346;
+    BEGIN
+      ConfiguredField.SETRANGE("Sent to Continia Online",FALSE);
+      IF ConfiguredField.FINDSET(TRUE,FALSE) THEN
+        REPEAT
+          FieldType.GET(ConfiguredField."Field Code");
+          IF FieldType."Source Table No." = DATABASE::"Dimension Value" THEN
+            EmOnline.SendDimToPendingExpUser(ConfiguredField);
+
+          ConfiguredField."Sent to Continia Online" := TRUE;
+          ConfiguredField.MODIFY;
+        UNTIL ConfiguredField.NEXT = 0;
+    END;
+
+    PROCEDURE MoveUp@1160040009();
+    VAR
+      ConfField@1160040000 : Record 6086346;
+      ConfFieldPred@1160040004 : Record 6086346;
+      ConfFieldCrt@1160040005 : Record 6086346;
+      Previous@1160040001 : Integer;
+      Current@1160040003 : Integer;
+    BEGIN
+      Current := "Field Order";
+      ConfField.GET(Type,"Field Order");
+      ConfField.SETRANGE(Type,Type);
+      IF ConfField.NEXT(-1) = -1 THEN
+        Previous := ConfField."Field Order"
+      ELSE
+        EXIT;
+
+      ConfFieldCrt.TRANSFERFIELDS(Rec);
+      Rec.DELETE;
+      ConfFieldCrt."Field Order" := Previous;
+      ConfFieldCrt.Type := Type;
+
+      ConfFieldPred.TRANSFERFIELDS(ConfField);
+      ConfField.DELETE;
+      ConfFieldPred."Field Order" := Current;
+      ConfFieldPred.Type := Type;
+      ConfFieldPred.INSERT;
+
+      ConfFieldCrt.INSERT;
+
+      Rec.GET(ConfFieldCrt.Type,ConfFieldCrt."Field Order");
+    END;
+
+    PROCEDURE MoveDown@1160040008();
+    VAR
+      ConfField@1160040000 : Record 6086346;
+      ConfFieldPred@1160040004 : Record 6086346;
+      ConfFieldCrt@1160040002 : Record 6086346;
+      NextOrder@1160040001 : Integer;
+      Current@1160040003 : Integer;
+    BEGIN
+      Current := "Field Order";
+      ConfField.GET(Type,"Field Order");
+      ConfField.SETRANGE(Type,Type);
+      IF ConfField.NEXT(1) = 1 THEN
+        NextOrder := ConfField."Field Order"
+      ELSE
+        EXIT;
+
+      ConfFieldCrt.TRANSFERFIELDS(Rec);
+      Rec.DELETE;
+      ConfFieldCrt."Field Order" := NextOrder;
+      ConfFieldCrt.Type := Type;
+
+      ConfFieldPred.TRANSFERFIELDS(ConfField);
+      ConfField.DELETE;
+      ConfFieldPred."Field Order" := Current;
+      ConfFieldPred.Type := Type;
+      ConfFieldPred.INSERT;
+
+      ConfFieldCrt.INSERT;
+
+      Rec.GET(ConfFieldCrt.Type,ConfFieldCrt."Field Order");
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

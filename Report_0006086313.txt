@@ -1,0 +1,199 @@
+OBJECT Report 6086313 Batch Post Mileage
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/10/17;
+    Time=[ 1:00:00 AM];
+    Version List=EMW17.00.00.2.60;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Batch Post Mileage;
+    ProcessingOnly=Yes;
+    OnInitReport=BEGIN
+                   EMSetup.GET;
+                 END;
+
+    OnPreReport=BEGIN
+                  IF ReplacePostingDate AND (PostingDatePolicy = PostingDatePolicy::"Specific Date") AND (PostingDateReq = 0D) THEN
+                    ERROR(Text000);
+
+                  IF Group THEN BEGIN
+                    IF NOT ReplacePostingDate THEN
+                      ERROR(ReplacePostingDateTxt);
+
+                    IF NOT (EMSetup."Enable Settlement" AND EMSetup."Post Bank Trans. on Import") THEN
+                      ERROR(GroupingNotAllowed);
+                  END;
+                END;
+
+    OnPostReport=BEGIN
+                   MileagePost.ForcePIApproval;
+
+                   IF Group THEN
+                     MileagePost.PostSettlement;
+
+                   Window.CLOSE;
+
+                   IF CounterOK <> 0 THEN
+                     MESSAGE(Text004,CounterOK,Counter);
+                 END;
+
+  }
+  DATASET
+  {
+    { 1   ;    ;DataItem;                    ;
+               DataItemTable=Table6086338;
+               DataItemTableView=SORTING(Posted,Continia User ID,Status);
+               OnPreDataItem=BEGIN
+                               SETRANGE(Posted,FALSE);
+                               SETRANGE(Status,Status::Released);
+
+                               CounterTotal := COUNT;
+
+                               Window.OPEN(Text001 + Text002 + Text003);
+
+                               IF Group THEN
+                                 Mileage.SETCURRENTKEY("Continia User ID",Status,Posted);
+                             END;
+
+               OnAfterGetRecord=VAR
+                                  Mileage2@1001 : Record 6086338;
+                                BEGIN
+                                  Counter := Counter + 1;
+
+                                  CODEUNIT.RUN(CODEUNIT::"Mileage-Validate",Mileage);
+                                  IF Mileage.HasErrorComment(FALSE) THEN
+                                    CurrReport.SKIP;
+
+                                  Window.UPDATE(1,ROUND(Counter / CounterTotal * 10000,1));
+
+                                  COMMIT;
+
+                                  MileagePost.SetPostingDate(ReplacePostingDate,PostingDatePolicy,PostingDateReq);
+                                  Mileage2 := Mileage;
+                                  IF MileageCheck.RUN(Mileage2) THEN BEGIN
+                                    TempMileageToPost.COPY(Mileage2);
+                                    TempMileageToPost.INSERT;
+
+                                    IF MARKEDONLY THEN
+                                      MARK(FALSE);
+                                  END;
+                                END;
+
+               ReqFilterFields=Continia User ID,Registration Date,Entry No. }
+
+    { 2   ;0   ;DataItem;                    ;
+               DataItemTable=Table2000000026;
+               DataItemTableView=SORTING(Number);
+               OnPreDataItem=BEGIN
+                               CounterTotal := TempMileageToPost.COUNT;
+                               SETRANGE(Number,1,CounterTotal);
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  IF Number = 1 THEN
+                                    TempMileageToPost.FINDFIRST
+                                  ELSE
+                                    TempMileageToPost.NEXT;
+
+                                  Mileage.GET(TempMileageToPost."Entry No.");
+                                  Window.UPDATE(2,ROUND(Number / CounterTotal * 10000,1));
+
+                                  MileagePost.SetPostingDate(ReplacePostingDate,PostingDatePolicy,PostingDateReq);
+                                  MileagePost.SetGroup(Group);
+                                  MileagePost.RunWithoutCheck(Mileage);
+
+                                  CounterOK := CounterOK + 1;
+                                END;
+                                 }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      OnOpenPage=BEGIN
+                   PostingDateEditable := PostingDatePolicy = PostingDatePolicy::"Specific Date";
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 5   ;0   ;Container ;
+                  ContainerType=ContentArea }
+
+      { 4   ;1   ;Group     ;
+                  CaptionML=ENU=Options }
+
+      { 1   ;2   ;Field     ;
+                  CaptionML=ENU=Group by Settlement;
+                  SourceExpr=Group;
+                  OnValidate=BEGIN
+
+                               IF Group THEN
+                                 ReplacePostingDate := TRUE
+                               ELSE
+                                 ReplacePostingDate := FALSE;
+                             END;
+                              }
+
+      { 3   ;2   ;Field     ;
+                  CaptionML=ENU=Replace Posting Date;
+                  SourceExpr=ReplacePostingDate }
+
+      { 6   ;2   ;Field     ;
+                  CaptionML=ENU=Posting Date Policy;
+                  OptionCaptionML=ENU=First Expense/Mileage Date,Last Expense/Mileage Date,Specific Date;
+                  SourceExpr=PostingDatePolicy;
+                  OnValidate=BEGIN
+                               IF PostingDatePolicy <> PostingDatePolicy::"Specific Date" THEN
+                                 CLEAR(PostingDateReq);
+
+                               PostingDateEditable := PostingDatePolicy = PostingDatePolicy::"Specific Date";
+                             END;
+                              }
+
+      { 2   ;2   ;Field     ;
+                  CaptionML=ENU=Posting Date;
+                  SourceExpr=PostingDateReq;
+                  Editable=PostingDateEditable }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      TempMileageToPost@1000 : TEMPORARY Record 6086338;
+      EMSetup@1016 : Record 6086300;
+      MileagePost@1010 : Codeunit 6086350;
+      MileageCheck@1009 : Codeunit 6086344;
+      Window@1008 : Dialog;
+      Counter@1007 : Integer;
+      CounterOK@1006 : Integer;
+      CounterTotal@1005 : Integer;
+      PostingDateReq@1004 : Date;
+      ReplacePostingDate@1003 : Boolean;
+      ReplaceDocumentDate@1002 : Boolean;
+      Text000@1015 : TextConst 'ENU=Please enter the posting date.';
+      Text001@1014 : TextConst 'ENU=Posting Mileage...';
+      Text002@1013 : TextConst 'ENU=\Checking lines @1@@@@@@@@@@@@@@@@@@@@@@@@@@';
+      Text003@1012 : TextConst 'ENU=\Posting lines  @2@@@@@@@@@@@@@@@@@@@@@@@@@@';
+      Text004@1011 : TextConst 'ENU=%1 mileage out of a total of %2 have been posted.';
+      Group@1001 : Boolean;
+      PostingDatePolicy@1160040009 : 'First Expense/Mileage Date,Last Expense/Mileage Date,Specific Date';
+      ReplacePostingDateTxt@1018 : TextConst 'ENU=The posting date needs to be replaced when grouping.';
+      GroupingNotAllowed@1019 : TextConst 'ENU=Settlements have not been enabled in the Expense Management Setup.';
+      PostingDateEditable@1020 : Boolean INDATASET;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

@@ -2,16 +2,15 @@ OBJECT Codeunit 6085577 Document Importer
 {
   OBJECT-PROPERTIES
   {
-    Date=10/17/18;
+    Date=10/01/18;
     Time=[ 1:00:00 AM];
-    Version List=DCW13.70.00.5.00.04;
+    Version List=DCW17.00.00.4.50.08;
   }
   PROPERTIES
   {
     OnRun=BEGIN
             CODC.IsCompanyActive(TRUE);
             CODC.GetNewDocuments;
-            LoadLocalFiles;
             ImportDocuments;
           END;
 
@@ -67,7 +66,7 @@ OBJECT Codeunit 6085577 Document Importer
       Document@161024020 : Record 6085590;
       TempDoc@1160040006 : TEMPORARY Record 6085756;
       CaptureMgt@1160040003 : Codeunit 6085576;
-      TempFileStorage@1000 : Codeunit 6085665;
+      FileSysMgt@1160040000 : Codeunit 6085584;
       DocNo@161024021 : Code[20];
       FileName@161024015 : Text[50];
       FileArray@1160040008 : ARRAY [10000] OF Text[1024];
@@ -87,8 +86,6 @@ OBJECT Codeunit 6085577 Document Importer
       DCSetup.TESTFIELD("Archive File Path");
       DCSetup.IsUICSetupConsistent(TRUE);
 
-      TempFileStorage.SetDeleteProhibited := TRUE;
-
       Document.LOCKTABLE;
 
       IF GUIALLOWED THEN
@@ -96,7 +93,7 @@ OBJECT Codeunit 6085577 Document Importer
 
       DocModMgt.SetHideWindow(TRUE);
 
-      DocCat.SETRANGE("Drag and Drop Category",FALSE);
+      DocCat.SETRANGE("Scanning Allowed",TRUE);
       IF DocCat.FINDSET THEN
         REPEAT
           IF GUIALLOWED THEN
@@ -112,8 +109,8 @@ OBJECT Codeunit 6085577 Document Importer
               DCSetup.TESTFIELD("Archive File Path");
 
             Path := DocCat.GetCategoryPath(2);
-            IF TempFileStorage.DirectoryExists(Path) THEN BEGIN
-              FileCount := TempFileStorage.GetFilesInDir2(Path,'*.tiff',FileArray);
+            IF FileSysMgt.DirectoryExists(Path) THEN BEGIN
+              FileCount := FileSysMgt.GetFilesInDir2(Path,'*.tiff',FileArray);
 
               FOR i := 1 TO FileCount DO BEGIN
                 IF GUIALLOWED THEN
@@ -152,9 +149,6 @@ OBJECT Codeunit 6085577 Document Importer
 
       MergeAndProcessEmail(TempDoc);
 
-      TempFileStorage.SetDeleteProhibited := FALSE;
-      TempFileStorage.Clear;
-
       IF GUIALLOWED THEN BEGIN
         IF ImportedFiles > 0 THEN BEGIN
           IF ImportedFiles > 1 THEN
@@ -178,8 +172,7 @@ OBJECT Codeunit 6085577 Document Importer
     VAR
       Document@1160040004 : Record 6085590;
       DocCat@1160040006 : Record 6085575;
-      TempFile@1001 : TEMPORARY Record 6085608;
-      TempFileStorage@1000 : Codeunit 6085665;
+      FileSysMgt@1160040005 : Codeunit 6085584;
       Status@1160040007 : 'File Imported,File Already Imported,Do Not Import';
     BEGIN
       DocCat.GET(DocCatCode);
@@ -188,23 +181,20 @@ OBJECT Codeunit 6085577 Document Importer
       Document.GET(DocNo);
 
       IF Status IN [Status::"File Imported",Status::"File Already Imported"] THEN BEGIN
-        TempFileStorage.GetFile(Path + '\' + Filename + '.tiff',TempFile);
-        Document.SetTiffFile(TempFile);
+        Document.SetTiffFile(Path + '\' + Filename + '.tiff');
+        Document.SetPdfFile(Path + '\' + Filename + '.pdf');
 
-        TempFileStorage.GetFile(Path + '\' + Filename + '.pdf',TempFile);
-        Document.SetPdfFile(TempFile);
+        IF FILE.EXISTS(Path + '\' + Filename + '.eml') THEN
+          IF DocCat."Archive E-mails on Document" THEN
+            IF NOT FILE.EXISTS(Document.GetEMailServerFileName) THEN
+              Document.SetEmailFile(Path + '\' + Filename + '.eml');
 
-        IF TempFileStorage.FileExists(Path + '\' + Filename + '.eml') THEN
-          IF DocCat."Archive E-mails on Document" THEN BEGIN
-            TempFileStorage.GetFile(Path + '\' + Filename + '.eml',TempFile);
-            Document.SetEmailFile(TempFile);
-          END;
+        COMMIT; // Make sure that the document is committed before we delete any files.
 
-        COMMIT; // Make sure that the document is committed before we move around with the files.
-        TempFileStorage.DeleteFile(Path + '\' + Filename + '.eml');
-        TempFileStorage.DeleteFile(Path + '\' + Filename + '.tiff');
-        TempFileStorage.DeleteFile(Path + '\' + Filename + '.pdf');
-        TempFileStorage.DeleteFile(Path + '\' + Filename + '.xml');
+        FileSysMgt.DeleteFile(Path + '\' + Filename + '.eml',TRUE);
+        FileSysMgt.DeleteFile(Path + '\' + Filename + '.tiff',FALSE);
+        FileSysMgt.DeleteFile(Path + '\' + Filename + '.pdf',FALSE);
+        FileSysMgt.DeleteFile(Path + '\' + Filename + '.xml',FALSE);
 
         IF COPYSTR(Filename,1,3) = 'CO-' THEN
           CODC.UpdateDocument(DocCat,COPYSTR(Filename,4));
@@ -220,17 +210,14 @@ OBJECT Codeunit 6085577 Document Importer
       Page@1000000012 : Record 6085591;
       TempWord@1000000022 : TEMPORARY Record 6085592;
       Word@1000000013 : Record 6085592;
-      TempFileStorage@1003 : Codeunit 6085665;
       DateParserMgt@1160040002 : Codeunit 6085586;
       CryptographyMgt@1160040003 : Codeunit 6085599;
-      XmlDoc@1000000004 : Codeunit 6192800;
-      EmailNode@1160040001 : Codeunit 6192801;
-      WordNodeList@1001 : Codeunit 6192802;
-      BarcodeNodeList@1002 : Codeunit 6192802;
-      PagesNodeList@1000000005 : Codeunit 6192802;
-      PageNode@1000000007 : Codeunit 6192801;
-      Node@1000 : Codeunit 6192801;
-      ReadStream@1004 : InStream;
+      XmlDoc@1000000004 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XmlFile@1001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File";
+      EmailNode@1160040001 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      PagesNodeList@1000000005 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      PageNode@1000000007 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      XMLText@1000 : Text;
       OCRProcessedDateTimeUTC@1160040005 : Text[250];
       i@1000000009 : Integer;
       Status@1160040004 : 'File Imported,File Already Imported,Do Not Import';
@@ -242,18 +229,16 @@ OBJECT Codeunit 6085577 Document Importer
         EXIT(Status::"File Already Imported");
       END;
 
-      TempFileStorage.GetFileReadStream(Path + '\' + Filename + '.xml',ReadStream);
-      XmlDoc.LoadFromStream(ReadStream);
+      XmlDoc := XmlDoc.XmlDocument;
+      XMLText := XmlFile.ReadAllText(Path + '\' + Filename + '.xml');
+      XmlDoc.LoadXml(XMLText);
 
-      XmlDoc.GetDocumentElement(Node);
-      Node.SelectSingleNode(PageNode,'Pages');
-      PageNode.SelectNodes(PagesNodeList,'Page');
+      PagesNodeList := XmlDoc.DocumentElement.SelectSingleNode('Pages').SelectNodes('Page');
       FOR i := 0 TO PagesNodeList.Count - 1 DO BEGIN
-        PagesNodeList.GetItem(PageNode,i);
-        IF PageNode.SelectNodes(WordNodeList,'Words/Word') THEN
-          LoadWordsToTempTable(i+1,Word.Type::Text,WordNodeList,TempWord);
-        IF PageNode.SelectNodes(BarcodeNodeList,'Barcodes/Barcode') THEN
-          LoadWordsToTempTable(i+1,Word.Type::Barcode,BarcodeNodeList,TempWord);
+        PageNode := PagesNodeList.Item(i);
+
+        LoadWordsToTempTable(i+1,Word.Type::Text,PageNode.SelectSingleNode('Words').SelectNodes('Word'),TempWord);
+        LoadWordsToTempTable(i+1,Word.Type::Barcode,PageNode.SelectSingleNode('Barcodes').SelectNodes('Barcode'),TempWord);
       END;
 
       DocCat.GET(DocCatCode);
@@ -265,17 +250,14 @@ OBJECT Codeunit 6085577 Document Importer
       Document.INSERT(TRUE);
       Document."Document Category Code" := DocCat.Code;
       Document.Filename := Filename;
-      XmlDoc.GetDocumentElement(Node);
-
-      OCRProcessedDateTimeUTC := XmlLib.GetNodeText(Node,'OCRProcessedDateTimeUTC');
+      OCRProcessedDateTimeUTC := XmlLib.GetNodeText(XmlDoc.DocumentElement,'OCRProcessedDateTimeUTC');
       IF OCRProcessedDateTimeUTC <> '' THEN BEGIN
         DateParserMgt.ParseUTC(OCRProcessedDateTimeUTC);
         Document."OCR Process Completed" := DateParserMgt.GetDatetime;
       END;
       Document."PDF File Hash" := CryptographyMgt.GetFileSHA1Hash(STRSUBSTNO('%1\%2.pdf',Path,Filename));
-
-      XmlDoc.GetDocumentElement(Node);
-      IF Node.SelectSingleNode(EmailNode,'Email') THEN BEGIN
+      EmailNode := XmlDoc.DocumentElement.SelectSingleNode('Email');
+      IF NOT ISNULL(EmailNode) THEN BEGIN
         Document."From E-Mail Address" := COPYSTR(XmlLib.GetNodeText(EmailNode,'FromAddress'),1,
           MAXSTRLEN(Document."From E-Mail Address"));
         Document."From E-Mail Name" := COPYSTR(XmlLib.GetNodeText(EmailNode,'FromName'),1,MAXSTRLEN(Document."From E-Mail Name"));
@@ -292,7 +274,7 @@ OBJECT Codeunit 6085577 Document Importer
       Document.MODIFY(TRUE);
 
       FOR i := 0 TO PagesNodeList.Count - 1 DO BEGIN
-        PagesNodeList.GetItem(PageNode,i);
+        PageNode := PagesNodeList.Item(i);
         Page.INIT;
         Page."Document No." := Document."No.";
         Page."Page No." := i + 1;
@@ -335,38 +317,13 @@ OBJECT Codeunit 6085577 Document Importer
       EXIT(Status::"File Imported");
     END;
 
-    LOCAL PROCEDURE LoadLocalFiles@1();
+    LOCAL PROCEDURE LoadWordsToTempTable@1000000005(PageNo@1000000001 : Integer;Type@1000000005 : Integer;NodeList@1000000000 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";VAR TempWord@1000000002 : Record 6085592);
     VAR
-      DocCat@1000 : Record 6085575;
-      TempFile@1008 : TEMPORARY Record 6085608;
-      FileInfo@1006 : Codeunit 6085666;
-      FileSysMgt@1002 : Codeunit 6085584;
-      TempFileStorage@1007 : Codeunit 6085665;
-      Path@1001 : Text[250];
-      FileArray@1004 : ARRAY [10000] OF Text[1024];
-      FileCount@1003 : Integer;
-      i@1005 : Integer;
-    BEGIN
-      DocCat.SETRANGE("Drag and Drop Category",FALSE);
-      IF DocCat.FINDSET THEN
-        REPEAT
-          Path := DocCat.GetCategoryPath(2);
-          FileCount := FileSysMgt.GetFilesInDir2(Path,'*.*',FileArray);
-          FOR i := 1 TO FileCount DO
-            IF FileInfo.GetFileExtension(FileArray[i]) IN ['tiff','pdf','xml','eml'] THEN BEGIN
-              TempFile.CreateFromFileIfExist(FileArray[i],FALSE);
-              TempFileStorage.AddFile(TempFile);
-            END;
-        UNTIL DocCat.NEXT = 0;
-    END;
-
-    LOCAL PROCEDURE LoadWordsToTempTable@1000000005(PageNo@1000000001 : Integer;Type@1000000005 : Integer;NodeList@1000000000 : Codeunit 6192802;VAR TempWord@1000000002 : Record 6085592);
-    VAR
-      Node@1000000003 : Codeunit 6192801;
+      Node@1000000003 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
       i@1000000004 : Integer;
     BEGIN
       FOR i := 0 TO NodeList.Count - 1 DO BEGIN
-        NodeList.GetItem(Node,i);
+        Node := NodeList.Item(i);
 
         TempWord.INIT;
         TempWord."Page No." := PageNo;
@@ -441,16 +398,18 @@ OBJECT Codeunit 6085577 Document Importer
           UNTIL AutoSplitPage.NEXT = 0;
       END;
 
-      IF Document.FIND('=') THEN BEGIN
-        CaptureEngine.SetHideWindow(TRUE);
-        CaptureEngine.CaptureDocument(Document);
-      END;
+      IF DocCat."Process New Files Automatic" THEN BEGIN
+        IF Document.FIND('=') THEN BEGIN
+          CaptureEngine.SetHideWindow(TRUE);
+          CaptureEngine.CaptureDocument(Document);
+        END;
 
-      IF AutoSplitPage.FINDSET THEN
-        REPEAT
-          IF Document2.GET(AutoSplitPage."Document No.") THEN
-            CaptureEngine.CaptureDocument(Document2);
-        UNTIL AutoSplitPage.NEXT = 0;
+        IF AutoSplitPage.FINDSET THEN
+          REPEAT
+            IF Document2.GET(AutoSplitPage."Document No.") THEN
+              CaptureEngine.CaptureDocument(Document2);
+          UNTIL AutoSplitPage.NEXT = 0;
+      END;
 
       COMMIT;
 
@@ -530,27 +489,24 @@ OBJECT Codeunit 6085577 Document Importer
     PROCEDURE GetDocInfo@1160040000(Filename@1160040004 : Text[1024];VAR FromEMailAddr@1160040003 : Text[200];VAR EMailSubject@1160040002 : Text[200];VAR EMailDate@1160040001 : DateTime;VAR OCRProcessed@1160040000 : DateTime);
     VAR
       DateParserMgt@1160040005 : Codeunit 6085586;
-      XmlDoc@1160040007 : Codeunit 6192800;
-      EmailNode@1160040006 : Codeunit 6192801;
-      DocumentElement@1001 : Codeunit 6192801;
-      FileSysMgt@1002 : Codeunit 6085584;
+      XmlDoc@1160040007 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      EmailNode@1160040006 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
       OCRProcessedDateTimeUTC@1000 : Text[30];
     BEGIN
-      IF NOT FileSysMgt.FileExists(Filename) THEN
+      IF NOT FILE.EXISTS(Filename) THEN
         EXIT;
 
+      XmlDoc := XmlDoc.XmlDocument;
       XmlDoc.Load(Filename);
 
-      XmlDoc.GetDocumentElement(DocumentElement);
-      OCRProcessedDateTimeUTC := XmlLib.GetNodeText(DocumentElement,'OCRProcessedDateTimeUTC');
+      OCRProcessedDateTimeUTC := XmlLib.GetNodeText(XmlDoc.DocumentElement,'OCRProcessedDateTimeUTC');
       IF OCRProcessedDateTimeUTC <> '' THEN BEGIN
         DateParserMgt.ParseUTC(OCRProcessedDateTimeUTC);
         OCRProcessed := DateParserMgt.GetDatetime;
       END;
 
-      XmlDoc.GetDocumentElement(DocumentElement);
-
-      IF DocumentElement.SelectSingleNode(EmailNode,'Email') THEN BEGIN
+      EmailNode := XmlDoc.DocumentElement.SelectSingleNode('Email');
+      IF NOT ISNULL(EmailNode) THEN BEGIN
         FromEMailAddr := COPYSTR(XmlLib.GetNodeText(EmailNode,'FromAddress'),1,MAXSTRLEN(FromEMailAddr));
 
         DateParserMgt.ParseUTC(XmlLib.GetNodeText(EmailNode,'Date'));

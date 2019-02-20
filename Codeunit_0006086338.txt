@@ -1,0 +1,895 @@
+OBJECT Codeunit 6086338 Settlement-Post
+{
+  OBJECT-PROPERTIES
+  {
+    Date=12/13/17;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.04;
+  }
+  PROPERTIES
+  {
+    TableNo=6086339;
+    Permissions=TableData 81=rimd,
+                TableData 210=rimd;
+    OnRun=BEGIN
+            RunWithCheck(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      EMSetup@1160040008 : Record 6086300;
+      PostingFunctions@1160040015 : Codeunit 6086336;
+      GenJnlPostLine@1160040025 : Codeunit 12;
+      Window@1160040005 : Dialog;
+      Text001@1160040013 : TextConst 'ENU=Posting lines              #2######\';
+      BalanceAccountNo@1160040002 : Code[20];
+      BalanceAccountType@1160040001 : Integer;
+      DocumentNo@1160040000 : Code[20];
+
+    PROCEDURE RunWithCheck@1160040012(VAR Settlement@1160040000 : Record 6086339);
+    VAR
+      CheckLine@1160040001 : Codeunit 6086349;
+    BEGIN
+      CheckLine.RUN(Settlement);
+      Code(Settlement);
+    END;
+
+    PROCEDURE RunWithoutCheck@1160040011(VAR Settlement@1160040000 : Record 6086339);
+    BEGIN
+      Code(Settlement);
+    END;
+
+    PROCEDURE Code@1160040013(VAR Rec@1160040000 : Record 6086339);
+    VAR
+      Expense@1160040002 : Record 6086320;
+      Mileage@1160040001 : Record 6086338;
+      Settlement@1160040003 : Record 6086339;
+      LineCount@1160040004 : Integer;
+      xCurrency@1160040005 : Code[10];
+      TotalBalAmountLCY@1160040007 : Decimal;
+      TotalBalAmount@1160040006 : Decimal;
+      PostingCurr@1160040008 : Code[10];
+    BEGIN
+      WITH Rec DO BEGIN
+        CLEARALL;
+
+        Settlement.COPY(Rec);
+        WITH Settlement DO BEGIN
+          IF GUIALLOWED THEN
+            Window.OPEN('#1#################################\\' + Text001);
+
+          Window.UPDATE(1,STRSUBSTNO('%1 %2',Rec."Document Type",Rec."No."));
+
+          //////////////////////////////////////////////////
+          // Expenses matched to bank transactions
+          //////////////////////////////////////////////////
+          IF EMSetup."Post in Expense Currency" THEN
+            Expense.SETCURRENTKEY("Settlement No.","Matched to Bank Transaction","Currency Code")
+          ELSE
+            Expense.SETCURRENTKEY("Settlement No.","Settlement Line No.");
+          Expense.SETRANGE("Settlement No.","No.");
+          Expense.SETRANGE("Matched to Bank Transaction",TRUE);
+          IF Expense.FINDFIRST THEN BEGIN
+            REPEAT
+              LineCount := LineCount + 1;
+              IF GUIALLOWED THEN
+                Window.UPDATE(2,LineCount);
+
+              PostingCurr := GetPostingCurrency(Expense);
+              IF xCurrency <> PostingCurr THEN
+                PostBalance(DATABASE::"Expense Header",1,"No.",0,TotalBalAmount,TotalBalAmountLCY,xCurrency,
+                  "Posting Date","Posting Description",EMSetup."Settlement Source Code");
+
+              PostExpense(Expense,"No.","Posting Date",EMSetup."Settlement Source Code",TotalBalAmount,TotalBalAmountLCY);
+
+              xCurrency := PostingCurr;
+            UNTIL Expense.NEXT = 0;
+
+            PostBalance(DATABASE::"Expense Header",1,"No.",0,TotalBalAmount,TotalBalAmountLCY,xCurrency,
+              "Posting Date","Posting Description",EMSetup."Settlement Source Code");
+          END;
+
+          //////////////////////////////////////////////////
+          // Un-matched expenses
+          //////////////////////////////////////////////////
+          Expense.SETRANGE("Matched to Bank Transaction",FALSE);
+          IF Expense.FINDFIRST THEN BEGIN
+            REPEAT
+              LineCount := LineCount + 1;
+              IF GUIALLOWED THEN
+                Window.UPDATE(2,LineCount);
+
+              PostingCurr := GetPostingCurrency(Expense);
+              IF xCurrency <> PostingCurr THEN
+                PostBalance(DATABASE::"Expense Header",1,"No.",0,TotalBalAmount,TotalBalAmountLCY,xCurrency,
+                  "Posting Date","Posting Description",EMSetup."Settlement Source Code");
+
+              PostExpense(Expense,"No.","Posting Date",EMSetup."Settlement Source Code",TotalBalAmount,TotalBalAmountLCY);
+
+              xCurrency := PostingCurr;
+            UNTIL Expense.NEXT = 0;
+
+            PostBalance(DATABASE::"Expense Header",1,"No.",0,TotalBalAmount,TotalBalAmountLCY,xCurrency,
+              "Posting Date","Posting Description",EMSetup."Settlement Source Code");
+          END;
+
+          //////////////////////////////////////////////////
+          // Mileage
+          //////////////////////////////////////////////////
+          Mileage.SETCURRENTKEY("Settlement No.","Settlement Line No.");
+          Mileage.SETRANGE("Settlement No.","No.");
+          IF Mileage.FINDSET THEN BEGIN
+            REPEAT
+              LineCount := LineCount + 1;
+              IF GUIALLOWED THEN
+                Window.UPDATE(2,LineCount);
+
+              PostMileage(Mileage,TotalBalAmount,TotalBalAmountLCY,"No.","Posting Date",EMSetup."Settlement Source Code");
+            UNTIL Mileage.NEXT = 0;
+
+            PostBalance(DATABASE::"Expense Header",1,"No.",0,TotalBalAmount,TotalBalAmountLCY,'',"Posting Date","Posting Description",
+              EMSetup."Settlement Source Code");
+          END;
+
+          VALIDATE(Posted,TRUE);
+          "Posted Date/Time" := CURRENTDATETIME;
+          "Posted by User ID" := USERID;
+          "Created Doc. Type" := DATABASE::"Gen. Journal Line";
+          "Created Doc. Subtype" := 0;
+          "Created Doc. ID" := "No.";
+          MODIFY;
+        END;
+
+        COMMIT;
+        IF GUIALLOWED THEN
+          Window.CLOSE;
+      END;
+    END;
+
+    LOCAL PROCEDURE PostBalance@1160040001(TableID@1160040003 : Integer;DocType@1160040000 : Integer;DocNo@1160040001 : Code[20];DocRefNo@1160040011 : Integer;VAR BalancingAmount@1160040006 : Decimal;VAR BalancingAmountLCY@1160040005 : Decimal;PostingCurrency@1160040004 : Code[10];NewPostingDate@1160040009 : Date;PostingDescription@1160040010 : Text[50];NewSourceCode@1160040002 : Code[20]);
+    VAR
+      ExpenseDimMgt@1160040007 : Codeunit 6086318;
+      EMNavVersionMgt@1160040008 : Codeunit 6086319;
+      GenJnlLine@1160040012 : Record 81;
+    BEGIN
+      IF (BalancingAmount = 0) AND (BalancingAmountLCY = 0) THEN
+        EXIT;
+
+      GenJnlLine.INIT;
+      GenJnlLine."Source Code" := NewSourceCode;
+      GenJnlLine."Document No." := DocumentNo;
+      GenJnlLine.VALIDATE("Posting Date",NewPostingDate); //ALWAYS REPLACED FOR A SETTLEMENT
+      GenJnlLine.VALIDATE("Account Type",BalanceAccountType);
+      GenJnlLine.VALIDATE("Account No.",BalanceAccountNo);
+      GenJnlLine.VALIDATE("Currency Code",PostingCurrency);
+
+      IF GenJnlLine."Account Type" = GenJnlLine."Account Type"::Vendor THEN BEGIN
+        GenJnlLine.VALIDATE(Amount,BalancingAmount);
+
+        IF DocumentNo <> '' THEN
+          IF PostingCurrency <> '' THEN
+            GenJnlLine."External Document No." := STRSUBSTNO('%1 %2',DocumentNo,PostingCurrency)
+          ELSE
+            GenJnlLine."External Document No." := STRSUBSTNO('%1',DocumentNo);
+
+        GenJnlLine."Gen. Posting Type" := GenJnlLine."Gen. Posting Type"::" ";
+        IF BalancingAmountLCY <> 0 THEN
+          GenJnlLine.VALIDATE("Amount (LCY)",BalancingAmountLCY);
+
+      END ELSE BEGIN
+        GenJnlLine.VALIDATE(Amount,BalancingAmount);
+        GenJnlLine.VALIDATE("Amount (LCY)",BalancingAmountLCY);
+        GenJnlLine."Gen. Posting Type" := GenJnlLine."Gen. Posting Type"::Purchase;
+      END;
+
+      IF (GenJnlLine."Account Type" <> GenJnlLine."Account Type"::Vendor) OR
+         (GenJnlLine."Gen. Bus. Posting Group" <> '') OR (GenJnlLine."Gen. Prod. Posting Group" <> '') OR
+         (GenJnlLine."VAT Bus. Posting Group" <> '') OR (GenJnlLine."VAT Prod. Posting Group" <> '')
+      THEN
+        GenJnlLine."Gen. Posting Type" := GenJnlLine."Gen. Posting Type"::Purchase
+      ELSE
+        GenJnlLine."Gen. Posting Type" := GenJnlLine."Gen. Posting Type"::" ";
+
+      GenJnlLine.Description := PostingDescription;
+
+      EMNavVersionMgt.PostJnLineWithCheck(GenJnlPostLine,GenJnlLine,TableID,DocType,DocNo,DocRefNo,0,FALSE,TRUE);
+
+      BalancingAmount := 0;
+      BalancingAmountLCY := 0;
+      DocumentNo := '';
+    END;
+
+    LOCAL PROCEDURE PostExpense@1160040002(Expense@1160040006 : Record 6086320;NewDocumentNo@1160040017 : Code[20];NewPostingDate@1160040012 : Date;NewSourceCode@1160040001 : Code[20];VAR TotalBalAmount@1160040005 : Decimal;VAR TotalBalAmountLCY@1160040004 : Decimal);
+    VAR
+      ContiniaUserSetup@1160040024 : Record 6086002;
+      ExpenseAllocation@1160040007 : Record 6086321;
+      Expense2@1160040008 : Record 6086320;
+      JobJnlLine@1160040020 : Record 210;
+      ExpenseMatch@1160040019 : Record 6086349;
+      BankTransaction@1160040021 : Record 6086330;
+      GenJnlLine@1160040000 : Record 81;
+      CreditCard@1160040003 : Record 6086311;
+      GLAccount@1160040025 : Record 15;
+      ExpenseCheck@1160040018 : Codeunit 6086333;
+      JobJnlPostLine@1160040016 : Codeunit 1012;
+      EMNavVersionMgt@1160040002 : Codeunit 6086319;
+      ExpenseDimMgt@1160040013 : Codeunit 6086318;
+      BankCurrencyCode@1160040015 : Code[10];
+      UseExpenseAllocation@1160040009 : Boolean;
+      CreateGenJnlBalanceEntry@1160040010 : Boolean;
+      BalancingAmount@1160040014 : Decimal;
+      BalancingAmountLCY@1160040011 : Decimal;
+      UpdateExpenseAmountLCY@1160040022 : Boolean;
+      AmountLCYRecalculated@1160040023 : Decimal;
+      SourceCode@1160040027 : Code[20];
+    BEGIN
+      ExpenseCheck.RUN(Expense);
+      EMSetup.GET;
+
+      IF NewSourceCode <> '' THEN
+        SourceCode := NewSourceCode
+      ELSE
+        SourceCode :=  EMSetup."Settlement Source Code";
+
+      ContiniaUserSetup.GET(Expense."Continia User ID");
+
+      IF NOT Expense."Matched to Bank Transaction" THEN BEGIN
+        CheckVendorSetup(ContiniaUserSetup."Vendor No.");
+        BalanceAccountType := GenJnlLine."Bal. Account Type"::Vendor;
+        BalanceAccountNo := ContiniaUserSetup."Vendor No.";
+      END ELSE BEGIN
+        ExpenseMatch.SETRANGE("Expense Entry No.",Expense."Entry No.");
+        ExpenseMatch.FINDFIRST;
+
+        BankTransaction.GET(ExpenseMatch."Transaction Entry No.");
+        CreditCard.SETCURRENTKEY("Card No.");
+        CreditCard.SETRANGE("Card No.",BankTransaction."Card No.");
+        CreditCard.FINDFIRST;
+
+        IF EMSetup."Post Bank Trans. on Import" THEN BEGIN
+          GLAccount.GET(EMSetup."Intermediate Expense Account");
+          IF (GLAccount."Gen. Bus. Posting Group" <> '') OR (GLAccount."Gen. Prod. Posting Group" <> '') OR
+             (GLAccount."VAT Bus. Posting Group" <> '') OR (GLAccount."VAT Prod. Posting Group" <> '')
+          THEN
+            GLAccount.TESTFIELD("Gen. Posting Type");
+
+          BalanceAccountType := GenJnlLine."Bal. Account Type"::"G/L Account";
+          BalanceAccountNo := EMSetup."Intermediate Expense Account";
+        END ELSE
+          IF CreditCard."Account No." <> '' THEN BEGIN
+            BalanceAccountType := CreditCard."Account Type";
+            BalanceAccountNo := CreditCard."Account No.";
+          END ELSE BEGIN
+            EMSetup.TESTFIELD("Card Transaction Bal. No.");
+            BalanceAccountType := EMSetup."Card Transaction Bal. Type";
+            BalanceAccountNo := EMSetup."Card Transaction Bal. No.";
+          END;
+      END;
+
+      ExpenseAllocation.SETCURRENTKEY("Expense Entry No.");
+      ExpenseAllocation.SETRANGE("Expense Entry No.",Expense."Entry No.");
+      IF ExpenseAllocation.FINDFIRST THEN
+        UseExpenseAllocation := TRUE
+      ELSE
+        Expense2.COPY(Expense,FALSE);
+
+      REPEAT
+        IF UseExpenseAllocation THEN BEGIN
+          ExpenseAllocation.TESTFIELD("Continia User ID",Expense."Continia User ID");
+          Expense2.TRANSFERFIELDS(ExpenseAllocation);
+          Expense2."Entry No." := Expense."Entry No.";
+        END;
+
+        CLEAR(BalancingAmountLCY);
+
+        // RE-CHECK THE BANK ACCOUNT CURRENCY
+        IF Expense."Matched to Bank Transaction" AND NOT EMSetup."Post Bank Trans. on Import" THEN BEGIN
+          BankCurrencyCode := GetBankAccountCurrency(BalanceAccountNo,BalanceAccountType);
+
+          // Currency Code on Bank Account may have changed after the expense was created.
+          IF BankCurrencyCode <> Expense2."Bank Currency Code" THEN
+            Expense2.VALIDATE("Bank Currency Code",BankCurrencyCode);
+        END;
+
+        IF (NOT Expense."Matched to Bank Transaction") OR (BankCurrencyCode <> '') THEN BEGIN
+          IF BankCurrencyCode <> '' THEN
+            Expense2."Amount (LCY)" :=
+              GetLCYAmount(
+                Expense2."Bank-Currency Amount",
+                Expense2."Bank Currency Code",
+                Expense2."Document Date")
+          ELSE
+            Expense2."Amount (LCY)" := GetLCYAmount(Expense2.Amount,Expense2."Currency Code",Expense2."Document Date");
+
+          UpdateExpenseAmountLCY := TRUE;
+        END;
+
+        IF DocumentNo = '' THEN
+          DocumentNo := NewDocumentNo;
+
+        GenJnlLine.INIT;
+        GenJnlLine."Source Code" := SourceCode;
+        GenJnlLine."Document No." := DocumentNo;
+        GenJnlLine.VALIDATE("Posting Date",NewPostingDate);
+        GenJnlLine.VALIDATE("Document Date",Expense."Document Date");
+
+        IF Expense2."No Refund" AND Expense."Matched to Bank Transaction" THEN BEGIN
+          CheckVendorSetup(ContiniaUserSetup."Vendor No.");
+
+          GenJnlLine.VALIDATE("Account Type",GenJnlLine."Account Type"::Vendor);
+          GenJnlLine.VALIDATE("Account No.",ContiniaUserSetup."Vendor No.");
+          GenJnlLine.VALIDATE("Bal. Account Type",BalanceAccountType);
+          GenJnlLine.VALIDATE("Bal. Account No.",BalanceAccountNo);
+          GenJnlLine."External Document No." := STRSUBSTNO('%1 %2',Expense.TABLECAPTION,Expense."Entry No.");
+          CreateGenJnlBalanceEntry := FALSE;
+        END ELSE BEGIN
+          GenJnlLine.VALIDATE("Account Type",GenJnlLine."Account Type"::"G/L Account");
+          Expense2.TESTFIELD("Expense Account");
+          GenJnlLine.VALIDATE("Account No.",Expense2."Expense Account");
+          IF Expense."Matched to Bank Transaction" THEN BEGIN
+            GenJnlLine.VALIDATE("Bal. Account Type",BalanceAccountType);
+            GenJnlLine.VALIDATE("Bal. Account No.",BalanceAccountNo);
+            CreateGenJnlBalanceEntry := FALSE;
+          END ELSE
+            CreateGenJnlBalanceEntry := TRUE;
+
+          IF BalanceAccountType = GenJnlLine."Bal. Account Type"::Vendor THEN
+            GenJnlLine."External Document No." := STRSUBSTNO('%1 %2',Expense.TABLECAPTION,Expense."Entry No.");
+        END;
+
+        IF Expense2."No Refund" AND (NOT Expense."Matched to Bank Transaction") THEN BEGIN
+          SetDocumentTypeAndAmounts(GenJnlLine,GenJnlLine."Document Type"::" ",0,0,'');
+          BalancingAmount := 0;
+          BalancingAmountLCY := 0;
+          CreateGenJnlBalanceEntry := FALSE;
+          GenJnlLine."Allow Zero-Amount Posting" := TRUE;
+        END ELSE
+          HandleDocumentTypeAndAmounts(GenJnlLine,Expense2,BalancingAmount,BalancingAmountLCY,BalanceAccountType,BalanceAccountNo);
+
+        IF NOT (
+           (GenJnlLine."Account Type" = GenJnlLine."Account Type"::Vendor) OR
+           (BalanceAccountType = GenJnlLine."Bal. Account Type"::Vendor))
+        THEN
+          GenJnlLine."Document Type" := GenJnlLine."Document Type"::" ";
+
+        GenJnlLine.Description := COPYSTR(GetExpensePostingDesc(Expense2),1,MAXSTRLEN(GenJnlLine.Description));
+
+        IF (NOT (
+           GenJnlLine."Account Type" IN [GenJnlLine."Account Type"::Customer,GenJnlLine."Account Type"::Vendor,
+           GenJnlLine."Account Type"::"Bank Account"]))
+        THEN BEGIN
+          IF Expense2."Gen. Bus. Posting Group" <> '' THEN BEGIN
+            GenJnlLine."Gen. Posting Type" := GenJnlLine."Gen. Posting Type"::Purchase;
+            GenJnlLine.VALIDATE("Gen. Bus. Posting Group",Expense2."Gen. Bus. Posting Group");
+          END;
+
+          IF Expense2."VAT Bus. Posting Group" <> '' THEN
+            GenJnlLine.VALIDATE("VAT Bus. Posting Group",Expense2."VAT Bus. Posting Group");
+
+          IF Expense2."Gen. Prod. Posting Group" <> '' THEN BEGIN
+            GenJnlLine."Gen. Posting Type" := GenJnlLine."Gen. Posting Type"::Purchase;
+            GenJnlLine.VALIDATE("Gen. Prod. Posting Group",Expense2."Gen. Prod. Posting Group");
+          END;
+
+          IF Expense2."VAT Prod. Posting Group" <> '' THEN
+            GenJnlLine.VALIDATE("VAT Prod. Posting Group",Expense2."VAT Prod. Posting Group");
+        END;
+
+        IF (GenJnlLine."Account Type" <> GenJnlLine."Account Type"::Vendor) OR
+           (GenJnlLine."Gen. Bus. Posting Group" <> '') OR (GenJnlLine."Gen. Prod. Posting Group" <> '') OR
+           (GenJnlLine."VAT Bus. Posting Group" <> '') OR (GenJnlLine."VAT Prod. Posting Group" <> '')
+        THEN
+          GenJnlLine."Gen. Posting Type" := GenJnlLine."Gen. Posting Type"::Purchase
+        ELSE
+          GenJnlLine."Gen. Posting Type" := GenJnlLine."Gen. Posting Type"::" ";
+
+        IF GenJnlLine."VAT Prod. Posting Group" <> '' THEN
+          IF GenJnlLine."Bill-to/Pay-to No." = '' THEN
+            GenJnlLine."Bill-to/Pay-to No." := ContiniaUserSetup."Vendor No.";
+
+        PostingFunctions.AddJobsToJnlLine(
+          GenJnlLine,Expense2."Job No.",Expense2."Job Task No.",Expense2."Job Line Type",Expense2.Billable);
+
+        EMNavVersionMgt.PostJnLineWithCheck(
+          GenJnlPostLine,GenJnlLine,DATABASE::Expense,0,'',Expense."Entry No.",ExpenseAllocation."Entry No.",FALSE,TRUE);
+
+        //CURRENCY RATE UPDATE
+        IF UpdateExpenseAmountLCY THEN BEGIN
+          AmountLCYRecalculated := AmountLCYRecalculated + Expense2."Amount (LCY)";
+          IF UseExpenseAllocation THEN
+            IF (ExpenseAllocation."Amount (LCY)" <> 0) AND (Expense2."Amount (LCY)" <> ExpenseAllocation."Amount (LCY)") THEN BEGIN
+              ExpenseAllocation."Amount (LCY)" := Expense2."Amount (LCY)";
+              ExpenseAllocation.MODIFY;
+            END;
+        END;
+
+        IF CreateGenJnlBalanceEntry THEN BEGIN
+          TotalBalAmountLCY += BalancingAmountLCY;
+          TotalBalAmount += BalancingAmount;
+        END;
+
+      UNTIL (NOT UseExpenseAllocation) OR (ExpenseAllocation.NEXT = 0);
+
+      IF UpdateExpenseAmountLCY AND (AmountLCYRecalculated <> 0) AND (Expense."Amount (LCY)" <> AmountLCYRecalculated) THEN BEGIN
+        Expense."Amount (LCY)" := AmountLCYRecalculated;
+        Expense.MODIFY;
+      END;
+
+      Expense."Created Doc. Type" := DATABASE::"Gen. Journal Line";
+      Expense."Created Doc. Subtype" := GenJnlLine."Document Type"::" ";
+      Expense."Created Doc. ID" := GenJnlLine."Document No.";
+      Expense.VALIDATE(Posted,TRUE);
+      Expense.MODIFY;
+
+      IF Expense."Matched to Bank Transaction" THEN
+        IF NOT BankTransaction.Posted THEN BEGIN
+          BankTransaction.VALIDATE(Posted,TRUE);
+          BankTransaction."Posted Doc. ID" := DocumentNo;
+          BankTransaction."Expense Type" := Expense."Expense Type";
+          BankTransaction.MODIFY;
+        END ELSE BEGIN
+          BankTransaction."Expense Type" := Expense."Expense Type";
+          BankTransaction.MODIFY;
+        END;
+    END;
+
+    PROCEDURE CheckVendorSetup@1160040007(VendorCode@1160040001 : Code[20]);
+    VAR
+      Vendor@1160040000 : Record 23;
+    BEGIN
+      Vendor.GET(VendorCode);
+      Vendor.TESTFIELD("Vendor Posting Group");
+    END;
+
+    PROCEDURE GetExpensePostingDesc@1160040010(Expense@1160040000 : Record 6086320) PostingDesc : Text[1024];
+    VAR
+      ExpPostingDescFields@1160040002 : Record 6086333;
+    BEGIN
+      PostingDesc := EMSetup."Posting Description";
+      ExpPostingDescFields.ASCENDING(FALSE);
+      IF ExpPostingDescFields.FINDFIRST THEN
+        REPEAT
+          PostingDesc :=
+            Replace(PostingDesc,'%' + FORMAT(ExpPostingDescFields."Parameter No."),
+              GetExpenseFieldValue(Expense,ExpPostingDescFields."Field Type Code"),FALSE);
+        UNTIL ExpPostingDescFields.NEXT = 0;
+    END;
+
+    PROCEDURE GetExpenseFieldValue@1160040040(Expense@1160040000 : Record 6086320;FieldTypeCode@1160040001 : Code[20]) : Text[1024];
+    VAR
+      FieldType@1160040002 : Record 6086345;
+      EMDim@1160040006 : Record 6086360;
+      RecRef@1160040003 : RecordRef;
+      FldRef@1160040004 : FieldRef;
+      DimCode@1160040008 : Code[20];
+      i@1160040005 : Integer;
+    BEGIN
+      IF FieldType.GET(FieldTypeCode) THEN
+        IF FieldType.IsSystemField THEN BEGIN
+          RecRef.GETTABLE(Expense);
+
+          FOR i := 1 TO RecRef.FIELDCOUNT DO BEGIN
+            FldRef := RecRef.FIELDINDEX(i);
+
+            IF FldRef.NUMBER = FieldType.GetSystemFieldExpTableNo(FieldType.Code) THEN
+              EXIT(FORMAT(FldRef.VALUE));
+          END;
+        END ELSE BEGIN
+          DimCode := FieldType.GetDimCode;
+
+          EMDim.SETCURRENTKEY("Table ID","Document Type","Document No.","Doc. Ref. No.");
+          EMDim.SETRANGE("Table ID",DATABASE::Expense);
+          EMDim.SETRANGE("Document Type",0);
+          EMDim.SETRANGE("Document No.",'');
+          EMDim.SETRANGE("Doc. Ref. No.",Expense."Entry No.");
+
+          IF DimCode <> '' THEN BEGIN
+            EMDim.SETRANGE("Dimension Code",DimCode);
+            IF EMDim.FINDFIRST THEN
+              EXIT(EMDim."Dimension Value Code");
+          END ELSE BEGIN
+            EMDim.SETRANGE("Field Code",FieldTypeCode);
+            IF EMDim.FINDFIRST THEN
+              EXIT(EMDim."Field Value");
+          END;
+        END;
+    END;
+
+    PROCEDURE HandleDocumentTypeAndAmounts@1160040009(VAR GenJnlLine@1160040000 : Record 81;VAR Expense@1160040001 : Record 6086320;VAR BalAmt@1160040004 : Decimal;VAR BalAmtLCY@1160040002 : Decimal;BalanceAccountType@1160040003 : 'G/L Account,,,Bank Account';BalanceAccountNo@1160040005 : Code[20]);
+    VAR
+      PostCurr@1160040007 : Code[10];
+      PostAmt@1160040008 : Decimal;
+      PostAmtLCY@1160040009 : Decimal;
+      BalCurr@1160040006 : Code[10];
+    BEGIN
+      GetPostingAndBalancingAmounts(Expense,PostAmt,PostCurr,PostAmtLCY,BalAmt,BalCurr,BalAmtLCY);
+
+      SetDocumentTypeAndAmounts(GenJnlLine,GenJnlLine."Document Type"::" ",PostAmt,PostAmtLCY,PostCurr);
+
+      //REVERSE SIGNS FOR NEGATIVE AMOUNTS
+      IF Expense."Amount (LCY)" < 0 THEN BEGIN
+        GenJnlLine.VALIDATE(Amount,-GenJnlLine.Amount);
+        BalAmt := -BalAmt;
+        BalAmtLCY := -BalAmtLCY;
+      END;
+    END;
+
+    PROCEDURE SetDocumentTypeAndAmounts@1160040008(VAR GenJnlLine@1160040001 : Record 81;DocumentType@1160040003 : Integer;Amount@1160040004 : Decimal;AmountLCY@1160040000 : Decimal;CurrencyCode@1160040005 : Code[10]);
+    BEGIN
+      GenJnlLine."Document Type" := DocumentType;
+      GenJnlLine.VALIDATE(Amount,ABS(Amount));
+      GenJnlLine.VALIDATE("Currency Code",CurrencyCode);
+      IF AmountLCY <> 0 THEN
+        GenJnlLine.VALIDATE("Amount (LCY)",ABS(AmountLCY));
+    END;
+
+    PROCEDURE GetBankAccountCurrency@1160040006(BalanceAccountNo@1160040000 : Code[20];BalanceAccountType@1160040001 : 'G/L Account,,Vendor,Bank Account') : Code[10];
+    VAR
+      Vendor@1160040003 : Record 23;
+      BankAccount@1160040002 : Record 270;
+    BEGIN
+      CASE BalanceAccountType OF
+
+        BalanceAccountType::"Bank Account":
+          IF BankAccount.GET(BalanceAccountNo) THEN
+            EXIT(BankAccount."Currency Code");
+
+        BalanceAccountType::Vendor:
+          IF Vendor.GET(BalanceAccountNo) THEN
+            EXIT(Vendor."Currency Code");
+      END;
+    END;
+
+    PROCEDURE GetLCYAmount@1160040005(Amount@1160040000 : Decimal;CurrencyCode@1160040001 : Code[10];Date@1160040003 : Date) : Decimal;
+    VAR
+      CurrExchRate@1160040004 : Record 330;
+      Currency@1160040006 : Record 4;
+      CurrencyFactor@1160040002 : Decimal;
+    BEGIN
+      IF CurrencyCode = '' THEN
+        EXIT(Amount);
+
+      Currency.GET(CurrencyCode);
+      Currency.CheckAmountRoundingPrecision;
+      CurrencyFactor := CurrExchRate.ExchangeRate(Date,CurrencyCode);
+      EXIT(ROUND(CurrExchRate.ExchangeAmtFCYToLCY(Date,CurrencyCode,Amount,CurrencyFactor),Currency."Amount Rounding Precision"));
+    END;
+
+    LOCAL PROCEDURE PostMileage@1160040004(VAR Mileage@1160040014 : Record 6086338;VAR TotalBalAmount@1160040004 : Decimal;VAR TotalBalAmountLCY@1160040000 : Decimal;NewDocumentNo@1160040011 : Code[20];NewPostingDate@1160040002 : Date;NewSourceCode@1160040007 : Code[20]);
+    VAR
+      ContiniaUserSetup@1160040013 : Record 6086002;
+      PurchLine@1160040009 : Record 39;
+      GenJnlLine@1160040008 : Record 81;
+      JobJnlLine@1160040010 : Record 210;
+      EMReg@1160040006 : Record 6086367;
+      DocType@1160040001 : Integer;
+      MileagePosting@1160040003 : 'Use General Journal,Use Purchase Invoice';
+      EMNavVersionMgt@1160040005 : Codeunit 6086319;
+      JobJnlPostLine@1160040012 : Codeunit 1012;
+      LessorIntegration@1160040016 : Codeunit 6086327;
+      BluegardenIntegration@1160040015 : Codeunit 6086328;
+      SourceCode@1160040018 : Code[20];
+    BEGIN
+      EMSetup.GET;
+
+      IF NewSourceCode <> '' THEN
+        SourceCode := NewSourceCode
+      ELSE
+        SourceCode :=  EMSetup."Settlement Source Code";
+
+      IF EMReg."No." = 0 THEN BEGIN
+        EMReg.LOCKTABLE;
+        IF EMReg.FINDLAST THEN
+          EMReg."No." := EMReg."No." + 1
+        ELSE
+          EMReg."No." := 1;
+        EMReg.INIT;
+        EMReg."Creation Date" := TODAY;
+        EMReg."User ID" := USERID;
+        EMReg.INSERT;
+      END;
+
+      WITH Mileage DO BEGIN
+
+        RecalculateMileage(Mileage);
+
+        // THERE ARE 3 MOTHODS OF POSTING:
+        // 1. POSTING ON THIS VENDOR IN NAV (INTERNAL)
+        // 2. POSTING IN THE INTEGRATION SYSTEMS (EXTERNAL)
+        // 3. POSTING IN A NON-INTEGRATED SYSTEM (EXTERNAL,NO ACCOUNTS SPECIFIED);
+
+        IF "Reimbursement Method" = "Reimbursement Method"::"External System" THEN BEGIN
+          IF ("Mileage Account Type" = "Mileage Account Type"::"Lessor Pay Type") AND (NOT "No Refund") THEN BEGIN
+            LessorIntegration.TransferMileageToLessor(Mileage);
+            VALIDATE(Reimbursed,TRUE);
+          END;
+
+          IF ("Mileage Account Type" = "Mileage Account Type"::"Bluegarden Pay Type") AND (NOT "No Refund") THEN BEGIN
+            BluegardenIntegration.TransferSingleMileageToBG(Mileage);
+            VALIDATE(Reimbursed,TRUE);
+          END;
+
+          VALIDATE(Posted,TRUE);
+          "Register No." := EMReg."No.";
+          VALIDATE("Reimbursement Method","Reimbursement Method"::"External System");
+          MODIFY;
+          EXIT;
+        END;
+
+        ContiniaUserSetup.GET("Continia User ID");
+        CheckVendorSetup(ContiniaUserSetup."Vendor No.");
+
+        MileagePosting := EMSetup."Expense Posting";
+
+        IF DocumentNo = '' THEN
+          DocumentNo := NewDocumentNo;
+
+        GenJnlLine.INIT;
+        GenJnlLine."Source Code" := SourceCode;
+        GenJnlLine."Document No." := DocumentNo;
+        GenJnlLine.VALIDATE("Posting Date",NewPostingDate); //ALWAYS REPLACE WHEN IS A SETTLEMENT
+        GenJnlLine.VALIDATE("Document Date","Registration Date");
+
+        GenJnlLine.VALIDATE("Account Type",GenJnlLine."Account Type"::"G/L Account");
+        TESTFIELD("Mileage Account");
+        GenJnlLine.VALIDATE("Account No.","Mileage Account");
+        GenJnlLine."External Document No." := STRSUBSTNO('%1 %2',TABLECAPTION,"Entry No.");
+
+        IF "No Refund" THEN BEGIN
+          GenJnlLine.VALIDATE(Amount,0);
+          GenJnlLine."Allow Zero-Amount Posting" := TRUE;
+          GenJnlLine.Description := COPYSTR(GetMileagePostingDesc(Mileage),1,MAXSTRLEN(GenJnlLine.Description));
+        END ELSE BEGIN
+          IF "Amount (LCY)" < 0 THEN
+            GenJnlLine.VALIDATE(Amount,-"Amount (LCY)")
+          ELSE
+            GenJnlLine.VALIDATE(Amount,"Amount (LCY)");
+          GenJnlLine.Description := COPYSTR(GetMileagePostingDesc(Mileage),1,MAXSTRLEN(GenJnlLine.Description));
+        END;
+
+        DocType := GenJnlLine."Document Type";
+
+        IF (NOT (
+           GenJnlLine."Account Type" IN
+           [GenJnlLine."Account Type"::Customer,GenJnlLine."Account Type"::Vendor,GenJnlLine."Account Type"::"Bank Account"]))
+        THEN BEGIN
+          IF "Gen. Bus. Posting Group" <> '' THEN BEGIN
+            GenJnlLine."Gen. Posting Type" := GenJnlLine."Gen. Posting Type"::Purchase;
+            GenJnlLine.VALIDATE("Gen. Bus. Posting Group","Gen. Bus. Posting Group");
+          END;
+
+          IF "VAT Bus. Posting Group" <> '' THEN
+            GenJnlLine.VALIDATE("VAT Bus. Posting Group","VAT Bus. Posting Group");
+
+          IF "Gen. Prod. Posting Group" <> '' THEN BEGIN
+            GenJnlLine."Gen. Posting Type" := GenJnlLine."Gen. Posting Type"::Purchase;
+            GenJnlLine.VALIDATE("Gen. Prod. Posting Group","Gen. Prod. Posting Group");
+          END;
+
+          IF "VAT Prod. Posting Group" <> '' THEN
+            GenJnlLine.VALIDATE("VAT Prod. Posting Group","VAT Prod. Posting Group");
+        END;
+
+        GenJnlLine.VALIDATE("Currency Code",'');
+
+        IF GenJnlLine."VAT Prod. Posting Group" <> '' THEN
+          IF GenJnlLine."Bill-to/Pay-to No." = '' THEN
+            GenJnlLine."Bill-to/Pay-to No." := ContiniaUserSetup."Vendor No.";
+
+        PostingFunctions.AddJobsToJnlLine(
+          GenJnlLine,Mileage."Job No.",Mileage."Job Task No.",Mileage."Job Line Type",Mileage.Billable);
+
+        EMNavVersionMgt.PostJnLineWithCheck(GenJnlPostLine,GenJnlLine,DATABASE::Mileage,0,'',"Entry No.",0,FALSE,TRUE);
+
+        IF "Register No." = 0 THEN
+          "Register No." := EMReg."No.";
+        "Reimbursement Register No." := EMReg."No.";
+
+        "Created Doc. Type" := DATABASE::"Gen. Journal Line";
+        "Created Doc. Subtype" := GenJnlLine."Document Type"::" ";
+        "Created Doc. ID" := GenJnlLine."Document No.";
+        VALIDATE(Posted,TRUE);
+        VALIDATE(Reimbursed,TRUE);
+        MODIFY;
+
+        BalanceAccountType := GenJnlLine."Bal. Account Type"::Vendor;
+        BalanceAccountNo := ContiniaUserSetup."Vendor No.";
+
+        TotalBalAmountLCY := TotalBalAmountLCY - ABS(GenJnlLine."Amount (LCY)");
+        TotalBalAmount := TotalBalAmount - ABS(GenJnlLine.Amount);
+      END;
+    END;
+
+    PROCEDURE RecalculateMileage@1160040022(VAR Mileage@1160040000 : Record 6086338);
+    VAR
+      MileageRate@1160040001 : Record 6086370;
+    BEGIN
+      MileageRate.CalcAmount(Mileage,FALSE);
+    END;
+
+    PROCEDURE GetMileagePostingDesc@1160040016(Mileage@1160040000 : Record 6086338) PostingDesc : Text[1024];
+    VAR
+      ExpPostingDescFields@1160040002 : Record 6086333;
+    BEGIN
+      PostingDesc := EMSetup."Mileage Posting Description";
+      ExpPostingDescFields.ASCENDING(FALSE);
+      IF ExpPostingDescFields.FINDFIRST THEN
+        REPEAT
+          PostingDesc :=
+            Replace(PostingDesc,'%' + FORMAT(ExpPostingDescFields."Parameter No."),
+              GetMileageFieldValue(Mileage,ExpPostingDescFields."Field Type Code"),FALSE);
+        UNTIL ExpPostingDescFields.NEXT = 0;
+    END;
+
+    PROCEDURE GetMileageFieldValue@1160040003(Mileage@1160040010 : Record 6086338;FieldTypeCode@1160040001 : Code[20]) : Text[1024];
+    VAR
+      FieldType@1160040008 : Record 6086345;
+      EMDim@1160040007 : Record 6086360;
+      RecRef@1160040003 : RecordRef;
+      FldRef@1160040002 : FieldRef;
+      DimCode@1160040004 : Code[20];
+      i@1160040000 : Integer;
+    BEGIN
+      IF FieldType.GET(FieldTypeCode) THEN
+        IF FieldType.GetSystemFieldMilTableNo(FieldType.Code) > 0 THEN BEGIN
+          RecRef.GETTABLE(Mileage);
+
+          FOR i := 1 TO RecRef.FIELDCOUNT DO BEGIN
+            FldRef := RecRef.FIELDINDEX(i);
+            IF FldRef.NUMBER = FieldType.GetSystemFieldMilTableNo(FieldType.Code) THEN
+              EXIT(FORMAT(FldRef.VALUE));
+          END;
+        END ELSE BEGIN
+          DimCode := FieldType.GetDimCode;
+
+          EMDim.SETCURRENTKEY("Table ID","Document Type","Document No.","Doc. Ref. No.");
+          EMDim.SETRANGE("Table ID",DATABASE::Mileage);
+          EMDim.SETRANGE("Document Type",0);
+          EMDim.SETRANGE("Document No.",'');
+          EMDim.SETRANGE("Doc. Ref. No.",Mileage."Entry No.");
+
+          IF DimCode <> '' THEN BEGIN
+            EMDim.SETRANGE("Dimension Code",DimCode);
+            IF EMDim.FINDFIRST THEN
+              EXIT(EMDim."Dimension Value Code");
+          END ELSE BEGIN
+            EMDim.SETRANGE("Field Code",FieldTypeCode);
+            IF EMDim.FINDFIRST THEN
+              EXIT(EMDim."Field Value");
+          END;
+        END;
+    END;
+
+    PROCEDURE PostAndBalanceExpense@1160040015(VAR Expense@1160040000 : Record 6086320;NewPostingDate@1160040003 : Date);
+    VAR
+      TotalBalAmountLCY@1160040002 : Decimal;
+      TotalBalAmount@1160040001 : Decimal;
+      PostingDate@1160040004 : Date;
+      PostingDescription@1160040005 : Text[50];
+    BEGIN
+      EMSetup.GET;
+      DocumentNo := 'EXP' + FORMAT(Expense."Entry No.");
+
+      IF NewPostingDate <> 0D THEN
+        PostingDate := NewPostingDate
+      ELSE
+        PostingDate := Expense."Document Date";
+
+      PostExpense(Expense,DocumentNo,PostingDate,EMSetup."Expense Source Code",TotalBalAmount,TotalBalAmountLCY);
+
+      PostingDescription := COPYSTR(GetExpensePostingDesc(Expense),1,MAXSTRLEN(PostingDescription));
+      PostBalance(DATABASE::Expense,0,'',Expense."Entry No.",TotalBalAmount,TotalBalAmountLCY,GetPostingCurrency(Expense),
+        PostingDate,PostingDescription,EMSetup."Expense Source Code");
+    END;
+
+    PROCEDURE PostAndBalanceMileage@1160040017(VAR Mileage@1160040000 : Record 6086338;NewPostingDate@1160040005 : Date);
+    VAR
+      TotalBalAmountLCY@1160040002 : Decimal;
+      TotalBalAmount@1160040001 : Decimal;
+      PostingDate@1160040004 : Date;
+      PostingDescription@1160040003 : Text[50];
+    BEGIN
+      EMSetup.GET;
+      DocumentNo := 'MIL' + FORMAT(Mileage."Entry No.");
+
+      IF NewPostingDate <> 0D THEN
+        PostingDate := NewPostingDate
+      ELSE
+        PostingDate := Mileage."Registration Date";
+
+      PostMileage(Mileage,TotalBalAmount,TotalBalAmountLCY,DocumentNo,PostingDate,EMSetup."Mileage Source Code");
+
+      PostingDescription := COPYSTR(GetMileagePostingDesc(Mileage),1,MAXSTRLEN(PostingDescription));
+      PostBalance(DATABASE::Mileage,0,'',Mileage."Entry No.",TotalBalAmount,TotalBalAmountLCY,'',PostingDate,PostingDescription,
+        EMSetup."Mileage Source Code");
+    END;
+
+    LOCAL PROCEDURE Replace@1000000003(Text@1000000000 : Text[1024];ReplaceTxt@1000000001 : Text[1024];ReplaceWithTxt@1000000002 : Text[1024];CaseSensitive@1160040000 : Boolean) : Text[1024];
+    VAR
+      i@1000000005 : Integer;
+      ReplaceTxtLen@1000000003 : Integer;
+      ReplaceWithTxtLen@1000000004 : Integer;
+    BEGIN
+      ReplaceTxtLen := STRLEN(ReplaceTxt);
+      ReplaceWithTxtLen := STRLEN(ReplaceWithTxt);
+
+      IF CaseSensitive THEN
+        i := STRPOS(Text,ReplaceTxt)
+      ELSE
+        i := STRPOS(UPPERCASE(Text),UPPERCASE(ReplaceTxt));
+
+      IF i <> 0 THEN BEGIN
+        Text := COPYSTR(Text,1,i-1) + ReplaceWithTxt + COPYSTR(Text,i + ReplaceTxtLen);
+        Text :=
+          COPYSTR(Text,1,i-1 + ReplaceWithTxtLen) +
+            Replace(COPYSTR(Text,i + ReplaceWithTxtLen),ReplaceTxt,ReplaceWithTxt,CaseSensitive);
+      END;
+
+      EXIT(Text);
+    END;
+
+    PROCEDURE GetPostingAndBalancingAmounts@1160040000(Expense@1160040000 : Record 6086320;VAR PostAmt@1160040005 : Decimal;VAR PostCurr@1160040006 : Code[10];VAR PostAmtLCY@1160040004 : Decimal;VAR BalAmt@1160040003 : Decimal;VAR BalCurr@1160040001 : Code[20];VAR BalAmtLCY@1160040002 : Decimal);
+    BEGIN
+      CLEAR(PostAmt);
+      CLEAR(PostCurr);
+      CLEAR(PostAmtLCY);
+      CLEAR(BalAmt);
+      CLEAR(BalCurr);
+      CLEAR(BalAmtLCY);
+
+      //ALWAYS POST IN BANK ACC CURRENCY IF ANY
+      IF Expense."Bank Currency Code" <> '' THEN BEGIN
+        PostAmt := Expense."Bank-Currency Amount";
+        PostCurr := Expense."Bank Currency Code";
+        BalAmt := -ABS(Expense."Bank-Currency Amount");
+
+        //USE THE AMOUNT LCY FROM THE BANK
+        IF Expense."Currency Code" = '' THEN BEGIN
+          PostAmtLCY := Expense."Amount (LCY)";
+          BalAmtLCY := -ABS(Expense."Amount (LCY)");
+        END;
+      END ELSE
+        IF EMSetup."Post in Expense Currency" THEN BEGIN
+          PostAmt := Expense.Amount;
+          PostCurr := Expense."Currency Code";
+          BalAmt := -ABS(Expense.Amount);
+
+          IF Expense."Cash/Private Card" THEN BEGIN
+            PostAmtLCY := Expense."Amount (LCY)";
+            BalAmtLCY := -ABS(Expense."Amount (LCY)");
+          END ELSE BEGIN
+            PostAmtLCY := Expense."Bank-Currency Amount";
+            BalAmtLCY := -ABS(Expense."Bank-Currency Amount");
+          END;
+        END ELSE
+          IF Expense."Cash/Private Card" THEN BEGIN
+            PostAmtLCY := Expense."Amount (LCY)";
+            BalAmtLCY := -ABS(Expense."Amount (LCY)");
+          END ELSE BEGIN
+            PostAmtLCY := Expense."Bank-Currency Amount";
+            BalAmtLCY := -ABS(Expense."Bank-Currency Amount");
+          END;
+
+      BalCurr := PostCurr;
+    END;
+
+    PROCEDURE GetPostingCurrency@1160040014(Expense@1160040006 : Record 6086320) : Code[10];
+    VAR
+      PostAmt@1160040007 : Decimal;
+      PostCurr@1160040004 : Code[10];
+      PostAmtLCY@1160040003 : Decimal;
+      BalAmt@1160040002 : Decimal;
+      BalCurr@1160040001 : Code[20];
+      BalAmtLCY@1160040000 : Decimal;
+    BEGIN
+      GetPostingAndBalancingAmounts(Expense,PostAmt,PostCurr,PostAmtLCY,BalAmt,BalCurr,BalAmtLCY);
+      EXIT(PostCurr);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

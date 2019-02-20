@@ -1,0 +1,164 @@
+OBJECT Codeunit 6086326 Navigate Settlement - Find
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/02/18;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.06;
+  }
+  PROPERTIES
+  {
+    TableNo=6086014;
+    OnRun=VAR
+            DocEntryTemp@1160040000 : TEMPORARY Record 265;
+          BEGIN
+            FindRecords(DocEntryTemp,"Doc. No. Filter","Posting Date Filter");
+            Rec.TRANSFERFIELDS(DocEntryTemp);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      SettlementCaption@1160040002 : TextConst 'ENU=Settlement';
+      Text001@1160040001 : TextConst 'ENU=Unable to find any entries or posting suggestion for this %1.';
+      Text002@1160040000 : TextConst 'ENU=The posting suggestion for this %1 has not been posted.';
+
+    PROCEDURE FindRecords@1160040002(VAR DocEntry@161024014 : Record 265;DocNoFilter@161024013 : Code[250];PostingDateFilter@161024012 : Text[250]);
+    VAR
+      TempSettlement@161024017 : TEMPORARY Record 6086339;
+      Settlement@1160040000 : Record 6086339;
+    BEGIN
+      IF Settlement.READPERMISSION THEN BEGIN
+        FilterSettlements(TempSettlement,DocNoFilter,PostingDateFilter);
+
+        InsertIntoDocEntry(DocEntry,DATABASE::"Expense Header",0,SettlementCaption,TempSettlement.COUNT);
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertIntoDocEntry@1160040001(VAR DocEntry@161024012 : Record 265;DocTableID@1000 : Integer;DocType@1003 : Option;DocTableName@1001 : Text[1024];DocNoOfRecords@1002 : Integer);
+    BEGIN
+      WITH DocEntry DO BEGIN
+        IF DocNoOfRecords = 0 THEN
+          EXIT;
+        INIT;
+        "Entry No." := "Entry No." + 1;
+        "Table ID" := DocTableID;
+        "Document Type" := DocType;
+        "Table Name" := COPYSTR(DocTableName,1,MAXSTRLEN("Table Name"));
+        "No. of Records" := DocNoOfRecords;
+        INSERT;
+      END;
+    END;
+
+    PROCEDURE FilterSettlements@161024014(VAR Settlement2@161024014 : TEMPORARY Record 6086339;DocNoFilter@161024013 : Code[250];PostingDateFilter@161024012 : Text[250]);
+    VAR
+      GLEntry@1160040002 : Record 17;
+      PurchHLine@1160040001 : Record 39;
+      GenJnlLine@1160040005 : Record 81;
+      PurchInvHeader@1160040000 : Record 122;
+      Settlement@1160040010 : Record 6086339;
+      LessorIntegration@1160040003 : Codeunit 6086327;
+    BEGIN
+      Settlement.SETCURRENTKEY("Created Doc. Type","Created Doc. Subtype","Created Doc. ID","Created Doc. Ref. No.");
+
+      IF PurchInvHeader.READPERMISSION THEN BEGIN
+        PurchInvHeader.SETFILTER("No.",DocNoFilter);
+        PurchInvHeader.SETFILTER("Posting Date",PostingDateFilter);
+        IF PurchInvHeader.FINDFIRST THEN
+          REPEAT
+            Settlement.SETRANGE("Created Doc. Type",DATABASE::"Purchase Line");
+            Settlement.SETRANGE("Created Doc. Subtype",PurchHLine."Document Type"::Invoice);
+            Settlement.SETRANGE("Created Doc. ID",PurchInvHeader."Pre-Assigned No.");
+            IF Settlement.FINDFIRST THEN
+              REPEAT
+                IF NOT Settlement2.GET(Settlement."Document Type",Settlement."No.") THEN BEGIN
+                  Settlement2 := Settlement;
+                  Settlement2.INSERT;
+                END;
+              UNTIL Settlement.NEXT = 0;
+          UNTIL PurchInvHeader.NEXT = 0;
+      END;
+
+      IF GLEntry.READPERMISSION THEN BEGIN
+        GLEntry.SETCURRENTKEY("Document No.","Posting Date");
+        GLEntry.SETFILTER("Document No.",DocNoFilter);
+        GLEntry.SETFILTER("Posting Date",PostingDateFilter);
+        IF GLEntry.FINDFIRST THEN
+          REPEAT
+            Settlement.SETRANGE("Created Doc. Type",DATABASE::"Gen. Journal Line");
+            Settlement.SETRANGE("Created Doc. Subtype",GenJnlLine."Document Type"::" ");
+            Settlement.SETRANGE("Created Doc. ID",GLEntry."Document No.");
+            IF Settlement.FINDFIRST THEN
+              REPEAT
+                IF NOT Settlement2.GET(Settlement."Document Type",Settlement."No.") THEN BEGIN
+                  Settlement2 := Settlement;
+                  Settlement2.INSERT;
+                END;
+              UNTIL Settlement.NEXT = 0;
+          UNTIL GLEntry.NEXT = 0;
+      END;
+
+      LessorIntegration.FilterSettlementFromPayEntry(Settlement2,DocNoFilter,PostingDateFilter);
+    END;
+
+    PROCEDURE NavigateSettlements@1160040004(Settlement@1160040000 : Record 6086339);
+    VAR
+      GLEntry@1160040002 : Record 17;
+      GenJnlLine@1160040005 : Record 81;
+      GenJnlBatch@1160040010 : Record 232;
+      EMSetup@1160040006 : Record 6086300;
+      Mileage@1160040011 : Record 6086338;
+      NavigateForm@1160040001 : Page 344;
+      GenJnlManagement@1160040009 : Codeunit 230;
+      LessorIntegration@1160040007 : Codeunit 6086327;
+    BEGIN
+      CASE Settlement."Created Doc. Type" OF
+        DATABASE::"Gen. Journal Line":
+          BEGIN
+            IF GLEntry.READPERMISSION THEN BEGIN
+              GLEntry.SETCURRENTKEY("Document No.","Posting Date");
+              GLEntry.SETFILTER("Document No.",Settlement."Created Doc. ID");
+              IF GLEntry.FINDFIRST THEN BEGIN
+                NavigateForm.SetDoc(GLEntry."Posting Date",Settlement."Created Doc. ID");
+                NavigateForm.RUN;
+                EXIT;
+              END;
+            END;
+
+            IF GenJnlLine.READPERMISSION THEN BEGIN
+              EMSetup.GET;
+              GenJnlLine.SETRANGE("Journal Template Name",EMSetup."Expense Template Name");
+              GenJnlLine.SETRANGE("Journal Batch Name",EMSetup."Expense Batch Name");
+              GenJnlLine.SETRANGE("Document No.",Settlement."Created Doc. ID");
+              IF GenJnlLine.FINDFIRST THEN BEGIN
+                GenJnlBatch.SETRANGE("Journal Template Name",EMSetup."Expense Template Name");
+                GenJnlBatch.SETRANGE(Name,EMSetup."Expense Batch Name");
+                GenJnlBatch.FINDFIRST;
+                GenJnlManagement.TemplateSelectionFromBatch(GenJnlBatch);
+
+                MESSAGE(STRSUBSTNO(Text002,SettlementCaption));
+                EXIT;
+              END;
+            END;
+          END;
+      END;
+
+      IF LessorIntegration.IsLessorEnabled(FALSE) THEN BEGIN
+        //FIND ANY MILEAGE TO INDENTIFY THE POSTED DOCUMENT NO.
+        Mileage.SETCURRENTKEY("Settlement No.");
+        Mileage.SETRANGE("Settlement No.",Settlement."No.");
+        IF Mileage.FINDFIRST THEN BEGIN
+          LessorIntegration.FilterPayEntryFromMileage(Mileage);
+          EXIT;
+        END;
+      END;
+
+      MESSAGE(STRSUBSTNO(Text001,SettlementCaption));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,174 @@
+OBJECT Codeunit 6086390 EM Bank Reconciliation Post
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/10/17;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60;
+  }
+  PROPERTIES
+  {
+    TableNo=6086374;
+    OnRun=BEGIN
+            Window.OPEN('#1#################################\\' + Text000);
+            Window.UPDATE(1,STRSUBSTNO('%1 %2',"Bank Account No.","Statement No."));
+
+            InitPost(Rec);
+            Post(Rec);
+            FinalizePost(Rec);
+
+            Window.CLOSE;
+
+            COMMIT;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=Posting lines              #2######';
+      Text001@1001 : TextConst 'ENU=%1 must be %2\(the sum between Total Balance and %3)';
+      Text002@1002 : TextConst 'ENU=There is nothing to post.';
+      Text003@1003 : TextConst 'ENU=The application is not correct. The total amount applied is %1.It must be %2.';
+      Text004@1004 : TextConst 'ENU=The total difference is %1. It must be %2.';
+      BankAcc@1007 : Record 270;
+      BankTransaction@1008 : Record 6086330;
+      TotalAmount@1014 : Decimal;
+      TotalAppliedAmount@1015 : Decimal;
+      TotalDiff@1016 : Decimal;
+      Lines@1017 : Integer;
+      Window@1018 : Dialog;
+      Difference@1006 : Decimal;
+
+    LOCAL PROCEDURE InitPost@2(BankAccRecon@1000 : Record 6086374);
+    BEGIN
+      BankAccRecon.TESTFIELD("Statement Date");
+      CheckLinesMatchEndingBalance(BankAccRecon,Difference);
+    END;
+
+    LOCAL PROCEDURE Post@3(BankAccRecon@1000 : Record 6086374);
+    VAR
+      BankAccReconLine@1001 : Record 6086375;
+      AppliedAmount@1002 : Decimal;
+    BEGIN
+      WITH BankAccRecon DO BEGIN
+        // Run through lines
+        BankAccReconLine.FilterBankRecLines(BankAccRecon);
+        BankAccReconLine.SETFILTER("Statement Amount",'<>%1',0);
+        TotalAmount := 0;
+        TotalAppliedAmount := 0;
+        TotalDiff := 0;
+        Lines := 0;
+        IF BankAccReconLine.ISEMPTY THEN
+          ERROR(Text002);
+        BankTransaction.LOCKTABLE;
+
+        IF BankAccReconLine.FINDSET THEN
+          REPEAT
+            Lines := Lines + 1;
+            Window.UPDATE(2,Lines);
+            AppliedAmount := 0;
+
+            CASE BankAccReconLine.Type OF
+              BankAccReconLine.Type::"Bank Transaction Entry":
+                CloseBankTransactionEntry(BankAccReconLine,AppliedAmount);
+              BankAccReconLine.Type::Difference:
+                TotalDiff += BankAccReconLine."Statement Amount";
+            END;
+
+            BankAccReconLine.TESTFIELD("Applied Amount",AppliedAmount);
+            TotalAmount += BankAccReconLine."Statement Amount";
+            TotalAppliedAmount += AppliedAmount;
+          UNTIL BankAccReconLine.NEXT = 0;
+
+        // Test amount
+        IF TotalAmount <> TotalAppliedAmount + TotalDiff THEN
+          ERROR(Text003,TotalAppliedAmount + TotalDiff,TotalAmount);
+        IF Difference <> TotalDiff THEN
+          ERROR(Text004,Difference,TotalDiff);
+
+        UpdateLastStatement("Statement No.");
+        TransferToBankStmt(BankAccRecon);
+      END;
+    END;
+
+    LOCAL PROCEDURE FinalizePost@4(BankAccRecon@1000 : Record 6086374);
+    VAR
+      BankAccReconLine@1001 : Record 6086375;
+    BEGIN
+      WITH BankAccRecon DO BEGIN
+        // Delete statement
+        IF BankAccReconLine.LinesExist(BankAccRecon) THEN
+          REPEAT
+            BankAccReconLine.DELETE;
+          UNTIL BankAccReconLine.NEXT = 0;
+
+        DELETE;
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckLinesMatchEndingBalance@1(BankAccRecon@1000 : Record 6086374;VAR Difference@1002 : Decimal);
+    VAR
+      BankAccReconLine@1001 : Record 6086375;
+    BEGIN
+      WITH BankAccReconLine DO BEGIN
+        LinesExist(BankAccRecon);
+        CALCSUMS("Statement Amount",Difference);
+
+        IF "Statement Amount" <> (BankAccRecon."Statement Ending Balance" - BankAccRecon."Balance Last Statement") THEN
+          ERROR(Text001,BankAccRecon.FIELDCAPTION("Statement Ending Balance"),
+            BankAccRecon."Balance Last Statement" + "Statement Amount",BankAccRecon.FIELDCAPTION("Balance Last Statement"));
+      END;
+      Difference := BankAccReconLine.Difference;
+    END;
+
+    LOCAL PROCEDURE CloseBankTransactionEntry@7(BankAccReconLine@1000 : Record 6086375;VAR AppliedAmount@1001 : Decimal);
+    VAR
+      BankTransaction2@1002 : Record 6086330;
+    BEGIN
+      BankTransaction.RESET;
+      BankTransaction.SETCURRENTKEY("Bank Account Type","Bank Account No.");
+      BankTransaction.SETRANGE("Statement Status",BankTransaction."Statement Status"::"Bank Transaction Applied");
+      BankTransaction.SETRANGE("Statement No.",BankAccReconLine."Statement No.");
+      BankTransaction.SETRANGE("Statement Line No.",BankAccReconLine."Statement Line No.");
+      IF BankTransaction.FINDSET(TRUE,FALSE) THEN
+        REPEAT
+          AppliedAmount += BankTransaction."Bank-Currency Amount";
+          BankTransaction2.GET(BankTransaction."Entry No.");
+          BankTransaction2."Statement Status" := BankTransaction."Statement Status"::Closed;
+          BankTransaction2.VALIDATE(Reconciled,TRUE);
+          BankTransaction2.MODIFY;
+        UNTIL BankTransaction.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE TransferToBankStmt@25(BankAccRecon@1002 : Record 6086374);
+    VAR
+      BankAccStmt@1001 : Record 6086376;
+      BankAccStmtLine@1000 : Record 6086377;
+      BankAccReconLine@1003 : Record 6086375;
+    BEGIN
+      IF BankAccReconLine.LinesExist(BankAccRecon) THEN
+        REPEAT
+          BankAccStmtLine.TRANSFERFIELDS(BankAccReconLine);
+          BankAccStmtLine.INSERT;
+        UNTIL BankAccReconLine.NEXT = 0;
+
+      BankAccStmt.TRANSFERFIELDS(BankAccRecon);
+      BankAccStmt.INSERT;
+    END;
+
+    LOCAL PROCEDURE UpdateLastStatement@5(StatementNo@1001 : Code[20]);
+    VAR
+      EMSetup@1000 : Record 6086300;
+    BEGIN
+      EMSetup.LOCKTABLE;
+      EMSetup.GET;
+      EMSetup."Last Statement No." := StatementNo;
+      EMSetup.MODIFY;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

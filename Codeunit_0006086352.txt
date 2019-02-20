@@ -1,0 +1,264 @@
+OBJECT Codeunit 6086352 Bank Transaction-Post
+{
+  OBJECT-PROPERTIES
+  {
+    Date=06/11/18;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.06;
+  }
+  PROPERTIES
+  {
+    TableNo=6086330;
+    OnRun=BEGIN
+            IF ReversePost THEN
+              RevertPosting(Rec)
+            ELSE
+              Code(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      EMSetup@1160040000 : Record 6086300;
+      DimMgt@1160040002 : Codeunit 408;
+      PostingTxt@1160040001 : TextConst 'ENU=Posting Bank Transactions #1############# @2@@@@@@@@@@@@';
+      ReversePostingTxt@1160040003 : TextConst 'ENU=Reversing Posting Bank Transactions #1############# @2@@@@@@@@@@@@';
+      ReversePost@1160040004 : Boolean;
+      ConfirmReversePostTxt@1160040005 : TextConst 'ENU=This will reverse %1 bank transactions.\\Do you want to continue?';
+      ConfirmPostTxt@1160040006 : TextConst 'ENU=This will post %1 bank transactions to the intermediate expense account.\\Do you want to continue?';
+
+    PROCEDURE Code@1160040000(VAR BankTransaction@1160040000 : Record 6086330);
+    VAR
+      GenJnlLine@1160040001 : Record 81;
+      UserCreditCard@1160040004 : Record 6086311;
+      GLAccount@1160040006 : Record 15;
+      Currency@1160040007 : Record 4;
+      EMNavVersionMgt@1160040003 : Codeunit 6086319;
+      GenJnlPostLine@1160040002 : Codeunit 12;
+      BankAccCurrency@1160040005 : Code[20];
+    BEGIN
+      IF BankTransaction.Posted OR BankTransaction."Bank Statement Transaction" THEN
+        EXIT;
+
+      EMSetup.GET;
+      EMSetup.TESTFIELD("Intermediate Expense Account");
+      GLAccount.GET(EMSetup."Intermediate Expense Account");
+      IF (GLAccount."Gen. Bus. Posting Group" <> '') OR (GLAccount."Gen. Prod. Posting Group" <> '') OR
+         (GLAccount."VAT Bus. Posting Group" <> '') OR (GLAccount."VAT Prod. Posting Group" <> '')
+      THEN
+        GLAccount.TESTFIELD("Gen. Posting Type");
+
+      GenJnlLine."Document No." := 'BANK TRANS.' + FORMAT(BankTransaction."Entry No.");
+
+      GenJnlLine.VALIDATE("Posting Date",BankTransaction."Posting Date");
+      GenJnlLine.VALIDATE("Document Date",BankTransaction."Document Date");
+
+      UserCreditCard.GET(BankTransaction."Continia User ID",BankTransaction."Card No.");
+      UserCreditCard.TESTFIELD("Account No.");
+      BankAccCurrency := UserCreditCard.GetAccountCurrencyCode(UserCreditCard."Account Type",UserCreditCard."Account No.");
+
+      GenJnlLine."System-Created Entry" := TRUE;
+      GenJnlLine.VALIDATE("Account Type",UserCreditCard."Account Type");
+      GenJnlLine.VALIDATE("Account No.",UserCreditCard."Account No.");
+      GenJnlLine.VALIDATE("Bal. Account Type",GenJnlLine."Bal. Account Type"::"G/L Account");
+      GenJnlLine.VALIDATE("Bal. Account No.",EMSetup."Intermediate Expense Account");
+      GenJnlLine."Source Code" := EMSetup."Bank Transaction Source Code";
+
+      IF BankAccCurrency <> '' THEN BEGIN
+        Currency.GET(BankAccCurrency);
+        Currency.TESTFIELD("Amount Rounding Precision");
+
+        GenJnlLine.VALIDATE(Amount,-ROUND(BankTransaction."Bank-Currency Amount",Currency."Amount Rounding Precision"));
+        GenJnlLine.VALIDATE("Currency Code",BankAccCurrency);
+        // THE BANK ACCOUNT IS THE SAME AS LCY
+        IF BankTransaction."Currency Code" = '' THEN
+          GenJnlLine.VALIDATE("Amount (LCY)",-ROUND(BankTransaction.Amount));
+      END ELSE BEGIN
+        IF BankTransaction."Currency Code" = '' THEN
+          Currency.InitRoundingPrecision
+        ELSE BEGIN
+          Currency.GET(BankTransaction."Currency Code");
+          Currency.TESTFIELD("Amount Rounding Precision");
+        END;
+
+        GenJnlLine.VALIDATE(Amount,-ROUND(BankTransaction.Amount,Currency."Amount Rounding Precision"));
+        GenJnlLine.VALIDATE("Currency Code",BankTransaction."Currency Code");
+        GenJnlLine.VALIDATE("Amount (LCY)",-ROUND(BankTransaction."Bank-Currency Amount"));
+      END;
+
+      GenJnlLine."External Document No." := STRSUBSTNO('BANK TRANS. %1',FORMAT(BankTransaction."Entry No."));
+      GenJnlLine.Description :=
+        COPYSTR(
+         STRSUBSTNO('%1 %2',BankTransaction.TABLECAPTION,BankTransaction."Entry No."),1,MAXSTRLEN(GenJnlLine.Description));
+
+      EMNavVersionMgt.PostJnLineWithCheck(
+        GenJnlPostLine,GenJnlLine,DATABASE::"Bank Transaction",0,'',BankTransaction."Entry No.",0,TRUE,TRUE);
+
+      BankTransaction.VALIDATE(Posted,TRUE);
+      BankTransaction."Posted Doc. ID" := GenJnlLine."Document No.";
+      BankTransaction.MODIFY;
+    END;
+
+    PROCEDURE RevertPosting@1160040001(VAR BankTransaction@1160040000 : Record 6086330);
+    VAR
+      GenJnlLine@1160040007 : Record 81;
+      UserCreditCard@1160040004 : Record 6086311;
+      GLAccount@1160040005 : Record 15;
+      Currency@1160040006 : Record 4;
+      GenJnlPostLine@1160040003 : Codeunit 12;
+      EMNavVersionMgt@1160040002 : Codeunit 6086319;
+      BankAccCurrency@1160040001 : Code[20];
+    BEGIN
+      IF (BankTransaction."Posted Doc. ID" = '') OR BankTransaction."Bank Statement Transaction" THEN
+        EXIT;
+
+      EMSetup.GET;
+      EMSetup.TESTFIELD("Intermediate Expense Account");
+      GLAccount.GET(EMSetup."Intermediate Expense Account");
+      IF (GLAccount."Gen. Bus. Posting Group" <> '') OR (GLAccount."Gen. Prod. Posting Group" <> '') OR
+         (GLAccount."VAT Bus. Posting Group" <> '') OR (GLAccount."VAT Prod. Posting Group" <> '')
+      THEN
+        GLAccount.TESTFIELD("Gen. Posting Type");
+
+      GenJnlLine."Document No." := 'BANK TRANS.' + FORMAT(BankTransaction."Entry No.");
+
+      GenJnlLine.VALIDATE("Posting Date",BankTransaction."Posting Date");
+      GenJnlLine.VALIDATE("Document Date",BankTransaction."Document Date");
+
+      UserCreditCard.GET(BankTransaction."Continia User ID",BankTransaction."Card No.");
+      UserCreditCard.TESTFIELD("Account No.");
+      BankAccCurrency := UserCreditCard.GetAccountCurrencyCode(UserCreditCard."Account Type",UserCreditCard."Account No.");
+
+      GenJnlLine."System-Created Entry" := TRUE;
+      GenJnlLine.VALIDATE("Account Type",UserCreditCard."Account Type");
+      GenJnlLine.VALIDATE("Account No.",UserCreditCard."Account No.");
+      GenJnlLine.VALIDATE("Bal. Account Type",GenJnlLine."Bal. Account Type"::"G/L Account");
+      GenJnlLine.VALIDATE("Bal. Account No.",EMSetup."Intermediate Expense Account");
+      GenJnlLine."Source Code" := EMSetup."Bank Trs. Reverse Source Code";
+
+      IF BankAccCurrency <> '' THEN BEGIN
+        Currency.GET(BankAccCurrency);
+        Currency.TESTFIELD("Amount Rounding Precision");
+
+        GenJnlLine.VALIDATE(Amount,ROUND(BankTransaction.Amount,Currency."Amount Rounding Precision"));
+        GenJnlLine.VALIDATE("Currency Code",BankAccCurrency);
+        IF BankTransaction."Currency Code" = '' THEN
+          GenJnlLine.VALIDATE("Amount (LCY)",ROUND(BankTransaction.Amount));
+      END ELSE BEGIN
+        IF BankTransaction."Currency Code" = '' THEN
+          Currency.InitRoundingPrecision
+        ELSE BEGIN
+          Currency.GET(BankTransaction."Currency Code");
+          Currency.TESTFIELD("Amount Rounding Precision");
+        END;
+
+        GenJnlLine.VALIDATE(Amount,ROUND(BankTransaction.Amount,Currency."Amount Rounding Precision"));
+        GenJnlLine.VALIDATE("Currency Code",BankTransaction."Currency Code");
+        GenJnlLine.VALIDATE("Amount (LCY)",ROUND(BankTransaction."Bank-Currency Amount"));
+      END;
+
+      GenJnlLine."External Document No." := STRSUBSTNO('BANK TRANS. %1',FORMAT(BankTransaction."Entry No."));
+      GenJnlLine.Description :=
+        COPYSTR(
+         STRSUBSTNO('%1 %2',BankTransaction.TABLECAPTION,BankTransaction."Entry No."),1,MAXSTRLEN(GenJnlLine.Description));
+
+      EMNavVersionMgt.PostJnLineWithCheck(
+        GenJnlPostLine,GenJnlLine,DATABASE::"Bank Transaction",0,'',BankTransaction."Entry No.",0,FALSE,FALSE);
+
+      CLEAR(BankTransaction.Posted);
+      CLEAR(BankTransaction."Posted Date/Time");
+      CLEAR(BankTransaction."Posted by User ID");
+      BankTransaction.MODIFY;
+    END;
+
+    PROCEDURE PostAllBankTransactions@1160040002();
+    VAR
+      BankTransaction@1160040000 : Record 6086330;
+      BankTransaction2@1160040001 : Record 6086330;
+      Expense@1160040005 : Record 6086320;
+      Window@1160040004 : Dialog;
+      CounterTotal@1160040003 : Integer;
+      Counter@1160040002 : Integer;
+    BEGIN
+      BankTransaction.SETCURRENTKEY(Posted);
+      BankTransaction.SETRANGE(Posted,FALSE);
+      IF BankTransaction.FINDSET THEN BEGIN
+        CounterTotal := BankTransaction.COUNT;
+
+        IF NOT CONFIRM(ConfirmPostTxt,TRUE,CounterTotal) THEN
+          ERROR('');
+
+        Window.OPEN(PostingTxt);
+
+        REPEAT
+          CLEAR(Expense);
+
+          Counter := Counter + 1;
+          Window.UPDATE(1,BankTransaction."Entry No.");
+          Window.UPDATE(2,ROUND(Counter / CounterTotal * 10000,1));
+
+          IF BankTransaction."Matched to Expense" THEN
+            Expense.GET(BankTransaction.GetMatchedExpenseEntryNo);
+
+          IF NOT Expense.Posted THEN BEGIN
+            BankTransaction2.GET(BankTransaction."Entry No.");
+            CODEUNIT.RUN(CODEUNIT::"Bank Transaction-Post",BankTransaction2);
+          END;
+
+        UNTIL BankTransaction.NEXT = 0;
+        Window.CLOSE;
+      END;
+    END;
+
+    PROCEDURE ReversePostAllBankTransactions@1160040003();
+    VAR
+      BankTransaction@1160040000 : Record 6086330;
+      BankTransaction2@1160040001 : Record 6086330;
+      Expense@1160040007 : Record 6086320;
+      BnkTransPost@1160040006 : Codeunit 6086352;
+      Window@1160040004 : Dialog;
+      Counter@1160040003 : Integer;
+      CounterTotal@1160040002 : Integer;
+    BEGIN
+      BankTransaction.SETCURRENTKEY(Posted);
+      BankTransaction.SETRANGE(Posted,TRUE);
+      IF BankTransaction.FINDSET THEN BEGIN
+        CounterTotal := BankTransaction.COUNT;
+
+        IF NOT CONFIRM(ConfirmReversePostTxt,TRUE,CounterTotal) THEN
+          ERROR('');
+
+        Window.OPEN(ReversePostingTxt);
+
+        REPEAT
+          CLEAR(Expense);
+
+          Counter := Counter + 1;
+          Window.UPDATE(1,BankTransaction."Entry No.");
+          Window.UPDATE(2,ROUND(Counter / CounterTotal * 10000,1));
+
+          IF BankTransaction."Matched to Expense" THEN
+            Expense.GET(BankTransaction.GetMatchedExpenseEntryNo);
+
+          IF NOT Expense.Posted THEN BEGIN
+            BankTransaction2.GET(BankTransaction."Entry No.");
+            BnkTransPost.SetReversePosting;
+            BnkTransPost.RUN(BankTransaction2);
+          END;
+
+        UNTIL BankTransaction.NEXT = 0;
+        Window.CLOSE;
+      END;
+    END;
+
+    PROCEDURE SetReversePosting@1160040004();
+    BEGIN
+      ReversePost := TRUE;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

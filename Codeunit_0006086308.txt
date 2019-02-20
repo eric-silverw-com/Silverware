@@ -1,0 +1,408 @@
+OBJECT Codeunit 6086308 Expense Inbox-Check
+{
+  OBJECT-PROPERTIES
+  {
+    Date=09/19/18;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.07;
+  }
+  PROPERTIES
+  {
+    TableNo=6086323;
+    OnRun=VAR
+            GLSetup@1160040022 : Record 98;
+            EMDimInbox@1160040019 : Record 6086362;
+            EMSetup@1160040016 : Record 6086300;
+            EMAttachment@1160040008 : Record 6086359;
+            EMDim@1160040009 : Record 6086360;
+            EMAttachmentInbox@1160040004 : Record 6086363;
+            EMReminder@1160040007 : Record 6086364;
+            ExpHeader@1160040010 : Record 6086339;
+            ExpHeaderInbox@1160040011 : Record 6086341;
+            ExpAttendeeInbox@1160040006 : Record 6086325;
+            ExpAttendee@1160040003 : Record 6086308;
+            ConfiguredField@1160040000 : Record 6086346;
+            FileManagement@1160040005 : Codeunit 6085584;
+            ExpenseReopen@1160040015 : Codeunit 6086303;
+            ExpValidate@1160040014 : Codeunit 6086321;
+            ExpSendToUser@1160040013 : Codeunit 6086324;
+            EMApprovalsBridge@1160040012 : Codeunit 6086369;
+            EmOnline@1160040017 : Codeunit 6086305;
+            EmptyGuid@1160040002 : GUID;
+            IsNew@1160040001 : Boolean;
+            SettlementNo@1160040018 : Code[20];
+          BEGIN
+            IF "Expense GUID" = EmptyGuid THEN
+              IsNew := TRUE
+            ELSE BEGIN
+              Expense.SETCURRENTKEY("Expense GUID");
+              Expense.SETRANGE("Expense GUID","Expense GUID");
+              IF Expense.FINDFIRST THEN
+                Expense.TESTFIELD(Posted,FALSE)
+              ELSE
+                IsNew := TRUE;
+            END;
+
+            IF NOT IsNew THEN
+              IF Expense.Posted OR NOT (Expense.Status IN [Expense.Status::Open,Expense.Status::"Pending Expense User"]) THEN
+                ERROR(ExpStatusErr,Expense.TABLECAPTION,Expense."Entry No.");
+
+            IF "Expense Header GUID" <> EmptyGuid THEN BEGIN
+              ExpHeader.SETCURRENTKEY("Exp. Header GUID");
+              ExpHeader.SETRANGE("Exp. Header GUID","Expense Header GUID");
+              IF NOT ExpHeader.FINDFIRST THEN BEGIN
+                ExpHeaderInbox.SETCURRENTKEY("Exp. Header GUID");
+                ExpHeaderInbox.SETRANGE("Exp. Header GUID","Expense Header GUID");
+                ExpHeaderInbox.SETFILTER(Status,'%1|%2',ExpHeaderInbox.Status::Error,ExpHeaderInbox.Status::Pending);
+                IF ExpHeaderInbox.FINDFIRST THEN
+                  ERROR(ProcessSettlement,ExpHeaderInbox.TABLECAPTION,ExpHeaderInbox.FIELDCAPTION("Entry No."),ExpHeaderInbox."Entry No.")
+                ELSE
+                  ERROR(SettlementNotFound);
+              END ELSE
+                IF NOT (ExpHeader.Status IN [ExpHeader.Status::Open,ExpHeader.Status::"Pending Expense User"]) THEN
+                  ERROR(SettlementStatusNotAllowed,ExpHeader."No.");
+
+              TESTFIELD("Continia User ID",ExpHeader."Continia User ID");
+              SettlementNo := ExpHeader."No.";
+            END ELSE
+              SettlementNo := '';
+
+            Expense.SetSuspendInboxCheck(TRUE);
+            IF IsNew THEN BEGIN
+              Expense.INIT;
+              Expense."Entry No." := GetLastLineNo + 1;
+              Expense."Date Created" := TODAY;
+              Expense."Created By User ID" := USERID;
+              Expense.INSERT;
+              Expense.VALIDATE("Continia User ID",Rec."Continia User ID");
+            END ELSE
+              EMReminder.ResetReminder(DATABASE::Expense,0,'',Expense."Entry No.",Expense."Continia User ID");
+
+            IF SettlementNo <> '' THEN BEGIN
+              Expense."Settlement No." := SettlementNo;
+              IF Expense."Settlement Line No." = 0 THEN
+                Expense."Settlement Line No." := Expense.GetNextDocumentLineNo;
+            END ELSE BEGIN
+              Expense."Settlement No." := '';
+              Expense."Settlement Line No." := 0;
+            END;
+
+            IF ConfiguredField.AttendeesEnabled THEN BEGIN
+              ExpAttendee.SETRANGE("Expense Entry No.","Expense Entry No.");
+              ExpAttendee.DELETEALL;
+            END;
+
+            Expense.VALIDATE(Description,Rec.Description);
+            Expense.VALIDATE("Description 2",Rec."Description 2");
+            Expense.VALIDATE("Expense Type",Rec."Expense Type");
+            Expense.VALIDATE("Document Date",Rec."Document Date");
+            IF EmOnline.ConfigFieldActive(ConfiguredField.Type::Expense,'COUNTRY/REGION') THEN
+              Expense.VALIDATE("Country/Region Code",Rec."Country/Region Code");
+
+            Expense."Expense Completed" := "Expense Completed";
+            Expense."Continia Online Version No." := "Continia Online Version No.";
+            Expense."Expense Header GUID" := "Expense Header GUID";
+
+            IF NOT Expense."Matched to Bank Transaction" THEN BEGIN
+              IF Expense."Currency Code" <> Rec."Currency Code" THEN
+                Expense.VALIDATE("Currency Code",Rec."Currency Code");
+              IF Expense.Amount <> Rec.Amount THEN
+                Expense.VALIDATE(Amount,Rec.Amount);
+            END ELSE BEGIN
+              TESTFIELD("Currency Code",Expense."Currency Code");
+              TESTFIELD(Amount,Expense.Amount);
+            END;
+
+            Expense.VALIDATE("Job No.","Job No.");
+            Expense.VALIDATE("Job Task No.","Job Task No.");
+
+            IF EmOnline.ConfigFieldActive(ConfiguredField.Type::Expense,'BILLABLE') THEN
+              Expense.VALIDATE(Billable,Billable);
+
+            Expense.VALIDATE("Expense GUID","Expense GUID");
+            IF NOT Expense."Matched to Bank Transaction" THEN
+              Expense.VALIDATE("Cash/Private Card",Rec."Cash/Private Card");
+
+            Expense.SetSuspendInboxCheck(TRUE);
+            Expense.SetSkipSendToExpUser(TRUE);
+            Expense.MODIFY;
+
+            EMDim.SETCURRENTKEY("Table ID","Document Type","Document No.","Doc. Ref. No.");
+            EMDim.SETRANGE("Table ID",DATABASE::Expense);
+            EMDim.SETRANGE("Document Type",0);
+            EMDim.SETRANGE("Document No.",'');
+            EMDim.SETRANGE("Doc. Ref. No.",Expense."Entry No.");
+            IF EMDim.FINDFIRST THEN
+              REPEAT
+                IF (EMDim."Dimension Code" = '') OR
+                   ((EMDim."Dimension Code" <> '') AND IsConfiguredField(EMDim."Dimension Code"))
+                THEN
+                  EMDim.DELETE;
+              UNTIL EMDim.NEXT = 0;
+
+            CLEAR(Expense."Global Dimension 1 Code");
+            CLEAR(Expense."Global Dimension 2 Code");
+            Expense.AddDefaultDim(0);
+            Expense.MODIFY;
+
+            EMDimInbox.SETRANGE("Table ID",DATABASE::"Expense Inbox");
+            EMDimInbox.SETRANGE("Document Type",0);
+            EMDimInbox.SETRANGE("Document No.",'');
+            EMDimInbox.SETRANGE("Doc. Ref. No.","Entry No.");
+            IF EMDimInbox.FINDSET THEN BEGIN
+              GLSetup.GET;
+              REPEAT
+                CLEAR(EMDim);
+                EMDim."Table ID" := DATABASE::Expense;
+                EMDim."Document Type" := 0;
+                EMDim."Document No." := '';
+                EMDim."Doc. Ref. No." := Expense."Entry No.";
+                IF EMDimInbox."Dimension Code" <> '' THEN BEGIN
+                  EMDim.VALIDATE("Dimension Code",EMDimInbox."Dimension Code");
+                  EMDim.VALIDATE("Dimension Value Code",EMDimInbox."Dimension Value Code");
+                END ELSE BEGIN
+                  EMDim.VALIDATE("Field Code",EMDimInbox."Field Code");
+                  EMDim.VALIDATE("Field Value",EMDimInbox."Field Value");
+                END;
+
+                IF NOT EMDim.INSERT(TRUE) THEN
+                  EMDim.MODIFY(TRUE);
+              UNTIL EMDimInbox.NEXT = 0;
+            END;
+
+            Expense.GET(Expense."Entry No.");
+
+            EMAttachment.SETRANGE("Table ID",DATABASE::Expense);
+            EMAttachment.SETRANGE("Document Type",0);
+            EMAttachment.SETRANGE("Document No.",'');
+            EMAttachment.SETRANGE("Doc. Ref. No.",Expense."Entry No.");
+            IF EMAttachment.FINDFIRST THEN
+              REPEAT
+                GlobalEMAttachmentTemp.COPY(EMAttachment);
+                GlobalEMAttachmentTemp.INSERT;
+              UNTIL EMAttachment.NEXT = 0;
+
+            IF EMAttachment.FINDFIRST THEN
+              REPEAT
+                EMAttachment.DELETE(FALSE); // DON'T DELETE THE FILE
+              UNTIL EMAttachment.NEXT = 0;
+
+            IF "Expense Entry No." <> Expense."Entry No." THEN BEGIN
+              "Expense Entry No." := Expense."Entry No.";
+              MODIFY;
+            END;
+
+            IF ConfiguredField.AttendeesEnabled THEN BEGIN
+              ExpAttendeeInbox.SETRANGE("Expense Entry No.","Entry No.");
+              IF ExpAttendeeInbox.FINDFIRST THEN
+                REPEAT
+                  ExpAttendee.Type := ExpAttendeeInbox.Type;
+                  ExpAttendee.Name := ExpAttendeeInbox.Name;
+                  ExpAttendee."Company Name" := ExpAttendeeInbox."Company Name";
+                  ExpAttendee."Expense Entry No." := "Expense Entry No.";
+                  ExpAttendee."Entry No." := 0;
+                  ExpAttendee.INSERT(TRUE);
+                UNTIL ExpAttendeeInbox.NEXT = 0;
+            END;
+
+            IF "Expense Entry No." <> 0 THEN BEGIN
+              Expense.GET("Expense Entry No.");
+
+              Expense.Status := Expense.Status::Open;
+              Expense.MODIFY;
+
+              IF NOT "Expense Completed" THEN BEGIN
+                IF RecChangedByNAVAfterImport(Expense,EMDim,"Entry No.") THEN BEGIN
+                  IF OtherInboxEntryExists(Rec) THEN
+                    Expense.ThrowInboxError;
+
+                  ExpSendToUser.UpdateRefWithoutFiles(Expense)
+                END ELSE
+                  Expense.Status := Expense.Status::"Pending Expense User";
+                Expense.MODIFY(TRUE);
+                MoveAttachFromInboxToExp("Entry No.","Expense Entry No."); //NO ERROR FROM THIS POINT ON. THE FILES WILL BE DUPLICATED
+              END ELSE BEGIN
+                MoveAttachFromInboxToExp("Entry No.","Expense Entry No."); //NO ERROR FROM THIS POINT ON. THE FILES WILL BE DUPLICATED
+                IF Expense."Settlement No." = '' THEN BEGIN
+                  EMSetup.GET;
+                  ExpValidate.CheckWithoutInboxValidation(Expense);
+
+                  IF EMSetup."Auto Submit Exp. for Approval" THEN
+                    IF EMApprovalsBridge.IsApprovalsWorkflowEnabled(DATABASE::Expense,FORMAT(Expense."Entry No.")) THEN
+                      EMApprovalsBridge.SendNonGUIExpApprovalRequest(Expense,FALSE);
+                END ELSE BEGIN
+                  Expense.Status := ExpHeader.Status;
+                  Expense.MODIFY;
+                END;
+              END;
+            END;
+
+            DeleteFiles(DATABASE::"Expense Inbox",0,'',"Entry No.");
+            Expense.SetSuspendInboxCheck(FALSE);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ExpStatusErr@1160040000 : TextConst 'ENU=The %1 %2 has incorrect status.Updates are not allowed.';
+      ProcessSettlement@1160040004 : TextConst 'ENU=The corresponding settlement needs to be processed first. Please check in %1 %2-%3.';
+      SettlementNotFound@1160040006 : TextConst 'ENU=The corresponding settlement was not received yet.';
+      Expense@1160040001 : Record 6086320;
+      GlobalEMAttachmentTemp@1160040002 : TEMPORARY Record 6086359;
+      SettlementStatusNotAllowed@1000 : TextConst 'ENU=Status must be Open or Pending Expense User for settlement %1';
+
+    LOCAL PROCEDURE GetLastLineNo@1160040002() : Integer;
+    VAR
+      Expense2@1160040000 : Record 6086320;
+    BEGIN
+      IF Expense2.FINDLAST THEN
+        EXIT(Expense2."Entry No.")
+      ELSE
+        EXIT(0);
+    END;
+
+    PROCEDURE GetExpenseEntryNo@1160040000() : Integer;
+    BEGIN
+      EXIT(Expense."Entry No.");
+    END;
+
+    PROCEDURE DeleteFiles@1160040004(TableID@1160040007 : Integer;DocumentType@1160040006 : Integer;DocumentNo@1160040005 : Code[10];DocRefNo@1160040004 : Integer);
+    VAR
+      EMAttachmentInbox@1160040001 : Record 6086363;
+    BEGIN
+      EMAttachmentInbox.RESET;
+      EMAttachmentInbox.SETRANGE("Table ID",TableID);
+      EMAttachmentInbox.SETRANGE("Document Type",DocumentType);
+      EMAttachmentInbox.SETRANGE("Document No.",DocumentNo);
+      EMAttachmentInbox.SETRANGE("Doc. Ref. No.",DocRefNo);
+      IF EMAttachmentInbox.FINDFIRST THEN
+        REPEAT
+          EMAttachmentInbox.ClearAttachment;
+        UNTIL EMAttachmentInbox.NEXT = 0;
+
+      //IT IS ASSUMED THAT THE GLOBAL TempExpenseAttachment HAS BEEN FILLED in OnRun
+
+      GlobalEMAttachmentTemp.SETCURRENTKEY("Table ID","Document Type","Document No.","Doc. Ref. No.");
+      GlobalEMAttachmentTemp.SETRANGE("Table ID",TableID);
+      GlobalEMAttachmentTemp.SETRANGE("Document Type",DocumentType);
+      GlobalEMAttachmentTemp.SETRANGE("Document No.",'');
+      GlobalEMAttachmentTemp.SETRANGE("Doc. Ref. No.",DocRefNo);
+      IF GlobalEMAttachmentTemp.FINDFIRST THEN
+        REPEAT
+          GlobalEMAttachmentTemp.ClearAttachment;
+        UNTIL GlobalEMAttachmentTemp.NEXT = 0;
+    END;
+
+    PROCEDURE RecChangedByNAVAfterImport@1160040001(Expense@1160040002 : Record 6086320;VAR EMDim@1160040003 : Record 6086360;InboxEntryNo@1160040000 : Integer) : Boolean;
+    VAR
+      ExpInbox@1160040001 : Record 6086323;
+      EMDimInbox@1160040004 : Record 6086362;
+      DiffFound@1160040006 : Boolean;
+    BEGIN
+      //SOME INFORMATION COULD BE ADDED RIGHT AFTTER THE IMPORT
+      //IF THIS HAPPENS AND THE FIELDS ARE CONFIGURED, THE DOCUMENT NEEDS TO BE SENT BACK TO THE EXPENSE USER.
+
+      ExpInbox.GET(InboxEntryNo);
+
+      IF ExpInbox."Expense Entry No." = 0 THEN
+        EXIT(FALSE);
+
+      IF Expense."Cash/Private Card" <> ExpInbox."Cash/Private Card" THEN
+        EXIT(TRUE);
+
+      //DIMENSIONS
+      EMDim.RESET;
+      EMDim.SETRANGE("Table ID",DATABASE::Expense);
+      EMDim.SETRANGE("Document Type",0);
+      EMDim.SETRANGE("Document No.",'');
+      EMDim.SETRANGE("Doc. Ref. No.",Expense."Entry No.");
+      IF EMDim.FINDSET THEN
+        REPEAT
+          IF EMDimInbox.GET(DATABASE::"Expense Inbox",0,'',InboxEntryNo,EMDim."Dimension Code",EMDim."Field Code") THEN BEGIN
+            IF (EMDim."Dimension Value Code" <> EMDimInbox."Dimension Value Code") OR
+               (EMDim."Field Value" <> EMDimInbox."Field Value")
+            THEN
+              DiffFound := IsConfiguredField(EMDim."Dimension Code");
+          END ELSE
+            DiffFound := IsConfiguredField(EMDim."Dimension Code");
+
+          IF DiffFound THEN
+            IF EMDim."Dimension Code" <> '' THEN
+              EXIT(IsConfiguredField(EMDim."Dimension Code"))
+            ELSE
+              EXIT(IsConfiguredField(EMDim."Field Code"));
+        UNTIL EMDim.NEXT = 0;
+
+      EMDimInbox.SETRANGE("Table ID",DATABASE::"Expense Inbox");
+      EMDimInbox.SETRANGE("Document Type",0);
+      EMDimInbox.SETRANGE("Document No.",'');
+      EMDimInbox.SETRANGE("Doc. Ref. No.",ExpInbox."Entry No.");
+      IF EMDimInbox.FINDSET THEN
+        REPEAT
+          IF EMDim.GET(DATABASE::Expense,0,'',Expense."Entry No.",EMDimInbox."Dimension Code",EMDimInbox."Field Code") THEN BEGIN
+            IF (EMDim."Dimension Value Code" <> EMDimInbox."Dimension Value Code") OR
+               (EMDim."Field Value" <> EMDimInbox."Field Value")
+            THEN
+              DiffFound := IsConfiguredField(EMDimInbox."Dimension Code");
+          END ELSE
+            DiffFound := IsConfiguredField(EMDimInbox."Dimension Code");
+
+          IF DiffFound THEN
+            IF EMDimInbox."Dimension Code" <> '' THEN
+              EXIT(IsConfiguredField(EMDimInbox."Dimension Code"))
+            ELSE
+              EXIT(IsConfiguredField(EMDimInbox."Field Code"));
+
+        UNTIL EMDimInbox.NEXT = 0;
+    END;
+
+    PROCEDURE IsConfiguredField@1160040010(FldCode@1160040002 : Code[20]) : Boolean;
+    VAR
+      FieldType@1160040000 : Record 6086345;
+      ConfiguredFields@1160040001 : Record 6086346;
+    BEGIN
+      EXIT(ConfiguredFields.IsConfiguredFieldForTable(DATABASE::Expense,FieldType.GetFieldFromDim(FldCode)));
+    END;
+
+    LOCAL PROCEDURE OtherInboxEntryExists@1(CurrExpenseInbox@1001 : Record 6086323) : Boolean;
+    VAR
+      ExpenseInbox@1000 : Record 6086323;
+    BEGIN
+      ExpenseInbox.SETCURRENTKEY("Expense GUID");
+      ExpenseInbox.SETRANGE("Expense GUID",CurrExpenseInbox."Expense GUID");
+      ExpenseInbox.SETFILTER("Entry No.",'<>%1',CurrExpenseInbox."Entry No.");
+      ExpenseInbox.SETFILTER(Status,'%1|%2',ExpenseInbox.Status::Pending,ExpenseInbox.Status::Error);
+      IF NOT ExpenseInbox.ISEMPTY THEN
+        EXIT(TRUE);
+    END;
+
+    PROCEDURE MoveAttachFromInboxToExp@1160040005(InboxEntryNo@1160040001 : Integer;ExpEntryNo@1160040002 : Integer);
+    VAR
+      EMAttachmentInbox@1160040000 : Record 6086363;
+      EMAttachment@1160040004 : Record 6086359;
+    BEGIN
+      EMAttachmentInbox.RESET;
+      EMAttachmentInbox.SETRANGE("Table ID",DATABASE::"Expense Inbox");
+      EMAttachmentInbox.SETRANGE("Document Type",0);
+      EMAttachmentInbox.SETRANGE("Document No.",'');
+      EMAttachmentInbox.SETRANGE("Doc. Ref. No.",InboxEntryNo);
+      IF EMAttachmentInbox.FINDFIRST THEN
+        REPEAT
+          EMAttachment."Table ID" := DATABASE::Expense;
+          EMAttachment."Document Type" := 0;
+          EMAttachment."Document No." := '';
+          EMAttachment."Doc. Ref. No." := ExpEntryNo;
+          EMAttachment."Entry No." := 0;
+          EMAttachment."File Name" := EMAttachmentInbox."File Name";
+          EMAttachment.INSERT(TRUE);
+
+          EMAttachment.SetAttachment(EMAttachmentInbox.GetAttachmentServerFileName);
+        UNTIL EMAttachmentInbox.NEXT = 0;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

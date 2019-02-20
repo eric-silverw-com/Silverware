@@ -1,0 +1,178 @@
+OBJECT Table 6086363 EM Attachment Inbox
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/10/17;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 6086320=rimd,
+                TableData 6086323=rimd;
+    OnInsert=VAR
+               EMAttachmentInbox@1160040001 : Record 6086363;
+             BEGIN
+               EMAttachmentInbox.SETRANGE("Table ID","Table ID");
+               EMAttachmentInbox.SETRANGE("Document Type","Document Type");
+               EMAttachmentInbox.SETRANGE("Document No.","Document No.");
+               EMAttachmentInbox.SETRANGE("Doc. Ref. No.","Doc. Ref. No.");
+               IF EMAttachmentInbox.FINDLAST THEN
+                 "Entry No." := EMAttachmentInbox."Entry No." + 1
+               ELSE
+                 "Entry No." := 1;
+
+               "Attachment GUID" := CREATEGUID;
+             END;
+
+    OnDelete=VAR
+               FileManagement@1160040001 : Codeunit 6085584;
+             BEGIN
+               IF "Table ID" = DATABASE::Expense THEN
+                 FileManagement.DeleteFile(GetAttachmentServerFileName,TRUE);
+             END;
+
+    CaptionML=ENU=EM Attachment Inbox;
+    LookupPageID=Page6086342;
+    DrillDownPageID=Page6086342;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Table ID            ;Integer       ;CaptionML=ENU=Table ID }
+    { 2   ;   ;Document Type       ;Option        ;CaptionML=ENU=Document Type;
+                                                   OptionCaptionML=ENU=Budget,Settlement;
+                                                   OptionString=Budget,Settlement }
+    { 3   ;   ;Document No.        ;Code20        ;CaptionML=ENU=Document No. }
+    { 4   ;   ;Doc. Ref. No.       ;Integer       ;TableRelation=IF (Table ID=CONST(6086323)) "Expense Inbox"
+                                                                 ELSE IF (Table ID=CONST(6086353)) "Mileage Inbox";
+                                                   CaptionML=ENU=Doc. Ref. No. }
+    { 10  ;   ;Entry No.           ;Integer       ;CaptionML=ENU=Entry No. }
+    { 12  ;   ;Attachment GUID     ;GUID          ;CaptionML=ENU=Attachment GUID }
+    { 13  ;   ;File Name           ;Text250       ;CaptionML=ENU=File Name }
+    { 14  ;   ;Attachment          ;BLOB          ;CaptionML=ENU=Attachment }
+  }
+  KEYS
+  {
+    {    ;Table ID,Document Type,Document No.,Doc. Ref. No.,Entry No.;
+                                                   Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      FileMove@1160040000 : TextConst 'ENU=The file was moved and it cannot be visualized anymore.';
+      EMSetup@1160040002 : Record 6086300;
+      ContCompSetup@1160040005 : Record 6192773;
+      EMDocFileInterface@1160040003 : Codeunit 6086396;
+      GotEMSetup@1160040001 : Boolean;
+      GotCompSetup@1160040004 : Boolean;
+
+    PROCEDURE GetCreatedDate@1160040000() : Date;
+    VAR
+      ExpenseInbox@1160040002 : Record 6086323;
+      MileageInbox@1160040000 : Record 6086353;
+    BEGIN
+      CASE "Table ID" OF
+        DATABASE::"Expense Inbox":
+          IF ExpenseInbox.GET("Doc. Ref. No.") THEN
+            EXIT(DT2DATE(ExpenseInbox."Imported Date/Time"));
+        DATABASE::"Mileage Inbox":
+          IF MileageInbox.GET("Doc. Ref. No.") THEN
+            EXIT(MileageInbox."Date Created");
+      END;
+
+      EXIT(TODAY);
+    END;
+
+    PROCEDURE OpenFile@1160040002();
+    VAR
+      FileSysMgt@1160040000 : Codeunit 6085584;
+      WebClientMgt@1000 : Codeunit 6085662;
+      ToFileName@1001 : Text[250];
+      FileExtension@1002 : Text[30];
+    BEGIN
+      IF InboxAccepted THEN
+        ERROR(FileMove);
+
+      IF NOT WebClientMgt.IsWebClient THEN
+        FileSysMgt.LocalShell(GetAttachmentServerFileName)
+      ELSE BEGIN
+        ToFileName := "File Name";
+        FileExtension := FileSysMgt.GetFileExtension(GetAttachmentServerFileName);
+        DOWNLOAD(GetAttachmentServerFileName,'Download','C:\',FileExtension,ToFileName);
+      END;
+    END;
+
+    PROCEDURE GetSetup@1160040003();
+    BEGIN
+      IF NOT GotEMSetup THEN
+        GotEMSetup := EMSetup.GET;
+    END;
+
+    PROCEDURE SetSetup@1160040006(VAR NewEMSetup@1160040000 : Record 6086300;VAR NewContCompSetup@1160040001 : Record 6192773);
+    BEGIN
+      EMSetup := NewEMSetup;
+      GotEMSetup := TRUE;
+
+      ContCompSetup := NewContCompSetup;
+      GotCompSetup := TRUE;
+
+      EMDocFileInterface.SetSetup(NewEMSetup,NewContCompSetup);
+    END;
+
+    PROCEDURE HasAttachment@13() : Boolean;
+    BEGIN
+      EXIT(EMDocFileInterface.HasInboxAttachment(Rec));
+    END;
+
+    PROCEDURE SetAttachment@6(FilePath@1000 : Text[250]) : Boolean;
+    BEGIN
+      EXIT(EMDocFileInterface.SetInboxAttachment(FilePath,Rec));
+    END;
+
+    PROCEDURE GetAttachmentClientFileName@1160040004() : Text[1024];
+    VAR
+      FileSysMgt@1160040002 : Codeunit 6085584;
+    BEGIN
+      EXIT(FileSysMgt.GetClientFilename(GetAttachmentServerFileName,FALSE));
+    END;
+
+    PROCEDURE GetAttachmentServerFileName@10() : Text[1024];
+    VAR
+      FullFilename@1160040000 : Text[1024];
+    BEGIN
+      EXIT(EMDocFileInterface.GetInboxAttachServerFileName(Rec));
+    END;
+
+    PROCEDURE ClearAttachment@14() : Boolean;
+    BEGIN
+      EXIT(EMDocFileInterface.ClearInboxAttachment(Rec));
+    END;
+
+    PROCEDURE InboxAccepted@1() : Boolean;
+    VAR
+      ExpenseInbox@1001 : Record 6086323;
+      MileageInbox@1000 : Record 6086353;
+    BEGIN
+      CASE "Table ID" OF
+        DATABASE::"Expense Inbox":
+          BEGIN
+            ExpenseInbox.GET("Doc. Ref. No.");
+            EXIT(ExpenseInbox.Status = ExpenseInbox.Status::Accepted);
+          END;
+
+        DATABASE::"Mileage Inbox":
+          BEGIN
+            MileageInbox.GET("Doc. Ref. No.");
+            EXIT(MileageInbox.Status = MileageInbox.Status::Accepted);
+          END;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

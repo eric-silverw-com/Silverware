@@ -1,0 +1,111 @@
+OBJECT Codeunit 6086385 Exp. Header - Complete
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/31/18;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.06;
+  }
+  PROPERTIES
+  {
+    TableNo=6086339;
+    OnRun=BEGIN
+            ShowError := TRUE;
+            Code(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      SendingDocCompleted@1160040000 : TextConst 'ENU=Reopening Settlement %1...';
+      ShowError@1160040001 : Boolean;
+      NewerVersionExists@1160040002 : TextConst 'ENU=A newer version might exist in Continia Online. Do you want to synchronize and send again?';
+
+    LOCAL PROCEDURE Code@1160040020(VAR ExpHeader@1160040000 : Record 6086339);
+    VAR
+      Expense@1160040005 : Record 6086320;
+      Mileage@1160040006 : Record 6086338;
+      EMAppBridge@1160040001 : Codeunit 6086369;
+      ExpValidate@1160040007 : Codeunit 6086381;
+      EMOnlineMgt@1160040002 : Codeunit 6086305;
+      Window@1160040003 : Dialog;
+    BEGIN
+      IF ExpHeader.Status = ExpHeader.Status::Open THEN
+        EXIT;
+      ExpHeader.CheckInboxAndThrowError;
+
+      IF GUIALLOWED THEN
+        Window.OPEN(STRSUBSTNO(SendingDocCompleted,ExpHeader."No."));
+
+      EMAppBridge.CancelApprovalRequest(DATABASE::"Expense Header",ExpHeader."No.");
+      ExpHeader.GET(ExpHeader."Document Type",ExpHeader."No.");
+
+      IF ExpHeader.Status = ExpHeader.Status::"Pending Expense User" THEN
+        IF HasPermissionToSync AND GUIALLOWED THEN BEGIN
+          IF NOT EMOnlineMgt.DeprecateSettlement(ExpHeader."Exp. Header GUID",ExpHeader."Continia Online Version No.",FALSE) THEN BEGIN
+            IF CONFIRM(NewerVersionExists) THEN BEGIN
+              CODEUNIT.RUN(CODEUNIT::"EM Online Mgt.");
+              ExpHeader.GET(ExpHeader."Document Type",ExpHeader."No.");
+            END;
+
+            EMOnlineMgt.DeprecateSettlement(ExpHeader."Exp. Header GUID",ExpHeader."Continia Online Version No.",TRUE);
+          END;
+        END ELSE
+          EMOnlineMgt.DeprecateSettlement(ExpHeader."Exp. Header GUID",ExpHeader."Continia Online Version No.",ShowError);
+
+      //A SHADOW EXIST FOR HISTORY PURPOSE. MAKE SURE THAT ONE IS FORGOTTEN (NO ERROR)
+      IF ExpHeader.Status > ExpHeader.Status::"Pending Expense User" THEN
+        EMOnlineMgt.DeprecateSettlement(ExpHeader."Exp. Header GUID",'',FALSE);
+
+      ExpHeader.Status := ExpHeader.Status::Open;
+      ExpHeader."Expense Header Completed" := TRUE;
+      ExpHeader.MODIFY(TRUE);
+
+      Expense.SETCURRENTKEY("Settlement No.");
+      Expense.SETRANGE("Settlement No.",ExpHeader."No.");
+      IF Expense.FINDSET THEN
+        REPEAT
+          CODEUNIT.RUN(CODEUNIT::"Expense - Complete",Expense);
+        UNTIL Expense.NEXT = 0;
+
+      Mileage.SETCURRENTKEY("Settlement No.");
+      Mileage.SETRANGE("Settlement No.",ExpHeader."No.");
+      IF Mileage.FINDSET THEN
+        REPEAT
+          CODEUNIT.RUN(CODEUNIT::"Mileage - Complete",Mileage);
+        UNTIL Mileage.NEXT = 0;
+
+      ExpValidate.RUN(ExpHeader);
+
+      IF GUIALLOWED THEN
+        Window.CLOSE;
+    END;
+
+    PROCEDURE SetShowError@1160040000(ShowErrValue@1160040000 : Boolean);
+    BEGIN
+      ShowError := ShowErrValue;
+    END;
+
+    PROCEDURE HasPermissionToSync@1160040001() : Boolean;
+    VAR
+      EMSetup@1160040001 : Record 6086300;
+      ExpNavVersionMgt@1160040000 : Codeunit 6086319;
+    BEGIN
+      IF EMSetup.GET THEN
+        IF EMSetup."Approval Administrator Role ID" <> '' THEN
+          IF ExpNavVersionMgt.HasPermission(EMSetup."Approval Administrator Role ID") THEN
+            EXIT(TRUE);
+
+      IF ExpNavVersionMgt.HasPermission('EM-SUPER') THEN
+        EXIT(TRUE);
+
+      IF ExpNavVersionMgt.HasPermission('SUPER') THEN
+        EXIT(TRUE);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

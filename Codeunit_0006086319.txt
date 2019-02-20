@@ -1,0 +1,173 @@
+OBJECT Codeunit 6086319 Expense NAV-version Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/28/17;
+    Time=[ 1:00:00 AM];
+    Version List=EMW17.00.00.2.60.01;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      BankFileFilters@1002 : TextConst 'ENU=All Files (*.*)|*.*';
+      SelectBankTxt@1001 : TextConst 'ENU=Select Bank File';
+
+    PROCEDURE GetClientFilename@3(ServerFilename@1160040000 : Text[1024];AllowFileNotFoundErr@1001 : Boolean) : Text[1024];
+    VAR
+      FileMgt@6085574 : Codeunit 419;
+      FileSysMgt@1000 : Codeunit 6085584;
+      ClientFilename@6085573 : Text[1024];
+    BEGIN
+      ClientFilename := FileMgt.ClientTempFileName(FileSysMgt.GetFileExtension(ServerFilename));
+      ClientFilename := FileMgt.GetDirectoryName(ClientFilename) + '\' + FileMgt.GetFileName(ServerFilename);
+      IF NOT AllowFileNotFoundErr THEN
+        IF NOT EXISTS(ServerFilename) THEN
+          EXIT;
+
+      FileMgt.DownloadToFile(ServerFilename,ClientFilename);
+      EXIT(ClientFilename);
+    END;
+
+    PROCEDURE OpenBankfile@1() : Text;
+    VAR
+      FileMgt@1001 : Codeunit 419;
+      Filename@1000 : Text;
+    BEGIN
+      Filename := FileMgt.UploadFile(SelectBankTxt,Filename); // Some banks needs the correct filename
+      EXIT(Filename);
+    END;
+
+    PROCEDURE GetHyperlink@161024016(_UserId@161024017 : Code[50]) : Text[1024];
+    VAR
+      Setup@161024016 : Record 6085573;
+      ContiniaUserSetup@161024018 : Record 6086002;
+      ActiveSession@6085573 : Record 2000000110;
+      ServerInstance@6085574 : Record 2000000112;
+      ContCompSetup@1000 : Record 6192773;
+      ContWebPortal@6086300 : Record 6192774;
+      EMSetup@1001 : Record 6086300;
+      LinkPath@1002 : Text[50];
+    BEGIN
+      ContCompSetup.GET;
+      EMSetup.GET;
+
+      LinkPath := 'DynamicsNAV://%1:%2/%3/%4/runpage?page=%5';
+
+      IF ContiniaUserSetup.GET(_UserId) AND ContiniaUserSetup."Web Approval User" THEN BEGIN
+        ContWebPortal.GET(ContCompSetup."Web Portal Code");
+        IF ContCompSetup."Company Code" <> '' THEN
+          EXIT(STRSUBSTNO('%1/%2/expense/approval/e',ContWebPortal."Web Site Url",LOWERCASE(ContCompSetup."Company Code")))
+        ELSE
+          EXIT(STRSUBSTNO('%1/expense/approval/e',ContWebPortal."Web Site Url"))
+      END ELSE BEGIN
+        IF EMSetup."Dynamics NAV Server Name" <> '' THEN
+          EXIT(STRSUBSTNO(LinkPath,EMSetup."Dynamics NAV Server Name",EMSetup."Dynamics NAV Server Port",EMSetup."Dynamics NAV Server Instance",COMPANYNAME,PAGE::"EM Approval Entries"));
+
+        ActiveSession.SETRANGE("Session ID",SESSIONID);
+        ActiveSession.FINDFIRST;
+        ServerInstance.GET(ActiveSession."Server Instance ID");
+
+        EXIT(STRSUBSTNO(LinkPath,ServerInstance."Server Computer Name",ServerInstance."Server Port",ServerInstance."Server Instance Name",COMPANYNAME,PAGE::"EM Approval Entries"));
+      END;
+    END;
+
+    PROCEDURE BlobImport@1160040004(VAR BlobRef@1160040000 : Record 99008535) : Text[1024];
+    VAR
+      FileMgt@1160040001 : Codeunit 419;
+    BEGIN
+      EXIT(FileMgt.BLOBImport(BlobRef,'*.htm'));
+    END;
+
+    PROCEDURE BlobExport@1160040005(VAR BlobRef@1160040000 : Record 99008535;Filetypes@1160040002 : Text[100]);
+    VAR
+      FileMgt@1160040001 : Codeunit 419;
+    BEGIN
+      FileMgt.BLOBExport(BlobRef,Filetypes,TRUE);
+    END;
+
+    PROCEDURE HasPermission@1160040008(UserRoleID@1160040000 : Code[20]) : Boolean;
+    VAR
+      AccessControl@1002 : Record 2000000053;
+      User@1000 : Record 2000000120;
+    BEGIN
+      User.SETCURRENTKEY("User Name");
+      User.SETRANGE("User Name",USERID);
+      IF NOT User.FINDFIRST THEN
+        EXIT(FALSE);
+
+      IF AccessControl.GET(User."User Security ID",UserRoleID) THEN
+        EXIT(TRUE);
+
+      IF AccessControl.GET(User."User Security ID",UserRoleID,COMPANYNAME) THEN
+        EXIT(TRUE);
+    END;
+
+    PROCEDURE PostJnLineWithCheck@1160040037(VAR GenJnlPostLine@1160040004 : Codeunit 12;VAR GenJnlLine@1160040000 : Record 81;TableID@1007 : Integer;DocumentType@1006 : Integer;DocumentNo@1005 : Code[20];DocRefNo@1004 : Integer;ExpAllocationEntryNo@1003 : Integer;SaveDefDimToEMDim@1002 : Boolean;CreateDefaultDim@1001 : Boolean);
+    VAR
+      EMDim@1009 : Record 6086360;
+      EMAllocationDim@1010 : Record 6086357;
+      GLSetup@1008 : Record 98;
+      EmDimMgt@1000 : Codeunit 6086318;
+    BEGIN
+      IF CreateDefaultDim THEN
+        EmDimMgt.CreateJnlLineDefaultDim(GenJnlLine);
+      IF SaveDefDimToEMDim THEN
+        EmDimMgt.CopyGenJnlDimToEMDim(GenJnlLine."Dimension Set ID",TableID,DocumentType,DocumentNo,DocRefNo);
+
+      GLSetup.GET;
+      IF ExpAllocationEntryNo = 0 THEN BEGIN
+        EMDim.SETRANGE("Table ID",TableID);
+        EMDim.SETRANGE("Document Type",DocumentType);
+        EMDim.SETRANGE("Document No.",DocumentNo);
+        EMDim.SETRANGE("Doc. Ref. No.",DocRefNo);
+        EMDim.SETFILTER("Dimension Code",'<>%1','');
+        IF EMDim.FINDSET THEN
+          REPEAT
+            EMDim.TESTFIELD("Dimension Value Code");
+
+            CASE EMDim."Dimension Code" OF
+              GLSetup."Global Dimension 1 Code":
+                GenJnlLine.VALIDATE("Shortcut Dimension 1 Code",EMDim."Dimension Value Code");
+              GLSetup."Global Dimension 2 Code":
+                GenJnlLine.VALIDATE("Shortcut Dimension 2 Code",EMDim."Dimension Value Code");
+              ELSE
+                GenJnlLine."Dimension Set ID" :=
+                  EmDimMgt.UpdateDimension(
+                   GenJnlLine."Dimension Set ID",EMDim."Dimension Code",EMDim."Dimension Value Code");
+            END;
+          UNTIL EMDim.NEXT = 0;
+      END;
+
+      IF ExpAllocationEntryNo <> 0 THEN BEGIN
+        EMAllocationDim.SETRANGE("Expense Allocation Entry No.",ExpAllocationEntryNo);
+        IF EMAllocationDim.FINDSET THEN
+          REPEAT
+            EMAllocationDim.TESTFIELD("Dimension Value Code");
+
+            CASE EMAllocationDim."Dimension Code" OF
+              GLSetup."Global Dimension 1 Code":
+                GenJnlLine.VALIDATE("Shortcut Dimension 1 Code",EMAllocationDim."Dimension Value Code");
+              GLSetup."Global Dimension 2 Code":
+                GenJnlLine.VALIDATE("Shortcut Dimension 2 Code",EMAllocationDim."Dimension Value Code");
+              ELSE
+                GenJnlLine."Dimension Set ID" :=
+                  EmDimMgt.UpdateDimension(
+                   GenJnlLine."Dimension Set ID",EMAllocationDim."Dimension Code",EMAllocationDim."Dimension Value Code");
+            END;
+          UNTIL EMAllocationDim.NEXT = 0;
+      END;
+
+      GenJnlPostLine.RunWithCheck(GenJnlLine);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

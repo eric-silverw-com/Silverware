@@ -1,0 +1,1565 @@
+OBJECT Table 6086320 Expense
+{
+  OBJECT-PROPERTIES
+  {
+    Date=06/13/18;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.06;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 352=r,
+                TableData 439=rimd,
+                TableData 6086002=r,
+                TableData 6086300=r,
+                TableData 6086307=r,
+                TableData 6086315=r,
+                TableData 6086323=r,
+                TableData 6086331=r,
+                TableData 6086349=r;
+    DataCaptionFields=Entry No.,Continia User ID,Expense Type,Description;
+    OnInsert=VAR
+               ExpHeader@1160040000 : Record 6086339;
+               SendToUser@1160040001 : Codeunit 6086324;
+             BEGIN
+               TESTFIELD(Posted,FALSE);
+               InitExpense;
+               TESTFIELD("Continia User ID");
+
+               "Entry No." := GetEntryNo;
+               IF ("Entry No." > 0) AND ("Settlement No." <> '') AND ("Settlement Line No." = 0) THEN
+                 "Settlement Line No." := GetNextDocumentLineNo;
+
+               IF "Settlement No." <> '' THEN BEGIN
+                 ExpHeader.GET(ExpHeader."Document Type"::Settlement,"Settlement No.");
+                 IF NOT (ExpHeader.Status IN [Status::Open,Status::"Pending Expense User"]) THEN
+                   ERROR(StatusNotAllowed);
+
+                 IF Status <> ExpHeader.Status THEN BEGIN
+                   IF ExpHeader.Status = ExpHeader.Status::"Pending Expense User" THEN
+                     SendToUser.UpdateRefWithoutFiles(Rec);
+                   Status := ExpHeader.Status;
+                 END;
+                 VALIDATE("Global Dimension 1 Code","Global Dimension 1 Code");
+                 VALIDATE("Global Dimension 2 Code","Global Dimension 2 Code");
+               END;
+
+               IF NOT (Status IN [Status::Open,Status::"Pending Expense User"]) THEN
+                 ERROR(StatusNotAllowed);
+
+               AddDefaultDim(0);
+
+               ExpValidate.RUN(Rec);
+
+               "Date Created" := TODAY;
+               "Created By User ID" := USERID;
+             END;
+
+    OnModify=VAR
+               ExpHeader@1160040000 : Record 6086339;
+               Sent@1160040002 : Boolean;
+             BEGIN
+               TESTFIELD(Posted,FALSE);
+               IF NOT (Status IN [Status::Open,Status::"Pending Expense User"]) THEN
+                 ERROR(StatusNotAllowed);
+
+               CheckInboxAndThrowError;
+
+               IF "Settlement No." <> '' THEN BEGIN
+                 ExpHeader.GET(ExpHeader."Document Type"::Settlement,"Settlement No.");
+                 IF Status <> ExpHeader.Status THEN BEGIN
+                   TESTFIELD(Status,Status::Open);
+                   IF (ExpHeader.Status = ExpHeader.Status::"Pending Expense User") THEN BEGIN
+                     CODEUNIT.RUN(CODEUNIT::"Expense - Send to Expense User",Rec);
+                     Sent := TRUE;
+                   END;
+
+                   Status := ExpHeader.Status;
+                 END;
+               END;
+
+               IF NOT Sent THEN
+                 SendToExpenseUser;
+             END;
+
+    OnDelete=VAR
+               ExpenseAllocation@1160040004 : Record 6086321;
+               EMAttachment@1160040003 : Record 6086359;
+               EMDimension@1160040002 : Record 6086360;
+               EMComment@1160040007 : Record 6086361;
+               EMReminder@1160040006 : Record 6086364;
+               EMAttendee@1160040001 : Record 6086308;
+               ExpenseInbox@1160040005 : Record 6086323;
+               ExpenseMatchMgt@1160040000 : Codeunit 6086311;
+               EMApprovalsBridge@1160040008 : Codeunit 6086369;
+             BEGIN
+               TESTFIELD(Posted,FALSE);
+               IF NOT (Status IN [Status::Open,Status::"Pending Expense User"]) THEN
+                 ERROR(StatusNotAllowed);
+
+               CheckInboxAndThrowError;
+
+               IF (NOT HideUI) AND "Matched to Bank Transaction" THEN
+                 IF NOT CONFIRM(DeleteAndExclude,FALSE) THEN
+                   ERROR(DeleteAborted);
+
+               ExpenseAllocation.LOCKTABLE;
+               ExpenseAllocation.SETCURRENTKEY("Expense Entry No.");
+               ExpenseAllocation.SETRANGE("Expense Entry No.","Entry No.");
+               ExpenseAllocation.DELETEALL(TRUE);
+
+               ExpenseMatchMgt.DeleteExpenseMatch(Rec);
+
+               EMDimension.LOCKTABLE;
+               EMDimension.SETCURRENTKEY("Table ID","Document Type","Document No.","Doc. Ref. No.");
+               EMDimension.SETRANGE("Table ID",DATABASE::Expense);
+               EMDimension.SETRANGE("Document Type",0);
+               EMDimension.SETRANGE("Document No.",'');
+               EMDimension.SETRANGE("Doc. Ref. No.","Entry No.");
+               EMDimension.DELETEALL;
+
+               EMAttachment.LOCKTABLE;
+               EMAttachment.SETCURRENTKEY("Table ID","Document Type","Document No.","Doc. Ref. No.");
+               EMAttachment.SETRANGE("Table ID",DATABASE::Expense);
+               EMAttachment.SETRANGE("Document Type",0);
+               EMAttachment.SETRANGE("Document No.",'');
+               EMAttachment.SETRANGE("Doc. Ref. No.","Entry No.");
+               EMAttachment.SetHideUI;
+               EMAttachment.DELETEALL(TRUE);
+
+               EMReminder.SETCURRENTKEY("Table ID","Document Type","Document No.","Doc. Ref. No.");
+               EMReminder.SETRANGE("Table ID",DATABASE::Expense);
+               EMReminder.SETRANGE("Document Type",0);
+               EMReminder.SETRANGE("Document No.",'');
+               EMReminder.SETRANGE("Doc. Ref. No.","Entry No.");
+               EMReminder.DELETEALL(TRUE);
+
+               IF Status = Status::"Pending Expense User" THEN
+                 EMOnlineMgt.PhysicalDeleteDocFromCO(DATABASE::Expense,"Expense GUID",NOT HideUI);
+
+               EMComment.SETCURRENTKEY("Table ID","Document Type","Document No.","Doc. Ref. No.");
+               EMComment.SETRANGE("Table ID",DATABASE::Expense);
+               EMComment.SETRANGE("Document Type",0);
+               EMComment.SETRANGE("Document No.",'');
+               EMComment.SETRANGE("Doc. Ref. No.","Entry No.");
+               EMComment.DELETEALL(TRUE);
+
+               EMAttendee.SETRANGE("Expense Entry No.","Entry No.");
+               EMAttendee.DELETEALL;
+
+               EMApprovalsBridge.DeleteApprovalEntries(DATABASE::Expense,FORMAT("Entry No."));
+             END;
+
+    OnRename=BEGIN
+               ERROR(Text001,TABLECAPTION);
+             END;
+
+    CaptionML=ENU=Expense;
+    LookupPageID=Page6086317;
+    DrillDownPageID=Page6086317;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Entry No.           ;Integer       ;CaptionML=ENU=Entry No. }
+    { 2   ;   ;Continia User ID    ;Code50        ;TableRelation="Continia User Setup";
+                                                   OnValidate=VAR
+                                                                ExpenseInbox@1160040000 : Record 6086323;
+                                                                UserResp@1160040003 : Record 6086379;
+                                                                EmptyGuid@1160040001 : GUID;
+                                                              BEGIN
+                                                                IF "Settlement No." <> '' THEN
+                                                                  ERROR(CannotChangeWhenSttl,FIELDCAPTION("Continia User ID"));
+
+                                                                IF "Continia User ID" = xRec."Continia User ID" THEN
+                                                                  EXIT;
+
+                                                                UserResp.VerifyUser("Continia User ID");
+
+                                                                TESTFIELD(Status,Status::Open);
+
+                                                                IF NOT SupressAllocationsExist THEN
+                                                                  IF AllocationsExists THEN
+                                                                    ERROR(ExpenseAllocatedErr,FIELDCAPTION("Continia User ID"));
+
+                                                                IF xRec."Continia User ID" <> "Continia User ID" THEN BEGIN
+                                                                  TESTFIELD("Matched to Bank Transaction",FALSE);
+                                                                  CheckInboxAndThrowError;
+
+                                                                  IF "Expense GUID" <> EmptyGuid THEN
+                                                                    "Expense GUID" := EmptyGuid;
+                                                                END;
+
+                                                                VALIDATE("Expense Type");
+
+                                                                ExpValidate.RUN(Rec);
+                                                                CALCFIELDS("Continia User Name");
+
+                                                                AddDefaultDim(CurrFieldNo);
+                                                              END;
+
+                                                   CaptionML=ENU=Continia User ID }
+    { 3   ;   ;Continia User Name  ;Text50        ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup("Continia User".Name WHERE (User ID=FIELD(Continia User ID)));
+                                                   CaptionML=ENU=Name;
+                                                   Editable=No }
+    { 4   ;   ;Description         ;Text50        ;CaptionML=ENU=Description }
+    { 5   ;   ;Description 2       ;Text50        ;CaptionML=ENU=Description 2 }
+    { 6   ;   ;Document Date       ;Date          ;OnValidate=BEGIN
+                                                                ExpValidate.RUN(Rec);
+                                                              END;
+
+                                                   CaptionML=ENU=Document Date;
+                                                   NotBlank=Yes }
+    { 7   ;   ;Date Created        ;Date          ;CaptionML=ENU=Date Created;
+                                                   Editable=No }
+    { 8   ;   ;Country/Region Code ;Code10        ;TableRelation=Country/Region;
+                                                   OnValidate=BEGIN
+                                                                VALIDATE("Expense Type");
+                                                              END;
+
+                                                   CaptionML=ENU=Country/Region Code;
+                                                   NotBlank=Yes }
+    { 9   ;   ;Currency Code       ;Code10        ;TableRelation=Currency;
+                                                   OnValidate=BEGIN
+                                                                UpdateAmount(FIELDNO("Currency Code"));
+                                                              END;
+
+                                                   CaptionML=ENU=Currency Code }
+    { 10  ;   ;No Refund           ;Boolean       ;CaptionML=ENU=No Refund }
+    { 11  ;   ;Amount              ;Decimal       ;OnValidate=BEGIN
+                                                                IF NOT SupressAllocationsExist THEN
+                                                                  IF AllocationsExists THEN
+                                                                    ERROR(ExpenseAllocatedErr,FIELDCAPTION(Amount));
+
+                                                                UpdateAmount(FIELDNO(Amount));
+                                                              END;
+
+                                                   CaptionML=ENU=Amount;
+                                                   AutoFormatType=1;
+                                                   AutoFormatExpr="Currency Code" }
+    { 12  ;   ;Amount (LCY)        ;Decimal       ;OnValidate=BEGIN
+                                                                IF AllocationsExists THEN
+                                                                  ERROR(ExpenseAllocatedErr,FIELDCAPTION("Amount (LCY)"));
+
+                                                                UpdateAmount(FIELDNO("Amount (LCY)"));
+                                                              END;
+
+                                                   CaptionML=ENU=Amount (LCY);
+                                                   AutoFormatType=1 }
+    { 13  ;   ;Created Doc. Type   ;Integer       ;CaptionML=ENU=Created Doc. Type;
+                                                   Editable=No }
+    { 14  ;   ;Created Doc. Subtype;Integer       ;CaptionML=ENU=Created Doc. Subtype;
+                                                   Editable=No }
+    { 15  ;   ;Created Doc. ID     ;Code20        ;CaptionML=ENU=Created Doc. ID;
+                                                   Editable=No }
+    { 16  ;   ;Created Doc. Ref. No.;Integer      ;CaptionML=ENU=Created Doc. Ref. No.;
+                                                   Editable=No }
+    { 17  ;   ;Created By User ID  ;Code50        ;CaptionML=ENU=Created By User ID;
+                                                   Editable=No }
+    { 18  ;   ;Bank-Currency Amount;Decimal       ;CaptionML=ENU=Bank-Currency Amount;
+                                                   Editable=No;
+                                                   AutoFormatType=1;
+                                                   AutoFormatExpr="Bank Currency Code" }
+    { 19  ;   ;Bank Currency Code  ;Code10        ;TableRelation=Currency;
+                                                   OnValidate=BEGIN
+                                                                UpdateAmount(FIELDNO("Bank Currency Code"));
+                                                              END;
+
+                                                   CaptionML=ENU=Bank Currency Code;
+                                                   Editable=No }
+    { 20  ;   ;Document Time       ;Time          ;CaptionML=ENU=Document Time;
+                                                   Editable=No }
+    { 21  ;   ;Admin Comment       ;Text250       ;CaptionML=ENU=Admin Comment }
+    { 23  ;   ;Global Dimension 1 Code;Code20     ;TableRelation="Dimension Value".Code WHERE (Global Dimension No.=CONST(1));
+                                                   OnValidate=VAR
+                                                                EMDimMgt@1160040000 : Codeunit 6086318;
+                                                              BEGIN
+                                                                EMDimMgt.UpdateEMDimForGlobalDim(DATABASE::Expense,0,'',"Entry No.",1,"Global Dimension 1 Code");
+                                                                ExpValidate.RUN(Rec);
+                                                              END;
+
+                                                   CaptionML=ENU=Global Dimension 1 Code;
+                                                   CaptionClass='1,1,1' }
+    { 24  ;   ;Global Dimension 2 Code;Code20     ;TableRelation="Dimension Value".Code WHERE (Global Dimension No.=CONST(2));
+                                                   OnValidate=VAR
+                                                                EMDimMgt@1160040000 : Codeunit 6086318;
+                                                              BEGIN
+                                                                EMDimMgt.UpdateEMDimForGlobalDim(DATABASE::Expense,0,'',"Entry No.",2,"Global Dimension 2 Code");
+                                                                ExpValidate.RUN(Rec);
+                                                              END;
+
+                                                   CaptionML=ENU=Global Dimension 2 Code;
+                                                   CaptionClass='1,1,2' }
+    { 25  ;   ;Transfer Attachments to CO;Boolean ;CaptionML=ENU=Transfer Attachments to CO }
+    { 26  ;   ;Allocated Amount (LCY);Decimal     ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Expense Allocation"."Amount (LCY)" WHERE (Expense Entry No.=FIELD(Entry No.)));
+                                                   CaptionML=ENU=Allocated Amount (LCY);
+                                                   BlankZero=Yes;
+                                                   Editable=No }
+    { 27  ;   ;Business Description;Text250       ;CaptionML=ENU=Business Description;
+                                                   Editable=No }
+    { 50  ;   ;Job No.             ;Code20        ;TableRelation=Job;
+                                                   OnValidate=VAR
+                                                                ConfiguredField@1160040000 : Record 6086346;
+                                                              BEGIN
+                                                                VALIDATE(Billable,"Job No." <> '');
+
+                                                                AddDefaultDim(CurrFieldNo);
+                                                                ExpValidate.RUN(Rec);
+                                                              END;
+
+                                                   CaptionML=ENU=Job No. }
+    { 51  ;   ;Job Task No.        ;Code20        ;TableRelation="Job Task"."Job Task No." WHERE (Job No.=FIELD(Job No.));
+                                                   OnValidate=BEGIN
+                                                                VALIDATE(Billable,"Job Task No." <> '');
+                                                              END;
+
+                                                   CaptionML=ENU=Job Task No. }
+    { 52  ;   ;Billable            ;Boolean       ;OnValidate=BEGIN
+                                                                IF Billable AND ("Job No." <> '') AND ("Job Task No." <> '') THEN
+                                                                  VALIDATE("Job Line Type","Job Line Type"::Contract)
+                                                                ELSE
+                                                                  VALIDATE("Job Line Type","Job Line Type"::" ");
+                                                              END;
+
+                                                   CaptionML=ENU=Billable }
+    { 53  ;   ;Job Line Type       ;Option        ;OnValidate=BEGIN
+                                                                IF "Job Line Type" = "Job Line Type"::Contract THEN BEGIN
+                                                                  TESTFIELD("Job No.");
+                                                                  TESTFIELD("Job Task No.");
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ENU=Job Line Type;
+                                                   OptionCaptionML=ENU=" ,Budget,Billable,Both Budget and Billable";
+                                                   OptionString=[ ,Schedule,Contract,Both Schedule and Contract];
+                                                   Editable=No }
+    { 60  ;   ;Cash/Private Card   ;Boolean       ;OnValidate=BEGIN
+                                                                IF "Cash/Private Card" THEN
+                                                                  TESTFIELD("Matched to Bank Transaction",FALSE);
+
+                                                                ExpValidate.RUN(Rec);
+                                                              END;
+
+                                                   CaptionML=ENU=Cash/Private Card }
+    { 71  ;   ;On Hold             ;Code3         ;CaptionML=ENU=On Hold }
+    { 72  ;   ;Comment             ;Boolean       ;FieldClass=FlowField;
+                                                   CalcFormula=Exist("EM Comment" WHERE (Table ID=CONST(6086320),
+                                                                                         Document Type=CONST(Budget),
+                                                                                         Document No.=CONST(),
+                                                                                         Doc. Ref. No.=FIELD(Entry No.)));
+                                                   CaptionML=ENU=Comment;
+                                                   Editable=No }
+    { 73  ;   ;Original Expense Entry No.;Integer ;CaptionML=ENU=Original Expense Entry No. }
+    { 100 ;   ;Expense GUID        ;GUID          ;CaptionML=ENU=Expense GUID }
+    { 109 ;   ;Expense Account Type;Option        ;OnValidate=BEGIN
+                                                                IF xRec."Expense Account Type" <> "Expense Account Type" THEN
+                                                                  CLEAR("Expense Account");
+                                                              END;
+
+                                                   CaptionML=ENU=Expense Account Type;
+                                                   OptionCaptionML=ENU=" ,G/L Account,Lessor Pay Type,Bluegarden Pay Type";
+                                                   OptionString=[ ,G/L Account,Lessor Pay Type,Bluegarden Pay Type] }
+    { 110 ;   ;Expense Account     ;Code20        ;OnValidate=VAR
+                                                                GLAcc@1160040003 : Record 15;
+                                                                ExpCmtMgt@1160040000 : Codeunit 6086323;
+                                                                LessorIntegration@1160040001 : Codeunit 6086327;
+                                                                BluegardenIntegration@1160040002 : Codeunit 6086328;
+                                                              BEGIN
+                                                                IF "Expense Account" <> '' THEN BEGIN
+                                                                  TESTFIELD("Expense Account Type");
+
+                                                                  CASE "Expense Account Type" OF
+                                                                    "Expense Account Type"::"G/L Account":
+                                                                      BEGIN
+                                                                        GLAcc.GET("Expense Account");
+                                                                        GLAcc.TESTFIELD("Direct Posting",TRUE);
+                                                                        GLAcc.CheckGLAcc;
+                                                                      END;
+
+                                                                    "Expense Account Type"::"Lessor Pay Type":
+                                                                      LessorIntegration.ValidatePayType("Expense Account");
+
+                                                                    "Expense Account Type"::"Bluegarden Pay Type":
+                                                                      BluegardenIntegration.ValidatePayType("Expense Account");
+                                                                  END;
+                                                                END;
+
+                                                                "Exp. Account Manually Changed" := CurrFieldNo = FIELDNO("Expense Account");
+
+                                                                IF CurrFieldNo = FIELDNO("Expense Account") THEN
+                                                                  ExpCmtMgt.AddExpFieldValueChanged(
+                                                                    DATABASE::Expense,0,'',"Entry No.",FIELDNO("Expense Account"),FIELDCAPTION("Expense Account"),
+                                                                    xRec."Expense Account","Expense Account")
+                                                                ELSE
+                                                                  ExpCmtMgt.DelExpFieldValueChangedCmt(DATABASE::Expense,0,'',"Entry No.",FIELDNO("Expense Account"));
+
+                                                                AddDefaultDim(CurrFieldNo);
+
+                                                                ExpValidate.RUN(Rec);
+                                                              END;
+
+                                                   CaptionML=ENU=Expense Account }
+    { 111 ;   ;Exp. Account Manually Changed;Boolean;
+                                                   CaptionML=ENU=Expense Account Manually Changed }
+    { 112 ;   ;Gen. Prod. Posting Group;Code10    ;TableRelation="Gen. Product Posting Group";
+                                                   CaptionML=ENU=Gen. Prod. Posting Group }
+    { 113 ;   ;VAT Prod. Posting Group;Code10     ;TableRelation="VAT Product Posting Group";
+                                                   CaptionML=ENU=VAT Prod. Posting Group }
+    { 114 ;   ;Gen. Bus. Posting Group;Code10     ;TableRelation="Gen. Business Posting Group";
+                                                   CaptionML=ENU=Gen. Bus. Posting Group }
+    { 115 ;   ;VAT Bus. Posting Group;Code10      ;TableRelation="VAT Business Posting Group";
+                                                   CaptionML=ENU=VAT Bus. Posting Group }
+    { 120 ;   ;Status              ;Option        ;CaptionML=ENU=Status;
+                                                   OptionCaptionML=ENU=Open,Pending Expense User,Pending Approval,Released;
+                                                   OptionString=Open,Pending Expense User,Pending Approval,Released;
+                                                   Editable=No }
+    { 130 ;   ;Current Reminder Level;Integer     ;FieldClass=FlowField;
+                                                   CalcFormula=Max("EM Reminder".No. WHERE (Table ID=CONST(6086320),
+                                                                                            Document Type=CONST(Budget),
+                                                                                            Document No.=CONST(),
+                                                                                            Doc. Ref. No.=FIELD(Entry No.)));
+                                                   CaptionML=ENU=Current Reminder Level;
+                                                   Editable=No }
+    { 132 ;   ;Settlement No.      ;Code20        ;TableRelation="Expense Header".No. WHERE (Document Type=CONST(Settlement),
+                                                                                             Continia User ID=FIELD(Continia User ID));
+                                                   OnValidate=VAR
+                                                                ExpHeader@1160040000 : Record 6086339;
+                                                                EMDim@1160040001 : Record 6086360;
+                                                                EMAttach@1160040002 : Record 6086359;
+                                                              BEGIN
+                                                                IF "Settlement No." = xRec."Settlement No." THEN
+                                                                  EXIT;
+
+                                                                IF ExpHeader.GET(ExpHeader."Document Type"::Settlement,"Settlement No.") THEN BEGIN
+                                                                  ExpHeader.TESTFIELD("Continia User ID","Continia User ID");
+                                                                  ExpHeader.TESTFIELD(Posted,FALSE);
+                                                                  IF ExpHeader.Status = ExpHeader.Status::Released THEN
+                                                                    ERROR(SettlementReleasedTxt);
+
+                                                                  IF "Settlement Line No." = 0 THEN
+                                                                    "Settlement Line No." := GetNextDocumentLineNo;
+                                                                  "Expense Header GUID" := ExpHeader."Exp. Header GUID";
+                                                                END ELSE BEGIN
+                                                                  CLEAR("Settlement Line No.");
+                                                                  CLEAR("Expense Header GUID");
+                                                                END;
+                                                              END;
+
+                                                   OnLookup=VAR
+                                                              Settlement@1160040000 : Record 6086339;
+                                                            BEGIN
+                                                              IF "Settlement No." <> '' THEN
+                                                                IF Settlement.GET(Settlement."Document Type"::Settlement,"Settlement No.") THEN;
+                                                              IF "Continia User ID" <> '' THEN
+                                                                Settlement.SETRANGE("Continia User ID","Continia User ID");
+                                                              IF Posted THEN
+                                                                PAGE.RUNMODAL(PAGE::"Posted Settlement List",Settlement)
+                                                              ELSE
+                                                                IF PAGE.RUNMODAL(PAGE::"Expense Settlement List",Settlement) = ACTION::LookupOK THEN
+                                                                  VALIDATE("Settlement No.",Settlement."No.");
+                                                            END;
+
+                                                   CaptionML=ENU=Settlement No. }
+    { 133 ;   ;Settlement Line No. ;Integer       ;CaptionML=ENU=Settlement Line No. }
+    { 180 ;   ;Expense Type        ;Code20        ;TableRelation="Expense Type";
+                                                   OnValidate=VAR
+                                                                ContiniaUserSetup@1160040002 : Record 6086002;
+                                                                ExpenseType@1160040000 : Record 6086307;
+                                                                ExpPostingSetup@1160040001 : Record 6086309;
+                                                                BankTransaction@6086300 : Record 6086330;
+                                                              BEGIN
+                                                                IF NOT ExpenseType.GET("Expense Type") THEN
+                                                                  CLEAR(ExpenseType);
+
+                                                                IF NOT ExpenseType."Attendees Required" THEN BEGIN
+                                                                  CALCFIELDS("No. of Attendees");
+                                                                  IF "No. of Attendees" <> 0 THEN
+                                                                    ERROR(ExpTypeAttNotAllowed,ExpenseType.TABLECAPTION,ExpenseType.Code);
+                                                                END;
+
+                                                                VALIDATE("No Refund",ExpenseType."No Refund");
+
+                                                                IF NOT ContiniaUserSetup.GET("Continia User ID") THEN
+                                                                  CLEAR(ContiniaUserSetup);
+
+                                                                IF (ExpenseType.Code <> '') AND
+                                                                   ExpPostingSetup.FindPostingSetup("Expense Type","Country/Region Code","Continia User ID",
+                                                                   ContiniaUserSetup."Expense User Group")
+                                                                THEN BEGIN
+                                                                  "Expense Account Type" := ExpPostingSetup."Posting Account Type";
+                                                                  "Expense Account" := ExpPostingSetup."Posting Account No.";
+                                                                  "Gen. Prod. Posting Group" := ExpPostingSetup."Gen. Prod. Posting Group";
+                                                                  "VAT Prod. Posting Group" := ExpPostingSetup."VAT Prod. Posting Group";
+                                                                  "Gen. Bus. Posting Group" := ExpPostingSetup."Gen. Bus. Posting Group";
+                                                                  "VAT Bus. Posting Group" := ExpPostingSetup."VAT Bus. Posting Group";
+                                                                END ELSE BEGIN
+                                                                  CLEAR("Expense Account Type");
+                                                                  CLEAR("Expense Account");
+                                                                  CLEAR("Gen. Prod. Posting Group");
+                                                                  CLEAR("VAT Prod. Posting Group");
+                                                                  CLEAR("Gen. Bus. Posting Group");
+                                                                  CLEAR("VAT Bus. Posting Group");
+                                                                END;
+
+                                                                "Exp. Account Manually Changed" := FALSE;
+
+                                                                AddDefaultDim(CurrFieldNo);
+
+                                                                IF Description = '' THEN
+                                                                  Description := ExpenseType.Description;
+
+                                                                IF BankTransaction.GET(GetMatchingBankEntryNo) THEN BEGIN
+                                                                  BankTransaction."Expense Type" := "Expense Type";
+                                                                  BankTransaction.MODIFY
+                                                                END;
+
+                                                                ExpValidate.RUN(Rec);
+                                                              END;
+
+                                                   CaptionML=ENU=Expense Type }
+    { 200 ;   ;Matched to Bank Transaction;Boolean;CaptionML=ENU=Matched to Bank Transaction;
+                                                   Editable=No }
+    { 220 ;   ;Posted              ;Boolean       ;OnValidate=BEGIN
+                                                                "Posted Date/Time" := CURRENTDATETIME;
+                                                                "Posted by User ID" := USERID;
+                                                              END;
+
+                                                   CaptionML=ENU=Posted;
+                                                   Editable=No }
+    { 221 ;   ;Posted Date/Time    ;DateTime      ;CaptionML=ENU=Posted Date Time;
+                                                   Editable=No }
+    { 222 ;   ;Posted by User ID   ;Code50        ;CaptionML=ENU=Posted by User ID;
+                                                   Editable=No }
+    { 223 ;   ;Expense Completed   ;Boolean       ;CaptionML=ENU=Expense Completed }
+    { 224 ;   ;Continia Online Version No.;Text100;CaptionML=ENU=Continia Online Version No. }
+    { 260 ;   ;No. of Attachments  ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count("EM Attachment" WHERE (Table ID=CONST(6086320),
+                                                                                            Document Type=CONST(Budget),
+                                                                                            Document No.=CONST(),
+                                                                                            Doc. Ref. No.=FIELD(Entry No.)));
+                                                   CaptionML=ENU=No. of Attachments;
+                                                   Editable=No }
+    { 270 ;   ;No. of Attendees    ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count("Expense Attendee" WHERE (Expense Entry No.=FIELD(Entry No.)));
+                                                   CaptionML=ENU=No. of Attendees;
+                                                   Editable=No }
+    { 271 ;   ;Expense Header GUID ;GUID          ;CaptionML=ENU=Settlement GUID }
+  }
+  KEYS
+  {
+    {    ;Entry No.                               ;Clustered=Yes }
+    {    ;Expense GUID                             }
+    {    ;Continia User ID,Currency Code,Document Date;
+                                                   SumIndexFields=Amount,Amount (LCY) }
+    {    ;Continia User ID,Document Date           }
+    {    ;Continia User ID,Status,Posted          ;SumIndexFields=Amount (LCY) }
+    {    ;Created Doc. Type,Created Doc. Subtype,Created Doc. ID,Created Doc. Ref. No. }
+    {    ;Status                                  ;SumIndexFields=Amount (LCY) }
+    {    ;Posted,Settlement No.                    }
+    {    ;Posted,Continia User ID,Status,Document Date }
+    {    ;Settlement No.,Posted,Posted Date/Time,Entry No. }
+    {    ;Settlement No.,Settlement Line No.      ;SumIndexFields=Amount (LCY) }
+    {    ;Settlement No.,Matched to Bank Transaction,Currency Code }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      EMOnlineMgt@1160040006 : Codeunit 6086305;
+      ExpValidate@1160040003 : Codeunit 6086321;
+      EMFileInterface@1160040034 : Codeunit 6086396;
+      SkipSendToExpUser@1160040015 : Boolean;
+      SupressAllocationsExist@1160040018 : Boolean;
+      SuspendInboxCheck@1160040009 : Boolean;
+      BothExpMatchedErr@1160040002 : TextConst 'ENU=Both expenses are matched to bank transactions and can therefore not be merged.';
+      OneExpMatchedErr@1160040001 : TextConst 'ENU=At least one of the expenses must be matched.';
+      ConfirmMergeTxt@1160040010 : TextConst 'ENU=Do you want to merge the two selected expenses?';
+      DeleteAborted@1160040020 : TextConst 'ENU=The expense was not deleted as it was matched with a bank transaction';
+      DeleteAndExclude@1160040019 : TextConst 'ENU=The Expense is matched to a bank transaction. Would you like to delete the matching and exclude the transaction?';
+      ExpenseAllocatedErr@1160040017 : TextConst 'ENU=This expense has been allocated and therefore you cannot change %1.';
+      EMInboxFoundErr@1160040008 : TextConst 'ENU=%1 %2 cannot be updated as there are one or more unprocessed lines in the %3.\\Please process the related lines in the %3 before making changes to this %1.';
+      FileAlreadyExistErr@1160040014 : TextConst 'ENU=The file name ''%1'' already exist for this expense and cannot be imported.\Please rename it before importing.';
+      MergeAmtDiffQuestion@1160040005 : TextConst 'ENU=The amount on the two expenses selected are not the same.\The Amount (%1 %2) from the expense matched to the bank transaction will be used.\\Do you want to continue?';
+      OneOrMoreBankTransError@1160040022 : TextConst 'ENU=There are one or more unprocessed entries in the Bank Transaction Inbox.';
+      OneOrMoreInboxError@1160040024 : TextConst 'ENU=There are one or more unprocessed entries in the %1.';
+      ProcessInboxAsapTxt@1160040023 : TextConst 'ENU=\\You should process these as soon as possible.';
+      MissingBankTransTxt@1160040013 : TextConst 'ENU=Missing Bank Transaction';
+      Text001@1160040000 : TextConst 'ENU=You cannot rename a %1.';
+      UnableToMergeWithAllocErr@1160040004 : TextConst 'ENU=Expense %1 cannot be merged when it has been allocated to one or more lines.';
+      SingleEmployee@1160040016 : TextConst 'ENU=%1 Employee';
+      MultipleEmployees@1160040021 : TextConst 'ENU=%1 Employees';
+      SingleGuest@1160040026 : TextConst 'ENU=%1 Guest';
+      MultipleGuests@1160040025 : TextConst 'ENU=%1 Guests';
+      AllocatedTxt@1160040007 : TextConst 'ENU=Allocated';
+      SettlementReleasedTxt@1160040027 : TextConst 'ENU=The settlement must not be released.';
+      HideUI@1160040028 : Boolean;
+      StatusNotAllowed@1160040029 : TextConst 'ENU=Status must be Open or Pending Expense User.';
+      NoExpInSelection@1160040031 : TextConst 'ENU=Please select one or more expenses to detach.';
+      ConfirmDetachExpenseSingle@1160040030 : TextConst 'ENU=Do you want to detach the expense from this Settlement?';
+      ConfirmDetachExpenseMultiple@1160040011 : TextConst 'ENU=Do you want to detach %1 expenses from this Settlement?';
+      ExpTypeAttNotReq@1160040032 : TextConst 'ENU=The %1 %2 does not require attendees.';
+      ExpTypeAttNotAllowed@1160040033 : TextConst 'ENU=The %1 %2 does not allow attendees. Please remove them.';
+      CannotChangeWhenSttl@1160040035 : TextConst 'ENU=%1 cannot be changed when assigned to a settlement.';
+
+    LOCAL PROCEDURE UpdateAmount@1160040007(CalledByFieldNo@1160040002 : Integer);
+    VAR
+      Currency@1160040000 : Record 4;
+      BankAccCurrency@1160040005 : Record 4;
+      CurrExchRate@1160040001 : Record 330;
+      CurrencyDate@1160040004 : Date;
+      AccountCurrencyFactor@1160040006 : Decimal;
+      ExpenseCurrencyFactor@1160040003 : Decimal;
+    BEGIN
+      IF CalledByFieldNo <> FIELDNO("Bank Currency Code") THEN
+        TESTFIELD("Matched to Bank Transaction",FALSE);
+
+      IF "Document Date" = 0D THEN
+        CurrencyDate := WORKDATE
+      ELSE
+        CurrencyDate := "Document Date";
+
+      ExpenseCurrencyFactor := 1;
+      AccountCurrencyFactor := 1;
+      IF "Currency Code" <> '' THEN BEGIN
+        ExpenseCurrencyFactor := CurrExchRate.ExchangeRate(CurrencyDate,"Currency Code");
+        Currency.GET("Currency Code");
+        Currency.CheckAmountRoundingPrecision;
+      END ELSE
+        Currency.InitRoundingPrecision;
+
+      IF "Bank Currency Code" <> '' THEN BEGIN
+        AccountCurrencyFactor := CurrExchRate.ExchangeRate(CurrencyDate,"Bank Currency Code");
+        BankAccCurrency.GET("Bank Currency Code");
+        BankAccCurrency.CheckAmountRoundingPrecision;
+      END ELSE
+        BankAccCurrency.InitRoundingPrecision;
+
+      CASE CalledByFieldNo OF
+        // CURRENCY CODE
+        FIELDNO("Currency Code"):
+          VALIDATE(Amount);
+
+        // AMOUNT
+        FIELDNO(Amount):
+          BEGIN
+            IF Currency.GET("Currency Code") THEN BEGIN
+              Amount := ROUND(Amount,Currency."Amount Rounding Precision");
+              "Amount (LCY)" :=
+                ROUND(CurrExchRate.ExchangeAmtFCYToLCY(CurrencyDate,"Currency Code",Amount,ExpenseCurrencyFactor),
+                Currency."Amount Rounding Precision");
+            END ELSE BEGIN
+              Amount := ROUND(Amount,Currency."Amount Rounding Precision");
+              "Amount (LCY)" := ROUND(Amount);
+            END;
+
+            IF "Matched to Bank Transaction" THEN
+              IF "Currency Code" = "Bank Currency Code" THEN
+                "Bank-Currency Amount" := ROUND(Amount,BankAccCurrency."Amount Rounding Precision")
+              ELSE
+                "Bank-Currency Amount" :=
+                   ROUND(CurrExchRate.ExchangeAmtLCYToFCY(CurrencyDate,"Bank Currency Code","Amount (LCY)",AccountCurrencyFactor),
+                    BankAccCurrency."Amount Rounding Precision")
+            ELSE
+              "Bank-Currency Amount" := 0;
+
+          END;
+
+        // AMOUNT (LCY)
+        FIELDNO("Amount (LCY)"):
+          BEGIN
+            IF "Currency Code" <> '' THEN
+              Amount :=
+                ROUND(CurrExchRate.ExchangeAmtLCYToFCY(CurrencyDate,"Currency Code","Amount (LCY)",ExpenseCurrencyFactor),
+                Currency."Amount Rounding Precision")
+            ELSE
+              Amount := ROUND("Amount (LCY)",Currency."Amount Rounding Precision");
+
+            IF "Matched to Bank Transaction" THEN
+              IF "Currency Code" = "Bank Currency Code" THEN
+                "Bank-Currency Amount" := ROUND(Amount,BankAccCurrency."Amount Rounding Precision")
+              ELSE
+                "Bank-Currency Amount" :=
+                   ROUND(CurrExchRate.ExchangeAmtLCYToFCY(CurrencyDate,"Bank Currency Code","Amount (LCY)",AccountCurrencyFactor),
+                    BankAccCurrency."Amount Rounding Precision")
+            ELSE
+              "Bank-Currency Amount" := 0;
+
+          END;
+
+        // BANK ACC. CURRENCY CODE
+        FIELDNO("Bank Currency Code"):
+          IF "Matched to Bank Transaction" THEN
+            IF "Currency Code" = "Bank Currency Code" THEN
+              "Bank-Currency Amount" := ROUND(Amount,BankAccCurrency."Amount Rounding Precision")
+            ELSE
+              "Bank-Currency Amount" :=
+                ROUND(CurrExchRate.ExchangeAmtLCYToFCY(CurrencyDate,"Bank Currency Code","Amount (LCY)",AccountCurrencyFactor),
+                  BankAccCurrency."Amount Rounding Precision")
+          ELSE
+            "Bank-Currency Amount" := 0;
+      END;
+    END;
+
+    PROCEDURE NextReminderDate@1160040018() : Date;
+    VAR
+      EMReminder@1160040003 : Record 6086364;
+    BEGIN
+      EXIT(EMReminder.NextReminderDate("Continia User ID",DATABASE::Expense,0,"Settlement No.","Entry No.",GetEarliestDate));
+    END;
+
+    PROCEDURE ShowReminders@1160040022();
+    VAR
+      Reminders@1160040000 : Page 6086305;
+    BEGIN
+      Reminders.SetRecordFilter(DATABASE::Expense,0,'',"Entry No.");
+      Reminders.RUNMODAL;
+    END;
+
+    PROCEDURE CalcMatchedAmount@1160040027() : Decimal;
+    VAR
+      Match@1160040000 : Record 6086349;
+      Sum@1160040001 : Decimal;
+    BEGIN
+      Sum := 0;
+      Match.SETCURRENTKEY("Expense Entry No.");
+      Match.SETRANGE("Expense Entry No.","Entry No.");
+      IF Match.FINDFIRST THEN
+        REPEAT
+          Match.CALCFIELDS("Transaction Amount");
+          Sum += Match."Transaction Amount";
+        UNTIL Match.NEXT = 0;
+
+      EXIT(Sum);
+    END;
+
+    PROCEDURE GetEmployeeEmail@1160040029() : Text[250];
+    VAR
+      ContiniaUser@1160040000 : Record 6086001;
+    BEGIN
+      IF ContiniaUser.GET("Continia User ID") THEN
+        EXIT(ContiniaUser."E-Mail");
+    END;
+
+    PROCEDURE MatchToBankTrans@1160040032();
+    VAR
+      BankTrans@1160040004 : Record 6086330;
+      ExpenseMatch@1160040003 : Record 6086349;
+      MatchBankTransForm@1160040000 : Page 6086341;
+      ExpenseMatchMgt@1160040005 : Codeunit 6086311;
+      Matching@1160040002 : Codeunit 6086311;
+      CurrentMatchedEntry@1160040001 : Integer;
+    BEGIN
+      TESTFIELD("Cash/Private Card",FALSE);
+
+      BankTrans.FILTERGROUP(2);
+      BankTrans.SETCURRENTKEY("Continia User ID","Matched to Expense","Currency Code","Exclude Entry");
+      BankTrans.SETRANGE("Continia User ID","Continia User ID");
+      BankTrans.SETRANGE("Currency Code","Currency Code");
+      BankTrans.FILTERGROUP(0);
+
+      MatchBankTransForm.SetExpense(Rec);
+      MatchBankTransForm.SETTABLEVIEW(BankTrans);
+
+      ExpenseMatch.SETRANGE("Expense Entry No.","Entry No.");
+      IF ExpenseMatch.FINDFIRST THEN BEGIN
+        BankTrans.GET(ExpenseMatch."Transaction Entry No.");
+        MatchBankTransForm.SETRECORD(BankTrans);
+        MatchBankTransForm.SetCurrMatchedEntry(BankTrans."Entry No.");
+        CurrentMatchedEntry := BankTrans."Entry No.";
+      END;
+
+      // THIS WILL SHOW THE MATCH SCREEN BUT WHERE IT IS NOT POSSIBLE TO CHANGE THE MATCHING IN ANY WAY
+      IF Posted OR (Status <> Status::Open) THEN BEGIN
+        MatchBankTransForm.EDITABLE := FALSE;
+        MatchBankTransForm.RUN;
+        EXIT;
+      END;
+
+      MatchBankTransForm.LOOKUPMODE(TRUE);
+      IF MatchBankTransForm.RUNMODAL = ACTION::LookupOK THEN BEGIN
+        IF (MatchBankTransForm.GetMatchedTransaction = 0) AND (CurrentMatchedEntry <> 0) THEN BEGIN
+          ExpenseMatchMgt.DeleteExpenseMatch(Rec);
+          MODIFY;
+        END;
+
+        IF (MatchBankTransForm.GetMatchedTransaction <> 0) AND
+           (MatchBankTransForm.GetMatchedTransaction <> CurrentMatchedEntry)
+        THEN BEGIN
+          BankTrans.GET(MatchBankTransForm.GetMatchedTransaction);
+          ExpenseMatchMgt.DeleteExpenseMatch(Rec);
+          MODIFY;
+          Matching.InsertMatch(BankTrans,Rec);
+        END;
+      END;
+
+      GET("Entry No.");
+    END;
+
+    PROCEDURE Attach@1160040053(Filename@1160040000 : Text[1024]);
+    VAR
+      EMAttachment@1160040002 : Record 6086359;
+      ExpenseInbox@1160040003 : Record 6086323;
+      FileSysMgt@1160040001 : Codeunit 6085584;
+      FilenameWithoutPath@1160040004 : Text[1024];
+      LastIndex@1160040005 : Integer;
+    BEGIN
+      CheckInboxAndThrowError;
+
+      LastIndex := FileSysMgt.LastIndexOf(Filename,'\',TRUE);
+
+      IF LastIndex = 0 THEN
+        EXIT;
+
+      FilenameWithoutPath := COPYSTR(Filename,LastIndex + 1);
+
+      EMAttachment.SETRANGE("Table ID",DATABASE::Expense);
+      EMAttachment.SETRANGE("Document Type",0);
+      EMAttachment.SETRANGE("Document No.",'');
+      EMAttachment.SETRANGE("Doc. Ref. No.","Entry No.");
+      EMAttachment.SETRANGE("File Name",FilenameWithoutPath);
+      IF NOT EMAttachment.ISEMPTY THEN
+        ERROR(FileAlreadyExistErr,FilenameWithoutPath);
+
+      EMAttachment.SETRANGE("File Name");
+
+      Filename := FileSysMgt.GetFilename(Filename);
+      EMAttachment.INIT;
+      EMAttachment."Table ID" := DATABASE::Expense;
+      EMAttachment."Document No." := '';
+      EMAttachment."Doc. Ref. No." := "Entry No.";
+      EMAttachment."File Name" := FileSysMgt.GetFilename(Filename);
+      EMAttachment.INSERT(TRUE);
+
+      ExpValidate.RUN(Rec);
+
+      EMAttachment.SetAttachment(Filename);
+    END;
+
+    PROCEDURE MergeExpenses@1160040004(VAR Expense1@1160040000 : Record 6086320;VAR Expense2@1160040001 : Record 6086320);
+    VAR
+      GLSetup@1160040008 : Record 98;
+      MatchedExpense@1160040003 : Record 6086320;
+      UnMatchedExpense@1160040002 : Record 6086320;
+      ExpenseMatch@1160040005 : Record 6086349;
+      NewExpenseMatch@1160040004 : Record 6086349;
+      EMAttachment@1160040006 : Record 6086359;
+      FileManagement@1160040011 : Codeunit 6085584;
+      CurrCode@1160040007 : Code[20];
+      LastEntry@1160040009 : Integer;
+      OldFilepath@1160040010 : Text[1024];
+    BEGIN
+      IF Expense1."Matched to Bank Transaction" AND Expense2."Matched to Bank Transaction" THEN
+        ERROR(BothExpMatchedErr);
+
+      IF (NOT Expense1."Matched to Bank Transaction") AND (NOT Expense2."Matched to Bank Transaction") THEN
+        ERROR(OneExpMatchedErr);
+
+      IF Expense1."Matched to Bank Transaction" THEN BEGIN
+        MatchedExpense := Expense1;
+        UnMatchedExpense := Expense2;
+        UnMatchedExpense.TESTFIELD("Cash/Private Card",FALSE);
+      END ELSE
+        BEGIN
+          Expense2.TESTFIELD("Matched to Bank Transaction");
+
+          MatchedExpense := Expense2;
+          UnMatchedExpense := Expense1;
+          UnMatchedExpense.TESTFIELD("Cash/Private Card",FALSE);
+        END;
+
+      IF NOT CONFIRM(ConfirmMergeTxt,TRUE) THEN
+        EXIT;
+
+      IF MatchedExpense.Amount <> UnMatchedExpense.Amount THEN BEGIN
+        GLSetup.GET;
+        IF MatchedExpense."Currency Code" <> '' THEN
+          CurrCode := MatchedExpense."Currency Code"
+        ELSE
+          CurrCode := GLSetup."LCY Code";
+
+        IF NOT CONFIRM(MergeAmtDiffQuestion,TRUE,CurrCode,MatchedExpense.Amount) THEN
+          ERROR('');
+      END;
+
+      MatchedExpense.TESTFIELD(Posted,FALSE);
+      UnMatchedExpense.TESTFIELD(Posted,FALSE);
+
+      IF MatchedExpense.AllocationsExists THEN
+        ERROR(UnableToMergeWithAllocErr);
+
+      IF UnMatchedExpense.AllocationsExists THEN
+        IF (UnMatchedExpense."Currency Code" <> MatchedExpense."Currency Code") OR
+           (UnMatchedExpense.Amount <> MatchedExpense.Amount) OR
+           (UnMatchedExpense."Amount (LCY)" <> MatchedExpense."Amount (LCY)")
+        THEN
+          ERROR(UnableToMergeWithAllocErr);
+
+      ExpenseMatch.SETRANGE("Expense Entry No.",MatchedExpense."Entry No.");
+      IF ExpenseMatch.FINDSET THEN
+        REPEAT
+          NewExpenseMatch := ExpenseMatch;
+          NewExpenseMatch."Expense Entry No." := UnMatchedExpense."Entry No.";
+          NewExpenseMatch.INSERT;
+          ExpenseMatch.DELETE;
+        UNTIL ExpenseMatch.NEXT = 0;
+
+      EMAttachment.SETCURRENTKEY("Table ID","Document Type","Document No.","Doc. Ref. No.");
+      EMAttachment.SETRANGE("Table ID",DATABASE::Expense);
+      EMAttachment.SETRANGE("Document Type",0);
+      EMAttachment.SETRANGE("Document No.",'');
+      EMAttachment.SETRANGE("Doc. Ref. No.",MatchedExpense."Entry No.");
+      IF EMAttachment.FINDLAST THEN
+        LastEntry := EMAttachment."Entry No.";
+
+      EMAttachment.SETCURRENTKEY("Table ID","Document Type","Document No.","Doc. Ref. No.");
+      EMAttachment.SETRANGE("Table ID",DATABASE::Expense);
+      EMAttachment.SETRANGE("Document Type",0);
+      EMAttachment.SETRANGE("Document No.",'');
+      EMAttachment.SETRANGE("Doc. Ref. No.",MatchedExpense."Entry No.");
+      IF EMAttachment.FINDLAST THEN
+        REPEAT
+          LastEntry := LastEntry + 1;
+          OldFilepath := EMAttachment.GetAttachmentServerFileName;
+          EMAttachment.RENAME(
+            EMAttachment."Table ID",
+            EMAttachment."Document Type",
+            EMAttachment."Document No.",
+            UnMatchedExpense."Entry No.",
+            LastEntry);
+
+          IF EMAttachment.GetAttachmentServerFileName <> OldFilepath THEN
+            FileManagement.MoveFile(OldFilepath,EMAttachment.GetAttachmentServerFileName);
+
+        UNTIL EMAttachment.NEXT(-1) = 0;
+
+      UnMatchedExpense."Continia User ID" := MatchedExpense."Continia User ID";
+      UnMatchedExpense."Document Date" := MatchedExpense."Document Date";
+      UnMatchedExpense."Country/Region Code" := MatchedExpense."Country/Region Code";
+      UnMatchedExpense."Currency Code" := MatchedExpense."Currency Code";
+      UnMatchedExpense.Amount := MatchedExpense.Amount;
+      UnMatchedExpense."Amount (LCY)" := MatchedExpense."Amount (LCY)";
+      UnMatchedExpense."Bank-Currency Amount" := MatchedExpense."Bank-Currency Amount";
+      UnMatchedExpense."Bank Currency Code" := MatchedExpense."Bank Currency Code";
+      UnMatchedExpense."Matched to Bank Transaction" := MatchedExpense."Matched to Bank Transaction";
+      UnMatchedExpense.MODIFY(TRUE);
+
+      MatchedExpense."Matched to Bank Transaction" := FALSE;
+      MatchedExpense.DELETE(TRUE);
+
+      CODEUNIT.RUN(CODEUNIT::"Expense-Validate",UnMatchedExpense);
+    END;
+
+    PROCEDURE HasExpenseComment@1160040009() : Boolean;
+    BEGIN
+      CALCFIELDS(Comment);
+      EXIT(Comment);
+    END;
+
+    PROCEDURE HasErrorComment@1160040017(ShowFirstError@1000 : Boolean) : Boolean;
+    VAR
+      EMCmtMgt@1160040001 : Codeunit 6086323;
+    BEGIN
+      EXIT(EMCmtMgt.HasErrorComments(DATABASE::Expense,0,"Settlement No.","Entry No.",ShowFirstError,TRUE));
+    END;
+
+    PROCEDURE HasWarningComment@1160040008(ShowFirstError@1000 : Boolean) : Boolean;
+    VAR
+      EMCmtMgt@1160040001 : Codeunit 6086323;
+    BEGIN
+      EXIT(EMCmtMgt.HasWarningComments(DATABASE::Expense,0,"Settlement No.","Entry No.",ShowFirstError,TRUE));
+    END;
+
+    PROCEDURE HasApprovalComment@1160040013() : Boolean;
+    VAR
+      ApprovalCmtLine@1160040000 : Record 455;
+    BEGIN
+      ApprovalCmtLine.SETCURRENTKEY("Table ID","Document Type","Document No.");
+      ApprovalCmtLine.SETRANGE("Table ID",DATABASE::Expense);
+      ApprovalCmtLine.SETRANGE("Document Type",ApprovalCmtLine."Document Type"::Invoice);
+      ApprovalCmtLine.SETRANGE("Document No.",FORMAT("Entry No."));
+      EXIT(NOT ApprovalCmtLine.ISEMPTY);
+    END;
+
+    PROCEDURE SetSkipSendToExpUser@1160040000(NewSkipSendToExpUser@1160040000 : Boolean);
+    BEGIN
+      SkipSendToExpUser := NewSkipSendToExpUser;
+    END;
+
+    PROCEDURE CheckUnProcessedInbox@1160040003();
+    VAR
+      UserResp@1000 : Record 6086379;
+      ExpenseInbox@1160040000 : Record 6086323;
+      BankTransInbox@1160040001 : Record 6086331;
+      TextMessage@1160040002 : Text[1024];
+    BEGIN
+      IF UserResp.GetResponsibilityFilter <> '' THEN
+        EXIT;
+
+      ExpenseInbox.SETFILTER(Status,'<>%1',ExpenseInbox.Status::Accepted);
+      IF NOT ExpenseInbox.ISEMPTY THEN
+        TextMessage := STRSUBSTNO(OneOrMoreInboxError,ExpenseInbox.TABLECAPTION);
+
+      BankTransInbox.SETFILTER(Status,'<>%1',BankTransInbox.Status::Accepted);
+      BankTransInbox.SETRANGE("Exclude Entry",FALSE);
+      IF NOT BankTransInbox.ISEMPTY THEN BEGIN
+        IF TextMessage <> '' THEN
+          TextMessage := TextMessage + '\\';
+        TextMessage := TextMessage + OneOrMoreBankTransError;
+      END;
+
+      IF TextMessage <> '' THEN
+        MESSAGE(TextMessage + ProcessInboxAsapTxt);
+    END;
+
+    PROCEDURE SupressAllocationCheck@1160040015();
+    BEGIN
+      SupressAllocationsExist := TRUE;
+    END;
+
+    PROCEDURE AllocationsExists@1160040001() : Boolean;
+    VAR
+      ExpenseAllocation@1160040000 : Record 6086321;
+    BEGIN
+      ExpenseAllocation.SETCURRENTKEY("Expense Entry No.");
+      ExpenseAllocation.SETRANGE("Expense Entry No.","Entry No.");
+      EXIT(NOT ExpenseAllocation.ISEMPTY);
+    END;
+
+    PROCEDURE LookupGlobalDim@1160040010(VAR Text@1160040001 : Text[1024];DimNo@1160040000 : Integer) : Boolean;
+    VAR
+      EMDimMgt@1160040002 : Codeunit 6086318;
+    BEGIN
+      EXIT(EMDimMgt.LookupGlobalDim(Text,DimNo));
+    END;
+
+    PROCEDURE GetStatusCaption@1160040016(StatusAsInt@1160040000 : Integer) : Text[30];
+    VAR
+      Expense@1160040001 : Record 6086320;
+    BEGIN
+      Expense.Status := StatusAsInt;
+      EXIT(FORMAT(Expense.Status));
+    END;
+
+    PROCEDURE Navigate@2();
+    VAR
+      NavigateExpense@1000 : Codeunit 6086322;
+    BEGIN
+      NavigateExpense.NavigateExpense(Rec);
+    END;
+
+    PROCEDURE SetSuspendInboxCheck@1160040005(NewSuspend@1160040000 : Boolean);
+    BEGIN
+      SuspendInboxCheck := NewSuspend;
+    END;
+
+    PROCEDURE PostingSetupChanged@1160040019(VAR NewCalculatedAccount@1160040002 : Code[20]) : Boolean;
+    VAR
+      ContiniaUserSetup@1160040001 : Record 6086002;
+      ExpensePostingSetup@1160040000 : Record 6086309;
+    BEGIN
+      IF "Exp. Account Manually Changed" THEN
+        EXIT(FALSE);
+
+      IF NOT ContiniaUserSetup.GET("Continia User ID") THEN
+        EXIT(FALSE);
+
+      ExpensePostingSetup.FindPostingSetup(
+        "Expense Type","Country/Region Code","Continia User ID",ContiniaUserSetup."Expense User Group");
+      NewCalculatedAccount := ExpensePostingSetup."Posting Account No.";
+      EXIT("Expense Account" <> NewCalculatedAccount);
+    END;
+
+    PROCEDURE ExistsInInbox@1160040020() : Boolean;
+    VAR
+      ExpenseInbox@1160040000 : Record 6086323;
+    BEGIN
+      ExpenseInbox.SETCURRENTKEY("Expense GUID");
+      ExpenseInbox.SETRANGE("Expense GUID","Expense GUID");
+      ExpenseInbox.SETFILTER(Status,'%1|%2',ExpenseInbox.Status::Pending,ExpenseInbox.Status::Error);
+      IF NOT ExpenseInbox.ISEMPTY THEN
+        EXIT(TRUE);
+    END;
+
+    PROCEDURE CheckInboxAndThrowError@1();
+    BEGIN
+      IF NOT SuspendInboxCheck THEN
+        IF ExistsInInbox THEN
+          ThrowInboxError;
+    END;
+
+    PROCEDURE ThrowInboxError@3();
+    VAR
+      ExpenseInbox@1000 : Record 6086323;
+    BEGIN
+      ERROR(EMInboxFoundErr,TABLECAPTION,"Entry No.",ExpenseInbox.TABLECAPTION);
+    END;
+
+    PROCEDURE BankIntegrationExists@1160040021() : Boolean;
+    VAR
+      BankAgreement@1160040000 : Record 6086315;
+    BEGIN
+      EXIT(NOT BankAgreement.ISEMPTY);
+    END;
+
+    PROCEDURE IsSyncRequired@1160040023() : Boolean;
+    BEGIN
+      EXIT(EMOnlineMgt.IsSyncRequired(Rec));
+    END;
+
+    PROCEDURE AddDefaultDim@1160040024(ValidatedFieldNo@1160040002 : Integer);
+    VAR
+      ContiniaUser@1160040001 : Record 6086002;
+      EMDimMgt@1160040000 : Codeunit 6086318;
+    BEGIN
+      IF "Entry No." = 0 THEN
+        EXIT;
+
+      DeleteOldDefaultDim;
+
+      IF ContiniaUser.GET("Continia User ID") THEN BEGIN
+        IF ContiniaUser.GetSalesPurchCode <> '' THEN
+          EMDimMgt.InsertDefaultDimExpense(DATABASE::"Salesperson/Purchaser",ContiniaUser.GetSalesPurchCode,Rec);
+
+        IF ContiniaUser."Vendor No." <> '' THEN
+          EMDimMgt.InsertDefaultDimExpense(DATABASE::Vendor,ContiniaUser."Vendor No.",Rec);
+      END;
+
+      IF "Expense Account" <> '' THEN
+        EMDimMgt.InsertDefaultDimExpense(DATABASE::"G/L Account","Expense Account",Rec);
+
+      IF "Expense Type" <> '' THEN
+        EMDimMgt.InsertDefaultDimExpense(DATABASE::"Expense Type","Expense Type",Rec);
+
+      IF "Job No." <> '' THEN
+        EMDimMgt.InsertDefaultDimExpense(DATABASE::Job,"Job No.",Rec);
+
+      CASE ValidatedFieldNo OF
+        FIELDNO("Continia User ID"):
+          IF ContiniaUser.GET("Continia User ID") THEN BEGIN
+            IF ContiniaUser.GetSalesPurchCode <> '' THEN
+              EMDimMgt.InsertDefaultDimExpense(DATABASE::"Salesperson/Purchaser",ContiniaUser.GetSalesPurchCode,Rec);
+
+            IF ContiniaUser."Vendor No." <> '' THEN
+              EMDimMgt.InsertDefaultDimExpense(DATABASE::Vendor,ContiniaUser."Vendor No.",Rec);
+          END;
+
+        FIELDNO("Expense Account"):
+          IF "Expense Account" <> '' THEN
+            EMDimMgt.InsertDefaultDimExpense(DATABASE::"G/L Account","Expense Account",Rec);
+
+        FIELDNO("Expense Type"):
+          IF "Expense Type" <> '' THEN
+            EMDimMgt.InsertDefaultDimExpense(DATABASE::"Expense Type","Expense Type",Rec);
+
+        FIELDNO("Job No."):
+          IF "Job No." <> '' THEN
+            EMDimMgt.InsertDefaultDimExpense(DATABASE::Job,"Job No.",Rec);
+      END;
+    END;
+
+    PROCEDURE DeleteOldDefaultDim@1160040026();
+    VAR
+      ContiniaUser@1160040001 : Record 6086002;
+      EMDimMgt@1160040000 : Codeunit 6086318;
+    BEGIN
+      IF ContiniaUser.GET(xRec."Continia User ID") THEN BEGIN
+        IF ContiniaUser.GetSalesPurchCode <> '' THEN
+          EMDimMgt.DeleteDefaultDimExpense(DATABASE::"Salesperson/Purchaser",ContiniaUser.GetSalesPurchCode,Rec);
+
+        IF ContiniaUser."Vendor No." <> '' THEN
+          EMDimMgt.DeleteDefaultDimExpense(DATABASE::Vendor,ContiniaUser."Vendor No.",Rec);
+      END;
+
+      IF xRec."Expense Type" <> '' THEN
+        EMDimMgt.DeleteDefaultDimExpense(DATABASE::"Expense Type",xRec."Expense Type",Rec);
+
+      IF xRec."Expense Account" <> '' THEN
+        EMDimMgt.DeleteDefaultDimExpense(DATABASE::"G/L Account",xRec."Expense Account",Rec);
+
+      IF xRec."Job No." <> '' THEN
+        EMDimMgt.DeleteDefaultDimExpense(DATABASE::Job,xRec."Job No.",Rec);
+    END;
+
+    PROCEDURE GetMatchingBankEntryNo@1160040006() : Integer;
+    VAR
+      ExpenseMatch@1160040000 : Record 6086349;
+    BEGIN
+      ExpenseMatch.SETRANGE("Expense Entry No.","Entry No.");
+      IF ExpenseMatch.FINDFIRST THEN
+        EXIT(ExpenseMatch."Transaction Entry No.");
+    END;
+
+    PROCEDURE GetAttendeesForDisplay@1160040002() DisplayTxt : Text[150];
+    VAR
+      ExpAttendee@1160040000 : Record 6086308;
+      NoOfGuests@1160040001 : Integer;
+      NoOfEmployees@1160040002 : Integer;
+    BEGIN
+      ExpAttendee.SETRANGE("Expense Entry No.","Entry No.");
+      CASE ExpAttendee.COUNT OF
+        0:
+          EXIT;
+
+        1:
+          BEGIN
+            ExpAttendee.FINDFIRST;
+            IF ExpAttendee.Name <> '' THEN
+              EXIT(STRSUBSTNO('%1 (%2)',ExpAttendee.Name,ExpAttendee.Type))
+            ELSE
+              EXIT(STRSUBSTNO('%1 (%2)',ExpAttendee."Company Name",ExpAttendee.Type));
+          END;
+
+        ELSE BEGIN
+          ExpAttendee.SETRANGE(Type,ExpAttendee.Type::Employee);
+          NoOfEmployees := ExpAttendee.COUNT;
+          ExpAttendee.SETRANGE(Type,ExpAttendee.Type::Guest);
+          NoOfGuests := ExpAttendee.COUNT;
+
+          IF NoOfEmployees > 1 THEN
+            DisplayTxt := STRSUBSTNO(MultipleEmployees,NoOfEmployees)
+          ELSE
+            IF NoOfEmployees = 1 THEN
+              DisplayTxt := STRSUBSTNO(SingleEmployee,NoOfEmployees);
+
+          IF (NoOfEmployees > 0) AND (NoOfGuests > 0) THEN
+            DisplayTxt := DisplayTxt + ', ';
+
+          IF NoOfGuests > 1 THEN
+            DisplayTxt := DisplayTxt + STRSUBSTNO(MultipleGuests,NoOfGuests)
+          ELSE
+            IF NoOfGuests = 1 THEN
+              DisplayTxt := DisplayTxt + STRSUBSTNO(SingleGuest,NoOfGuests);
+
+        END;
+      END;
+    END;
+
+    PROCEDURE DrillDownAttendees@1160040011();
+    VAR
+      ExpAttendee@1160040000 : Record 6086308;
+      TempExpAttendee@1160040002 : TEMPORARY Record 6086308;
+      ExpenseType@1160040004 : Record 6086307;
+      ExpAttendees@1160040001 : Page 6086325;
+      SendToExpUser@1160040003 : Codeunit 6086324;
+    BEGIN
+      ExpAttendee.SETRANGE("Expense Entry No.","Entry No.");
+
+      TESTFIELD("Expense Type");
+      ExpenseType.GET("Expense Type");
+      IF NOT ExpenseType."Attendees Required" THEN
+        ERROR(ExpTypeAttNotReq,ExpenseType.TABLECAPTION,ExpenseType.Code);
+
+      IF NOT Posted THEN BEGIN
+        IF ExpAttendee.FINDSET THEN
+          REPEAT
+            TempExpAttendee := ExpAttendee;
+            TempExpAttendee.INSERT;
+          UNTIL ExpAttendee.NEXT = 0;
+
+        TempExpAttendee.SETRANGE("Expense Entry No.","Entry No.");
+        PAGE.RUNMODAL(0,TempExpAttendee);
+        IF TempExpAttendee.AttendeesUpdated(TempExpAttendee,"Entry No.") THEN BEGIN
+          ExpAttendee.DELETEALL;
+
+          IF TempExpAttendee.FINDSET THEN
+            REPEAT
+              ExpAttendee := TempExpAttendee;
+              ExpAttendee.INSERT;
+            UNTIL TempExpAttendee.NEXT = 0;
+
+          SendToExpenseUser;
+
+          CODEUNIT.RUN(CODEUNIT::"Expense-Validate",Rec);
+        END;
+      END ELSE BEGIN
+        ExpAttendees.SETTABLEVIEW(ExpAttendee);
+        ExpAttendees.EDITABLE := FALSE;
+        ExpAttendees.RUNMODAL;
+      END;
+    END;
+
+    PROCEDURE SendToExpenseUser@1160040012();
+    VAR
+      SendToExpUser@1160040000 : Codeunit 6086324;
+    BEGIN
+      IF SkipSendToExpUser THEN
+        EXIT;
+
+      IF Status = Status::"Pending Expense User" THEN
+        SendToExpUser.UpdateWithoutFiles(Rec);
+    END;
+
+    PROCEDURE LookupDimensions@1160040025(Editable@1160040000 : Boolean);
+    VAR
+      Expense@1160040001 : Record 6086320;
+    BEGIN
+      IF Expense.GET("Entry No.") THEN
+        DrillDownDimensions(PAGE::"Expense Dimensions",Editable);
+    END;
+
+    PROCEDURE LookupExtraFields@1160040028(Editable@1160040000 : Boolean);
+    VAR
+      Expense@1160040001 : Record 6086320;
+    BEGIN
+      IF Expense.GET("Entry No.") THEN
+        DrillDownDimensions(PAGE::"Expense Extra Fields",Editable);
+    END;
+
+    LOCAL PROCEDURE DrillDownDimensions@1160040014(FormID@1160040004 : Integer;Editable@1160040006 : Boolean);
+    VAR
+      EMDim@1160040000 : Record 6086360;
+      TempEMDim@1160040002 : TEMPORARY Record 6086360;
+      ExpDim@1160040001 : Page 6086356;
+      ExpExtraFields@1160040005 : Page 6086358;
+    BEGIN
+      EMDim.SETRANGE("Table ID",DATABASE::Expense);
+      EMDim.SETRANGE("Document Type",0);
+      EMDim.SETRANGE("Document No.",'');
+      EMDim.SETRANGE("Doc. Ref. No.","Entry No.");
+
+      IF (NOT Posted) AND Editable THEN BEGIN
+        IF EMDim.FINDSET THEN
+          REPEAT
+            TempEMDim := EMDim;
+            TempEMDim.INSERT;
+          UNTIL EMDim.NEXT = 0;
+
+        TempEMDim.SETRANGE("Table ID",DATABASE::Expense);
+        TempEMDim.SETRANGE("Document Type",0);
+        TempEMDim.SETRANGE("Document No.",'');
+        TempEMDim.SETRANGE("Doc. Ref. No.","Entry No.");
+        PAGE.RUNMODAL(FormID,TempEMDim);
+
+        IF EMDim.EMDimUpdated(TempEMDim,DATABASE::Expense,0,'',"Entry No.") THEN BEGIN
+          EMDim.DELETEALL(TRUE);
+
+          IF TempEMDim.FINDSET THEN
+            REPEAT
+              EMDim := TempEMDim;
+              EMDim.INSERT(TRUE);
+            UNTIL TempEMDim.NEXT = 0;
+
+          GET("Entry No.");
+          SendToExpenseUser;
+
+          CODEUNIT.RUN(CODEUNIT::"Expense-Validate",Rec);
+        END;
+      END ELSE
+        CASE FormID OF
+          PAGE::"Expense Dimensions":
+            BEGIN
+              ExpDim.SETTABLEVIEW(EMDim);
+              ExpDim.SetReadOnly;
+              ExpDim.RUNMODAL;
+            END;
+
+          PAGE::"Expense Extra Fields":
+            BEGIN
+              ExpExtraFields.SETTABLEVIEW(EMDim);
+              ExpExtraFields.SetReadOnly;
+              ExpExtraFields.RUNMODAL;
+            END;
+        END;
+    END;
+
+    PROCEDURE ShowAttachments@1160040031();
+    VAR
+      EMAttachment@1160040000 : Record 6086359;
+    BEGIN
+      EMAttachment.SETRANGE("Table ID",DATABASE::Expense);
+      EMAttachment.SETRANGE("Document Type",0);
+      EMAttachment.SETRANGE("Document No.",'');
+      EMAttachment.SETRANGE("Doc. Ref. No.","Entry No.");
+      PAGE.RUNMODAL(0,EMAttachment);
+    END;
+
+    PROCEDURE GetOverviewDetails@1160040033() AddInfo : Text[250];
+    VAR
+      ExpenseAllocation@1160040000 : Record 6086321;
+    BEGIN
+      AddTextTo(AddInfo,GetAttendeesForDisplay);
+
+      IF "No Refund" THEN
+        AddTextTo(AddInfo,FIELDCAPTION("No Refund"));
+
+      ExpenseAllocation.SETCURRENTKEY("Expense Entry No.");
+      ExpenseAllocation.SETRANGE("Expense Entry No.","Entry No.");
+      IF NOT ExpenseAllocation.ISEMPTY THEN
+        AddTextTo(AddInfo,AllocatedTxt);
+
+      IF "Cash/Private Card" THEN
+        AddTextTo(AddInfo,FIELDCAPTION("Cash/Private Card"));
+
+      IF (NOT "Cash/Private Card") AND (NOT "Matched to Bank Transaction") THEN
+        AddTextTo(AddInfo,MissingBankTransTxt);
+    END;
+
+    LOCAL PROCEDURE AddTextTo@1160040035(VAR ReturnTxt@1160040001 : Text[250];TxtToAdd@1160040000 : Text[250]);
+    BEGIN
+      IF TxtToAdd = '' THEN
+        EXIT;
+
+      IF (STRLEN(TxtToAdd) + STRLEN(ReturnTxt)) > MAXSTRLEN(ReturnTxt) THEN
+        EXIT;
+
+      IF ReturnTxt = '' THEN
+        ReturnTxt := TxtToAdd
+      ELSE
+        ReturnTxt := ReturnTxt + ',' + TxtToAdd;
+    END;
+
+    PROCEDURE GetNextDocumentLineNo@1160040036() LineNo : Integer;
+    VAR
+      Expense@1160040000 : Record 6086320;
+    BEGIN
+      Expense.SETCURRENTKEY("Settlement No.");
+      Expense.SETRANGE("Settlement No.","Settlement No.");
+      Expense.SETFILTER("Entry No.",'<>%1',"Entry No.");
+      IF Expense.FINDLAST THEN
+        EXIT(Expense."Settlement Line No." + 10000);
+
+      EXIT(10000);
+    END;
+
+    PROCEDURE OpenDocumentCard@1160040030();
+    BEGIN
+      PAGE.RUN(PAGE::"Expense Card",Rec);
+    END;
+
+    PROCEDURE SplitAndAllocate@1160040034();
+    VAR
+      ExpenseAlloc@1160040001 : Record 6086321;
+      Spliform@1160040000 : Page 6086320;
+    BEGIN
+      ExpenseAlloc.SETRANGE("Expense Entry No.","Entry No.");
+      Spliform.SETTABLEVIEW(ExpenseAlloc);
+      Spliform.RUNMODAL;
+    END;
+
+    PROCEDURE SetHideUI@1160040038();
+    BEGIN
+      HideUI := TRUE;
+    END;
+
+    PROCEDURE LookupComments@1160040037();
+    VAR
+      EMCmtMgt@1160040000 : Codeunit 6086323;
+    BEGIN
+      EMCmtMgt.LookupComments(DATABASE::Expense,0,'',"Entry No.");
+    END;
+
+    PROCEDURE DetachExpFromSettlement@1160040040(VAR Expense@1160040000 : Record 6086320);
+    VAR
+      ConfirmText@1160040002 : Text[250];
+      Expense2@1160040001 : Record 6086320;
+    BEGIN
+      IF Expense.COUNT = 0 THEN
+        ERROR(NoExpInSelection);
+
+      IF Expense.COUNT = 1 THEN
+        ConfirmText := ConfirmDetachExpenseSingle
+      ELSE
+        ConfirmText := ConfirmDetachExpenseMultiple;
+
+      IF CONFIRM(ConfirmText,FALSE,Expense.COUNT) THEN BEGIN
+        Expense.FINDFIRST;
+        REPEAT
+          Expense2.GET(Expense."Entry No.");
+          Expense2.VALIDATE("Settlement No.",'');
+          Expense2.MODIFY(TRUE);
+        UNTIL Expense.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE AttachExpenseToSettlement@1160040039(VAR Expense@1160040003 : Record 6086320);
+    VAR
+      Expense2@1160040001 : Record 6086320;
+      ExpHeader@1160040004 : Record 6086339;
+      ConfirmText@1160040002 : Text[250];
+    BEGIN
+      IF Expense.COUNT = 0 THEN
+        ERROR(NoExpInSelection);
+
+      Expense.FINDFIRST;
+
+      ExpHeader.FILTERGROUP(4);
+      ExpHeader.SETRANGE("Continia User ID",Expense."Continia User ID");
+      ExpHeader.FILTERGROUP(0);
+      IF PAGE.RUNMODAL(PAGE::"Expense Settlement List",ExpHeader) = ACTION::LookupOK THEN
+        REPEAT
+          Expense2.GET(Expense."Entry No.");
+          Expense2.VALIDATE("Settlement No.",ExpHeader."No.");
+          Expense2.MODIFY(TRUE);
+        UNTIL Expense.NEXT = 0;
+    END;
+
+    PROCEDURE LookupPostingAccount@1000000000(VAR Text@1000000000 : Text[1024]) : Boolean;
+    VAR
+      GLAcc@1000000003 : Record 15;
+      LessorIntegration@1000000002 : Codeunit 6086327;
+      BluegardenIntegration@1000000001 : Codeunit 6086328;
+    BEGIN
+      TESTFIELD("Expense Account Type");
+      CASE "Expense Account Type" OF
+        "Expense Account Type"::"G/L Account":
+          BEGIN
+            IF GLAcc.GET(Text) THEN;
+            IF PAGE.RUNMODAL(0,GLAcc) = ACTION::LookupOK THEN BEGIN
+              Text := GLAcc."No.";
+              EXIT(TRUE);
+            END;
+          END;
+
+        "Expense Account Type"::"Lessor Pay Type":
+          EXIT(LessorIntegration.LookupPayType(Text));
+
+        "Expense Account Type"::"Bluegarden Pay Type":
+          EXIT(BluegardenIntegration.LookupPayType(Text));
+      END;
+    END;
+
+    PROCEDURE GetEntryNo@1160040042() : Integer;
+    VAR
+      Expense@1160040000 : Record 6086320;
+    BEGIN
+      IF Expense.FINDLAST THEN
+        EXIT(Expense."Entry No." + 1)
+      ELSE
+        EXIT(1);
+    END;
+
+    PROCEDURE InitExpense@1160040041();
+    VAR
+      Expense@1160040000 : Record 6086320;
+    BEGIN
+      IF "Continia User ID" = '' THEN
+        "Continia User ID" := USERID;
+
+      IF "Document Date" = 0D THEN
+        "Document Date" := WORKDATE;
+    END;
+
+    PROCEDURE GetEarliestDate@1160040043() : Date;
+    BEGIN
+      //BETWEEN DOCUMENT DATE AND DATE CREATED
+
+      IF "Document Date" = 0D THEN
+        EXIT("Date Created");
+
+      IF "Date Created" = 0D THEN
+        EXIT("Document Date");
+
+      IF "Date Created" < "Document Date" THEN
+        EXIT("Date Created")
+      ELSE
+        EXIT("Document Date")
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

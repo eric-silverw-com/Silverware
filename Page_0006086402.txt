@@ -1,0 +1,414 @@
+OBJECT Page 6086402 EM Client Addin - Settlement
+{
+  OBJECT-PROPERTIES
+  {
+    Date=06/22/17;
+    Time=[ 1:00:00 AM];
+    Version List=EMW17.00.00.2.60;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=EM Client Addin - Settlement;
+    LinksAllowed=No;
+    SourceTable=Table6086339;
+    PageType=List;
+    OnOpenPage=BEGIN
+                 EMSetup.GET;
+
+                 IF GetContiniaUserProp AND (ContiniaUserProp."Image Zoom" > 0) THEN
+                   CurrZoom := ContiniaUserProp."Image Zoom"
+                 ELSE
+                   CurrZoom := 100;
+
+                 ShowCaptureUI := NOT WebClientMgt.IsWebClient;
+                 ShowCaptureWebUI := WebClientMgt.IsWebClient;
+               END;
+
+    OnAfterGetRecord=BEGIN
+                       IF PageEventListenerInitialized THEN
+                         EXIT;
+
+                       PageEventListenerData := 'PageReady';
+                       PageEventListenerInitialized := TRUE;
+                     END;
+
+  }
+  CONTROLS
+  {
+    { 1000000000;;Container;
+                ContainerType=ContentArea }
+
+    { 1000000001;1;Field  ;
+                Name=CaptureUI;
+                SourceExpr=CaptureUISource;
+                Visible=ShowCaptureUI;
+                ControlAddIn=[Akeyto.DocumentCapture.Dynamics.Nav.UI;PublicKeyToken=44fe4ac2c6480df6];
+                OnControlAddIn=BEGIN
+                                 OnControlAddIn(Index,Data);
+                               END;
+                                }
+
+    { 1   ;1   ;Field     ;
+                Name=CaptureUIWeb;
+                SourceExpr=CaptureUISource;
+                Visible=ShowCaptureWebUI;
+                ControlAddIn=[Continia.DocumentCapture.Dynamics.Nav.Web.UI;PublicKeyToken=652b4f7dbff5f5b3] }
+
+    { 3   ;1   ;Field     ;
+                Name=PageEventListener;
+                SourceExpr=PageEventListenerData;
+                ControlAddIn=[Continia.DocumentCapture.Dynamics.Nav.Page.EventListener;PublicKeyToken=652b4f7dbff5f5b3];
+                OnControlAddIn=VAR
+                                 InXmlDoc@1001 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+                                 XmlLib@1002 : Codeunit 6085573;
+                               BEGIN
+                                 IF Index = 0 THEN
+                                   HandleSimpleCommand(Data)
+                                 ELSE BEGIN
+                                   CaptureAddinLib.TextToXml(InXmlDoc,Data);
+                                   HandleXmlCommand(XmlLib.GetNodeText(InXmlDoc.DocumentElement,'Command'),InXmlDoc);
+                                 END;
+                               END;
+                                }
+
+  }
+  CODE
+  {
+    VAR
+      ContiniaUserProp@1160040000 : Record 6085780;
+      EMAttachment@1004 : Record 6086359;
+      EMSetup@1010 : Record 6086300;
+      CaptureAddinLib@1000000013 : Codeunit 6085660;
+      WebClientMgt@1009 : Codeunit 6085662;
+      CaptureXmlDoc@1160040003 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      CurrentAttachmentText@1000000005 : Text[250];
+      CurrentZoomText@1000000009 : Text[30];
+      CurrZoom@1000000004 : Decimal;
+      CurrentAttachmentNo@1000000006 : Integer;
+      AddInReady@1007 : Boolean;
+      SendAllPendingCommands@1000000012 : Boolean;
+      ShowCaptureUI@1000000021 : Boolean INDATASET;
+      InvalidFile@1160040002 : TextConst 'ENU=Preview can only show jpg files. To view the Attachment click here.';
+      Text001@1000000002 : TextConst 'ENU=(%1 Attachments in total)';
+      Text002@1000000001 : TextConst 'ENU=Attachment %1';
+      ShowCaptureWebUI@1008 : Boolean;
+      PageEventListenerInitialized@1016 : Boolean;
+      CaptureUISource@1160040001 : Text;
+      ChannelReady@1001 : Boolean;
+      TableID@1006 : Integer;
+      DocRefNo@1005 : Integer;
+      xTableID@1003 : Integer;
+      xDocRefNo@1002 : Integer;
+      EventData@1012 : Text[250];
+      TimerReady@1000 : Boolean;
+      AttachmentFound@1013 : Boolean;
+      PageEventListenerData@1014 : Text;
+
+    LOCAL PROCEDURE UpdateImage@1000000006(AttachmentNo@1160040000 : Integer);
+    VAR
+      ImageMgt@1000 : Codeunit 6085625;
+      Filename@1160040001 : Text[1024];
+      ImageDataUrl@1001 : Text;
+    BEGIN
+      CurrentAttachmentNo := AttachmentNo;
+
+      IF AttachmentNo = 0 THEN BEGIN
+        CurrentAttachmentText := '';
+        CaptureAddinLib.BuildTotalNoOfPagesTextCommand(STRSUBSTNO(Text001,0),CaptureXmlDoc);
+      END ELSE
+        IF EMAttachment.FINDFIRST THEN BEGIN
+          IF CurrentAttachmentNo > 1 THEN
+            EMAttachment.NEXT(CurrentAttachmentNo - 1);
+
+          IF NOT WebClientMgt.IsWebClient THEN
+            Filename := EMAttachment.GetAttachmentClientFileName
+          ELSE
+            Filename := EMAttachment.GetAttachmentServerFileName;
+
+          CurrentAttachmentText := STRSUBSTNO(Text002,CurrentAttachmentNo);
+          CaptureAddinLib.BuildTotalNoOfPagesTextCommand(STRSUBSTNO(Text001,EMAttachment.COUNT),CaptureXmlDoc);
+        END;
+
+      CaptureAddinLib.BuildClearImageCommand(CaptureXmlDoc);
+
+      IF Filename = '' THEN
+        EXIT;
+
+      IF NOT WebClientMgt.IsWebClient THEN
+        CaptureAddinLib.BuildSetImageCommand(Filename,TRUE,CaptureXmlDoc)
+      ELSE
+        IF FILE.EXISTS(Filename) THEN
+          IF ImageMgt.FileIsImage(Filename) THEN BEGIN
+            ImageDataUrl := ImageMgt.GetImageDataAsJpegDataUrl(Filename,EMSetup."Picture Quality Web Client (%)");
+            CaptureAddinLib.BuildSetImageDataCommand(ImageDataUrl,TRUE,CaptureXmlDoc);
+          END;
+
+      CaptureAddinLib.BuildSetActivePageCommand(1,CurrentAttachmentText,CaptureXmlDoc);
+      CaptureAddinLib.BuildScrollTopCommand(CaptureXmlDoc);
+
+      CaptureAddinLib.BuildScrollTopCommand(CaptureXmlDoc);
+
+      Zoom(CurrZoom,FALSE);
+    END;
+
+    LOCAL PROCEDURE ParseAttachmentText@1000000001(PageText@1000000000 : Text[30]);
+    VAR
+      NewPageNo@1000000001 : Integer;
+    BEGIN
+      IF STRPOS(PageText,' ') = 0 THEN BEGIN
+        IF EVALUATE(NewPageNo,PageText) THEN;
+      END ELSE
+        IF EVALUATE(NewPageNo,COPYSTR(PageText,STRPOS(PageText,' '))) THEN;
+
+      IF (NewPageNo <= 0) OR (NewPageNo > EMAttachment.COUNT) THEN
+        UpdateImage(CurrentAttachmentNo)
+      ELSE
+        UpdateImage(NewPageNo);
+    END;
+
+    LOCAL PROCEDURE Zoom@1000000000(ZoomPct@1000000000 : Decimal;UpdateUserProp@6085573 : Boolean);
+    BEGIN
+      IF ZoomPct < 1 THEN
+        ZoomPct := 1;
+
+      CurrZoom := ZoomPct;
+      CurrentZoomText := FORMAT(CurrZoom) + '%';
+
+      IF UpdateUserProp THEN
+        IF NOT GetContiniaUserProp THEN BEGIN
+          ContiniaUserProp."User ID" := USERID;
+          ContiniaUserProp."Image Zoom" := CurrZoom;
+          ContiniaUserProp.INSERT;
+        END ELSE
+          IF ContiniaUserProp."Image Zoom" <> CurrZoom THEN BEGIN
+            ContiniaUserProp."Image Zoom" := CurrZoom;
+            ContiniaUserProp.MODIFY;
+          END;
+
+      CaptureAddinLib.BuildZoomCommand(CurrZoom,CaptureXmlDoc);
+      CaptureAddinLib.BuildZoomTextCommand(CurrentZoomText,CaptureXmlDoc);
+    END;
+
+    LOCAL PROCEDURE SendCommand@1000000002(VAR XmlDoc@1160040000 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument");
+    VAR
+      NewXmlDoc@1160040001 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+    BEGIN
+      CaptureAddinLib.XmlToText(XmlDoc,CaptureUISource);
+
+      IF CaptureUISource = '' THEN
+        EXIT;
+
+      CaptureAddinLib.TextToXml(NewXmlDoc,CaptureUISource);
+
+      IF WebClientMgt.IsWebClient AND AddInReady THEN
+        CurrPage.CaptureUIWeb.SourceValueChanged(CaptureUISource);
+
+      IF (WebClientMgt.IsWebClient AND AddInReady) OR NOT WebClientMgt.IsWebClient THEN
+        CLEAR(CaptureXmlDoc);
+    END;
+
+    LOCAL PROCEDURE HandleSimpleCommand@1000000011(Command@1000000000 : Text[1024]);
+    BEGIN
+      CASE Command OF
+        'ZoomIn':
+          Zoom(CurrZoom + 5,TRUE);
+
+        'ZoomOut':
+          Zoom(CurrZoom - 5,TRUE);
+
+        'FirstPage':
+          IF EMAttachment.COUNT > 0 THEN
+            UpdateImage(1)
+          ELSE
+            EXIT;
+
+        'NextPage':
+          IF CurrentAttachmentNo < EMAttachment.COUNT THEN
+            UpdateImage(CurrentAttachmentNo + 1)
+          ELSE
+            EXIT;
+
+        'PrevPage':
+          IF CurrentAttachmentNo > 1 THEN
+            UpdateImage(CurrentAttachmentNo - 1)
+          ELSE
+            EXIT;
+
+        'LastPage':
+          UpdateImage(EMAttachment.COUNT);
+      END;
+
+      SendCommand(CaptureXmlDoc);
+    END;
+
+    LOCAL PROCEDURE HandleXmlCommand@1000000007(Command@1000000000 : Text[1024];VAR InXmlDoc@1160040000 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument");
+    VAR
+      XmlLib@1000000003 : Codeunit 6085573;
+      RecordRef@1000 : RecordRef;
+      Expense@1001 : Record 6086320;
+      Mileage@1002 : Record 6086338;
+    BEGIN
+      CASE Command OF
+        'ZoomTextChanged':
+          BEGIN
+            CurrentZoomText := XmlLib.GetNodeText(InXmlDoc.DocumentElement,'Text');
+            IF EVALUATE(CurrZoom,DELCHR(CurrentZoomText,'=','%')) THEN;
+            Zoom(CurrZoom,TRUE);
+          END;
+
+        'PageTextChanged':
+          BEGIN
+            CurrentAttachmentText := XmlLib.GetNodeText(InXmlDoc.DocumentElement,'Text');
+            ParseAttachmentText(CurrentAttachmentText);
+          END;
+
+        'ChangePage':
+          UpdateImage(XmlLib.Text2Int(XmlLib.GetNodeText(InXmlDoc.DocumentElement,'NewPageNo')));
+
+        'ActiveRecordChanged':
+          BEGIN
+            XmlLib.GetNodeText(InXmlDoc.DocumentElement,'ActivePageName');
+            CASE XmlLib.Text2Int(XmlLib.GetNodeText(InXmlDoc.DocumentElement,'ActiveTableID')) OF
+              DATABASE::Expense :
+                RecordRef.GETTABLE(Expense);
+              DATABASE::Mileage :
+                RecordRef.GETTABLE(Mileage);
+              ELSE
+                EXIT;
+            END;
+            RecordRef.SETPOSITION(XmlLib.GetNodeText(InXmlDoc.DocumentElement,'ActiveRecordPosition'));
+            IF RecordRef.FIND THEN
+              LoadImageFromRecID(FORMAT(RecordRef.RECORDID));
+          END;
+      END;
+
+      IF NOT ISNULL(CaptureXmlDoc) THEN
+        SendCommand(CaptureXmlDoc);
+    END;
+
+    LOCAL PROCEDURE GetContiniaUserProp@1160040001() : Boolean;
+    BEGIN
+      IF ContiniaUserProp."User ID" = USERID THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(ContiniaUserProp.GET(USERID));
+    END;
+
+    PROCEDURE ClearImage@1161054000();
+    BEGIN
+      CaptureAddinLib.BuildClearImageCommand(CaptureXmlDoc);
+      UpdateImage(0);
+      SendCommand(CaptureXmlDoc);
+      IF NOT WebClientMgt.IsWebClient THEN
+        CurrPage.UPDATE(FALSE);
+    END;
+
+    PROCEDURE UpdateDefaultImage@1160040000();
+    BEGIN
+      UpdateImage(1);
+      SendCommand(CaptureXmlDoc);
+      IF NOT WebClientMgt.IsWebClient THEN
+        CurrPage.UPDATE(FALSE);
+    END;
+
+    PROCEDURE LoadImageFromRecID@2(RecordID@1000 : Text);
+    VAR
+      Expense@1004 : Record 6086320;
+      Mileage@1003 : Record 6086338;
+      RecID@1002 : RecordID;
+      RecRef@1001 : RecordRef;
+    BEGIN
+      IF NOT EVALUATE(RecID,RecordID) THEN
+        EXIT;
+
+      IF NOT RecRef.GET(RecID) THEN
+        EXIT;
+
+      CASE RecRef.NUMBER OF
+        DATABASE::Expense:
+          BEGIN
+            RecRef.SETTABLE(Expense);
+            TableID := DATABASE::Expense;
+            DocRefNo := Expense."Entry No.";
+          END;
+
+        DATABASE::Mileage:
+          BEGIN
+            RecRef.SETTABLE(Mileage);
+            TableID := DATABASE::Mileage;
+            DocRefNo := Mileage."Entry No.";
+          END;
+      END;
+
+      IF (xTableID = TableID) AND (xDocRefNo = DocRefNo) AND AttachmentFound THEN
+        EXIT;
+
+      xTableID := TableID;
+      xDocRefNo := DocRefNo;
+
+      CaptureAddinLib.BuildInvalidFileTextCommand(InvalidFile,CaptureXmlDoc);
+
+      CLEAR(EMAttachment);
+      EMAttachment.SETRANGE("Table ID",TableID);
+      EMAttachment.SETRANGE("Document Type",0);
+      EMAttachment.SETRANGE("Document No.",'');
+      EMAttachment.SETRANGE("Doc. Ref. No.",DocRefNo);
+      AttachmentFound := EMAttachment.FINDFIRST;
+
+      IF AttachmentFound THEN
+        UpdateImage(1)
+      ELSE
+        UpdateImage(0);
+
+      SendCommand(CaptureXmlDoc);
+    END;
+
+    LOCAL PROCEDURE OnControlAddIn@8(Index@1000 : Integer;Data@1001 : Text);
+    VAR
+      XmlLib@1003 : Codeunit 6085573;
+      InXmlDoc@1002 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+    BEGIN
+      CLEAR(CaptureXmlDoc);
+      IF Index = 0 THEN
+        HandleSimpleCommand(Data)
+      ELSE BEGIN
+        CaptureAddinLib.TextToXml(InXmlDoc,Data);
+        IF WebClientMgt.IsWebClient THEN
+          HandleXmlCommand(XmlLib.GetNodeText(InXmlDoc.DocumentElement,'Event'),InXmlDoc)
+        ELSE
+          HandleXmlCommand(XmlLib.GetNodeText(InXmlDoc.DocumentElement,'Command'),InXmlDoc);
+      END;
+    END;
+
+    LOCAL PROCEDURE OnMessageReceived@13(Index@1004 : Integer;Data@1005 : Text);
+    BEGIN
+      LoadImageFromRecID(Data);
+    END;
+
+    EVENT CaptureXmlDoc@1160040003::ondataavailable@198();
+    BEGIN
+    END;
+
+    EVENT CaptureXmlDoc@1160040003::onreadystatechange@-609();
+    BEGIN
+    END;
+
+    EVENT CaptureUIWeb@-1::OnControlAddIn@1(index@1001 : Integer;data@1000 : Text);
+    BEGIN
+      OnControlAddIn(index,data);
+    END;
+
+    EVENT CaptureUIWeb@-1::AddInReady@2();
+    BEGIN
+      AddInReady := TRUE;
+      SendCommand(CaptureXmlDoc);
+    END;
+
+    BEGIN
+    {
+      The reason for this form to be a list is to avoide default RTC right-click functionality
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,450 @@
+OBJECT Codeunit 6086323 EM Comment Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/23/17;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.02;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 6086361=rimd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ValChanged@1160040000 : TextConst 'ENU=%1 changed from %2 to %3.';
+      LineNoTxt@1160040001 : TextConst 'ENU=in %1 %2';
+      SettlementTxt@1160040002 : TextConst 'ENU=Settlement';
+
+    PROCEDURE AddComment@1160040000(TableID@1160040006 : Integer;DocumentType@1160040007 : Integer;DocumentNo@1160040008 : Code[20];DocRefNo@1160040001 : Integer;Importance@1160040002 : Integer;Area@1160040003 : Code[20];Comment@1160040004 : Text[250];ValidationComment@1160040005 : Boolean);
+    VAR
+      EMComment@1160040000 : Record 6086361;
+    BEGIN
+      DeleteComment(TableID,DocumentType,DocumentNo,DocRefNo,Importance,Area,ValidationComment);
+
+      EMComment.INIT;
+      EMComment."Table ID" := TableID;
+      EMComment."Document Type" := DocumentType;
+      EMComment."Document No." := DocumentNo;
+      EMComment."Doc. Ref. No." := DocRefNo;
+      EMComment."Line No." := GetNextLineNo(TableID,DocumentType,DocumentNo,DocRefNo);
+      EMComment.Importance := Importance;
+      EMComment.Area := Area;
+      EMComment.Comment := Comment;
+      EMComment."Validation Comment" := ValidationComment;
+      EMComment.INSERT(TRUE);
+    END;
+
+    PROCEDURE DeleteComment@1160040005(TableID@1160040008 : Integer;DocumentType@1160040007 : Integer;DocumentNo@1160040006 : Code[20];DocRefNo@1160040001 : Integer;Importance@1160040002 : Integer;Area@1160040003 : Code[20];ValidationComment@1160040005 : Boolean);
+    VAR
+      EMComment@1160040000 : Record 6086361;
+    BEGIN
+      EMComment.SETRANGE("Table ID",TableID);
+      EMComment.SETRANGE("Document Type",DocumentType);
+      EMComment.SETRANGE("Document No.",DocumentNo);
+      EMComment.SETRANGE("Doc. Ref. No.",DocRefNo);
+      EMComment.SETRANGE(Importance,Importance);
+      EMComment.SETRANGE(Area,Area);
+      EMComment.SETRANGE("Validation Comment",ValidationComment);
+      EMComment.DELETEALL(TRUE);
+    END;
+
+    PROCEDURE HasErrorComments@1160040006(TableID@1160040003 : Integer;DocumentType@1160040001 : Integer;DocumentNo@1160040004 : Code[20];DocRefNo@1160040002 : Integer;ShowFirstError@1000 : Boolean;RunValidationChecks@1160040005 : Boolean) : Boolean;
+    VAR
+      EMComment@1160040000 : Record 6086361;
+      Expense@1001 : Record 6086320;
+      Mileage@1002 : Record 6086338;
+      ExpHeader@1003 : Record 6086339;
+    BEGIN
+      IF RunValidationChecks THEN
+        ValidateEntries(TableID,DocumentType,DocumentNo,DocRefNo);
+
+      EMComment.SETRANGE("Table ID",TableID);
+      EMComment.SETRANGE("Document Type",DocumentType);
+      EMComment.SETRANGE("Document No.",DocumentNo);
+      EMComment.SETRANGE("Doc. Ref. No.",DocRefNo);
+      EMComment.SETRANGE(Importance,EMComment.Importance::Error);
+      IF EMComment.FINDFIRST THEN
+        IF ShowFirstError THEN
+          CASE TableID OF
+            DATABASE::Expense:
+              BEGIN
+                Expense.GET(DocRefNo);
+                IF Expense."Settlement Line No." = 0 THEN
+                  ERROR(EMComment.Comment)
+                ELSE
+                  ERROR(
+                    EMComment.Comment + ' ' +
+                      STRSUBSTNO(LineNoTxt,SettlementTxt + ' ' + Expense."Settlement No.",
+                        Expense.FIELDCAPTION("Settlement Line No.") + ' ' + FORMAT(Expense."Settlement Line No.")));
+              END;
+
+            DATABASE::Mileage:
+              BEGIN
+                Mileage.GET(DocRefNo);
+                IF Mileage."Settlement Line No." = 0 THEN
+                  ERROR(EMComment.Comment)
+                ELSE
+                  ERROR(
+                    EMComment.Comment + ' ' +
+                      STRSUBSTNO(LineNoTxt,SettlementTxt + ' ' + Mileage."Settlement No.",
+                        Mileage.FIELDCAPTION("Settlement Line No.") + ' ' + FORMAT(Mileage."Settlement Line No.")));
+              END;
+
+            DATABASE::"Expense Header":
+              ERROR(EMComment.Comment);
+          END
+        ELSE
+          EXIT(TRUE);
+
+      IF TableID = DATABASE::"Expense Header" THEN BEGIN
+        Mileage.SETCURRENTKEY("Settlement No.");
+        Mileage.SETRANGE("Settlement No.",DocumentNo);
+        IF Mileage.FINDSET THEN
+          REPEAT
+            IF HasErrorComments(DATABASE::Mileage,0,'',Mileage."Entry No.",ShowFirstError,RunValidationChecks) THEN
+              EXIT(TRUE);
+          UNTIL Mileage.NEXT = 0;
+
+        Expense.SETCURRENTKEY("Settlement No.");
+        Expense.SETRANGE("Settlement No.",DocumentNo);
+        IF Expense.FINDSET THEN
+          REPEAT
+            IF HasErrorComments(DATABASE::Expense,0,'',Expense."Entry No.",ShowFirstError,RunValidationChecks) THEN
+              EXIT(TRUE);
+          UNTIL Expense.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE HasWarningComments@1160040007(TableID@1160040003 : Integer;DocumentType@1160040004 : Integer;DocumentNo@1160040000 : Code[20];DocRefNo@1160040002 : Integer;ShowFirstError@1000 : Boolean;RunValidationChecks@1160040005 : Boolean) : Boolean;
+    VAR
+      EMComment@1160040001 : Record 6086361;
+      Expense@1001 : Record 6086320;
+      Mileage@1002 : Record 6086338;
+    BEGIN
+      IF RunValidationChecks THEN
+        ValidateEntries(TableID,DocumentType,DocumentNo,DocRefNo);
+
+      EMComment.SETRANGE("Table ID",TableID);
+      EMComment.SETRANGE("Document Type",DocumentType);
+      EMComment.SETRANGE("Document No.",DocumentNo);
+      EMComment.SETRANGE("Doc. Ref. No.",DocRefNo);
+      EMComment.SETRANGE(Importance,EMComment.Importance::Warning);
+      IF EMComment.FINDFIRST THEN
+        IF ShowFirstError THEN
+          CASE TableID OF
+            DATABASE::Expense:
+              BEGIN
+                Expense.GET(DocRefNo);
+                IF Expense."Settlement Line No." = 0 THEN
+                  ERROR(EMComment.Comment)
+                ELSE
+                  ERROR(
+                    EMComment.Comment + ' ' +
+                      STRSUBSTNO(LineNoTxt,SettlementTxt + ' ' + Expense."Settlement No.",
+                        Expense.FIELDCAPTION("Settlement Line No.") + ' ' + FORMAT(Expense."Settlement Line No.")));
+              END;
+
+            DATABASE::Mileage:
+              BEGIN
+                Mileage.GET(DocRefNo);
+                IF Mileage."Settlement Line No." = 0 THEN
+                  ERROR(EMComment.Comment)
+                ELSE
+                  ERROR(
+                    EMComment.Comment + ' ' +
+                      STRSUBSTNO(LineNoTxt,SettlementTxt + ' ' + Mileage."Settlement No.",
+                        Mileage.FIELDCAPTION("Settlement Line No.") + ' ' + FORMAT(Mileage."Settlement Line No.")));
+              END;
+          END
+        ELSE
+          EXIT(TRUE);
+
+      IF TableID = DATABASE::"Expense Header" THEN BEGIN
+        Mileage.SETCURRENTKEY("Settlement No.");
+        Mileage.SETRANGE("Settlement No.",DocumentNo);
+        IF Mileage.FINDSET THEN
+          REPEAT
+            IF HasWarningComments(DATABASE::Mileage,0,'',Mileage."Entry No.",ShowFirstError,RunValidationChecks) THEN
+              EXIT(TRUE);
+          UNTIL Mileage.NEXT = 0;
+
+        Expense.SETCURRENTKEY("Settlement No.");
+        Expense.SETRANGE("Settlement No.",DocumentNo);
+        IF Expense.FINDSET THEN
+          REPEAT
+            IF HasWarningComments(DATABASE::Expense,0,'',Expense."Entry No.",ShowFirstError,RunValidationChecks) THEN
+              EXIT(TRUE);
+          UNTIL Expense.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE ValidateEntries@1160040008(TableID@1160040001 : Integer;DocumentType@1160040006 : Integer;DocumentNo@1160040005 : Code[20];DocRefNo@1160040000 : Integer);
+    VAR
+      Expense@1160040003 : Record 6086320;
+      Mileage@1160040002 : Record 6086338;
+      ExpHeader@1160040004 : Record 6086339;
+    BEGIN
+      CASE TableID OF
+        DATABASE::Expense:
+          BEGIN
+            Expense.GET(DocRefNo);
+            CODEUNIT.RUN(CODEUNIT::"Expense-Validate",Expense);
+          END;
+        DATABASE::Mileage:
+          BEGIN
+            Mileage.GET(DocRefNo);
+            CODEUNIT.RUN(CODEUNIT::"Mileage-Validate",Mileage);
+          END;
+        DATABASE::"Expense Header":
+          BEGIN
+            ExpHeader.GET(DocumentType,DocumentNo);
+            CODEUNIT.RUN(CODEUNIT::"Exp. Header - Validate",ExpHeader);
+          END;
+
+      END;
+
+      COMMIT;
+    END;
+
+    PROCEDURE AddExpFieldValueChanged@1160040003(TableID@1160040009 : Integer;DocumentType@1160040008 : Integer;DocumentNo@1160040007 : Code[20];ExpEntryNo@1160040000 : Integer;ExpFieldNo@1160040001 : Integer;FldCaption@1160040002 : Text[250];xRecValue@1160040003 : Text[1024];RecValue@1160040004 : Text[1024]);
+    VAR
+      EMComment@1160040005 : Record 6086361;
+      AreaCode@1160040006 : Code[20];
+    BEGIN
+      IF xRecValue = RecValue THEN
+        EXIT;
+
+      DelExpFieldValueChangedCmt(TableID,DocumentType,DocumentNo,ExpEntryNo,ExpFieldNo);
+
+      AreaCode := 'FIELD CHANGED - ' + FORMAT(ExpFieldNo);
+      AddComment(TableID,DocumentType,DocumentNo,ExpEntryNo,EMComment.Importance::Information,
+        AreaCode,STRSUBSTNO(ValChanged,FldCaption,xRecValue,RecValue),FALSE);
+    END;
+
+    PROCEDURE DelExpFieldValueChangedCmt@1160040004(TableID@1160040004 : Integer;DocumentType@1160040003 : Integer;DocumentNo@1160040002 : Code[20];ExpEntryNo@1160040000 : Integer;ExpFieldNo@1160040001 : Integer);
+    VAR
+      EMComment@1160040005 : Record 6086361;
+      AreaCode@1160040006 : Code[20];
+    BEGIN
+      AreaCode := 'FIELD CHANGED - ' + FORMAT(ExpFieldNo);
+
+      EMComment.SETRANGE("Table ID",TableID);
+      EMComment.SETRANGE("Document Type",DocumentType);
+      EMComment.SETRANGE("Document No.",DocumentNo);
+      EMComment.SETRANGE("Doc. Ref. No.",ExpEntryNo);
+      EMComment.SETRANGE(Area,AreaCode);
+      EMComment.DELETEALL;
+    END;
+
+    LOCAL PROCEDURE GetNextLineNo@1160040001(TableID@1160040004 : Integer;DocumentType@1160040003 : Integer;DocumentNo@1160040002 : Code[20];ExpEntryNo@1160040001 : Integer) : Integer;
+    VAR
+      EMComment@1160040000 : Record 6086361;
+    BEGIN
+      EMComment.SETCURRENTKEY("Table ID","Document Type","Document No.","Doc. Ref. No.","Line No.");
+      EMComment.SETRANGE("Table ID",TableID);
+      EMComment.SETRANGE("Document Type",DocumentType);
+      EMComment.SETRANGE("Document No.",DocumentNo);
+      EMComment.SETRANGE("Doc. Ref. No.",ExpEntryNo);
+      IF EMComment.FINDLAST THEN
+        EXIT(EMComment."Line No." + 1)
+      ELSE
+        EXIT(1);
+    END;
+
+    PROCEDURE LoadCommentsInTemp@1160040002(TableID@1160040008 : Integer;DocumentType@1160040007 : Integer;DocumentNo@1160040006 : Code[20];DocRefNo@1160040000 : Integer;VAR TempExpenseCmt@1160040002 : TEMPORARY Record 6086356) : Boolean;
+    VAR
+      ApprovalComment@1160040003 : Record 455;
+      EMComment@1160040001 : Record 6086361;
+      EMAppMgt@1160040010 : Codeunit 6086312;
+      NewEntryNo@1160040004 : Integer;
+      TypeAdded@1160040005 : Boolean;
+      AppDocumentNo@1160040009 : Code[20];
+    BEGIN
+      NewEntryNo := 0;
+      TempExpenseCmt.RESET;
+      TempExpenseCmt.DELETEALL;
+
+      IF (DocRefNo = 0) AND (TableID IN [DATABASE::Expense,DATABASE::Mileage]) THEN
+        EXIT;
+
+      IF (DocumentNo = '') AND (TableID = DATABASE::"Expense Header") THEN
+        EXIT;
+
+      EMComment.SETCURRENTKEY("Table ID","Document Type","Document No.","Doc. Ref. No.","Line No.");
+      EMComment.SETRANGE("Table ID",TableID);
+      EMComment.SETRANGE("Document Type",DocumentType);
+      EMComment.SETRANGE("Document No.",DocumentNo);
+      EMComment.SETRANGE("Doc. Ref. No.",DocRefNo);
+      IF EMComment.FINDSET THEN
+        REPEAT
+          NewEntryNo += 1;
+          TempExpenseCmt."Entry No." := NewEntryNo;
+          TempExpenseCmt.Importance := EMComment.Importance;
+          TempExpenseCmt.Area := EMComment.Area;
+          TempExpenseCmt.Comment := EMComment.Comment;
+
+          IF NOT TypeAdded THEN BEGIN
+            TypeAdded := TRUE;
+
+            CASE TableID OF
+              DATABASE::Expense:
+                TempExpenseCmt.Source := TempExpenseCmt.Source::ExpenseComment;
+              DATABASE::Mileage:
+                TempExpenseCmt.Source := TempExpenseCmt.Source::MileageComment;
+              DATABASE::"Expense Header":
+                TempExpenseCmt.Source := TempExpenseCmt.Source::SettlementComment
+              ELSE
+                TypeAdded := FALSE;
+            END;
+          END ELSE
+            TempExpenseCmt.Source := TempExpenseCmt.Source::" ";
+
+          TempExpenseCmt."Table ID" := TableID;
+          TempExpenseCmt."Doc. Ref. No." := DocRefNo;
+          TempExpenseCmt."Doc. Ref. No. (Code)" := FORMAT(DocRefNo);
+          TempExpenseCmt."Created Date/Time" := EMComment."Created Date/Time";
+          TempExpenseCmt."Created by" := EMComment."Created by";
+          TempExpenseCmt.INSERT;
+        UNTIL EMComment.NEXT = 0;
+
+      IF TableID IN [DATABASE::Expense,DATABASE::Mileage] THEN
+        AppDocumentNo := FORMAT(DocRefNo)
+      ELSE
+        AppDocumentNo := DocumentNo;
+
+      TypeAdded := FALSE;
+      ApprovalComment.SETCURRENTKEY("Table ID","Document Type","Document No.");
+      ApprovalComment.SETRANGE("Table ID",TableID);
+      ApprovalComment.SETRANGE("Document Type",ApprovalComment."Document Type"::Invoice);
+      ApprovalComment.SETRANGE("Document No.",AppDocumentNo);
+      IF ApprovalComment.FINDSET THEN BEGIN
+        //INSERT SEPPARATOR
+        IF NewEntryNo <> 0 THEN BEGIN
+          NewEntryNo += 1;
+          TempExpenseCmt."Entry No." := NewEntryNo;
+          TempExpenseCmt.Importance := TempExpenseCmt.Importance::Information;
+          TempExpenseCmt.Area := 'SEPPARATOR';
+          TempExpenseCmt.Comment := '';
+          TempExpenseCmt."Created Date/Time" := 0DT;
+          TempExpenseCmt."Created by" := '';
+          TempExpenseCmt.Source := TempExpenseCmt.Source::" ";
+          TempExpenseCmt."Table ID" := TableID;
+          IF TableID IN [DATABASE::Expense,DATABASE::Mileage] THEN
+            TempExpenseCmt."Doc. Ref. No." := EMAppMgt.Code2Int(AppDocumentNo);
+          TempExpenseCmt."Doc. Ref. No. (Code)" := AppDocumentNo;
+          TempExpenseCmt.INSERT;
+        END;
+
+        REPEAT
+          NewEntryNo += 1;
+          TempExpenseCmt."Entry No." := NewEntryNo;
+          TempExpenseCmt.Importance := TempExpenseCmt.Importance::Information;
+          TempExpenseCmt.Area := 'APPRCOMM';
+          TempExpenseCmt.Comment := ApprovalComment.Comment;
+          IF NOT TypeAdded THEN BEGIN
+            TempExpenseCmt.Source := TempExpenseCmt.Source::ApprovalComment;
+            TypeAdded := TRUE;
+          END ELSE
+            TempExpenseCmt.Source := TempExpenseCmt.Source::" ";
+          TempExpenseCmt."Table ID" := TableID;
+          IF TableID IN [DATABASE::Expense,DATABASE::Mileage] THEN
+            TempExpenseCmt."Doc. Ref. No." := EMAppMgt.Code2Int(AppDocumentNo);
+          TempExpenseCmt."Doc. Ref. No. (Code)" := AppDocumentNo;
+          TempExpenseCmt."Created Date/Time" := ApprovalComment."Date and Time";
+          TempExpenseCmt."Created by" := ApprovalComment."User ID";
+          TempExpenseCmt."App. Cmt. Entry No." := ApprovalComment."Entry No.";
+          TempExpenseCmt.INSERT;
+        UNTIL ApprovalComment.NEXT = 0;
+      END;
+
+      TempExpenseCmt.RESET;
+      EXIT(TempExpenseCmt.FINDFIRST);
+    END;
+
+    PROCEDURE InitApprovalComment@1160040009(VAR TempExpCmtRec@1160040000 : TEMPORARY Record 6086356;TableID@1160040001 : Integer;AppDocNo@1160040002 : Code[20]);
+    VAR
+      EMAppMgt@1160040006 : Codeunit 6086312;
+      NewEntryNo@1160040003 : Integer;
+      TypeAdded@1160040004 : Boolean;
+    BEGIN
+      TempExpCmtRec.RESET;
+      IF TempExpCmtRec.FINDLAST THEN
+        NewEntryNo := TempExpCmtRec."Entry No."
+      ELSE
+        NewEntryNo := 1;
+
+      TempExpCmtRec.RESET;
+      TempExpCmtRec.SETRANGE(Source,TempExpCmtRec.Source::ApprovalComment);
+      TypeAdded := TempExpCmtRec.FINDFIRST;
+
+      CLEAR(TempExpCmtRec);
+      NewEntryNo := NewEntryNo + 1;
+      TempExpCmtRec."Entry No." := NewEntryNo;
+      TempExpCmtRec.Importance := TempExpCmtRec.Importance::Information;
+      TempExpCmtRec.Area := 'APPRCOMM';
+      IF NOT TypeAdded THEN
+        TempExpCmtRec.Source := TempExpCmtRec.Source::ApprovalComment
+      ELSE
+        TempExpCmtRec.Source := TempExpCmtRec.Source::" ";
+      TempExpCmtRec."Table ID" := TableID;
+      IF TableID IN [DATABASE::Expense,DATABASE::Mileage] THEN
+        TempExpCmtRec."Doc. Ref. No." := EMAppMgt.Code2Int(AppDocNo);
+      TempExpCmtRec."Doc. Ref. No. (Code)" := AppDocNo;
+      TempExpCmtRec."Created by" := USERID;
+      TempExpCmtRec."Created Date/Time" := CURRENTDATETIME;
+      TempExpCmtRec.Comment := '...';
+    END;
+
+    PROCEDURE AddApprovalComment@1160040014(TableID@1160040002 : Integer;AppDocNo@1160040000 : Code[10];Comment@1160040004 : Text[80]);
+    VAR
+      AppCmtLine@1001 : Record 455;
+      EMApprovalsBridge@1000 : Codeunit 6086369;
+    BEGIN
+      IF AppDocNo = '' THEN
+        EXIT;
+
+      EMApprovalsBridge.CreateAppvlCmtLine(TableID,AppCmtLine."Document Type"::Invoice,AppDocNo,Comment);
+    END;
+
+    PROCEDURE ModifyApprovalComment@2(AppCmtEntryNo@1160040001 : Integer;Comment@1160040002 : Text[80]);
+    VAR
+      AppCmtLine@1160040000 : Record 455;
+    BEGIN
+      IF AppCmtEntryNo = 0 THEN
+        EXIT;
+
+      AppCmtLine.GET(AppCmtEntryNo);
+      AppCmtLine.Comment := Comment;
+      AppCmtLine.MODIFY(TRUE);
+    END;
+
+    PROCEDURE DeleteApprovalComments@1160040016(VAR TempExpCmt@1160040002 : TEMPORARY Record 6086356);
+    VAR
+      AppCmtLine@1160040000 : Record 455;
+    BEGIN
+      TempExpCmt.SETFILTER("App. Cmt. Entry No.",'<>%1',0);
+      IF TempExpCmt.FINDSET THEN
+        REPEAT
+          IF AppCmtLine.GET(TempExpCmt."App. Cmt. Entry No.") THEN
+            AppCmtLine.DELETE;
+        UNTIL TempExpCmt.NEXT = 0;
+    END;
+
+    PROCEDURE LookupComments@1160040010(TableID@1160040003 : Integer;DocumentType@1160040002 : Integer;DocumentNo@1160040001 : Code[20];DocRefNo@1160040000 : Integer);
+    VAR
+      TempEMComment@1160040004 : TEMPORARY Record 6086356;
+    BEGIN
+      LoadCommentsInTemp(TableID,DocumentType,DocumentNo,DocRefNo,TempEMComment);
+      PAGE.RUN(PAGE::"EM Comments",TempEMComment);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

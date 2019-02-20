@@ -1,0 +1,140 @@
+OBJECT Codeunit 6086336 EM Posting Functions
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/31/17;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.01;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 38=rimd,
+                TableData 39=rimd,
+                TableData 81=rimd,
+                TableData 210=rimd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    PROCEDURE GetNextPurchLineNo@1160040001(PurchHeader@1160040000 : Record 38) : Integer;
+    VAR
+      PurchLine@1160040001 : Record 39;
+    BEGIN
+      PurchLine.SETRANGE("Document Type",PurchHeader."Document Type");
+      PurchLine.SETRANGE("Document No.",PurchHeader."No.");
+      IF PurchLine.FINDLAST THEN
+        EXIT(PurchLine."Line No." + 10000)
+      ELSE
+        EXIT(10000);
+    END;
+
+    PROCEDURE CleanUpGenJnl@1160040006(JnlTemplName@1160040001 : Code[10];JnlBatchName@1160040000 : Code[10]);
+    VAR
+      GenJnlLine@1160040002 : Record 81;
+    BEGIN
+      GenJnlLine.SETRANGE("Journal Template Name",JnlTemplName);
+      GenJnlLine.SETRANGE("Journal Batch Name",JnlBatchName);
+      GenJnlLine.SETFILTER("Account No.",'%1','');
+      GenJnlLine.DELETEALL(TRUE);
+    END;
+
+    PROCEDURE GetNextGenJnlDocNo@1160040002(GenJnlBatch@1160040000 : Record 232;DocDate@1160040003 : Date;TableID@1160040005 : Integer;DocRefNo@1160040004 : Integer) : Code[20];
+    VAR
+      GenJnlLine@1160040001 : Record 81;
+      NoSeriesMgt@1160040002 : Codeunit 396;
+    BEGIN
+      GenJnlLine.SETRANGE("Journal Template Name",GenJnlBatch."Journal Template Name");
+      GenJnlLine.SETRANGE("Journal Batch Name",GenJnlBatch.Name);
+      GenJnlLine.SETFILTER("Document No.",'<>%1','');
+      IF GenJnlLine.FINDLAST THEN
+        EXIT(INCSTR(GenJnlLine."Document No."));
+
+      IF GenJnlBatch."No. Series" <> '' THEN
+        EXIT(NoSeriesMgt.GetNextNo(GenJnlBatch."No. Series",DocDate,FALSE));
+    END;
+
+    PROCEDURE GetNextGenJnlLineNo@1160040000(JnlTemplName@1160040000 : Code[10];JnlBatchName@1160040001 : Code[10]) : Integer;
+    VAR
+      GenJnlLine@1160040002 : Record 81;
+    BEGIN
+      GenJnlLine.SETRANGE("Journal Template Name",JnlTemplName);
+      GenJnlLine.SETRANGE("Journal Batch Name",JnlBatchName);
+      IF GenJnlLine.FINDLAST THEN
+        EXIT(GenJnlLine."Line No." + 10000)
+      ELSE
+        EXIT(10000);
+    END;
+
+    PROCEDURE CleanUpJobJnl@1160040008(JnlTemplName@1160040001 : Code[10];JnlBatchName@1160040000 : Code[10]);
+    VAR
+      JobJnlLine@1160040002 : Record 210;
+    BEGIN
+      JobJnlLine.SETRANGE("Journal Template Name",JnlTemplName);
+      JobJnlLine.SETRANGE("Journal Batch Name",JnlBatchName);
+      JobJnlLine.SETFILTER("No.",'%1','');
+      JobJnlLine.DELETEALL(TRUE);
+    END;
+
+    PROCEDURE AddJobsToJnlLine@1160040003(VAR GenJnlLine@1160040007 : Record 81;Jobno@1160040006 : Code[20];JobTaskNo@1160040005 : Code[20];JobLineType@1160040004 : ' ,Schedule,Contract,Both Schedule and Contract';Billable@1160040000 : Boolean);
+    VAR
+      Job@1160040010 : Record 167;
+      CurrExchRate@1160040012 : Record 330;
+      ExpMgtSetup@1160040001 : Record 6086300;
+      Currency@1160040002 : Record 4;
+      Amount@1160040016 : Decimal;
+      CurrencyFactor@1160040011 : Decimal;
+    BEGIN
+      IF (Jobno = '') OR (JobTaskNo = '') OR
+        (GenJnlLine."Account Type" <> GenJnlLine."Account Type"::"G/L Account")
+      THEN
+        EXIT;
+
+      GenJnlLine.TESTFIELD("Account No.");
+      GenJnlLine.VALIDATE("Job No.",Jobno);
+      GenJnlLine.VALIDATE("Job Task No.",JobTaskNo);
+      GenJnlLine.VALIDATE("Job Line Type",JobLineType);
+
+      Job.GET(Jobno);
+      IF Job."Currency Code" <> '' THEN BEGIN
+        IF Job."Currency Code" = GenJnlLine."Currency Code" THEN
+          Amount := GenJnlLine."VAT Base Amount"
+        ELSE BEGIN
+          Currency.GET(Job."Currency Code");
+          Currency.CheckAmountRoundingPrecision;
+          CurrencyFactor := CurrExchRate.ExchangeRate(GenJnlLine."Posting Date",Job."Currency Code");
+          Amount :=
+            ROUND(
+              CurrExchRate.ExchangeAmtLCYToFCY(
+                GenJnlLine."Posting Date",
+                Job."Currency Code",
+                GenJnlLine."VAT Base Amount (LCY)",
+                CurrencyFactor),
+              Currency."Amount Rounding Precision");
+        END;
+
+        GenJnlLine.VALIDATE("Job Unit Cost",Amount);
+
+        IF Billable THEN
+          GenJnlLine.VALIDATE("Job Unit Price",Amount)
+        ELSE
+          GenJnlLine.VALIDATE("Job Unit Price",0);
+
+      END ELSE BEGIN
+        GenJnlLine.VALIDATE("Job Unit Cost",GenJnlLine."VAT Base Amount (LCY)");
+        IF Billable THEN
+          GenJnlLine.VALIDATE("Job Unit Price",GenJnlLine."VAT Base Amount (LCY)")
+        ELSE
+          GenJnlLine.VALIDATE("Job Unit Price",0);
+      END;
+
+      GenJnlLine.VALIDATE("Job Quantity",1);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

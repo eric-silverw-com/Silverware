@@ -1,0 +1,121 @@
+OBJECT Codeunit 6086317 Navigate Bank Trans. - Find
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/02/18;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.06;
+  }
+  PROPERTIES
+  {
+    TableNo=6086014;
+    OnRun=VAR
+            DocEntryTemp@1160040000 : TEMPORARY Record 265;
+          BEGIN
+            FindRecords(DocEntryTemp,"Doc. No. Filter","Posting Date Filter");
+            Rec.TRANSFERFIELDS(DocEntryTemp);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1160040000 : TextConst 'ENU=Unable to find any entries or posting suggestion for this %1.';
+      Text002@1160040001 : TextConst 'ENU=The posting suggestion for this %1 has not been posted.';
+
+    PROCEDURE FindRecords@1160040002(VAR DocEntry@161024014 : Record 265;DocNoFilter@161024013 : Code[250];PostingDateFilter@161024012 : Text[250]);
+    VAR
+      TempBankTransaction@161024017 : TEMPORARY Record 6086330;
+      BankTransaction@1160040000 : Record 6086330;
+    BEGIN
+      IF BankTransaction.READPERMISSION THEN BEGIN
+        FilterBankTransaction(TempBankTransaction,DocNoFilter,PostingDateFilter);
+        InsertIntoDocEntry(DocEntry,DATABASE::"Bank Transaction",0,TempBankTransaction.TABLECAPTION,TempBankTransaction.COUNT);
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertIntoDocEntry@1160040001(VAR DocEntry@161024012 : Record 265;DocTableID@1000 : Integer;DocType@1003 : Option;DocTableName@1001 : Text[1024];DocNoOfRecords@1002 : Integer);
+    BEGIN
+      WITH DocEntry DO BEGIN
+        IF DocNoOfRecords = 0 THEN
+          EXIT;
+        INIT;
+        "Entry No." := "Entry No." + 1;
+        "Table ID" := DocTableID;
+        "Document Type" := DocType;
+        "Table Name" := COPYSTR(DocTableName,1,MAXSTRLEN("Table Name"));
+        "No. of Records" := DocNoOfRecords;
+        INSERT;
+      END;
+    END;
+
+    PROCEDURE FilterBankTransaction@161024014(VAR BankTransaction2@161024014 : TEMPORARY Record 6086330;DocNoFilter@161024013 : Code[250];PostingDateFilter@161024012 : Text[250]);
+    VAR
+      GLEntry@1160040002 : Record 17;
+      BnkTransaction@1160040010 : Record 6086330;
+    BEGIN
+      IF NOT BnkTransaction.READPERMISSION THEN
+        EXIT;
+
+      BnkTransaction.SETCURRENTKEY("Posted Doc. ID");
+      IF GLEntry.READPERMISSION THEN BEGIN
+        GLEntry.SETCURRENTKEY("Document No.","Posting Date");
+        GLEntry.SETFILTER("Document No.",DocNoFilter);
+        GLEntry.SETFILTER("Posting Date",PostingDateFilter);
+        IF GLEntry.FINDFIRST THEN
+          REPEAT
+            BnkTransaction.SETRANGE("Posted Doc. ID",GLEntry."Document No.");
+            IF BnkTransaction.FINDFIRST THEN
+              REPEAT
+                IF NOT BankTransaction2.GET(BnkTransaction."Entry No.") THEN BEGIN
+                  BankTransaction2 := BnkTransaction;
+                  BankTransaction2.INSERT;
+                END;
+              UNTIL BnkTransaction.NEXT = 0;
+          UNTIL GLEntry.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE NavigateBankTransaction@1160040004(BankTransaction@1160040000 : Record 6086330);
+    VAR
+      GLEntry@1160040002 : Record 17;
+      GenJnlLine@1160040005 : Record 81;
+      GenJnlBatch@1160040008 : Record 232;
+      EMSetup@1160040006 : Record 6086300;
+      NavigateForm@1160040001 : Page 344;
+      GenJnlManagement@1160040009 : Codeunit 230;
+    BEGIN
+      IF GLEntry.READPERMISSION THEN BEGIN
+        GLEntry.SETCURRENTKEY("Document No.","Posting Date");
+        GLEntry.SETFILTER("Document No.",BankTransaction."Posted Doc. ID");
+        IF GLEntry.FINDFIRST THEN BEGIN
+          NavigateForm.SetDoc(GLEntry."Posting Date",BankTransaction."Posted Doc. ID");
+          NavigateForm.RUN;
+          EXIT;
+        END;
+      END;
+
+      IF GenJnlLine.READPERMISSION THEN BEGIN
+        EMSetup.GET;
+        GenJnlLine.SETRANGE("Journal Template Name",EMSetup."Expense Template Name");
+        GenJnlLine.SETRANGE("Journal Batch Name",EMSetup."Expense Batch Name");
+        GenJnlLine.SETRANGE("Document No.",BankTransaction."Posted Doc. ID");
+        IF GenJnlLine.FINDFIRST THEN BEGIN
+          GenJnlBatch.SETRANGE("Journal Template Name",EMSetup."Expense Template Name");
+          GenJnlBatch.SETRANGE(Name,EMSetup."Expense Batch Name");
+          GenJnlBatch.FINDFIRST;
+          GenJnlManagement.TemplateSelectionFromBatch(GenJnlBatch);
+
+          MESSAGE(STRSUBSTNO(Text002,BankTransaction.TABLECAPTION));
+          EXIT;
+        END;
+      END;
+
+      MESSAGE(STRSUBSTNO(Text001,BankTransaction.TABLECAPTION));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

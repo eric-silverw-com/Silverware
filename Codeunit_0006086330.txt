@@ -1,0 +1,758 @@
+OBJECT Codeunit 6086330 Expense-Post
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/18;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.08;
+  }
+  PROPERTIES
+  {
+    TableNo=6086320;
+    Permissions=TableData 38=rimd,
+                TableData 39=rimd,
+                TableData 81=rimd,
+                TableData 210=rimd,
+                TableData 454=rimd;
+    OnRun=BEGIN
+            RunWithCheck(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      PurchCreditMemo@1160040019 : Record 38;
+      PurchHeader@1160040009 : Record 38;
+      PurchHeaderCard@1160040020 : Record 38;
+      ContiniaUserSetup@1160040007 : Record 6086002;
+      EMSetup@1160040002 : Record 6086300;
+      PostingDate@1160040004 : Date;
+      NoOfGenJnlLines@1160040011 : Integer;
+      NoOfPurchLines@1160040010 : Integer;
+      CreateGenJnlBalanceEntry@1160040013 : Boolean;
+      PostingDateExists@1160040006 : Boolean;
+      ReplacePostingDate@1160040005 : Boolean;
+      AppForcedByTxt@1160040015 : TextConst 'ENU=Approval forced by %1';
+      WrongAllocAmtErr@1160040008 : TextConst 'ENU=%1 on %2 %3 does not match the total allocated amount.';
+      WrongMatchAmtErr@1160040000 : TextConst 'ENU=Amount %2 and Matched Amount %1 does not match.';
+      Group@1160040001 : Boolean;
+      Settlement@1160040003 : Record 6086339;
+      PostingDatePolicy@1160040012 : 'First expense/Mileage date,Last Expense/Mileage Date,Specific date';
+
+    PROCEDURE RunWithCheck@1160040011(VAR Expense@1160040000 : Record 6086320);
+    VAR
+      CheckLine@1160040001 : Codeunit 6086333;
+    BEGIN
+      CheckLine.RUN(Expense);
+      Code(Expense);
+    END;
+
+    PROCEDURE RunWithoutCheck@1160040010(VAR Expense@1160040000 : Record 6086320);
+    BEGIN
+      Code(Expense);
+    END;
+
+    PROCEDURE Code@1160040009(VAR Expense@1160040014 : Record 6086320);
+    VAR
+      GenJnlLine@1160040018 : Record 81;
+      GenJnlLine2@1160040024 : Record 81;
+      JobJnlLine@1160040020 : Record 210;
+      GenJnlBatch@1160040017 : Record 232;
+      CreditCard@1160040015 : Record 6086311;
+      BankTransaction@1160040002 : Record 6086330;
+      Expense2@1160040013 : Record 6086320;
+      ExpenseAllocation@1160040012 : Record 6086321;
+      ExpenseDimMgt@1160040009 : Codeunit 6086318;
+      PostingFunctions@1160040021 : Codeunit 6086336;
+      BalanceAccountNo@1160040008 : Code[20];
+      BankAccCurrency@1160040022 : Code[10];
+      DocumentNo@1160040004 : Code[20];
+      PostingCurrency@1160040032 : Code[10];
+      AmountLCYRecalculated@1160040030 : Decimal;
+      BalancingAmount@1160040000 : Decimal;
+      BalancingAmountLCY@1160040029 : Decimal;
+      PostingAmount@1160040023 : Decimal;
+      DocType@1160040001 : Integer;
+      BalanceAccountType@1160040007 : 'G/L Account,,Vendor,Bank Account';
+      UpdateExpenseAmountLCY@1160040031 : Boolean;
+      UseExpenseAllocation@1160040005 : Boolean;
+      SettlementPost@1160040003 : Codeunit 6086338;
+    BEGIN
+      EMSetup.GET;
+
+      IF Group AND EMSetup."Enable Settlement" THEN BEGIN
+        IF (Settlement."Continia User ID" <> '') AND (Settlement."Continia User ID" <> Expense."Continia User ID") THEN BEGIN
+          PostSettlement;
+          CLEAR(Settlement);
+        END;
+        AddToSettlement(Expense);
+        EXIT; // note that PostSettlement should be called from outside at last too
+      END;
+
+      CLEAR(NoOfGenJnlLines);
+      CLEAR(NoOfPurchLines);
+      CLEAR(AmountLCYRecalculated);
+
+      WITH Expense DO BEGIN
+        ContiniaUserSetup.GET("Continia User ID");
+
+        // *****************************************************************************************************************************
+        // DETERMINE IF WE SHOULD POST USING A GEN. JOURNAL OR PURCHASE INVOICE. ALSO DETERMINE WHICH BALANCING ACCOUNT TYPE AND NUMBER
+        // *****************************************************************************************************************************
+        CASE TRUE OF
+          NOT "Matched to Bank Transaction":
+            BEGIN
+              CheckVendorSetup(ContiniaUserSetup."Vendor No.");
+              BalanceAccountType := GenJnlLine."Bal. Account Type"::Vendor;
+              BalanceAccountNo := ContiniaUserSetup."Vendor No.";
+            END;
+
+          "Matched to Bank Transaction":
+            BEGIN
+              IF CalcMatchedAmount <> Amount THEN
+                ERROR(WrongMatchAmtErr,CalcMatchedAmount,Amount);
+
+              BankTransaction.GET(GetMatchingBankEntryNo);
+
+              CreditCard.SETRANGE("Card No.",BankTransaction."Card No.");
+              CreditCard.FINDFIRST;
+
+              IF EMSetup."Post Bank Trans. on Import" THEN BEGIN
+                BalanceAccountType := GenJnlLine."Bal. Account Type"::"G/L Account";
+                BalanceAccountNo := EMSetup."Intermediate Expense Account";
+              END ELSE
+                IF CreditCard."Account No." <> '' THEN BEGIN
+                  BalanceAccountType := CreditCard."Account Type";
+                  BalanceAccountNo := CreditCard."Account No.";
+                END ELSE BEGIN
+                  EMSetup.TESTFIELD("Card Transaction Bal. No.");
+                  BalanceAccountType := EMSetup."Card Transaction Bal. Type";
+                  BalanceAccountNo := EMSetup."Card Transaction Bal. No.";
+                END;
+            END;
+        END;
+
+        IF EMSetup."Expense Posting" = EMSetup."Expense Posting"::"Use General Journal" THEN
+          SettlementPost.PostAndBalanceExpense(Expense,PostingDate)
+        ELSE
+          PostExpenseInvoice(Expense,BalanceAccountType,BalanceAccountNo);
+      END;
+    END;
+
+    PROCEDURE SetPostingDate@1(NewReplacePostingDate@1000 : Boolean;NewPostingDatePolicy@1160040000 : 'First Expense/Mileage Date,Last Expense/Mileage Date,Specific Date';NewPostingDate@1002 : Date);
+    BEGIN
+      PostingDateExists := TRUE;
+      ReplacePostingDate := NewReplacePostingDate;
+      PostingDate := NewPostingDate;
+      PostingDatePolicy := NewPostingDatePolicy;
+    END;
+
+    PROCEDURE ForcePIApprovalAll@1160040015();
+    BEGIN
+      ForcePIApprovalHeader(PurchHeader);
+      ForcePIApprovalHeader(PurchHeaderCard);
+      ForcePIApprovalHeader(PurchCreditMemo);
+    END;
+
+    PROCEDURE ForcePIApprovalHeader@1160040017(PurchHeader@1160040008 : Record 38);
+    VAR
+      ApprovalEntry@1160040004 : Record 454;
+      DCApprovalMgt@1160040006 : Codeunit 6085722;
+      DCApprovalsBridge@1160040002 : Codeunit 6085790;
+      EMApprovalMgt@1160040000 : Codeunit 6086312;
+      EMApprovalsBridge@1160040007 : Codeunit 6086369;
+      PurchRecRef@1160040001 : RecordRef;
+    BEGIN
+      IF PurchHeader.Status <> PurchHeader.Status::Open THEN
+        EXIT;
+
+      IF PurchHeader."No." = '' THEN
+        EXIT;
+
+      CODEUNIT.RUN(CODEUNIT::"Release Purchase Document",PurchHeader);
+
+      IF EMApprovalsBridge.ApprovalHandlingExists THEN BEGIN
+        PurchRecRef.GETTABLE(PurchHeader);
+        DCApprovalsBridge.InitializeApprovalEntry(PurchRecRef,ApprovalEntry,CREATEGUID);
+        DCApprovalMgt.MakeApprovalEntry(ApprovalEntry,0,EMApprovalMgt.GetCurrUserID);
+
+        ApprovalEntry.SETRANGE("Table ID",DATABASE::"Purchase Header");
+        ApprovalEntry.SETRANGE("Document Type",PurchHeader."Document Type");
+        ApprovalEntry.SETRANGE("Document No.",PurchHeader."No.");
+        ApprovalEntry.FINDLAST;
+        ApprovalEntry.Status := ApprovalEntry.Status::Approved;
+        ApprovalEntry.MODIFY;
+
+        EMApprovalsBridge.CreateAppvlCmtLine(
+          DATABASE::"Purchase Header",
+          PurchHeader."Document Type",
+          PurchHeader."No.",
+          STRSUBSTNO(AppForcedByTxt,EMApprovalMgt.GetCurrUserID));
+      END;
+    END;
+
+    LOCAL PROCEDURE CreatePurchInvHeader@1160040005(IsInvoice@1160040003 : Boolean;VAR Expense@1160040005 : Record 6086320;VAR LocalPurchHeader@1160040000 : Record 38;DocumentDate@1160040001 : Date;VendorNo@1160040004 : Code[20];ReuseInvoice@1160040006 : Boolean;CurrencyCode@1160040007 : Code[10]);
+    VAR
+      NoSeriesMgt@1160040002 : Codeunit 396;
+    BEGIN
+      WITH Expense DO BEGIN
+        IF ReuseInvoice THEN BEGIN
+          LocalPurchHeader.RESET;
+          LocalPurchHeader.SETRANGE("Buy-from Vendor No.",VendorNo);
+          LocalPurchHeader.SETRANGE("Currency Code",CurrencyCode);
+          IF IsInvoice THEN BEGIN
+            LocalPurchHeader.SETRANGE("Document Type",LocalPurchHeader."Document Type"::Invoice);
+            LocalPurchHeader.SETFILTER("Vendor Invoice No.",'%1',TABLECAPTION + '*');
+          END ELSE BEGIN
+            LocalPurchHeader.SETRANGE("Document Type",LocalPurchHeader."Document Type"::"Credit Memo");
+            LocalPurchHeader.SETFILTER("Vendor Cr. Memo No.",'%1',TABLECAPTION + '*');
+          END;
+
+          IF LocalPurchHeader.FINDFIRST THEN BEGIN
+            LocalPurchHeader.VALIDATE(Status,LocalPurchHeader.Status::Open);
+            LocalPurchHeader.MODIFY;
+            EXIT;
+          END;
+        END;
+
+        EMSetup.GET;
+        IF EMSetup."Invoice Nos." <> '' THEN BEGIN
+          NoSeriesMgt.InitSeries(EMSetup."Invoice Nos.",
+            LocalPurchHeader."No. Series",
+            TODAY,
+            LocalPurchHeader."No.",
+            LocalPurchHeader."No. Series");
+        END ELSE
+          LocalPurchHeader."No." := '';
+
+        LocalPurchHeader.INSERT(TRUE);
+
+        LocalPurchHeader.SetHideValidationDialog(TRUE);
+        LocalPurchHeader.VALIDATE("Buy-from Vendor No.",VendorNo);
+        LocalPurchHeader.VALIDATE("Currency Code",CurrencyCode);
+        LocalPurchHeader.VALIDATE("Posting Date",DocumentDate);
+        LocalPurchHeader.VALIDATE("Shortcut Dimension 1 Code","Global Dimension 1 Code");
+        LocalPurchHeader.VALIDATE("Shortcut Dimension 2 Code","Global Dimension 2 Code");
+        IF IsInvoice THEN
+          LocalPurchHeader.VALIDATE("Vendor Invoice No.",STRSUBSTNO('%1 %2',TABLECAPTION,"Entry No."))
+        ELSE
+          LocalPurchHeader.VALIDATE("Vendor Cr. Memo No.",STRSUBSTNO('%1 %2',TABLECAPTION,"Entry No."));
+
+        LocalPurchHeader.VALIDATE("Prices Including VAT",TRUE);
+        LocalPurchHeader.MODIFY(TRUE);
+      END;
+    END;
+
+    PROCEDURE GetExpPostingDesc@1160040003(Expense@1160040000 : Record 6086320) PostingDesc : Text[1024];
+    VAR
+      ExpPostingDescFields@1160040002 : Record 6086333;
+    BEGIN
+      PostingDesc := EMSetup."Posting Description";
+      ExpPostingDescFields.ASCENDING(FALSE);
+      IF ExpPostingDescFields.FINDFIRST THEN
+        REPEAT
+          PostingDesc :=
+            Replace(PostingDesc,'%' + FORMAT(ExpPostingDescFields."Parameter No."),
+              ExtractText(Expense,ExpPostingDescFields."Field Type Code"),FALSE);
+        UNTIL ExpPostingDescFields.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE Replace@1000000003(Text@1000000000 : Text[1024];ReplaceTxt@1000000001 : Text[1024];ReplaceWithTxt@1000000002 : Text[1024];CaseSensitive@1160040000 : Boolean) : Text[1024];
+    VAR
+      i@1000000005 : Integer;
+      ReplaceTxtLen@1000000003 : Integer;
+      ReplaceWithTxtLen@1000000004 : Integer;
+    BEGIN
+      ReplaceTxtLen := STRLEN(ReplaceTxt);
+      ReplaceWithTxtLen := STRLEN(ReplaceWithTxt);
+
+      IF CaseSensitive THEN
+        i := STRPOS(Text,ReplaceTxt)
+      ELSE
+        i := STRPOS(UPPERCASE(Text),UPPERCASE(ReplaceTxt));
+
+      IF i <> 0 THEN BEGIN
+        Text := COPYSTR(Text,1,i-1) + ReplaceWithTxt + COPYSTR(Text,i + ReplaceTxtLen);
+        Text :=
+          COPYSTR(Text,1,i-1 + ReplaceWithTxtLen) +
+            Replace(COPYSTR(Text,i + ReplaceWithTxtLen),ReplaceTxt,ReplaceWithTxt,CaseSensitive);
+      END;
+
+      EXIT(Text);
+    END;
+
+    PROCEDURE ExtractText@1160040040(Expense@1160040000 : Record 6086320;FieldTypeCode@1160040001 : Code[20]) : Text[1024];
+    VAR
+      FieldType@1160040002 : Record 6086345;
+      EMDim@1160040006 : Record 6086360;
+      RecRef@1160040003 : RecordRef;
+      FldRef@1160040004 : FieldRef;
+      DimCode@1160040008 : Code[20];
+      i@1160040005 : Integer;
+    BEGIN
+      IF FieldType.GET(FieldTypeCode) THEN
+        IF FieldType.IsSystemField THEN BEGIN
+          RecRef.GETTABLE(Expense);
+
+          FOR i := 1 TO RecRef.FIELDCOUNT DO BEGIN
+            FldRef := RecRef.FIELDINDEX(i);
+
+            IF FldRef.NUMBER = FieldType.GetSystemFieldExpTableNo(FieldType.Code) THEN
+              EXIT(FORMAT(FldRef.VALUE));
+          END;
+        END ELSE BEGIN
+          DimCode := FieldType.GetDimCode;
+
+          EMDim.SETCURRENTKEY("Table ID","Document Type","Document No.","Doc. Ref. No.");
+          EMDim.SETRANGE("Table ID",DATABASE::Expense);
+          EMDim.SETRANGE("Document Type",0);
+          EMDim.SETRANGE("Document No.",'');
+          EMDim.SETRANGE("Doc. Ref. No.",Expense."Entry No.");
+
+          IF DimCode <> '' THEN BEGIN
+            EMDim.SETRANGE("Dimension Code",DimCode);
+            IF EMDim.FINDFIRST THEN
+              EXIT(EMDim."Dimension Value Code");
+          END ELSE BEGIN
+            EMDim.SETRANGE("Field Code",FieldTypeCode);
+            IF EMDim.FINDFIRST THEN
+              EXIT(EMDim."Field Value");
+          END;
+        END;
+    END;
+
+    PROCEDURE HandleDocumentTypeAndAmounts@1160040006(VAR GenJnlLine@1160040000 : Record 81;VAR Expense@1160040006 : Record 6086320;VAR Expense2@1160040001 : Record 6086320;VAR BalancingAmount@1160040004 : Decimal;VAR BalancingAmountLCY@1160040002 : Decimal;BalanceAccountType@1160040003 : 'G/L Account,,,Bank Account';BalanceAccountNo@1160040005 : Code[20]);
+    VAR
+      PostingCurrency@1160040010 : Code[10];
+      PostingAmount@1160040008 : Decimal;
+      PostingAmountLCY@1160040009 : Decimal;
+    BEGIN
+      IF EMSetup."Post in Expense Currency" THEN
+        IF Expense2."Bank Currency Code" = '' THEN BEGIN
+          PostingAmount := Expense2.Amount;
+          PostingCurrency := Expense2."Currency Code";
+
+          BalancingAmount := -ABS(Expense.Amount);
+
+          IF Expense."Cash/Private Card" THEN BEGIN
+            PostingAmountLCY := Expense2."Amount (LCY)";
+            BalancingAmountLCY := -ABS(Expense."Amount (LCY)");
+          END ELSE BEGIN
+            PostingAmountLCY := Expense2."Bank-Currency Amount";
+            BalancingAmountLCY := -ABS(Expense."Bank-Currency Amount");
+          END;
+
+        END ELSE BEGIN
+          PostingAmount := Expense2."Bank-Currency Amount";
+          PostingCurrency := Expense2."Bank Currency Code";
+          PostingAmountLCY := Expense2."Amount (LCY)";
+
+          BalancingAmount := -ABS(Expense."Bank-Currency Amount");
+          BalancingAmountLCY := -ABS(Expense."Amount (LCY)");
+        END
+      ELSE
+        IF Expense2."Bank Currency Code" = '' THEN BEGIN
+          IF Expense."Cash/Private Card" THEN BEGIN
+            PostingAmount := Expense2."Amount (LCY)";
+            BalancingAmount := -ABS(Expense."Amount (LCY)");
+          END ELSE BEGIN
+            PostingAmount := Expense2."Bank-Currency Amount";
+            BalancingAmount := -ABS(Expense."Bank-Currency Amount");
+          END;
+
+          PostingAmountLCY := 0;
+          BalancingAmountLCY := 0;
+          PostingCurrency := '';
+        END ELSE BEGIN
+          PostingAmount := Expense2."Bank-Currency Amount";
+          PostingCurrency := Expense2."Bank Currency Code";
+          PostingAmountLCY := Expense2."Amount (LCY)";
+
+          BalancingAmount := -ABS(Expense."Bank-Currency Amount");
+          BalancingAmountLCY := -ABS(Expense."Amount (LCY)");
+        END;
+
+      CASE BalanceAccountType OF
+        GenJnlLine."Bal. Account Type"::Vendor:
+          SetDocumentTypeAndAmounts(GenJnlLine,GenJnlLine."Document Type"::Invoice,PostingAmount,PostingAmountLCY,PostingCurrency);
+
+        GenJnlLine."Bal. Account Type"::"Bank Account":
+          SetDocumentTypeAndAmounts(
+            GenJnlLine,GenJnlLine."Document Type"::"Credit Memo",PostingAmount,PostingAmountLCY,PostingCurrency);
+
+        GenJnlLine."Bal. Account Type"::"G/L Account":
+          SetDocumentTypeAndAmounts(
+            GenJnlLine,GenJnlLine."Document Type"::"Credit Memo",PostingAmount,PostingAmountLCY,PostingCurrency);
+      END;
+
+      //REVERSE SIGNS FOR NEGATIVE AMOUNTS
+      IF Expense2."Amount (LCY)" < 0 THEN BEGIN
+        IF GenJnlLine."Document Type" = GenJnlLine."Document Type"::Invoice THEN
+          GenJnlLine."Document Type" := GenJnlLine."Document Type"::"Credit Memo"
+        ELSE
+          GenJnlLine."Document Type" := GenJnlLine."Document Type"::Invoice;
+
+        GenJnlLine.VALIDATE(Amount,-GenJnlLine.Amount);
+        BalancingAmount := -BalancingAmount;
+        BalancingAmountLCY := -BalancingAmountLCY;
+      END;
+    END;
+
+    PROCEDURE SetDocumentTypeAndAmounts@1160040002(VAR GenJnlLine@1160040001 : Record 81;DocumentType@1160040003 : Integer;Amount@1160040004 : Decimal;AmountLCY@1160040000 : Decimal;CurrencyCode@1160040005 : Code[10]);
+    BEGIN
+      GenJnlLine."Document Type" := DocumentType;
+      GenJnlLine.VALIDATE(Amount,ABS(Amount));
+      GenJnlLine.VALIDATE("Currency Code",CurrencyCode);
+      IF AmountLCY <> 0 THEN
+        GenJnlLine.VALIDATE("Amount (LCY)",ABS(AmountLCY));
+    END;
+
+    PROCEDURE GetBankAccountCurrency@1160040001(BalanceAccountNo@1160040000 : Code[20];BalanceAccountType@1160040001 : 'G/L Account,,Vendor,Bank Account') : Code[10];
+    VAR
+      Vendor@1160040003 : Record 23;
+      BankAccount@1160040002 : Record 270;
+    BEGIN
+      CASE BalanceAccountType OF
+        BalanceAccountType::"Bank Account":
+          IF BankAccount.GET(BalanceAccountNo) THEN
+            EXIT(BankAccount."Currency Code");
+
+        BalanceAccountType::Vendor:
+          IF Vendor.GET(BalanceAccountNo) THEN
+            EXIT(Vendor."Currency Code");
+      END;
+    END;
+
+    PROCEDURE CheckVendorSetup@1160040007(VendorCode@1160040001 : Code[20]);
+    VAR
+      Vendor@1160040000 : Record 23;
+    BEGIN
+      Vendor.GET(ContiniaUserSetup."Vendor No.");
+      Vendor.TESTFIELD("Vendor Posting Group");
+    END;
+
+    PROCEDURE AddLineToInvoice@1160040016(VAR LocalPurchaseHeader@1160040000 : Record 38;Expense@1160040001 : Record 6086320;VAR Expense2@1160040002 : Record 6086320;ExpenseAllocation@1160040004 : Record 6086321;VAR PurchLine@1160040007 : Record 39;UseExpenseAllocation@1160040003 : Boolean;Amount@1160040005 : Decimal;Description@1160040006 : Text[50]);
+    VAR
+      ExpenseDimMgt@1160040008 : Codeunit 6086318;
+      PostingFunctions@1160040009 : Codeunit 6086336;
+    BEGIN
+      PurchLine.INIT;
+      PurchLine."Document Type" := LocalPurchaseHeader."Document Type";
+      PurchLine."Document No." := LocalPurchaseHeader."No.";
+      PurchLine."Line No." := PostingFunctions.GetNextPurchLineNo(LocalPurchaseHeader);
+      PurchLine.INSERT(TRUE);
+
+      PurchLine.VALIDATE(Type,PurchLine.Type::"G/L Account");
+      PurchLine.VALIDATE("No.",Expense2."Expense Account");
+
+      IF Expense2."Gen. Bus. Posting Group" <> '' THEN
+        PurchLine.VALIDATE("Gen. Bus. Posting Group",Expense2."Gen. Bus. Posting Group");
+      IF Expense2."VAT Bus. Posting Group" <> '' THEN
+        PurchLine.VALIDATE("VAT Bus. Posting Group",Expense2."VAT Bus. Posting Group");
+      IF Expense2."Gen. Prod. Posting Group" <> '' THEN
+        PurchLine.VALIDATE("Gen. Prod. Posting Group",Expense2."Gen. Prod. Posting Group");
+      IF Expense2."VAT Prod. Posting Group" <> '' THEN
+        PurchLine.VALIDATE("VAT Prod. Posting Group",Expense2."VAT Prod. Posting Group");
+
+      PurchLine.VALIDATE(Quantity,1);
+
+      PurchLine.VALIDATE("Direct Unit Cost",Amount);
+
+      PurchLine.VALIDATE(Description,COPYSTR(Description,1,MAXSTRLEN(PurchLine.Description)));
+
+      PurchLine.VALIDATE("Description 2",Expense2."Description 2");
+
+      IF Expense2."Job No." <> '' THEN BEGIN
+        PurchLine.VALIDATE("Job No.",Expense2."Job No.");
+        PurchLine.VALIDATE("Job Task No.",Expense2."Job Task No.");
+        PurchLine.VALIDATE("Job Line Type",PurchLine."Job Line Type"::Billable);
+        PurchLine.VALIDATE("Job Unit Price",PurchLine."Unit Cost (LCY)");
+      END;
+
+      PurchLine.VALIDATE("Shortcut Dimension 1 Code",Expense2."Global Dimension 1 Code");
+      PurchLine.VALIDATE("Shortcut Dimension 2 Code",Expense2."Global Dimension 2 Code");
+      IF NOT UseExpenseAllocation THEN
+        ExpenseDimMgt.CopyExpDimToPurchLine(Expense,PurchLine)
+      ELSE
+        ExpenseDimMgt.CopyExpAllocDimToPurchLine(ExpenseAllocation,PurchLine);
+
+      PurchLine.MODIFY(TRUE);
+
+      NoOfPurchLines := NoOfPurchLines + 1;
+    END;
+
+    PROCEDURE GetLCYAmount@1160040000(Amount@1160040000 : Decimal;CurrencyCode@1160040001 : Code[10];Date@1160040003 : Date) : Decimal;
+    VAR
+      CurrExchRate@1160040004 : Record 330;
+      Currency@1160040006 : Record 4;
+      CurrencyFactor@1160040002 : Decimal;
+    BEGIN
+      IF CurrencyCode = '' THEN
+        EXIT(Amount);
+
+      Currency.GET(CurrencyCode);
+      Currency.CheckAmountRoundingPrecision;
+      CurrencyFactor := CurrExchRate.ExchangeRate(Date,CurrencyCode);
+      EXIT(ROUND(CurrExchRate.ExchangeAmtFCYToLCY(Date,CurrencyCode,Amount,CurrencyFactor),Currency."Amount Rounding Precision"));
+    END;
+
+    PROCEDURE GetPostingDetForEmployeeDoc@1160040004(Expense@1160040000 : Record 6086320;VAR PostingAmt@1160040002 : Decimal;VAR PostingCurrency@1160040003 : Code[10]) : Code[10];
+    BEGIN
+      IF EMSetup."Post in Expense Currency" THEN BEGIN
+        PostingAmt := Expense.Amount;
+        PostingCurrency := Expense."Currency Code";
+      END ELSE BEGIN
+        PostingAmt := Expense."Amount (LCY)";
+        PostingCurrency := '';
+      END;
+    END;
+
+    PROCEDURE GetPostingDetForBankDoc@1160040014(Expense@1160040000 : Record 6086320;VAR PostingAmt@1160040003 : Decimal;VAR PostingCurrency@1160040002 : Code[10]) : Code[10];
+    BEGIN
+      //ALWAYS POST IN THE VENDOR CURRENCY BECAUSE OF THE EXCH. RATES
+      PostingAmt := Expense."Bank-Currency Amount";
+      PostingCurrency := Expense."Bank Currency Code";
+    END;
+
+    PROCEDURE SetGroup@1160040022(Newgroup@1160040000 : Boolean);
+    BEGIN
+      Group := Newgroup;
+    END;
+
+    PROCEDURE AddToSettlement@1160040012(VAR Expense@1160040000 : Record 6086320);
+    BEGIN
+      IF Settlement."No." = '' THEN BEGIN
+        Settlement."Document Type" := Settlement."Document Type"::Settlement;
+        Settlement.INSERT(TRUE);
+        Settlement.VALIDATE("Continia User ID",Expense."Continia User ID");
+        IF ReplacePostingDate THEN
+          Settlement.VALIDATE("Posting Date",PostingDate)
+        ELSE
+          Settlement.VALIDATE("Posting Date",WORKDATE);
+        Settlement.Description := Expense.TABLECAPTION + ' ' + Expense."Continia User ID";
+        Settlement.MODIFY(TRUE);
+      END;
+      Expense.VALIDATE("Settlement No.",Settlement."No.");
+      Expense.MODIFY;
+    END;
+
+    PROCEDURE PostSettlement@1160040008();
+    VAR
+      SettlementPost@1160040000 : Codeunit 6086338;
+    BEGIN
+      IF Settlement."Continia User ID" <> '' THEN BEGIN
+        Settlement.Status := Settlement.Status::Released;
+        IF ReplacePostingDate THEN
+          Settlement.UpdatePostingDate(PostingDatePolicy);
+        Settlement.MODIFY;
+        SettlementPost.RUN(Settlement);
+      END;
+    END;
+
+    PROCEDURE PostInvoice@1160040013(VAR Expense@1160040000 : Record 6086320;VAR Expense2@1160040001 : Record 6086320;BalanceAccountType@1160040007 : 'G/L Account,,Vendor,Bank Account';BalanceAccountNo@1160040008 : Code[20];UseExpenseAllocation@1160040014 : Boolean;ExpenseAllocation@1160040015 : Record 6086321);
+    VAR
+      PurchLine@1160040016 : Record 39;
+      BankInvoice@1160040006 : Boolean;
+      CreateBankInvoice@1160040005 : Boolean;
+      CreateEmployeeCreditMemo@1160040004 : Boolean;
+      CreateEmployeeInvoice@1160040003 : Boolean;
+      Reuse@1160040002 : Boolean;
+      PostingCurrency@1160040013 : Code[10];
+      AmountLCYRecalculated@1160040012 : Decimal;
+      BalancingAmount@1160040011 : Decimal;
+      BalancingAmountLCY@1160040010 : Decimal;
+      PostingAmount@1160040009 : Decimal;
+      PostingDescription@1160040017 : Text[50];
+    BEGIN
+      EMSetup.GET;
+
+      IF EMSetup."Expense Posting" = EMSetup."Expense Posting"::"Always Purchase Invoice" THEN
+        Reuse := TRUE;
+
+      WITH Expense DO BEGIN
+        EMSetup.TESTFIELD("Post Bank Trans. on Import",FALSE);
+        IF NOT (PostingDateExists AND ReplacePostingDate) THEN
+          PostingDate := "Document Date";
+
+        CreateBankInvoice := FALSE;
+        IF EMSetup."Expense Posting" = EMSetup."Expense Posting"::"Always Purchase Invoice" THEN
+          IF BalanceAccountType = BalanceAccountType::Vendor THEN
+            IF "Matched to Bank Transaction" THEN
+              IF NOT EMSetup."Post Bank Trans. on Import" THEN
+                CreateBankInvoice := TRUE;
+
+        CreateEmployeeInvoice := TRUE;
+        IF CreateBankInvoice AND ((NOT "No Refund") AND (Expense2."Amount (LCY)" > 0)) THEN
+          CreateEmployeeInvoice := FALSE;
+
+        IF CreateBankInvoice AND ((NOT "No Refund") AND (Expense2."Amount (LCY)" < 0)) THEN
+          CreateEmployeeInvoice := FALSE;
+
+        IF CreateEmployeeInvoice THEN BEGIN
+          GetPostingDetForEmployeeDoc(Expense2,PostingAmount,PostingCurrency);
+
+          CreateEmployeeCreditMemo := FALSE;
+          IF NOT "No Refund" THEN
+            PostingDescription := COPYSTR(GetExpPostingDesc(Expense2),1,MAXSTRLEN(Description))
+          ELSE BEGIN
+            IF "Cash/Private Card" THEN
+              PostingAmount := 0;
+
+            PostingDescription := COPYSTR(GetExpPostingDesc(Expense2),1,MAXSTRLEN(Description));
+            CreateEmployeeCreditMemo := TRUE;
+            CreateEmployeeInvoice := FALSE;
+          END;
+
+          IF PostingAmount < 0 THEN BEGIN
+            CreateEmployeeCreditMemo := NOT CreateEmployeeCreditMemo;
+            CreateEmployeeInvoice := NOT CreateEmployeeInvoice;
+            PostingAmount := ABS(PostingAmount);
+          END;
+
+          IF CreateEmployeeCreditMemo THEN BEGIN
+            IF (PurchCreditMemo."Buy-from Vendor No." <> ContiniaUserSetup."Vendor No.") OR
+               (PurchCreditMemo."Currency Code" <> PostingCurrency)
+            THEN BEGIN
+              ForcePIApprovalHeader(PurchCreditMemo); // this will force the approval of the previous credit memo
+              CreatePurchInvHeader(FALSE,Expense,PurchCreditMemo,PostingDate,ContiniaUserSetup."Vendor No.",Reuse,PostingCurrency);
+            END;
+
+            AddLineToInvoice(PurchCreditMemo,Expense,Expense2,ExpenseAllocation,PurchLine,UseExpenseAllocation,
+              PostingAmount,PostingDescription);
+
+            IF ReplacePostingDate THEN BEGIN
+              PurchCreditMemo.SetHideValidationDialog(TRUE);
+              PurchCreditMemo.VALIDATE("Posting Date",PostingDate);
+              PurchCreditMemo.MODIFY;
+            END;
+          END ELSE
+            IF CreateEmployeeInvoice THEN BEGIN
+              IF (PurchHeader."Buy-from Vendor No." <> ContiniaUserSetup."Vendor No.") OR
+                 (PurchHeader."Currency Code" <> PostingCurrency)
+              THEN BEGIN
+                ForcePIApprovalHeader(PurchHeader); // this will force the approval of the previous invoice
+                CreatePurchInvHeader(TRUE,Expense,PurchHeader,PostingDate,ContiniaUserSetup."Vendor No.",Reuse,PostingCurrency);
+              END;
+
+              AddLineToInvoice(PurchHeader,Expense,Expense2,ExpenseAllocation,PurchLine,UseExpenseAllocation,
+                PostingAmount,PostingDescription);
+
+              IF ReplacePostingDate THEN BEGIN
+                PurchHeader.SetHideValidationDialog(TRUE);
+                PurchHeader.VALIDATE("Posting Date",PostingDate);
+                PurchHeader.MODIFY;
+              END;
+            END;
+        END;
+
+        IF CreateBankInvoice THEN BEGIN
+          BankInvoice := TRUE;
+          GetPostingDetForBankDoc(Expense2,PostingAmount,PostingCurrency);
+
+          IF PostingAmount < 0 THEN BEGIN
+            PostingAmount := ABS(PostingAmount);
+            BankInvoice := FALSE;
+          END;
+
+          IF (PurchHeaderCard."Buy-from Vendor No." <> BalanceAccountNo) OR
+             (PurchHeaderCard."Currency Code" <> PostingCurrency) OR
+             (((PurchHeaderCard."Document Type" = PurchHeaderCard."Document Type"::Invoice) AND NOT BankInvoice)
+              OR (PurchHeaderCard."Document Type" = PurchHeaderCard."Document Type"::"Credit Memo") AND BankInvoice)
+          THEN BEGIN
+            ForcePIApprovalHeader(PurchHeaderCard); // this will force the approval of the previous invoice
+            CreatePurchInvHeader(BankInvoice,Expense,PurchHeaderCard,PostingDate,BalanceAccountNo,Reuse,PostingCurrency);
+          END;
+
+          PostingDescription := COPYSTR(GetExpPostingDesc(Expense2),1,MAXSTRLEN(Description));
+
+          AddLineToInvoice(PurchHeaderCard,Expense,Expense2,ExpenseAllocation,PurchLine,UseExpenseAllocation,
+            PostingAmount,PostingDescription);
+
+          IF ReplacePostingDate THEN BEGIN
+            PurchHeaderCard.SetHideValidationDialog(TRUE);
+            PurchHeaderCard.VALIDATE("Posting Date",PostingDate);
+            PurchHeaderCard.MODIFY;
+          END;
+        END;
+
+        "Created Doc. Type" := DATABASE::"Purchase Line";
+        "Created Doc. Subtype" := PurchLine."Document Type";
+        "Created Doc. ID" := PurchLine."Document No.";
+        "Created Doc. Ref. No." := PurchLine."Line No.";
+      END;
+    END;
+
+    PROCEDURE PostExpenseInvoice@1160040020(VAR Expense@1160040000 : Record 6086320;BalanceAccountType@1160040006 : 'G/L Account,,Vendor,Bank Account';BalanceAccountNo@1160040007 : Code[20]);
+    VAR
+      UseExpenseAllocation@1160040001 : Boolean;
+      Expense2@1160040003 : Record 6086320;
+      ExpenseAllocation@1160040002 : Record 6086321;
+      BalancingAmountLCY@1160040004 : Decimal;
+      BankAccCurrency@1160040005 : Code[10];
+      UpdateExpenseAmountLCY@1160040008 : Boolean;
+      AmountLCYRecalculated@1160040010 : Decimal;
+    BEGIN
+      WITH Expense DO BEGIN
+        UseExpenseAllocation := FALSE;
+        ExpenseAllocation.SETCURRENTKEY("Expense Entry No.");
+        ExpenseAllocation.SETRANGE("Expense Entry No.","Entry No.");
+        IF ExpenseAllocation.FINDFIRST THEN BEGIN
+          CALCFIELDS("Allocated Amount (LCY)");
+          IF "Allocated Amount (LCY)" <> "Amount (LCY)" THEN
+            ERROR(WrongAllocAmtErr,FIELDCAPTION("Amount (LCY)"),TABLECAPTION,"Entry No.");
+          UseExpenseAllocation := TRUE;
+        END ELSE
+          Expense2.COPY(Expense,FALSE);
+
+        REPEAT
+          IF UseExpenseAllocation THEN BEGIN
+            ExpenseAllocation.TESTFIELD("Continia User ID","Continia User ID");
+            Expense2.TRANSFERFIELDS(ExpenseAllocation);
+            Expense2."Entry No." := "Entry No.";
+          END;
+
+          CLEAR(BalancingAmountLCY);
+          CLEAR(BankAccCurrency);
+
+          //RE-CHECK THE BANK ACCOUNT CURRENCY
+          IF "Matched to Bank Transaction" AND NOT EMSetup."Post Bank Trans. on Import" THEN BEGIN
+            BankAccCurrency := GetBankAccountCurrency(BalanceAccountNo,BalanceAccountType);
+            IF BankAccCurrency <> Expense2."Bank Currency Code" THEN
+              Expense2.VALIDATE("Bank Currency Code",BankAccCurrency);
+          END;
+
+          IF (NOT "Matched to Bank Transaction") OR (BankAccCurrency <> '') THEN BEGIN
+            IF BankAccCurrency <> '' THEN
+              Expense2."Amount (LCY)" :=
+                GetLCYAmount(Expense2."Bank-Currency Amount",Expense2."Bank Currency Code",Expense2."Document Date")
+            ELSE
+              Expense2."Amount (LCY)" := GetLCYAmount(Expense2.Amount,Expense2."Currency Code",Expense2."Document Date");
+
+            UpdateExpenseAmountLCY := TRUE;
+          END;
+
+          PostInvoice(Expense,Expense2,BalanceAccountType,BalanceAccountNo,UseExpenseAllocation,ExpenseAllocation);
+
+          IF UpdateExpenseAmountLCY THEN BEGIN
+            AmountLCYRecalculated := AmountLCYRecalculated + Expense2."Amount (LCY)";
+            IF UseExpenseAllocation THEN
+              IF (ExpenseAllocation."Amount (LCY)" <> 0) AND (Expense2."Amount (LCY)" <> ExpenseAllocation."Amount (LCY)") THEN BEGIN
+                ExpenseAllocation."Amount (LCY)" := Expense2."Amount (LCY)";
+                ExpenseAllocation.MODIFY;
+              END;
+          END;
+
+        UNTIL (NOT UseExpenseAllocation) OR (ExpenseAllocation.NEXT = 0);
+
+        VALIDATE(Posted,TRUE);
+        MODIFY;
+
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

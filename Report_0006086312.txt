@@ -1,0 +1,205 @@
+OBJECT Report 6086312 Batch Post Expenses
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/10/17;
+    Time=[ 1:00:00 AM];
+    Version List=EMW17.00.00.2.60;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Batch Post Expenses;
+    ProcessingOnly=Yes;
+    OnInitReport=BEGIN
+                   EMSetup.GET;
+                 END;
+
+    OnPreReport=BEGIN
+                  IF ReplacePostingDate AND (PostingDatePolicy = PostingDatePolicy::"Specific Date") AND (PostingDateReq = 0D) THEN
+                    ERROR(Text000);
+
+                  IF Group THEN BEGIN
+                    IF NOT ReplacePostingDate THEN
+                      ERROR(ReplacePostingDateTxt);
+
+                    IF NOT (EMSetup."Enable Settlement" AND EMSetup."Post Bank Trans. on Import") THEN
+                      ERROR(GroupingNotAllowed);
+                  END;
+                END;
+
+    OnPostReport=BEGIN
+                   ExpensePost.ForcePIApprovalAll;
+                   IF Group THEN
+                     ExpensePost.PostSettlement;
+
+                   Window.CLOSE;
+
+                   IF CounterOK <> 0 THEN
+                     MESSAGE(Text004,CounterOK,Counter);
+                 END;
+
+  }
+  DATASET
+  {
+    { 1   ;    ;DataItem;                    ;
+               DataItemTable=Table6086320;
+               DataItemTableView=SORTING(Posted,Continia User ID,Status);
+               OnPreDataItem=BEGIN
+                               SETRANGE(Posted,FALSE);
+                               SETRANGE(Status,Status::Released);
+
+                               CounterTotal := COUNT;
+
+                               Window.OPEN(Text001 + Text002 + Text003);
+
+                               IF Group THEN
+                                 Expense.SETCURRENTKEY("Continia User ID",Status,Posted);
+                             END;
+
+               OnAfterGetRecord=VAR
+                                  Expense2@1000 : Record 6086320;
+                                BEGIN
+                                  Counter := Counter + 1;
+                                  IF Expense.AllocationsExists THEN BEGIN
+                                    CALCFIELDS("Allocated Amount (LCY)");
+                                    IF "Allocated Amount (LCY)" <> "Amount (LCY)" THEN
+                                      CurrReport.SKIP;
+                                  END;
+
+                                  CODEUNIT.RUN(CODEUNIT::"Expense-Validate",Expense);
+                                  IF Expense.HasErrorComment(FALSE) THEN
+                                    CurrReport.SKIP;
+
+                                  Window.UPDATE(1,ROUND(Counter / CounterTotal * 10000,1));
+
+                                  COMMIT;
+
+                                  ExpensePost.SetPostingDate(ReplacePostingDate,PostingDatePolicy,PostingDateReq);
+                                  Expense2 := Expense;
+                                  IF ExpenseCheck.RUN(Expense2) THEN BEGIN
+                                    TempExpenseToPost.COPY(Expense2);
+                                    TempExpenseToPost.INSERT;
+
+                                    IF MARKEDONLY THEN
+                                      MARK(FALSE);
+                                  END;
+                                END;
+
+               ReqFilterFields=Continia User ID,Document Date,Entry No. }
+
+    { 2   ;0   ;DataItem;                    ;
+               DataItemTable=Table2000000026;
+               DataItemTableView=SORTING(Number);
+               OnPreDataItem=BEGIN
+                               CounterTotal := TempExpenseToPost.COUNT;
+                               SETRANGE(Number,1,CounterTotal);
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  IF Number = 1 THEN
+                                    TempExpenseToPost.FINDFIRST
+                                  ELSE
+                                    TempExpenseToPost.NEXT;
+
+                                  Expense.GET(TempExpenseToPost."Entry No.");
+                                  Window.UPDATE(2,ROUND(Number / CounterTotal * 10000,1));
+
+                                  ExpensePost.SetPostingDate(ReplacePostingDate,PostingDatePolicy,PostingDateReq);
+                                  ExpensePost.SetGroup(Group);
+                                  ExpensePost.RunWithoutCheck(Expense);
+
+                                  CounterOK := CounterOK + 1;
+                                END;
+                                 }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      OnOpenPage=BEGIN
+                   PostingDateEditable := PostingDatePolicy = PostingDatePolicy::"Specific Date";
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 5   ;0   ;Container ;
+                  ContainerType=ContentArea }
+
+      { 4   ;1   ;Group     ;
+                  CaptionML=ENU=Options }
+
+      { 1160040000;2;Field  ;
+                  CaptionML=ENU=Group by Settlement;
+                  SourceExpr=Group;
+                  OnValidate=BEGIN
+
+                               IF Group THEN
+                                 ReplacePostingDate := TRUE
+                               ELSE
+                                 ReplacePostingDate := FALSE;
+                             END;
+                              }
+
+      { 1   ;2   ;Field     ;
+                  CaptionML=ENU=Replace Posting Date;
+                  SourceExpr=ReplacePostingDate }
+
+      { 1160040001;2;Field  ;
+                  CaptionML=ENU=Posting Date Policy;
+                  OptionCaptionML=ENU=First Expense/Mileage Date,Last Expense/Mileage Date,Specific Date;
+                  SourceExpr=PostingDatePolicy;
+                  OnValidate=BEGIN
+                               IF PostingDatePolicy <> PostingDatePolicy::"Specific Date" THEN
+                                 CLEAR(PostingDateReq);
+
+                               PostingDateEditable := PostingDatePolicy = PostingDatePolicy::"Specific Date";
+                             END;
+                              }
+
+      { 2   ;2   ;Field     ;
+                  Name=PostingDate;
+                  CaptionML=ENU=Posting Date;
+                  SourceExpr=PostingDateReq;
+                  Editable=PostingDateEditable }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      ExpensePost@1010 : Codeunit 6086330;
+      ExpenseCheck@1001 : Codeunit 6086333;
+      EMSetup@1002 : Record 6086300;
+      SettlementPost@1016 : Codeunit 6086338;
+      TempExpenseToPost@1000 : TEMPORARY Record 6086320;
+      Window@1009 : Dialog;
+      Counter@1008 : Integer;
+      CounterOK@1007 : Integer;
+      CounterTotal@1006 : Integer;
+      PostingDateReq@1005 : Date;
+      ReplacePostingDate@1004 : Boolean;
+      ReplaceDocumentDate@1003 : Boolean;
+      Text000@1015 : TextConst 'ENU=Please enter the posting date.';
+      Text001@1014 : TextConst 'ENU=Posting Expenses...';
+      Text002@1013 : TextConst 'ENU=\Checking lines @1@@@@@@@@@@@@@@@@@@@@@@@@@@';
+      Text003@1012 : TextConst 'ENU=\Posting lines  @2@@@@@@@@@@@@@@@@@@@@@@@@@@';
+      Text004@1011 : TextConst 'ENU=%1 expenses out of a total of %2 have been posted.';
+      Group@1017 : Boolean;
+      PostingDatePolicy@1160040011 : 'First Expense/Mileage Date,Last Expense/Mileage Date,Specific Date';
+      ReplacePostingDateTxt@1019 : TextConst 'ENU=The posting date needs to be replaced when grouping.';
+      GroupingNotAllowed@1020 : TextConst 'ENU=Settlements have not been enabled in the Expense Management Setup.';
+      PostingDateEditable@1021 : Boolean INDATASET;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

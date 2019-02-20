@@ -1,0 +1,84 @@
+OBJECT Codeunit 6086333 Expense-Check
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/31/17;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.02;
+  }
+  PROPERTIES
+  {
+    TableNo=6086320;
+    OnRun=VAR
+            ContiniaUserSetup@1160040002 : Record 6086002;
+            ExpenseAllocation@1160040000 : Record 6086321;
+            GLAccount@1160040003 : Record 15;
+            UseExpenseAllocation@1160040001 : Boolean;
+          BEGIN
+            TESTFIELD(Posted,FALSE);
+            TESTFIELD("Continia User ID");
+            TESTFIELD("Document Date");
+            IF "Job No." = '' THEN
+              TESTFIELD("Expense Type");
+            TESTFIELD("Expense Account");
+
+            GLAccount.GET("Expense Account");
+            IF (GLAccount."Gen. Bus. Posting Group" <> '') OR (GLAccount."Gen. Prod. Posting Group" <> '') OR
+               (GLAccount."VAT Bus. Posting Group" <> '') OR (GLAccount."VAT Prod. Posting Group" <> '')
+            THEN
+              GLAccount.TESTFIELD("Gen. Posting Type");
+            GLAccount.TESTFIELD("Direct Posting",TRUE);
+
+            IF "Matched to Bank Transaction" THEN BEGIN
+              IF CalcMatchedAmount <> Amount THEN
+                ERROR(WrongMatchAmtErr,CalcMatchedAmount,Amount,"Entry No.");
+            END ELSE
+              TESTFIELD("Cash/Private Card",TRUE);
+
+            IF NOT "Cash/Private Card" THEN
+              TESTFIELD("Matched to Bank Transaction",TRUE);
+
+            ContiniaUserSetup.GET("Continia User ID");
+            IF "No Refund" THEN
+              ContiniaUserSetup.TESTFIELD("Vendor No.");
+            TESTFIELD(Status,Status::Released);
+
+            ExpenseAllocation.SETCURRENTKEY("Expense Entry No.");
+            ExpenseAllocation.SETRANGE("Expense Entry No.","Entry No.");
+            IF ExpenseAllocation.FINDFIRST THEN BEGIN
+              CALCFIELDS("Allocated Amount (LCY)");
+              IF "Allocated Amount (LCY)" <> "Amount (LCY)" THEN
+                ERROR(WrongAllocAmtErr,FIELDCAPTION("Amount (LCY)"),TABLECAPTION,"Entry No.");
+              UseExpenseAllocation := TRUE;
+              REPEAT
+                IF "Job No." = '' THEN
+                  ExpenseAllocation.TESTFIELD("Expense Type");
+                ExpenseAllocation.TESTFIELD("Expense Account");
+              UNTIL ExpenseAllocation.NEXT = 0;
+            END;
+
+            IF UseExpenseAllocation THEN
+              CheckAllocation(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      NoAllocationAllowed@1160040002 : TextConst 'ENU=No allocation allowed for expenses that are positive,matched and rejected.';
+      NoAllocationAllowedNegativ@1160040005 : TextConst 'ENU=No allocation allowed for expenses that are matched and without refund.';
+      WrongAllocAmtErr@1160040000 : TextConst 'ENU=%1 on %2 %3 does not match the total allocated amount.';
+      WrongMatchAmtErr@1160040003 : TextConst 'ENU=Amount %2 and Matched Amount %1 does not match on %3';
+
+    PROCEDURE CheckAllocation@1160040000(VAR Rec@1160040000 : Record 6086320);
+    BEGIN
+      WITH Rec DO
+        IF "Matched to Bank Transaction" AND "No Refund" AND ("Amount (LCY)" < 0) THEN
+          ERROR(NoAllocationAllowedNegativ);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,1324 @@
+OBJECT Codeunit 6086362 EM Card Trans. - Line Capture
+{
+  OBJECT-PROPERTIES
+  {
+    Date=06/29/18;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.06;
+  }
+  PROPERTIES
+  {
+    TableNo=6085590;
+    OnRun=BEGIN
+            DocPage.SETRANGE("Document No.",Rec."No.");
+            DocPage.FINDFIRST;
+
+            //RUN STANDARD LINE CAPTURE CODEUNIT
+            CODEUNIT.RUN(CODEUNIT::"Purch./Sales - Line Capture",Rec);
+
+            //CHECK IF ANY LINES RECOGNIZED, ELSE EXIT
+            BuildTempLinesTable(TempDocLine);
+            IF TempDocLine.ISEMPTY THEN
+              EXIT;
+
+            //GET DOCUMENT TEMPLATE FIELDS
+            IF CardIDField.GET("Template No.",CardIDField.Type::Line,'CARDID') THEN;
+            IF CardNameField.GET("Template No.",CardIDField.Type::Line,'CARDNAME') THEN;
+            IF TransCurrField.GET("Template No.",TransCurrField.Type::Line,'TRANSCURRENCY') THEN;
+            IF TransExchRateField.GET("Template No.",TransExchRateField.Type::Line,'TRANSEXCHRATE') THEN;
+            IF TransDetailsField.GET("Template No.",TransDetailsField.Type::Line,'TRANSDETAILS') THEN;
+            IF TransAmountField.GET("Template No.",TransAmountField.Type::Line,'TRANSAMOUNT') THEN;
+            IF TransAmountLCYField.GET("Template No.",TransAmountLCYField.Type::Line,'TRANSAMOUNTLCY') THEN;
+            IF LineTypeField.GET("Template No.",LineTypeField.Type::Line,'LINETYPE') THEN;
+            IF TransDateField.GET("Template No.",LineTypeField.Type::Line,'TRANSDATE') THEN;
+            IF TransDateTxtField.GET("Template No.",LineTypeField.Type::Line,'TRANSDATETXT') THEN;
+
+            //HEADER FIELDS
+            IF CardIDHeaderField.GET("Template No.",CardIDField.Type::Header,'CARDID') THEN;
+
+            //RUN LINE CAPTURE ACCORDING TO MASTER TEMPLATE
+            DCSetup.GET;
+            Template.GET("Template No.");
+            CASE Template."Master Template No." OF
+              'MASTER-HSBC':
+                HSBC(Rec);
+
+              'MASTER-RABOBANK':
+                Rabobank(Rec);
+
+              'MASTER-CHASE':
+                Chase(Rec);
+
+              'MASTER-LLOYDS':
+                LLOYDS(Rec);
+
+              'MASTER-ATB':
+                ATBFinance(Rec);
+
+              'MASTER-BNP':
+                BNPParibas(Rec);
+
+              'MASTER-CHASE-US':
+                ChaseUS(Rec);
+
+              'MASTER-WELLS-FARGO':
+                WellsFargo(Rec);
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      DCSetup@1014 : Record 6085573;
+      Template@1000 : Record 6085579;
+      CardIDHeaderField@1160040002 : Record 6085580;
+      CardIDField@1011 : Record 6085580;
+      CardNameField@1010 : Record 6085580;
+      TransCurrField@1009 : Record 6085580;
+      TransExchRateField@1016 : Record 6085580;
+      TransDetailsField@1008 : Record 6085580;
+      TransDateField@1002 : Record 6085580;
+      TransDateTxtField@1160040001 : Record 6085580;
+      TransAmountField@1012 : Record 6085580;
+      TransAmountLCYField@1007 : Record 6085580;
+      LineTypeField@1015 : Record 6085580;
+      CardIDStartWordTmp@1006 : ARRAY [100] OF TEMPORARY Record 6085592;
+      CardIDEndWordTmp@1005 : ARRAY [100] OF TEMPORARY Record 6085592;
+      LineCurrStartWordTmp@1004 : ARRAY [100] OF TEMPORARY Record 6085592;
+      LineCurrEndWordTmp@1003 : ARRAY [100] OF TEMPORARY Record 6085592;
+      TempDocLine@1013 : TEMPORARY Record 6085596;
+      CaptureMgt@1001 : Codeunit 6085576;
+      DocPage@1160040000 : Record 6085591;
+
+    LOCAL PROCEDURE HSBC@3(VAR Document@1000 : Record 6085590);
+    BEGIN
+      HSBCDetails(Document);
+      HSBCTotals(Document);
+    END;
+
+    LOCAL PROCEDURE HSBCDetails@1000000000(VAR Document@1000000000 : Record 6085590);
+    VAR
+      Value@1001 : Record 6085593;
+      DecTransAmountLCY@1002 : Decimal;
+      PrevPageNo@1160040001 : Integer;
+      NextLineNo@1000 : Integer;
+      CardName@1160040011 : Text[1024];
+    BEGIN
+      IF TempDocLine.FINDSET THEN
+        REPEAT
+          CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+            LineTypeField,'DETAIL',TRUE,FALSE);
+
+          IF TempDocLine."Page No." <> PrevPageNo THEN BEGIN
+            IF GetStartAndEndCaption(CardIDStartWordTmp,CardIDEndWordTmp,CardIDField,Document."No.",TempDocLine."Page No.") THEN
+              IF CaptureValue(TempDocLine,CardNameField.Code,
+                 CardIDStartWordTmp[1].Top - DpiFactor(180),CardIDStartWordTmp[1].Left - DpiFactor(1450),
+                 CardIDStartWordTmp[1].Top - DpiFactor(120),CardIDStartWordTmp[1].Left - DpiFactor(800)) <> ''
+              THEN
+                CardName := CaptureMgt.GetText(Document,CardNameField.Type,CardNameField.Code,TempDocLine."Line No.");
+
+            GetStartAndEndCaption(LineCurrStartWordTmp,LineCurrEndWordTmp,TransCurrField,Document."No.",TempDocLine."Page No.");
+            PrevPageNo := TempDocLine."Page No.";
+          END;
+
+          IF CardName <> '' THEN
+            CaptureMgt.UpdateFieldValue(Document."No.",TempDocLine."Page No.",TempDocLine."Line No.",CardNameField,CardName,TRUE,FALSE);
+
+          IF (CardIDStartWordTmp[1].Word <> '') AND (CardIDEndWordTmp[1].Word <> '') THEN
+            CaptureValue(TempDocLine,CardIDField.Code,
+              CardIDStartWordTmp[1].Bottom + DpiFactor(10),CardIDStartWordTmp[1].Left,
+              CardIDEndWordTmp[1].Bottom + DpiFactor(50),CardIDEndWordTmp[1].Right);
+
+          IF LineCurrEndWordTmp[1].Word <> '' THEN
+            CaptureValue(TempDocLine,TransCurrField.Code,
+              LineCurrEndWordTmp[1].Top,LineCurrEndWordTmp[1].Right + DpiFactor(10),
+              LineCurrEndWordTmp[1].Bottom,LineCurrEndWordTmp[1].Right + DpiFactor(100));
+
+          IF CaptureMgt.GetFieldValue(Document,TransDetailsField,TempDocLine."Line No.",Value) THEN
+            IF NOT FormatDecimalCR(
+               CaptureValue(TempDocLine,TransAmountLCYField.Code,
+                 Value.Top,
+                 Value.Left + DpiFactor(1800),
+                 Value.Bottom,
+                 Value.Left + DpiFactor(2560)),DecTransAmountLCY)
+            THEN
+              DecTransAmountLCY := 0;
+
+          IF DecTransAmountLCY <> 0 THEN
+            CaptureMgt.UpdateFieldValue(
+              Document."No.",TempDocLine."Page No.",TempDocLine."Line No.",TransAmountLCYField,FORMAT(DecTransAmountLCY),TRUE,FALSE)
+          ELSE
+            DeleteLine(Document,TempDocLine."Line No.");
+
+        UNTIL TempDocLine.NEXT = 0;
+
+      RenumberLines(Document);
+    END;
+
+    LOCAL PROCEDURE HSBCTotals@5(VAR Document@1000 : Record 6085590);
+    VAR
+      NextLineNo@1002 : Integer;
+      LineCount@1001 : Integer;
+      PrevPageNo@1005 : Integer;
+      CardName@1003 : Text[1024];
+      PrevCardName@1004 : Text[1024];
+    BEGIN
+      IF TempDocLine.FINDSET THEN BEGIN
+        LineCount := TempDocLine.COUNT;
+
+        REPEAT
+          CardName := CaptureMgt.GetValueAsText(Document."No.",TempDocLine."Line No.",CardNameField);
+          IF PrevCardName = '' THEN
+            PrevCardName := CardName;
+
+          IF CardName <> PrevCardName THEN BEGIN
+            NextLineNo := TempDocLine."Line No." + 1;
+
+            MoveDownLines(Document,TempDocLine."Line No.",LineCount);
+            HSBCAddLine(Document,TempDocLine,PrevPageNo,TempDocLine."Line No." - 1,TempDocLine."Line No.");
+            LineCount += 1;
+
+            TempDocLine.DELETEALL;
+            Document.BuildTempLinesTable(TempDocLine);
+            TempDocLine.GET(Document."No.",NextLineNo);
+
+            PrevCardName := CardName;
+          END;
+
+          PrevPageNo := TempDocLine."Page No.";
+        UNTIL TempDocLine.NEXT = 0;
+
+        HSBCAddLine(Document,TempDocLine,TempDocLine."Page No.",TempDocLine."Line No.",TempDocLine."Line No." + 1);
+      END;
+    END;
+
+    LOCAL PROCEDURE Rabobank@2(VAR Document@1001 : Record 6085590);
+    BEGIN
+      RabobankDetails(Document);
+      RabobankTotals(Document);
+    END;
+
+    LOCAL PROCEDURE RabobankDetails@1(VAR Document@1001 : Record 6085590);
+    VAR
+      GLSetup@1160040008 : Record 98;
+      Value@1000 : Record 6085593;
+      TransAmountLCY@1160040018 : Decimal;
+      TransAmount@1003 : Decimal;
+      TransAmountTxt@1004 : Text[30];
+      PrevPageNo@1160040001 : Integer;
+      LastIntPos@1002 : Integer;
+      CardID@1160040004 : Text[1024];
+      CardName@1160040000 : Text[1024];
+      TransCurrency@1160040013 : Text[30];
+      CurrExchRate@1005 : Decimal;
+    BEGIN
+      IF TempDocLine.FINDSET THEN
+        REPEAT
+          CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+            LineTypeField,'DETAIL',TRUE,FALSE);
+
+          IF TempDocLine."Page No." <> PrevPageNo THEN
+            GetStartAndEndCaption(CardIDStartWordTmp,CardIDEndWordTmp,CardIDField,Document."No.",TempDocLine."Page No.");
+          CaptureValue(TempDocLine,CardIDField.Code,
+            CardIDStartWordTmp[1].Top,
+            CardIDEndWordTmp[1].Right + DpiFactor(50),
+            CardIDEndWordTmp[1].Bottom,
+            CardIDEndWordTmp[1].Right + DpiFactor(1000));
+
+          CardID := CaptureMgt.GetText(Document,CardIDField.Type,CardIDField.Code,TempDocLine."Line No.");
+          IF CardID <> '' THEN BEGIN
+            LastIntPos := FindLastInt(CardID);
+            CardName := COPYSTR(CardID,LastIntPos,STRPOS(CardID,'(')-LastIntPos);
+            CardID := DELCHR(COPYSTR(CardID,1,LastIntPos - 1) + ' - ' + CardName,'=',' ,.*');
+          END;
+
+          PrevPageNo := TempDocLine."Page No.";
+
+          CaptureMgt.UpdateFieldValue(Document."No.",TempDocLine."Page No.",TempDocLine."Line No.",CardNameField,CardName,TRUE,FALSE);
+
+          CaptureMgt.UpdateFieldValue(Document."No.",TempDocLine."Page No.",TempDocLine."Line No.",CardIDField,CardID,TRUE,FALSE);
+
+          TransCurrency := CaptureMgt.GetText(Document,TransCurrField.Type,TransCurrField.Code,TempDocLine."Line No.");
+
+          IF TransCurrency = '' THEN BEGIN
+            TransAmountTxt := CaptureMgt.GetText(Document,TransAmountField.Type,TransAmountField.Code,TempDocLine."Line No.");
+
+            IF TransAmountTxt = '' THEN BEGIN
+              TransAmountLCY :=
+                CaptureMgt.GetDecimal(
+                 Document,TransAmountLCYField.Type,TransAmountLCYField.Code,TempDocLine."Line No.");
+
+              IF TransAmountLCY <> 0 THEN
+                CaptureMgt.UpdateFieldValue(Document."No.",TempDocLine."Page No.",TempDocLine."Line No.",
+                  TransAmountField,FORMAT(TransAmountLCY),TRUE,FALSE);
+            END;
+
+            IF DCSetup."Fill-out LCY" THEN BEGIN
+              GLSetup.GET;
+              CaptureMgt.UpdateFieldValue(Document."No.",TempDocLine."Page No.",TempDocLine."Line No.",
+                TransCurrField,GLSetup."LCY Code",TRUE,FALSE);
+            END;
+          END ELSE BEGIN
+            CaptureMgt.GetFieldValue(Document,TransCurrField,TempDocLine."Line No.",Value);
+            CaptureValue(TempDocLine,TransExchRateField.Code,
+              Value.Top + DpiFactor(30),Value.Left,
+              Value.Bottom + DpiFactor(30),Value.Right + DpiFactor(150));
+
+            TransAmountLCY :=
+              CaptureMgt.GetDecimal(
+                Document,TransAmountLCYField.Type,TransAmountLCYField.Code,TempDocLine."Line No.");
+            TransAmount :=
+              CaptureMgt.GetDecimal(
+                Document,TransAmountField.Type,TransAmountField.Code,TempDocLine."Line No.");
+            CurrExchRate :=
+              CaptureMgt.GetDecimal(
+                Document,TransExchRateField.Type,TransExchRateField.Code,TempDocLine."Line No.");
+            IF TransAmountLCY <> 0 THEN BEGIN
+              CaptureMgt.UpdateFieldValue(
+                Document."No.",TempDocLine."Page No.",TempDocLine."Line No.",
+                TransAmountField,FORMAT(TransAmountLCY * CurrExchRate),TRUE,FALSE);
+            END;
+
+          END;
+
+        UNTIL TempDocLine.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE RabobankTotals@1160040000(VAR Document@1001 : Record 6085590);
+    VAR
+      PrevPageNo@1160040004 : Integer;
+      NextLineNo@1160040000 : Integer;
+      LineCount@1160040005 : Integer;
+    BEGIN
+      PrevPageNo := 1;
+      IF TempDocLine.FINDSET THEN BEGIN
+        LineCount := TempDocLine.COUNT;
+
+        REPEAT
+          IF PrevPageNo <> TempDocLine."Page No." THEN BEGIN
+            NextLineNo := TempDocLine."Line No." + 1;
+
+            MoveDownLines(Document,TempDocLine."Line No.",LineCount);
+            RabobankAddTotalLine(Document,TempDocLine,PrevPageNo,NextLineNo,TempDocLine."Line No.");
+            LineCount += 1;
+
+            TempDocLine.DELETEALL;
+            Document.BuildTempLinesTable(TempDocLine);
+            TempDocLine.GET(Document."No.",NextLineNo);
+
+            PrevPageNo := TempDocLine."Page No.";
+          END;
+        UNTIL TempDocLine.NEXT = 0;
+
+        RabobankAddTotalLine(Document,TempDocLine,TempDocLine."Page No.",TempDocLine."Line No.",TempDocLine."Line No." + 1);
+      END;
+    END;
+
+    LOCAL PROCEDURE CaptureValue@1210050000(TempDocLine@1160040000 : TEMPORARY Record 6085596;FieldCode@1210050001 : Code[20];Top@1210050005 : Integer;Left@1210050006 : Integer;Bottom@1210050008 : Integer;Right@1210050007 : Integer) : Text[1024];
+    VAR
+      OffsetField@1210050004 : Record 6085580;
+      Value@1160040007 : Record 6085593;
+      Page@1210050003 : Record 6085591;
+    BEGIN
+      Page.GET(TempDocLine."Document No.",TempDocLine."Page No.");
+
+      OffsetField.GET(TempDocLine."Template No.",OffsetField.Type::Line,FieldCode);
+
+      EXIT(CaptureMgt.CaptureFromPos(Page,OffsetField,TempDocLine."Line No.",TRUE,Top,Left,Bottom,Right,Value));
+    END;
+
+    LOCAL PROCEDURE CaptureValueNoUpdate@1160040014(TempDocLine@1160040000 : TEMPORARY Record 6085596;FieldCode@1210050001 : Code[20];Top@1210050005 : Integer;Left@1210050006 : Integer;Bottom@1210050008 : Integer;Right@1210050007 : Integer) : Text[1024];
+    VAR
+      OffsetField@1210050004 : Record 6085580;
+      Value@1160040007 : Record 6085593;
+      Page@1210050003 : Record 6085591;
+      IsValue@1160040001 : Boolean;
+    BEGIN
+      Page.GET(TempDocLine."Document No.",TempDocLine."Page No.");
+
+      OffsetField.GET(TempDocLine."Template No.",OffsetField.Type::Line,FieldCode);
+
+      IsValue := TRUE;
+      EXIT(
+      CaptureMgt.CaptureFromPos2(
+        Page,OffsetField,
+        OffsetField.Multiline AND IsValue,
+        OffsetField."Auto Update Field Width" OR NOT IsValue,
+        OffsetField."Auto Update Field Height" OR NOT IsValue,
+        IsValue, // Apply Translations
+        Top,Left,Bottom,Right));
+    END;
+
+    LOCAL PROCEDURE GetStartAndEndCaption@1160040001(VAR CaptionStartWord@1160040002 : ARRAY [100] OF TEMPORARY Record 6085592;VAR CaptionEndWord@1160040001 : ARRAY [100] OF TEMPORARY Record 6085592;Field@1160040000 : Record 6085580;DocNo@1160040003 : Code[20];PageNo@1160040006 : Integer) : Boolean;
+    VAR
+      TemplateFieldCaption@1160040005 : Record 6085581;
+      CaptureEngine@1160040004 : Codeunit 6085575;
+    BEGIN
+      CLEAR(CaptionStartWord);
+      CLEAR(CaptionEndWord);
+
+      TemplateFieldCaption.SETRANGE("Template No.",Field."Template No.");
+      TemplateFieldCaption.SETRANGE(Type,Field.Type);
+      TemplateFieldCaption.SETRANGE(Code,Field.Code);
+      IF TemplateFieldCaption.FINDSET THEN
+        REPEAT
+          IF CaptureEngine.FindCaption(DocNo,PageNo,Field,TemplateFieldCaption,CaptionStartWord,CaptionEndWord) THEN
+            EXIT(TRUE);
+        UNTIL (TemplateFieldCaption.NEXT = 0) OR ((CaptionStartWord[1].Word <> '') AND (CaptionEndWord[1].Word <> ''));
+    END;
+
+    LOCAL PROCEDURE DeleteLine@23(Document@1160040000 : Record 6085590;LineNo@1160040001 : Integer);
+    VAR
+      Value@1000 : Record 6085593;
+      Value2@1160040004 : Record 6085593;
+    BEGIN
+      Value.SETCURRENTKEY("Document No.","Is Value",Type,"Line No.",Code);
+      Value.SETRANGE("Document No.",Document."No.");
+      Value.SETRANGE("Is Value",TRUE);
+      Value.SETRANGE(Type,Value.Type::Line);
+      Value.SETRANGE("Line No.",LineNo);
+      Value.DELETEALL;
+    END;
+
+    LOCAL PROCEDURE MoveDownLines@1160040002(Document@1160040000 : Record 6085590;FromLineNo@1160040001 : Integer;ToLineNo@1160040003 : Integer);
+    VAR
+      Value@1000 : Record 6085593;
+      Value2@1160040004 : Record 6085593;
+    BEGIN
+      Value.SETCURRENTKEY("Document No.","Is Value",Type,"Line No.",Code);
+
+      Value.SETRANGE("Document No.",Document."No.");
+      Value.SETRANGE("Is Value",TRUE);
+      Value.SETRANGE(Type,Value.Type::Line);
+      Value.SETRANGE("Line No.",FromLineNo,ToLineNo);
+      Value.ASCENDING(FALSE);
+      IF Value.FINDFIRST THEN
+        REPEAT
+          Value2.GET(Value."Document No.",Value."Is Value",Value.Code,Value."Line No.");
+          Value2."Line No." += 1;
+          IF NOT Value2.INSERT THEN
+            Value2.MODIFY;
+        UNTIL Value.NEXT = 0;
+
+      Value.SETRANGE("Document No.",Document."No.");
+      Value.SETRANGE("Is Value",TRUE);
+      Value.SETRANGE(Type,Value.Type::Line);
+      Value.SETRANGE("Line No.",FromLineNo);
+      Value.DELETEALL;
+    END;
+
+    LOCAL PROCEDURE RenumberLines@4(Document@1160040000 : Record 6085590);
+    VAR
+      Value@1000 : Record 6085593;
+      Value2@1160040004 : Record 6085593;
+      PrevValue@1001 : Record 6085593;
+      Cnt@1002 : Integer;
+    BEGIN
+      Value.SETCURRENTKEY("Document No.","Is Value",Type,"Line No.",Code);
+      Value.SETRANGE("Document No.",Document."No.");
+      Value.SETRANGE("Is Value",TRUE);
+      Value.SETRANGE(Type,Value.Type::Line);
+      IF Value.FINDSET(FALSE,FALSE) THEN
+        REPEAT
+          IF Value."Line No." <> PrevValue."Line No." THEN
+            Cnt := Cnt + 1;
+
+          IF Value."Line No." <> Cnt THEN BEGIN
+            Value2 := Value;
+            Value2."Line No." := Cnt;
+            Value2.INSERT;
+            Value.DELETE;
+          END;
+          PrevValue := Value;
+        UNTIL Value.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE HSBCAddLine@1160040004(Document@1160040002 : Record 6085590;TempDocLine@1160040000 : Record 6085596;PageNo@1160040001 : Integer;FromLineNo@1160040004 : Integer;ToLineNo@1160040003 : Integer);
+    VAR
+      Value@1160040005 : Record 6085593;
+      DecTransAmountLCY@1000 : Decimal;
+    BEGIN
+      CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",PageNo,ToLineNo,LineTypeField,'TOTAL',TRUE,FALSE);
+
+      CaptureMgt.GetFieldValue(Document,CardIDField,FromLineNo,Value);
+
+      CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",PageNo,ToLineNo,CardIDField,Value."Value (Text)",TRUE,FALSE);
+
+      CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",PageNo,ToLineNo,CardNameField,
+        CaptureMgt.GetText(Document,CardNameField.Type,CardNameField.Code,FromLineNo),TRUE,FALSE);
+
+      TempDocLine."Page No." := PageNo;
+      TempDocLine."Line No." := ToLineNo;
+
+      CaptureMgt.GetFieldValue(Document,TransAmountLCYField,FromLineNo,Value);
+      IF NOT FormatDecimalCR(
+         CaptureValue(TempDocLine,
+         TransAmountLCYField.Code,
+         Value.Top + DpiFactor(40),
+         Value.Left - DpiFactor(150),
+         Value.Bottom + DpiFactor(80),
+         Value.Left + DpiFactor(100)),
+         DecTransAmountLCY)
+      THEN
+        DecTransAmountLCY := 0;
+      CaptureMgt.UpdateFieldValue(
+        Document."No.",TempDocLine."Page No.",TempDocLine."Line No.",TransAmountLCYField,
+        FORMAT(DecTransAmountLCY),TRUE,FALSE);
+    END;
+
+    LOCAL PROCEDURE RabobankAddTotalLine@9(Document@1160040002 : Record 6085590;TempDocLine@1160040000 : Record 6085596;PageNo@1160040001 : Integer;FromLineNo@1160040004 : Integer;ToLineNo@1160040003 : Integer);
+    VAR
+      Value@1160040005 : Record 6085593;
+    BEGIN
+      CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",PageNo,ToLineNo,LineTypeField,'TOTAL',TRUE,FALSE);
+
+      CaptureMgt.GetFieldValue(Document,CardIDField,FromLineNo,Value);
+
+      CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",PageNo,ToLineNo,CardIDField,Value."Value (Text)",TRUE,FALSE);
+
+      CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",PageNo,ToLineNo,CardNameField,
+        CaptureMgt.GetText(Document,CardNameField.Type,CardNameField.Code,FromLineNo),TRUE,FALSE);
+
+      TempDocLine."Page No." := PageNo;
+      TempDocLine."Line No." := ToLineNo;
+
+      GetStartAndEndCaption(CardIDStartWordTmp,CardIDEndWordTmp,CardIDField,Document."No.",TempDocLine."Page No.");
+      CaptureValue(TempDocLine,TransAmountLCYField.Code,
+        CardIDStartWordTmp[1].Top - DpiFactor(60),
+        CardIDEndWordTmp[1].Left + DpiFactor(2000),
+        CardIDEndWordTmp[1].Bottom - DpiFactor(60),
+        CardIDEndWordTmp[1].Left + DpiFactor(2200));
+    END;
+
+    LOCAL PROCEDURE FindLastInt@1160040003(MyText@1160040000 : Text[1024]) : Integer;
+    VAR
+      i@1160040001 : Integer;
+      TempInt@1160040002 : Integer;
+      Tempchar@1160040003 : Char;
+    BEGIN
+      FOR i := 1 TO STRLEN(MyText) DO BEGIN
+        Tempchar := MyText[i];
+        IF NOT (Tempchar IN [' ',',','.','*']) THEN
+          IF NOT EVALUATE(TempInt,FORMAT(Tempchar)) THEN
+            EXIT(i);
+      END;
+    END;
+
+    LOCAL PROCEDURE FormatDecimalCR@12(TxtValue@1000 : Text[1024];VAR DecValue@1001 : Decimal) : Boolean;
+    BEGIN
+      TxtValue := DELCHR(TxtValue,'=',' ,.');
+      IF STRPOS(UPPERCASE(TxtValue),'CR') > 0 THEN BEGIN
+        TxtValue := DELCHR(TxtValue,'=','crCR');
+        IF NOT EVALUATE(DecValue,'-' + TxtValue) THEN
+          EXIT(FALSE);
+      END ELSE
+        IF TxtValue <> '' THEN BEGIN
+          IF NOT EVALUATE(DecValue,TxtValue) THEN
+            EXIT(FALSE);
+        END ELSE
+          DecValue := 0;
+
+      IF DecValue <> 0 THEN
+        DecValue := DecValue / 100;
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE FormatDecimal@6(txtValue@1000 : Text[1024];VAR DecValue@1001 : Decimal) : Boolean;
+    BEGIN
+      DecValue := 0;
+      txtValue := DELCHR(txtValue,'=',' ,.');
+      IF NOT EVALUATE(DecValue,txtValue) THEN
+        EXIT(FALSE);
+
+      IF DecValue <> 0 THEN
+        DecValue := DecValue / 100;
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE Chase@1160040005(VAR Document@1160040000 : Record 6085590);
+    BEGIN
+      ChaseDetails(Document);
+    END;
+
+    PROCEDURE ChaseDetails@1160040006(VAR Document@1160040000 : Record 6085590);
+    VAR
+      Value@1160040005 : Record 6085593;
+      DecTransAmountLCY@1160040004 : Decimal;
+      PrevPageNo@1160040003 : Integer;
+      NextLineNo@1160040002 : Integer;
+      CardName@1160040001 : Text[1024];
+      Details@1000 : Text[1024];
+      Pos@1001 : Integer;
+      CardTotal@1002 : Decimal;
+      PrevLine@1003 : Text[1024];
+    BEGIN
+      IF TempDocLine.FINDSET THEN
+        REPEAT
+          CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+            LineTypeField,'DETAIL',TRUE,FALSE);
+
+          DecTransAmountLCY := 0;
+          IF CaptureMgt.GetFieldValue(Document,TransAmountLCYField,TempDocLine."Line No.",Value) THEN
+            IF NOT FormatDecimal(Value."Value (Text)",DecTransAmountLCY) THEN
+              DecTransAmountLCY := 0
+            ELSE // Recognize the detailtext to fix the * issue
+              CaptureValue(TempDocLine,
+                TransDetailsField.Code,
+                Value.Top - DpiFactor(10),
+                Value.Right - DpiFactor(1250),
+                Value.Bottom + DpiFactor(10),
+                Value.Right - DpiFactor(400));
+
+          IF DecTransAmountLCY <> 0 THEN BEGIN
+            CaptureMgt.UpdateFieldValue(Document."No.",
+              TempDocLine."Page No.",
+              TempDocLine."Line No.",
+              TransAmountLCYField,
+              FORMAT(DecTransAmountLCY),
+              TRUE,
+              FALSE);
+            CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",
+              TempDocLine."Page No.",
+              TempDocLine."Line No.",
+              TransDateField,
+              CaptureValue(TempDocLine,
+                TransDateField.Code,
+                Value.Top,
+                Value.Left * 0 + DpiFactor(360),
+                Value.Bottom,
+                Value.Right * 0 + DpiFactor(450)),
+              TRUE,
+              FALSE);
+          END ELSE BEGIN
+              // If we don't have an Amount the the line might be a summary with the Card information
+            Details := CaptureMgt.GetValueAsText(Document."No.",TempDocLine."Line No.",TransDetailsField);
+              // Example that shows the expected format of the line
+              // TRANSACTIONS THIS CYCLE (CARD 0362) -$7,899.87
+            IF STRPOS(Details,'TRANSACTIONS THIS CYCLE (CARD') <> 0 THEN BEGIN
+              // Take Card number as Cardname
+              CardName := COPYSTR(Details,STRLEN('TRANSACTIONS THIS CYCLE (CARD') + 1);
+              Pos := STRPOS(CardName,')');
+              Details := COPYSTR(CardName,Pos + 1);
+              CardName := COPYSTR(CardName,1,Pos-1);
+              CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",
+                TempDocLine."Page No.",
+                TempDocLine."Line No.",
+                CardNameField,
+                PrevLine,
+                TRUE,
+                FALSE);
+                // Set the CardId to be the same as the Cardname
+              CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",
+                TempDocLine."Page No.",
+                TempDocLine."Line No.",
+                CardIDField,
+                CardName,
+                TRUE,
+                FALSE);
+              CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",
+                TempDocLine."Page No.",
+                TempDocLine."Line No.",
+                TransDateField,
+                '',
+                TRUE,
+                FALSE);
+              ChaseUpdateCard(Document,TempDocLine,TempDocLine."Page No.",TempDocLine."Line No.",PrevLine,CardName);
+                // add the amount to the line so we can use it for the total
+                // will be removed later when we make the total line
+              IF STRPOS(Details,'$') <> 0 THEN
+                IF FormatDecimal(DELCHR(Details,'=','$'),CardTotal) THEN
+                  CaptureMgt.UpdateFieldValue(Document."No.",
+                    TempDocLine."Page No.",
+                    TempDocLine."Line No.",
+                    TransAmountLCYField,
+                    FORMAT(CardTotal),
+                    TRUE,
+                    FALSE);
+              CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",
+                TempDocLine."Page No.",
+                TempDocLine."Line No.",
+                LineTypeField,
+                'TOTAL',TRUE,FALSE);
+            END ELSE BEGIN
+              // No Amount and no summary so the line is probably not a transaction but just a text line.
+              CardName := '';
+              PrevLine := CaptureMgt.GetValueAsText(Document."No.",TempDocLine."Line No.",TransDetailsField);
+              DeleteLine(Document,TempDocLine."Line No.");
+            END;
+          END;
+
+        UNTIL TempDocLine.NEXT = 0;
+
+      RenumberLines(Document);
+    END;
+
+    LOCAL PROCEDURE ChaseAddLine@1160040009(Document@1160040002 : Record 6085590;TempDocLine@1160040000 : Record 6085596;PageNo@1160040001 : Integer;FromLineNo@1160040004 : Integer;ToLineNo@1160040003 : Integer);
+    VAR
+      Value@1160040005 : Record 6085593;
+    BEGIN
+      CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",PageNo,ToLineNo,LineTypeField,'TOTAL',TRUE,FALSE);
+
+      CaptureMgt.GetFieldValue(Document,CardIDField,FromLineNo,Value);
+
+      CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",PageNo,ToLineNo,CardIDField,Value."Value (Text)",TRUE,FALSE);
+
+      CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",
+        PageNo,
+        ToLineNo,
+        CardNameField,
+        CaptureMgt.GetText(Document,CardNameField.Type,CardNameField.Code,FromLineNo),
+        TRUE,
+        FALSE);
+      CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",
+        PageNo,
+        ToLineNo,
+        CardIDField,
+        CaptureMgt.GetText(Document,CardNameField.Type,CardIDField.Code,FromLineNo),
+        TRUE,
+        FALSE);
+
+      TempDocLine."Page No." := PageNo;
+      TempDocLine."Line No." := ToLineNo;
+
+      CaptureMgt.GetFieldValue(Document,TransAmountLCYField,FromLineNo,Value);
+      CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",
+        PageNo,
+        ToLineNo,
+        TransAmountLCYField,
+        Value."Value (Text)",
+        TRUE,
+        FALSE);
+    END;
+
+    LOCAL PROCEDURE ChaseUpdateCard@7(Document@1004 : Record 6085590;TempDocLine@1003 : Record 6085596;PageNo@1002 : Integer;FromLineNo@1001 : Integer;CardName@1000 : Text[1024];CardId@1007 : Text[1024]);
+    VAR
+      Value@1005 : Record 6085593;
+      CardValue@1006 : Record 6085593;
+    BEGIN
+      Value.SETRANGE("Document No.",Document."No.");
+      Value.SETRANGE(Code,'LINETYPE');
+      Value.SETRANGE("Value (Text)",'DETAIL');
+      IF Value.FINDFIRST THEN
+        REPEAT
+          IF (Value."Page No." < PageNo) OR ((Value."Page No." = PageNo) AND (Value."Line No." < FromLineNo)) THEN BEGIN
+            IF NOT CaptureMgt.GetFieldValue(Document,CardNameField,Value."Line No.",CardValue) THEN
+              CardValue."Value (Text)" := '';
+            IF CardValue."Value (Text)" = '' THEN BEGIN
+              CaptureMgt.UpdateFieldValue(Document."No.",
+                Value."Page No.",
+                Value."Line No.",
+                CardNameField,
+                CardName,
+                TRUE,
+                FALSE);
+              CaptureMgt.UpdateFieldValue(Document."No.",
+                Value."Page No.",
+                Value."Line No.",
+                CardIDField,
+                CardId,
+                TRUE,
+                FALSE);
+            END;
+          END;
+        UNTIL Value.NEXT = 0;
+    END;
+
+    PROCEDURE DpiFactor@1160040007(Pixels@1160040000 : Integer) : Integer;
+    VAR
+      CaptureEngine@1160040001 : Codeunit 6085575;
+    BEGIN
+      EXIT(ROUND(Pixels * CaptureEngine.GetDPIFactor(300,DocPage."TIFF Image Resolution"),1));
+    END;
+
+    LOCAL PROCEDURE LLOYDS@1160040011(VAR Document@1000 : Record 6085590);
+    BEGIN
+      LLOYDSDetails(Document);
+    END;
+
+    LOCAL PROCEDURE LLOYDSDetails@1160040010(VAR Document@1000000000 : Record 6085590);
+    VAR
+      Value@1001 : Record 6085593;
+      CardIDValue@1160040006 : Record 6085593;
+      CardNameValue@1160040001 : Record 6085593;
+      DateText@1000 : Text[50];
+      DateValue@1160040000 : Date;
+      AmtLCY@1160040002 : Decimal;
+      CardName@1160040004 : Text[1024];
+      CardNo@1160040003 : Code[20];
+      LineDetailText@1160040005 : Text[1024];
+      LineValid@1160040007 : Boolean;
+    BEGIN
+      IF TempDocLine.FINDSET THEN
+        REPEAT
+          CLEAR(AmtLCY);
+          CLEAR(DateValue);
+          CLEAR(LineDetailText);
+          CLEAR(Value);
+          CLEAR(LineValid);
+
+          //CARD HANDLING
+          CaptureMgt.GetFieldValue(Document,TransDetailsField,TempDocLine."Line No.",Value);
+          LineDetailText := Value."Value (Text)";
+          IF Value."Value (Text)" = 'Description' THEN BEGIN
+            CardNo :=
+              CaptureValue(
+               TempDocLine,
+               CardIDField.Code,
+               Value.Top - DpiFactor(100),
+               Value.Left - DpiFactor(70),
+               Value.Top - DpiFactor(50),
+               Value.Left - DpiFactor(50));
+            CaptureMgt.GetFieldValue(Document,CardIDField,TempDocLine."Line No.",CardIDValue);
+
+            CardName :=
+              CaptureValue(
+               TempDocLine,
+               CardNameField.Code,
+               Value.Top - DpiFactor(150),
+               Value.Left - DpiFactor(350),
+               Value.Top - DpiFactor(100),
+               Value.Left - DpiFactor(50));
+            CaptureMgt.GetFieldValue(Document,CardNameField,TempDocLine."Line No.",CardNameValue);
+          END;
+
+          IF CardNo <> '' THEN BEGIN
+            DateText := CaptureValue(
+              TempDocLine,
+              TransDateField.Code,
+              Value.Top,
+              Value.Left - DpiFactor(700),
+              Value.Bottom,Value.Left - DpiFactor(670));
+
+            DateText := DateText + '/' + FORMAT(DATE2DMY(TODAY,3));
+            CaptureMgt.ParseDate(TransDateField,DateText,DateValue);
+            IF DateValue > TODAY THEN
+              DateValue := CALCDATE('<-1Y>',DateValue);
+
+            CaptureMgt.GetFieldValue(Document,TransAmountLCYField,TempDocLine."Line No.",Value);
+            AmtLCY := Value."Value (Decimal)";
+
+            IF (CardNo <> '') AND (AmtLCY <> 0) AND (DateValue = 0D) THEN
+              //IT MIGHT BE A SUMMARY LINE - READ "Total"
+              LineDetailText :=
+                CaptureValueNoUpdate(
+                  TempDocLine,
+                  TransAmountLCYField.Code,
+                  Value.Top,
+                  Value.Left - DpiFactor(400),
+                  Value.Bottom,
+                  Value.Left - DpiFactor(300));
+
+            LineValid := ((DateValue <> 0D) AND (LineDetailText <> '')) OR (LineDetailText = 'Total');
+
+            IF LineValid THEN BEGIN
+              IF LineDetailText = 'Total' THEN
+                CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+                  LineTypeField,'TOTAL',TRUE,FALSE)
+              ELSE
+                CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+                  LineTypeField,'DETAIL',TRUE,FALSE);
+
+              CardIDValue."Line No." := TempDocLine."Line No.";
+              CardIDValue.INSERT;
+
+              CardNameValue."Line No." := TempDocLine."Line No.";
+              CardNameValue.INSERT;
+
+              CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+                TransDateField,FORMAT(DateValue),TRUE,FALSE);
+              CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+                TransAmountField,FORMAT(AmtLCY),TRUE,FALSE);
+              CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+                TransExchRateField,FORMAT('1.0000'),TRUE,FALSE);
+            END;
+
+            // CREDIT LINE
+            CaptureMgt.GetFieldValue(Document,TransAmountLCYField,TempDocLine."Line No.",Value);
+            IF (AmtLCY = 0) AND (LineDetailText <> 'Total') THEN
+              IF FormatDecimalCR(
+                 CaptureValueNoUpdate(TempDocLine,TransAmountLCYField.Code,
+                   Value.Top,
+                   Value.Left,
+                   Value.Bottom,
+                   Value.Left + DpiFactor(200)),AmtLCY)
+              THEN BEGIN
+                CaptureMgt.UpdateFieldValue(
+                  Document."No.",TempDocLine."Page No.",TempDocLine."Line No.",TransAmountLCYField,FORMAT(AmtLCY),TRUE,FALSE);
+                CaptureMgt.UpdateFieldValue(
+                  Document."No.",TempDocLine."Page No.",TempDocLine."Line No.",TransAmountField,FORMAT(AmtLCY),TRUE,FALSE);
+                CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+                  TransExchRateField,FORMAT('1.0000'),TRUE,FALSE);
+              END ELSE
+                LineValid := FALSE;
+          END;
+
+          IF NOT LineValid THEN
+            DeleteLine(Document,TempDocLine."Line No.");
+
+        UNTIL TempDocLine.NEXT = 0;
+
+      RenumberLines(Document);
+    END;
+
+    PROCEDURE ATBFinance@1160040012(VAR Document@1160040000 : Record 6085590);
+    VAR
+      DateText@1160040002 : Text[50];
+      DateValue@1160040001 : Date;
+      Value@1160040003 : Record 6085593;
+      DescriptionValue@1160040008 : Record 6085593;
+      LineValid@1160040004 : Boolean;
+      CardName@1160040006 : Text[1024];
+      CardNo@1160040005 : Code[20];
+      LineDetailText@1160040007 : Text[1024];
+      Pos@1160040009 : Integer;
+      AmtLCY@1160040010 : Decimal;
+      AmtLCYTxt@1160040011 : Text[50];
+    BEGIN
+      IF TempDocLine.FINDSET THEN
+        REPEAT
+          CLEAR(DescriptionValue);
+          CLEAR(AmtLCY);
+
+          //READING CARD HANDLING
+          CaptureMgt.GetFieldValue(Document,TransDetailsField,TempDocLine."Line No.",DescriptionValue);
+          IF DescriptionValue."Value (Text)" = 'Description' THEN BEGIN
+            CLEAR(CardName);
+            CLEAR(CardNo);
+            CLEAR(Value);
+
+            CaptureMgt.GetFieldValue(Document,TransDateField,TempDocLine."Line No.",Value);
+
+            CardName :=
+              CaptureValue(
+               TempDocLine,
+               CardIDField.Code,
+               DescriptionValue.Top - DpiFactor(50),
+               Value.Left,
+               DescriptionValue.Top,
+               DescriptionValue.Right + DpiFactor(50));
+
+            Pos := STRPOS(CardName,'xxxx xxxx');
+            IF Pos > 0 THEN BEGIN
+              CardNo := COPYSTR(CardName,Pos - 5);
+              CardName := COPYSTR(CardName,1,Pos - 6);
+            END;
+          END;
+
+          IF CardNo <> '' THEN BEGIN
+            CLEAR(Value);
+            CaptureMgt.GetFieldValue(Document,TransAmountLCYField,TempDocLine."Line No.",Value);
+            AmtLCYTxt := DELCHR(FORMAT(Value."Value (Decimal)"),'=',',.');
+            IF EVALUATE(AmtLCY,AmtLCYTxt) THEN
+              AmtLCY := AmtLCY / 100
+            ELSE
+              AmtLCY := Value."Value (Decimal)";
+
+            CLEAR(Value);
+            CLEAR(DateText);
+            CaptureMgt.GetFieldValue(Document,TransDateField,TempDocLine."Line No.",Value);
+            DateText := Value."Value (Text)" + ' ' + FORMAT(DATE2DMY(TODAY,3));
+            CaptureMgt.ParseDate(TransDateField,DateText,DateValue);
+            IF DateValue > TODAY THEN
+              DateValue := CALCDATE('<-1Y>',DateValue);
+
+            IF COPYSTR(DateText,1,9) = 'Total for' THEN BEGIN
+              CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+                LineTypeField,'TOTAL',TRUE,FALSE);
+              LineValid := AmtLCY <> 0;
+            END ELSE BEGIN
+              CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+                LineTypeField,'DETAIL',TRUE,FALSE);
+              LineValid := (DateValue <> 0D) AND (AmtLCY <> 0);
+            END;
+
+            CaptureMgt.UpdateFieldValue(
+              Document."No.",TempDocLine."Page No.",TempDocLine."Line No.",CardIDField,CardNo,TRUE,FALSE);
+            CaptureMgt.UpdateFieldValue(
+              Document."No.",TempDocLine."Page No.",TempDocLine."Line No.",CardNameField,CardName,TRUE,FALSE);
+            CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+              TransDateField,FORMAT(DateValue),TRUE,FALSE);
+            CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+              TransAmountLCYField,FORMAT(AmtLCY),TRUE,FALSE);
+            CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+              TransAmountField,FORMAT(AmtLCY),TRUE,FALSE);
+          END;
+
+          IF NOT LineValid THEN
+            DeleteLine(Document,TempDocLine."Line No.");
+
+        UNTIL TempDocLine.NEXT = 0;
+
+      RenumberLines(Document);
+    END;
+
+    PROCEDURE BNPParibas@1160040008(VAR Document@1160040000 : Record 6085590);
+    VAR
+      Value@1160040016 : Record 6085593;
+      CardValue@1160040008 : Record 6085593;
+      Currency@1160040003 : Record 4;
+      DateText@1160040002 : Text[50];
+      DateValue@1160040001 : Date;
+      LineValid@1160040004 : Boolean;
+      CardName@1160040006 : Text[1024];
+      CardNo@1160040005 : Code[20];
+      LineDetailText@1160040007 : Text[1024];
+      Pos@1160040009 : Integer;
+      AmtLCY@1160040010 : Decimal;
+      Amt@1160040019 : Decimal;
+      AmtSign@1160040020 : Integer;
+      CardKeyWord@1160040012 : Text[30];
+      LineIsTotal@1160040013 : Boolean;
+      ExchRate@1160040011 : Decimal;
+      CurrCode@1160040014 : Code[3];
+      CurrKeyWord@1160040015 : Text[30];
+      ExchRateTxt@1160040018 : Text[30];
+      CurrCodeTxt@1160040017 : Text[1024];
+    BEGIN
+      IF TempDocLine.FINDSET THEN
+        REPEAT
+          //READING CARD DETAILS
+          CLEAR(CardValue);
+          CaptureMgt.GetFieldValue(Document,TransDetailsField,TempDocLine."Line No.",CardValue);
+          CardKeyWord := 'Num. carte ';
+          IF STRPOS(CardValue."Value (Text)",CardKeyWord) > 0 THEN BEGIN
+            CardName := COPYSTR(CardValue."Value (Text)",STRLEN(CardKeyWord) + 1,STRLEN(CardValue."Value (Text)"));
+            Pos := STRPOS(CardName,' ');
+            CardNo := COPYSTR(CardName,Pos + 1,MAXSTRLEN(CardNo));
+            CardName := COPYSTR(CardName,1,Pos);
+          END;
+
+          IF CardNo <> '' THEN BEGIN
+            //AMOUNT LCY
+            CLEAR(Value);
+            CaptureMgt.GetFieldValue(Document,TransAmountLCYField,TempDocLine."Line No.",Value);
+            AmtLCY := -Value."Value (Decimal)";
+            Amt := AmtLCY;
+
+            //ADD YEAR TO THE DATE
+            CLEAR(Value);
+            CLEAR(DateValue);
+            CLEAR(LineIsTotal);
+            CaptureMgt.GetFieldValue(Document,TransDateTxtField,TempDocLine."Line No.",Value);
+            DateText := Value."Value (Text)";
+            IF DateText <> '' THEN BEGIN
+              IF DateText = 'Sous-total' THEN
+                LineIsTotal := TRUE
+              ELSE BEGIN
+                DateText := DateText + '/' + FORMAT(DATE2DMY(TODAY,3));
+
+                CaptureMgt.ParseDate(TransDateTxtField,DateText,DateValue);
+                IF DateValue > TODAY THEN
+                  DateValue := CALCDATE('<-1Y>',DateValue);
+              END;
+            END;
+
+            CurrKeyWord := '1 EUR=';
+            CLEAR(Value);
+            CLEAR(ExchRate);
+            CLEAR(CurrCode);
+            CaptureMgt.GetFieldValue(Document,TransCurrField,TempDocLine."Line No.",Value);
+            CurrCodeTxt := Value."Value (Text)";
+            IF CurrCodeTxt <> '' THEN
+              IF STRPOS(CurrCodeTxt,CurrKeyWord) > 0 THEN BEGIN
+                //CURRENCY EXCHANGE LINE - IS ONE LINE BELOW THE AMOUNT LINE
+                //1 EUR=1.150611 CHF
+                CurrCode := COPYSTR(CurrCodeTxt,STRLEN(CurrCodeTxt) - 2,STRLEN(CurrCodeTxt));
+                ExchRateTxt := COPYSTR(CurrCodeTxt,
+                  STRPOS(CurrCodeTxt,CurrKeyWord) + STRLEN(CurrKeyWord),
+                  STRPOS(CurrCodeTxt,CurrCode) - STRPOS(CurrCodeTxt,CurrKeyWord) - STRLEN(CurrKeyWord));
+                EVALUATE(ExchRate,ExchRateTxt);
+
+                //SET EXCHAGE RATE TO THE PREVIOUS LINE
+                CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No." - 1,
+                  TransExchRateField,FORMAT(ExchRate),TRUE,FALSE);
+                CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No." - 1,
+                  TransCurrField,FORMAT(CurrCode),TRUE,FALSE);
+              END;
+
+            LineValid := LineIsTotal OR ((AmtLCY <> 0) AND (DateValue <> 0D));
+
+            IF LineValid THEN BEGIN
+              IF (CurrCodeTxt <> '') THEN
+                EVALUATE(Amt,COPYSTR(CurrCodeTxt,1,STRLEN(CurrCodeTxt) - STRPOS(CurrCodeTxt,'-')));
+
+              //UPDATE LINES WITH THE CALCULATED VALUES
+              IF LineIsTotal THEN
+                CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+                  LineTypeField,'TOTAL',TRUE,FALSE)
+              ELSE
+                IF LineValid THEN
+                  CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+                    LineTypeField,'DETAIL',TRUE,FALSE);
+
+              CaptureMgt.UpdateFieldValue(
+                Document."No.",TempDocLine."Page No.",TempDocLine."Line No.",CardIDField,CardNo,TRUE,FALSE);
+              CaptureMgt.UpdateFieldValue(
+                Document."No.",TempDocLine."Page No.",TempDocLine."Line No.",CardNameField,CardName,TRUE,FALSE);
+              CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+                TransDateTxtField,FORMAT(DateValue),TRUE,FALSE);
+              CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+                TransAmountField,FORMAT(Amt),TRUE,FALSE);
+              CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+                TransAmountLCYField,FORMAT(AmtLCY),TRUE,FALSE);
+              IF CurrCode <> '' THEN
+                CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+                  TransCurrField,FORMAT(CurrCode),TRUE,FALSE);
+               CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+                 TransExchRateField,FORMAT(1),TRUE,FALSE);
+            END;
+          END;
+
+          IF NOT LineValid THEN
+            DeleteLine(Document,TempDocLine."Line No.");
+
+        UNTIL TempDocLine.NEXT = 0;
+
+      RenumberLines(Document);
+    END;
+
+    PROCEDURE WellsFargo@1160040015(VAR Document@1160040000 : Record 6085590);
+    VAR
+      Value@1160040001 : Record 6085593;
+      TotalAmtString@1160040015 : Text[250];
+      AmtString@1160040014 : Text[250];
+      CardText@1160040010 : Text[250];
+      CardName@1160040009 : Text[1024];
+      DateText@1160040005 : Text[250];
+      Amt@1160040002 : Decimal;
+      AmtCredit@1160040016 : Decimal;
+      DateValue@1160040004 : Date;
+      Pos@1160040006 : Integer;
+      TotalAmount@1160040007 : Decimal;
+      CardNo@1160040008 : Code[20];
+      LineIsTotal@1160040003 : Boolean;
+      TempDocLine2@1160040011 : TEMPORARY Record 6085596;
+      LastLineWithCardNo@1160040012 : Integer;
+      LineValid@1160040013 : Boolean;
+    BEGIN
+      TempDocLine2.DELETEALL;
+      IF TempDocLine.FINDSET THEN
+        REPEAT
+          TempDocLine2.TRANSFERFIELDS(TempDocLine);
+          TempDocLine2.INSERT;
+        UNTIL TempDocLine.NEXT = 0;
+
+      IF TempDocLine.FINDSET THEN
+        REPEAT
+          CLEAR(LineIsTotal);
+          CLEAR(Value);
+          CLEAR(DateValue);
+          CLEAR(CardNo);
+          CLEAR(CardName);
+
+          CaptureMgt.GetFieldValue(Document,TransDetailsField,TempDocLine."Line No.",Value);
+
+          IF COPYSTR(Value."Value (Text)",1,5) = 'TOTAL' THEN BEGIN
+            Pos := STRPOS(Value."Value (Text)",'$');
+            IF Pos <> 0 THEN BEGIN
+              LineIsTotal := TRUE;
+              TotalAmtString := COPYSTR(Value."Value (Text)",Pos + 1);
+              IF TotalAmtString <> '' THEN BEGIN
+                //NOT ALWAYS RECOGNIZED PROPERLY, SPECIFC PARSING NEEDED
+                TotalAmtString := DELCHR(TotalAmtString,'=',',. '); //NOT ALWAYS RECOGNIZED PROPERLY
+                IF STRPOS(TotalAmtString,'-') <> 0 THEN BEGIN
+                  TotalAmtString := DELCHR(TotalAmtString,'=','-');
+                  TotalAmtString := '-' + TotalAmtString;
+                END;
+
+                EVALUATE(TotalAmount,TotalAmtString);
+                TotalAmount := TotalAmount / 100; //DECIMALS WERE REMOVED PREVIOUSLY
+              END;
+
+              //GET CARD INFORMATION FROM NEXT LINE
+              CardText :=
+                CaptureValue(
+                 TempDocLine,
+                 TransDetailsField.Code,
+                 Value.Top + DpiFactor(50),
+                 Value.Left - 50,
+                 Value.Bottom + DpiFactor(50),
+                 Value.Right + DpiFactor(400));
+
+              IF CardText <> '' THEN BEGIN
+                IF STRPOS(CardText,'/') <> 0 THEN
+                  CardName := COPYSTR(CardText,1,STRPOS(CardText,'/') - 1);
+                CardNo := COPYSTR(CardText,STRLEN(CardText) - 3);
+              END;
+            END;
+          END;
+
+          //Amount
+          CLEAR(Amt);
+          CaptureMgt.GetFieldValue(Document,TransAmountLCYField,TempDocLine."Line No.",Value);
+          IF Value."Value (Decimal)" <> 0 THEN BEGIN
+            Amt := Value."Value (Decimal)";
+            IF Value.Left < 2100 THEN
+              Amt := -Amt;
+          END;
+
+          //ADD YEAR TO THE DATE
+          CaptureMgt.GetFieldValue(Document,TransDateTxtField,TempDocLine."Line No.",Value);
+          IF Value."Value (Text)" <> '' THEN BEGIN
+            DateText := COPYSTR(Value."Value (Text)",1,5); //THE TEMPLATE IS IRREGULAR AND IT GRABS BOTH DATES IN THE SAME COLUMN
+            DateValue := ParseDateAndAddCurrYear(DateText);
+          END;
+
+          LineValid := LineIsTotal OR ((Amt <> 0) AND (DateValue <> 0D));
+
+          TempDocLine2.GET(TempDocLine."Document No.",TempDocLine."Line No."); //USED AS A MARK FOR LATER
+          TempDocLine2.OK := LineValid;
+          TempDocLine2.MODIFY;
+
+          IF LineValid THEN BEGIN
+            IF LineIsTotal THEN
+              CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+                LineTypeField,'TOTAL',TRUE,FALSE)
+            ELSE
+              CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+                LineTypeField,'DETAIL',TRUE,FALSE);
+
+            IF CardNo <> '' THEN BEGIN
+              TempDocLine2.SETRANGE("Document No.",TempDocLine."Document No.");
+              TempDocLine2.SETRANGE("Line No.",LastLineWithCardNo + 1,TempDocLine."Line No.");
+              TempDocLine2.SETRANGE(OK,TRUE); //UPDATING ALL THE LINES WITH VALUES WILL REOPEN
+              IF TempDocLine2.FINDSET THEN
+                REPEAT
+                  CaptureMgt.UpdateFieldValue(
+                    Document."No.",TempDocLine2."Page No.",TempDocLine2."Line No.",CardIDField,CardNo,TRUE,FALSE);
+                  CaptureMgt.UpdateFieldValue(
+                    Document."No.",TempDocLine2."Page No.",TempDocLine2."Line No.",CardNameField,CardName,TRUE,FALSE);
+                UNTIL TempDocLine2.NEXT = 0;
+
+              LastLineWithCardNo := TempDocLine."Line No.";
+            END;
+
+            CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+              TransDateField,FORMAT(DateValue),TRUE,FALSE);
+            CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+              TransCurrField,'USD',TRUE,FALSE);
+            CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+              TransExchRateField,FORMAT(1),TRUE,FALSE);
+            CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+              TransDateTxtField,FORMAT(DateValue),TRUE,FALSE); //JUST TO LOOK PRETTY
+            IF LineIsTotal THEN BEGIN
+              CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+                TransAmountLCYField,FORMAT(TotalAmount),TRUE,FALSE);
+              CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+                TransAmountField,FORMAT(TotalAmount),TRUE,FALSE);
+            END;
+
+            IF Amt < 0 THEN BEGIN
+              CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+                TransAmountLCYField,FORMAT(Amt),TRUE,FALSE);
+              CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+                TransAmountField,FORMAT(Amt),TRUE,FALSE);
+            END;
+
+          END ELSE
+            DeleteLine(Document,TempDocLine."Line No.");
+
+        UNTIL TempDocLine.NEXT = 0;
+
+      RenumberLines(Document);
+    END;
+
+    PROCEDURE ChaseUS@1160040013(VAR Document@1160040000 : Record 6085590);
+    VAR
+      Value@1160040005 : Record 6085593;
+      DecTransAmountLCY@1160040004 : Decimal;
+      PrevPageNo@1160040003 : Integer;
+      NextLineNo@1160040002 : Integer;
+      CardName@1160040001 : Text[1024];
+      Details@1000 : Text[1024];
+      CardTotal@1002 : Decimal;
+      PrevLine@1003 : Text[1024];
+      CardText@1160040006 : Text[250];
+      DateText@1160040007 : Text[250];
+      DateValue@1160040008 : Date;
+    BEGIN
+      IF CaptureMgt.GetFieldValue(Document,CardIDHeaderField,0,Value) THEN BEGIN
+        CardText := Value."Value (Text)";
+
+        // CARD NAME IS A HEADER FIELD
+        CardName := CaptureValue(TempDocLine,
+          CardNameField.Code,
+          Value.Top + DpiFactor(189),
+          Value.Left - DpiFactor(1221),
+          Value.Bottom + DpiFactor(175),
+          Value.Right - DpiFactor(1347));
+      END;
+
+      IF TempDocLine.FINDSET THEN
+        REPEAT
+          CLEAR(DateValue);
+
+          CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",
+            TempDocLine."Page No.",
+            TempDocLine."Line No.",
+            CardIDField,
+            CardText,
+            TRUE,
+            FALSE);
+
+          CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",
+            TempDocLine."Page No.",
+            TempDocLine."Line No.",
+            CardNameField,
+            CardName,
+            TRUE,
+            FALSE);
+
+          IF CaptureMgt.GetFieldValue(Document,TransAmountLCYField,TempDocLine."Line No.",Value) THEN BEGIN
+            IF Value."Value (Decimal)" <> 0 THEN BEGIN
+              //GET THE VALUES OF THE DETAILS:
+              CaptureMgt.GetFieldValue(Document,TransDetailsField,TempDocLine."Line No.",Value);
+
+              //READ DATE
+              DateText := CaptureValue(TempDocLine,
+                  TransDateField.Code,
+                  Value.Top,
+                  Value.Left - DpiFactor(350),
+                  Value.Bottom,
+                  Value.Left - DpiFactor(250));
+
+              DateValue := ParseDateAndAddCurrYear(DateText);
+              IF DateValue <> 0D THEN
+                CaptureMgt.UpdateFieldValue(Document."No.",
+                  TempDocLine."Page No.",
+                  TempDocLine."Line No.",
+                  TransDateField,
+                  FORMAT(DateValue),
+                  TRUE,
+                  FALSE);
+            END;
+          END;
+
+          //VALID LINE - HAS AMOUNT AND DATE
+          IF DateValue <> 0D THEN BEGIN
+            CaptureMgt.UpdateFieldValue(TempDocLine."Document No.",TempDocLine."Page No.",TempDocLine."Line No.",
+              LineTypeField,'DETAIL',TRUE,FALSE);
+          END ELSE
+            DeleteLine(Document,TempDocLine."Line No.");
+
+        UNTIL TempDocLine.NEXT  = 0;
+
+      RenumberLines(Document);
+    END;
+
+    PROCEDURE ParseDateAndAddCurrYear@1160040016(DateText@1160040000 : Text[250]) DateValue : Date;
+    BEGIN
+      IF (DateText <> '') AND (STRPOS(DateText,'/') <> 0) THEN BEGIN
+        DateText := DateText + '/' + FORMAT(DATE2DMY(TODAY,3));
+
+        CaptureMgt.ParseDate(TransDateField,DateText,DateValue);
+        IF DateValue > TODAY THEN
+          DateValue := CALCDATE('<-1Y>',DateValue);
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

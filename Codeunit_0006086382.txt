@@ -1,0 +1,128 @@
+OBJECT Codeunit 6086382 Exp. Header - Send to User
+{
+  OBJECT-PROPERTIES
+  {
+    Date=06/13/18;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.06;
+  }
+  PROPERTIES
+  {
+    TableNo=6086339;
+    Permissions=TableData 6086320=rm,
+                TableData 6086338=rm,
+                TableData 6086339=rm;
+    OnRun=BEGIN
+            TESTFIELD(Status,Status::Open);
+            Code(Rec,TRUE);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      SendExpenseWrongStatusErr@1160040002 : TextConst 'ENU=You cannot send a settlement with status ''%1'' to expense user.';
+      SendingToExpUserStatus@1160040001 : TextConst 'ENU=Sending Settlement to the Expense User...';
+      BatchMode@1160040000 : Boolean;
+
+    LOCAL PROCEDURE Code@1160040020(VAR ExpHeader@1160040000 : Record 6086339;Force@1160040004 : Boolean);
+    VAR
+      Expense@1160040005 : Record 6086320;
+      Mileage@1160040006 : Record 6086338;
+      EMOnlineMgt@1160040002 : Codeunit 6086305;
+      Window@1160040003 : Dialog;
+      EmptyGuid@1160040001 : GUID;
+      SendUpdate@1160040007 : Boolean;
+    BEGIN
+      IF (NOT Force) AND (ExpHeader.Status <> ExpHeader.Status::"Pending Expense User") THEN
+        EXIT;
+
+      IF ExpHeader.Status = ExpHeader.Status::"Pending Approval" THEN
+        ERROR(SendExpenseWrongStatusErr,FORMAT(ExpHeader.Status));
+
+      ExpHeader.CheckInboxAndThrowError;
+
+      IF GUIALLOWED AND NOT BatchMode THEN
+        Window.OPEN(SendingToExpUserStatus);
+
+      ExpHeader.SetSkipSendToExpUser(TRUE);
+
+      IF ExpHeader."Exp. Header GUID" = EmptyGuid THEN BEGIN
+        ExpHeader."Exp. Header GUID" := EMOnlineMgt.CreateNewSettlement;
+        ExpHeader.MODIFY;
+      END;
+
+      ExpHeader."Continia Online Version No." := EMOnlineMgt.UpdateSettlement(ExpHeader);
+
+      IF ExpHeader.Status <> ExpHeader.Status::Released THEN BEGIN
+        ExpHeader.VALIDATE(Status,ExpHeader.Status::"Pending Expense User");
+        ExpHeader."Expense Header Completed" := FALSE;
+        ExpHeader.MODIFY(TRUE);
+      END;
+
+      //SHADOW NEEDS TO KEEP THE VERSION NO
+      IF ExpHeader.Status = ExpHeader.Status::Released THEN
+        ExpHeader.MODIFY;
+
+      Expense.SETCURRENTKEY("Settlement No.");
+      Expense.SETRANGE("Settlement No.",ExpHeader."No.");
+      IF Expense.FINDSET THEN
+        REPEAT
+          IF Expense."Expense GUID" = EmptyGuid THEN
+            Expense."Expense GUID" := EMOnlineMgt.CreateNewExpense;
+
+          Expense."Transfer Attachments to CO" := TRUE;
+          Expense."Expense Header GUID" := ExpHeader."Exp. Header GUID";
+          SendUpdate := Expense.Status <> Expense.Status::"Pending Expense User";
+          Expense.Status := ExpHeader.Status; //SEND THE FINAL STATUS TO CO
+          IF SendUpdate  THEN
+            Expense."Continia Online Version No." := EMOnlineMgt.UpdateExpense(Expense);
+          Expense.MODIFY;
+        UNTIL Expense.NEXT = 0;
+
+      Mileage.SETCURRENTKEY("Settlement No.");
+      Mileage.SETRANGE("Settlement No.",ExpHeader."No.");
+      IF Mileage.FINDSET THEN
+        REPEAT
+          IF Mileage."Mileage GUID" = EmptyGuid THEN
+            Mileage."Mileage GUID" := EMOnlineMgt.CreateNewMileage;
+
+          Mileage."Transfer Attachments to CO" := TRUE;
+          Mileage."Expense Header GUID" := ExpHeader."Exp. Header GUID";
+          SendUpdate := Mileage.Status <> Mileage.Status::"Pending Expense User";
+          Mileage.Status := ExpHeader.Status; //SEND THE FINAL STATUS TO CO
+          IF SendUpdate THEN
+            Mileage."Continia Online Version No." := EMOnlineMgt.UpdateMileage(Mileage);
+          Mileage.MODIFY;
+        UNTIL Mileage.NEXT = 0;
+
+      ExpHeader.SetSkipSendToExpUser(FALSE);
+      IF GUIALLOWED AND NOT BatchMode THEN
+        Window.CLOSE;
+    END;
+
+    PROCEDURE SendReleaseNotification@1160040000(VAR ExpHeader@1160040000 : Record 6086339);
+    BEGIN
+      Code(ExpHeader,TRUE);
+    END;
+
+    PROCEDURE Update@1160040003(VAR ExpHeader@1160040000 : Record 6086339);
+    BEGIN
+      Code(ExpHeader,FALSE);
+    END;
+
+    PROCEDURE UpdateForced@1(VAR ExpHeader@1160040000 : Record 6086339);
+    BEGIN
+      Code(ExpHeader,TRUE);
+    END;
+
+    PROCEDURE SetBatchMode@1160040001(NewbatchMode@1160040000 : Boolean);
+    BEGIN
+      BatchMode := NewbatchMode;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

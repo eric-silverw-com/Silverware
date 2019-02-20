@@ -1,0 +1,169 @@
+OBJECT Table 6086359 EM Attachment
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/31/17;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.02;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 6086320=rimd,
+                TableData 6086323=rimd;
+    OnInsert=VAR
+               EMAttachment@1160040001 : Record 6086359;
+             BEGIN
+               EMAttachment.SETRANGE("Table ID","Table ID");
+               EMAttachment.SETRANGE("Document Type","Document Type");
+               EMAttachment.SETRANGE("Document No.","Document No.");
+               EMAttachment.SETRANGE("Doc. Ref. No.","Doc. Ref. No.");
+               EMAttachment.SETRANGE("File Name","File Name");
+               IF NOT EMAttachment.ISEMPTY THEN
+                 ERROR(FileAlreadyExistErr,"File Name");
+
+               EMAttachment.RESET;
+               EMAttachment.SETRANGE("Table ID","Table ID");
+               EMAttachment.SETRANGE("Document Type","Document Type");
+               EMAttachment.SETRANGE("Document No.","Document No.");
+               EMAttachment.SETRANGE("Doc. Ref. No.","Doc. Ref. No.");
+               IF EMAttachment.FINDLAST THEN
+                 "Entry No." := EMAttachment."Entry No." + 1
+               ELSE
+                 "Entry No." := 1;
+
+               "Attachment GUID" := CREATEGUID;
+             END;
+
+    OnDelete=VAR
+               FileManagement@1160040001 : Codeunit 6085584;
+             BEGIN
+               EMDocFileInterface.ClearAttachment(Rec,HideUI);
+             END;
+
+    CaptionML=ENU=Attachment;
+    LookupPageID=Page6086333;
+    DrillDownPageID=Page6086333;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Table ID            ;Integer       ;CaptionML=ENU=Table ID }
+    { 2   ;   ;Document Type       ;Option        ;CaptionML=ENU=Document Type;
+                                                   OptionCaptionML=ENU=Budget,Settlement;
+                                                   OptionString=Budget,Settlement }
+    { 3   ;   ;Document No.        ;Code20        ;CaptionML=ENU=Document No. }
+    { 4   ;   ;Doc. Ref. No.       ;Integer       ;TableRelation=IF (Table ID=CONST(6086320)) Expense
+                                                                 ELSE IF (Table ID=CONST(6086338)) Mileage;
+                                                   CaptionML=ENU=Doc. Ref. No. }
+    { 10  ;   ;Entry No.           ;Integer       ;CaptionML=ENU=Entry No. }
+    { 11  ;   ;Attachment GUID     ;GUID          ;CaptionML=ENU=Attachment GUID }
+    { 12  ;   ;File Name           ;Text250       ;CaptionML=ENU=File Name }
+    { 13  ;   ;Attachment          ;BLOB          ;CaptionML=ENU=Attachment }
+  }
+  KEYS
+  {
+    {    ;Table ID,Document Type,Document No.,Doc. Ref. No.,Entry No.;
+                                                   Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      EMSetup@1160040002 : Record 6086300;
+      ContCompSetup@1160040005 : Record 6192773;
+      EMDocFileInterface@1160040003 : Codeunit 6086396;
+      HideUI@1160040000 : Boolean;
+      GotEMSetup@1160040001 : Boolean;
+      GotCompSetup@1160040004 : Boolean;
+      FileAlreadyExistErr@1160040006 : TextConst 'ENU=The file name ''%1'' already exist for this expense and cannot be imported.\Please rename it before importing.';
+
+    PROCEDURE OpenFile@1000000014();
+    VAR
+      FileSysMgt@1160040000 : Codeunit 6085584;
+      WebClientMgt@1160040003 : Codeunit 6085662;
+      ToFileName@1160040002 : Text[250];
+      FileExtension@1160040001 : Text[30];
+    BEGIN
+      IF NOT WebClientMgt.IsWebClient THEN
+        FileSysMgt.LocalShell(GetAttachmentClientFileName)
+      ELSE BEGIN
+        ToFileName := "File Name";
+        FileExtension := FileSysMgt.GetFileExtension(GetAttachmentServerFileName);
+        DOWNLOAD(GetAttachmentServerFileName,'Download','C:\',FileExtension,ToFileName);
+      END;
+    END;
+
+    PROCEDURE GetCreatedDate@1160040000() : Date;
+    VAR
+      Expense@1160040001 : Record 6086320;
+      Mileage@1160040000 : Record 6086338;
+    BEGIN
+      CASE "Table ID" OF
+        DATABASE::Expense:
+          IF Expense.GET("Doc. Ref. No.") THEN
+            EXIT(Expense."Date Created");
+        DATABASE::Mileage:
+          IF Mileage.GET("Doc. Ref. No.") THEN
+            EXIT(Mileage."Date Created");
+      END;
+
+      EXIT(TODAY);
+    END;
+
+    PROCEDURE SetHideUI@1160040002();
+    BEGIN
+      HideUI := TRUE;
+    END;
+
+    PROCEDURE GetSetup@1160040003();
+    BEGIN
+      IF NOT GotEMSetup THEN
+        GotEMSetup := EMSetup.GET;
+    END;
+
+    PROCEDURE SetSetup@1160040006(VAR NewEMSetup@1160040000 : Record 6086300;VAR NewContCompSetup@1160040001 : Record 6192773);
+    BEGIN
+      EMSetup := NewEMSetup;
+      GotEMSetup := TRUE;
+
+      NewContCompSetup := NewContCompSetup;
+      GotCompSetup := TRUE;
+
+      EMDocFileInterface.SetSetup(NewEMSetup,NewContCompSetup);
+    END;
+
+    PROCEDURE HasAttachment@13() : Boolean;
+    BEGIN
+      EXIT(EMDocFileInterface.HasAttachment(Rec));
+    END;
+
+    PROCEDURE SetAttachment@6(FilePath@1000 : Text[250]) : Boolean;
+    BEGIN
+      EXIT(EMDocFileInterface.SetAttachment(FilePath,Rec));
+    END;
+
+    PROCEDURE GetAttachmentClientFileName@1160040004() : Text[1024];
+    VAR
+      FileSysMgt@1160040002 : Codeunit 6085584;
+    BEGIN
+      EXIT(FileSysMgt.GetClientFilename(GetAttachmentServerFileName,FALSE));
+    END;
+
+    PROCEDURE GetAttachmentServerFileName@10() : Text[1024];
+    VAR
+      FullFilename@1160040000 : Text[1024];
+    BEGIN
+      EXIT(EMDocFileInterface.GetAttachmentServerFileName(Rec));
+    END;
+
+    PROCEDURE ClearAttachment@14() : Boolean;
+    BEGIN
+      EXIT(EMDocFileInterface.ClearAttachment(Rec,HideUI));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

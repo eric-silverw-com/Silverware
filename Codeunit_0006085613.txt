@@ -4,7 +4,7 @@ OBJECT Codeunit 6085613 Document Modification Mgt.
   {
     Date=08/30/18;
     Time=[ 1:00:00 AM];
-    Version List=DCW13.70.00.5.00.03;
+    Version List=DCW13.70.00.4.50.07;
   }
   PROPERTIES
   {
@@ -20,8 +20,8 @@ OBJECT Codeunit 6085613 Document Modification Mgt.
       Text003@1160040013 : TextConst 'ENU=Deleting pages\#1####################\@2@@@@@@@@@@@@@@@@@@@@';
       Text004@1160040002 : TextConst 'ENU=Splitting pages\#1####################\@2@@@@@@@@@@@@@@@@@@@@';
       Window@1160040003 : Dialog;
-      TempFileStorage@1000 : Codeunit 6085665;
       CaptureEngine@1160040012 : Codeunit 6085575;
+      FileSysMgt@1160040006 : Codeunit 6085584;
       PDFMgt@1160040005 : Codeunit 6085608;
       TIFFMgt@1160040004 : Codeunit 6085609;
       HideWindow@1160040009 : Boolean;
@@ -108,6 +108,8 @@ OBJECT Codeunit 6085613 Document Modification Mgt.
         Window.OPEN(Text005);
       END;
 
+      CLEAR(CurrDocNo);
+      CLEAR(Document);
       FirstPages.FINDSET;
       REPEAT
         IF GUIALLOWED AND NOT HideWindow THEN BEGIN
@@ -133,6 +135,10 @@ OBJECT Codeunit 6085613 Document Modification Mgt.
 
         IF FirstDocNo <> FirstPages."Document No." THEN
           MergePage(FirstPages."Document No.",FirstDocNo);
+
+        IF CurrDocNo <> FirstPages."Document No." THEN BEGIN
+          CurrDocNo := FirstPages."Document No.";
+        END;
       UNTIL FirstPages.NEXT = 0;
 
       IF NOT SeveralSourceID AND (SourceID1 <> '') THEN BEGIN
@@ -149,10 +155,8 @@ OBJECT Codeunit 6085613 Document Modification Mgt.
       FirstDoc@1160040006 : Record 6085590;
       Document@1160040015 : Record 6085590;
       DocPage@1160040001 : Record 6085591;
-      TempTiffFile@1000 : TEMPORARY Record 6085608;
-      TempPdfFile@1001 : TEMPORARY Record 6085608;
-      TempDocFile@1002 : TEMPORARY Record 6085608;
-      TempFirstDocFile@1003 : TEMPORARY Record 6085608;
+      TempTiffFilePath@1000 : Text[250];
+      TempPdfFilePath@1001 : Text[250];
       PageNo@1160040002 : Integer;
     BEGIN
       FirstDoc.GET(FirstDocNo);
@@ -167,25 +171,20 @@ OBJECT Codeunit 6085613 Document Modification Mgt.
           MovePage(DocPage."Document No.",DocPage."Page No.",FirstDoc."No.",PageNo);
         UNTIL DocPage.NEXT = 0;
 
-      TempTiffFile.CreateTemp('tiff');
-      TempPdfFile.CreateTemp('pdf');
+      TempTiffFilePath := FirstDoc.GetTiffServerFileName + '1';
+      TempPdfFilePath := FirstDoc.GetPdfServerFileName + '1';
 
-      FirstDoc.GetTiffFile(TempFirstDocFile);
-      Document.GetTiffFile(TempDocFile);
-      TIFFMgt.Combine(TempFirstDocFile,TempDocFile,TempTiffFile);
-
-      FirstDoc.GetPdfFile(TempFirstDocFile);
-      Document.GetPdfFile(TempDocFile);
-      PDFMgt.Combine(TempFirstDocFile,TempDocFile,TempPdfFile);
+      TIFFMgt.Combine(FirstDoc.GetTiffServerFileName,Document.GetTiffServerFileName,TempTiffFilePath);
+      PDFMgt.Combine(FirstDoc.GetPdfServerFileName,Document.GetPdfServerFileName,TempPdfFilePath);
 
       Document.SuspendDeleteCheck(TRUE);
       Document.DELETE(TRUE);
       Document.SuspendDeleteCheck(FALSE);
 
-      FirstDoc.SetTiffFile(TempTiffFile);
-      FirstDoc.SetPdfFile(TempPdfFile);
-
-      TempFileStorage.Clear;
+      FirstDoc.SetTiffFile(TempTiffFilePath);
+      FirstDoc.SetPdfFile(TempPdfFilePath);
+      FileSysMgt.DeleteFile(TempTiffFilePath,TRUE);
+      FileSysMgt.DeleteFile(TempPdfFilePath,TRUE);
 
       COMMIT;
     END;
@@ -409,12 +408,10 @@ OBJECT Codeunit 6085613 Document Modification Mgt.
       DocToSplit@1160040006 : Record 6085590;
       NewDoc@1160040004 : Record 6085590;
       DocPage@1160040010 : Record 6085591;
-      TempTiffFile@1005 : TEMPORARY Record 6085608;
-      TempPdfFile@1004 : TEMPORARY Record 6085608;
-      TempDocToSplitTiffFile@1001 : TEMPORARY Record 6085608;
-      TempDocToSplitPdfFile@1000 : TEMPORARY Record 6085608;
-      TempNewTiffFile@1007 : TEMPORARY Record 6085608;
-      TempNewPdfFile@1006 : TEMPORARY Record 6085608;
+      TempTiffFilePath@1000 : Text[1024];
+      TempPdfFilePath@1001 : Text[1024];
+      NewDocTempTiffFilePath@1002 : Text[1024];
+      NewDocTempPdfFilePath@1003 : Text[1024];
       NewPageNo@1160040011 : Integer;
     BEGIN
       DocToSplit.GET(DocNo);
@@ -430,30 +427,30 @@ OBJECT Codeunit 6085613 Document Modification Mgt.
         MovePage(DocPage."Document No.",DocPage."Page No.",NewDoc."No.",NewPageNo);
       UNTIL DocPage.NEXT = 0;
 
-      TempTiffFile.CreateTemp('tiff');
-      TempPdfFile.CreateTemp('pdf');
-      TempNewTiffFile.CreateTemp('tiff');
-      TempNewPdfFile.CreateTemp('pdf');
+      TempTiffFilePath := DocToSplit.GetTiffServerFileName + '1';
+      TempPdfFilePath := DocToSplit.GetPdfServerFileName + '1';
+      NewDocTempTiffFilePath := NewDoc.GetTiffServerFileName + '1';
+      NewDocTempPdfFilePath := NewDoc.GetPdfServerFileName + '1';
 
-      DocToSplit.GetTiffFile(TempDocToSplitTiffFile);
-      DocToSplit.GetPdfFile(TempDocToSplitPdfFile);
-
-      TIFFMgt.Split(TempDocToSplitTiffFile,
-        TempTiffFile,
-        TempNewTiffFile,
+      TIFFMgt.Split(DocToSplit.GetTiffServerFileName,
+        TempTiffFilePath,
+        NewDocTempTiffFilePath,
         PageNo-1);
 
-      PDFMgt.Split(TempDocToSplitPdfFile,
-        TempPdfFile,
-        TempNewPdfFile,
+      PDFMgt.Split(DocToSplit.GetPdfServerFileName,
+        TempPdfFilePath,
+        NewDocTempPdfFilePath,
         PageNo-1);
 
-      DocToSplit.SetTiffFile(TempTiffFile);
-      DocToSplit.SetPdfFile(TempPdfFile);
-      NewDoc.SetTiffFile(TempNewTiffFile);
-      NewDoc.SetPdfFile(TempNewPdfFile);
+      DocToSplit.SetTiffFile(TempTiffFilePath);
+      DocToSplit.SetPdfFile(TempPdfFilePath);
+      NewDoc.SetTiffFile(NewDocTempTiffFilePath);
+      NewDoc.SetPdfFile(NewDocTempPdfFilePath);
 
-      TempFileStorage.Clear;
+      FileSysMgt.DeleteFile(TempTiffFilePath,TRUE);
+      FileSysMgt.DeleteFile(TempPdfFilePath,TRUE);
+      FileSysMgt.DeleteFile(NewDocTempTiffFilePath,TRUE);
+      FileSysMgt.DeleteFile(NewDocTempPdfFilePath,TRUE);
 
       COMMIT;
     END;
@@ -462,69 +459,57 @@ OBJECT Codeunit 6085613 Document Modification Mgt.
     VAR
       FromDoc@1160040006 : Record 6085590;
       ToDoc@1160040004 : Record 6085590;
-      TempFromTiffFile@1001 : TEMPORARY Record 6085608;
-      TempFromPdfFile@1000 : TEMPORARY Record 6085608;
-      TempToTiffFile@1003 : TEMPORARY Record 6085608;
-      TempToPdfFile@1002 : TEMPORARY Record 6085608;
+      ToDocTempTiffFileName@1001 : Text[1024];
+      ToDocTempPdfFileName@1000 : Text[1024];
     BEGIN
       FromDoc.GET(FromDocNo);
       ToDoc.GET(ToDocNo);
 
-      TempToTiffFile.CreateTemp('tiff');
-      TempToPdfFile.CreateTemp('pdf');
+      ToDocTempTiffFileName := FileSysMgt.GetTempFilename(ToDoc."No.",'tiff');
+      ToDocTempPdfFileName := FileSysMgt.GetTempFilename(ToDoc."No.",'pdf');
 
-      FromDoc.GetTiffFile(TempFromTiffFile);
-      FromDoc.GetPdfFile(TempFromPdfFile);
-
-      TIFFMgt.CopyPagesToNewFile(TempFromTiffFile,
-        TempToTiffFile,
+      TIFFMgt.CopyPagesToNewFile(FromDoc.GetTiffServerFileName,
+        ToDocTempTiffFileName,
         FirstPageNo,
         LastPageNo);
 
-      PDFMgt.CopyPagesToNewFile(TempFromPdfFile,
-        TempToPdfFile,
+      PDFMgt.CopyPagesToNewFile(FromDoc.GetPdfServerFileName,
+        ToDocTempPdfFileName,
         FirstPageNo,
         LastPageNo);
 
-      ToDoc.SetTiffFile(TempToTiffFile);
-      ToDoc.SetPdfFile(TempToPdfFile);
-
-      TempFileStorage.Clear;
+      ToDoc.SetTiffFile(ToDocTempTiffFileName);
+      ToDoc.SetPdfFile(ToDocTempPdfFileName);
     END;
 
     PROCEDURE CopyAndReplaceDoc@1160040030(DocNo@1160040003 : Code[20];FirstPageNo@1160040001 : Integer;LastPageNo@1160040000 : Integer);
     VAR
       Doc@1160040002 : Record 6085590;
-      TempTiffFile@1000 : TEMPORARY Record 6085608;
-      TempPdfFile@1001 : TEMPORARY Record 6085608;
-      TempDocTiffFile@1003 : TEMPORARY Record 6085608;
-      TempDocPdfFile@1002 : TEMPORARY Record 6085608;
+      TempTiffFilePath@1000 : Text[1024];
+      TempPdfFilePath@1001 : Text[1024];
     BEGIN
       IF NOT (LastPageNo > 0) THEN
         EXIT;
 
       Doc.GET(DocNo);
 
-      TempTiffFile.CreateTemp('tiff');
-      TempPdfFile.CreateTemp('pdf');
+      TempTiffFilePath := Doc.GetTiffServerFileName + '1';
+      TempPdfFilePath := Doc.GetPdfServerFileName + '1';
 
-      Doc.GetTiffFile(TempDocTiffFile);
-      Doc.GetPdfFile(TempDocPdfFile);
-
-      TIFFMgt.CopyPagesToNewFile(TempDocTiffFile,
-        TempTiffFile,
+      TIFFMgt.CopyPagesToNewFile(Doc.GetTiffServerFileName,
+        TempTiffFilePath,
         FirstPageNo,
         LastPageNo);
 
-      PDFMgt.CopyPagesToNewFile(TempDocPdfFile,
-        TempPdfFile,
+      PDFMgt.CopyPagesToNewFile(Doc.GetPdfServerFileName,
+        TempPdfFilePath,
         FirstPageNo,
         LastPageNo);
 
-      Doc.SetTiffFile(TempTiffFile);
-      Doc.SetPdfFile(TempPdfFile);
-
-      TempFileStorage.Clear;
+      Doc.SetTiffFile(TempTiffFilePath);
+      Doc.SetPdfFile(TempPdfFilePath);
+      FileSysMgt.DeleteFile(TempTiffFilePath,TRUE);
+      FileSysMgt.DeleteFile(TempPdfFilePath,TRUE);
     END;
 
     PROCEDURE DeletePages@1160040005(VAR SelectedPages@1160040005 : Record 6085599;VAR PagesToDelete@1160040004 : Record 6085599) : Boolean;
@@ -537,10 +522,10 @@ OBJECT Codeunit 6085613 Document Modification Mgt.
     BEGIN
       IF GUIALLOWED AND NOT HideWindow THEN BEGIN
         IF NOT SelectedPages.FINDSET THEN
-          EXIT(FALSE);
+          EXIT;
 
         IF NOT CONFIRM(Text009) THEN
-          EXIT(FALSE);
+          EXIT;
 
         Window.OPEN(Text003);
         TotalPages := SelectedPages.COUNT;
@@ -582,8 +567,6 @@ OBJECT Codeunit 6085613 Document Modification Mgt.
     VAR
       Document@1160040001 : Record 6085590;
       DocPage@1160040003 : Record 6085591;
-      TempTiffFile@1001 : TEMPORARY Record 6085608;
-      TempPdfFile@1000 : TEMPORARY Record 6085608;
     BEGIN
       Document.GET(DocNo);
       Document.CALCFIELDS("No. of Pages");
@@ -600,15 +583,10 @@ OBJECT Codeunit 6085613 Document Modification Mgt.
             MovePage(DocPage."Document No.",DocPage."Page No.",DocPage."Document No.",DocPage."Page No."-1);
           UNTIL DocPage.NEXT = 0;
 
-        Document.GetTiffFile(TempTiffFile);
-        Document.GetPdfFile(TempPdfFile);
-
-        TIFFMgt.DeletePage(TempTiffFile,PageNo);
-        PDFMgt.DeletePage(TempPdfFile,PageNo);
-
-        Document.SetTiffFile(TempTiffFile);
-        Document.SetPdfFile(TempPdfFile);
+        TIFFMgt.DeletePage(Document.GetTiffServerFileName,PageNo);
+        PDFMgt.DeletePage(Document.GetPdfServerFileName,PageNo);
       END;
+
       COMMIT;
     END;
 
@@ -647,30 +625,27 @@ OBJECT Codeunit 6085613 Document Modification Mgt.
     PROCEDURE RotatePage@1160040007(DocNo@1160040004 : Code[20];PageNo@1160040000 : Integer);
     VAR
       Document@1160040001 : Record 6085590;
-      TempTiffFile@1001 : TEMPORARY Record 6085608;
-      TempPdfFile@1000 : TEMPORARY Record 6085608;
+      TiffFilePath@1000 : Text[1024];
+      PdfFilePath@1001 : Text[1024];
     BEGIN
       Document.GET(DocNo);
 
-      Document.GetTiffFile(TempTiffFile);
-      Document.GetPdfFile(TempPdfFile);
+      TiffFilePath := Document.GetTiffServerFileName;
+      PdfFilePath := Document.GetPdfServerFileName;
 
-      TIFFMgt.RotatePage(TempTiffFile,PageNo,90);
-      PDFMgt.RotatePage(TempPdfFile,PageNo,90);
+      TIFFMgt.RotatePage(TiffFilePath,PageNo,90);
+      PDFMgt.RotatePage(PdfFilePath,PageNo,90);
 
-      Document.SetTiffFile(TempTiffFile);
-      Document.SetPdfFile(TempPdfFile);
-
-      TempFileStorage.Clear;
-
+      Document.SetTiffFile(TiffFilePath);
+      Document.SetPdfFile(PdfFilePath);
       COMMIT;
     END;
 
     PROCEDURE MovePages@1160040018(VAR SelectedPages@1160040001 : Record 6085599;MoveUp@1160040002 : Boolean) PagesMoved : Boolean;
     VAR
       Document@1160040004 : Record 6085590;
-      TempTiffFile@1000 : TEMPORARY Record 6085608;
-      TempPdfFile@1001 : TEMPORARY Record 6085608;
+      TiffFilePath@1000 : Text[1024];
+      PdfFilePath@1001 : Text[1024];
       MoveThisPage@1160040003 : Boolean;
       MoveToPage@1160040008 : Integer;
       TotalPages@1160040005 : Integer;
@@ -708,14 +683,14 @@ OBJECT Codeunit 6085613 Document Modification Mgt.
           MovePage(SelectedPages."Document No.",MoveToPage,SelectedPages."Document No.",SelectedPages.Page);
           MovePage(SelectedPages."Document No.",0,SelectedPages."Document No.",MoveToPage);
 
-          Document.GetTiffFile(TempTiffFile);
-          Document.GetPdfFile(TempPdfFile);
+          TiffFilePath := Document.GetTiffServerFileName;
+          PdfFilePath := Document.GetPdfServerFileName;
 
-          TIFFMgt.MovePage(TempTiffFile,SelectedPages.Page,MoveToPage);
-          PDFMgt.MovePage(TempPdfFile,SelectedPages.Page,MoveToPage);
+          TIFFMgt.MovePage(TiffFilePath,SelectedPages.Page,MoveToPage);
+          PDFMgt.MovePage(PdfFilePath,SelectedPages.Page,MoveToPage);
 
-          Document.SetTiffFile(TempTiffFile);
-          Document.SetPdfFile(TempPdfFile);
+          Document.SetTiffFile(TiffFilePath);
+          Document.SetPdfFile(PdfFilePath);
 
           Document.Version += 1;
           Document.MODIFY;
@@ -726,6 +701,7 @@ OBJECT Codeunit 6085613 Document Modification Mgt.
           MoveThisPage := FALSE;
         END;
       UNTIL SelectedPages.NEXT = 0;
+
 
       IF GUIALLOWED AND NOT HideWindow THEN
         Window.CLOSE;
@@ -763,11 +739,8 @@ OBJECT Codeunit 6085613 Document Modification Mgt.
       IF DocCat."Split on Barcode" OR
         DocCat."Split on Source ID" OR
         DocCat."Split on Sep. Fields" OR
-        DocCat."Split on Blank Page"
-      THEN
-        EXIT(TRUE);
-
-      EXIT(FALSE);
+        DocCat."Split on Blank Page" THEN
+         EXIT(TRUE);
     END;
 
     PROCEDURE IsNewBarcode@1160040021(Document@1160040004 : Record 6085590;PageNo@1160040003 : Integer;VAR RecIDTreeID@1160040001 : Integer) Result : Boolean;
@@ -795,8 +768,6 @@ OBJECT Codeunit 6085613 Document Modification Mgt.
             EXIT(TRUE);
           END;
         UNTIL DocWord.NEXT = 0;
-
-      EXIT(FALSE);
     END;
 
     PROCEDURE IsBlank@1160040008(DocNo@1160040000 : Code[20];PageNo@1160040003 : Integer) : Boolean;
@@ -808,7 +779,7 @@ OBJECT Codeunit 6085613 Document Modification Mgt.
       Word.SETRANGE("Page No.",PageNo);
 
       IF Word.COUNT > 40 THEN
-        EXIT(FALSE);
+        EXIT;
 
       IF Word.FINDSET THEN
         REPEAT
@@ -816,7 +787,7 @@ OBJECT Codeunit 6085613 Document Modification Mgt.
         UNTIL (Word.NEXT = 0) OR (TotalChar > 40);
 
       IF TotalChar > 40 THEN
-        EXIT(FALSE);
+        EXIT;
 
       EXIT(TRUE);
     END;
@@ -878,7 +849,7 @@ OBJECT Codeunit 6085613 Document Modification Mgt.
           SepFieldValues."Is Value" := TRUE;
           SepFieldValues.Code := TemplField.Code;
           SepFieldValues."Value (Text)" := Value;
-          SepFieldValues."Is Valid" := (Value <> '') AND CaptureMgt.ParseField(TemplField,Value,TRUE,Document."No.");
+          SepFieldValues."Is Valid" := (Value <> '') AND CaptureMgt.ParseField(TemplField,Value,TRUE);
           SepFieldValues.INSERT;
         UNTIL TemplField.NEXT = 0;
     END;
@@ -890,7 +861,7 @@ OBJECT Codeunit 6085613 Document Modification Mgt.
       Value@1005 : Text[250];
     BEGIN
       IF TemplateNo = '' THEN
-        EXIT(FALSE);
+        EXIT;
 
       TemplField.SETRANGE("Template No.",TemplateNo);
       TemplField.SETRANGE("Use as Doc. Separator",TRUE);
@@ -924,8 +895,8 @@ OBJECT Codeunit 6085613 Document Modification Mgt.
     VAR
       Template@1160040002 : Record 6085579;
     BEGIN
-      IF NOT DocCat.HasMasterTemplate THEN
-        EXIT('');
+      IF DocCat."Register without Template" THEN
+        EXIT;
 
       Template.SETRANGE("Category Code",DocCat.Code);
       Template.SETRANGE("Source Record ID Tree ID",RecIDTreeID);
@@ -964,7 +935,7 @@ OBJECT Codeunit 6085613 Document Modification Mgt.
     BEGIN
       IF Document."Source Record ID Tree ID" = 0 THEN
         IF NOT IsNewSource(Document,1,RecIDTreeID,TemplateNo) THEN
-          EXIT(FALSE);
+          EXIT;
 
       Document.VALIDATE("Source Record ID Tree ID",RecIDTreeID);
       Document.MODIFY(TRUE);

@@ -1,0 +1,327 @@
+OBJECT Table 6086309 Expense Posting Setup
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/09/18;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.08;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 6086309=rimd;
+    OnInsert=BEGIN
+               IF "Country/Region Type" = "Country/Region Type"::Country THEN
+                 TESTFIELD("Country/Region Code");
+             END;
+
+    OnModify=BEGIN
+               IF "Country/Region Type" = "Country/Region Type"::Country THEN
+                 TESTFIELD("Country/Region Code");
+             END;
+
+    CaptionML=ENU=Posting setup for Expense/Mileage;
+    LookupPageID=Page6086312;
+    DrillDownPageID=Page6086312;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Type                ;Option        ;CaptionML=ENU=Type;
+                                                   OptionCaptionML=ENU=Mileage,Expense;
+                                                   OptionString=Mileage,Expense }
+    { 2   ;   ;No.                 ;Code20        ;TableRelation=IF (Type=CONST(Expense)) "Expense Type"
+                                                                 ELSE IF (Type=CONST(Mileage)) Vehicle;
+                                                   CaptionML=ENU=Type Code }
+    { 3   ;   ;Country/Region Type ;Option        ;CaptionML=ENU=Country/Region Type;
+                                                   OptionCaptionML=ENU=All Countries/Regions,Country;
+                                                   OptionString=All Countries/Regions,Country }
+    { 4   ;   ;Country/Region Code ;Code10        ;TableRelation=IF (Country/Region Type=CONST(Country)) Country/Region;
+                                                   OnValidate=BEGIN
+                                                                TESTFIELD(Type,"Country/Region Type"::Country);
+
+                                                                IF "Country/Region Type" = "Country/Region Type"::Country THEN
+                                                                  TESTFIELD("Country/Region Code");
+                                                              END;
+
+                                                   CaptionML=ENU=Country/Region Code }
+    { 5   ;   ;Employee No.        ;Code50        ;TableRelation="Continia User Setup";
+                                                   CaptionML=ENU=Employee No. }
+    { 8   ;   ;Employee Group      ;Code20        ;TableRelation="Expense User Group";
+                                                   CaptionML=ENU=Employee Group }
+    { 9   ;   ;Posting Account Type;Option        ;OnValidate=BEGIN
+                                                                IF xRec."Posting Account Type" <> "Posting Account Type" THEN
+                                                                  CLEAR("Posting Account No.");
+                                                                IF Type = Type::Expense THEN
+                                                                  IF NOT ("Posting Account Type" IN ["Posting Account Type"::" ","Posting Account Type"::"G/L Account"]) THEN
+                                                                    ERROR(WrongPostingAccountType,FIELDCAPTION(Type),FORMAT(Type),FIELDCAPTION("Posting Account Type"));
+
+                                                                IF "Posting Account Type" <> xRec."Posting Account Type" THEN
+                                                                  CheckForExistingDocuments;
+                                                              END;
+
+                                                   CaptionML=ENU=Posting Account Type;
+                                                   OptionCaptionML=ENU=" ,G/L Account,Lessor Pay Type,Bluegarden Pay Type";
+                                                   OptionString=[ ,G/L Account,Lessor Pay Type,Bluegarden Pay Type] }
+    { 10  ;   ;Posting Account No. ;Code20        ;OnValidate=VAR
+                                                                GLAcc@1160040001 : Record 15;
+                                                                LessorIntegration@1160040003 : Codeunit 6086327;
+                                                                BluegardenIntegration@1160040002 : Codeunit 6086328;
+                                                              BEGIN
+                                                                IF "Posting Account No." <> '' THEN
+                                                                  TESTFIELD("Posting Account Type");
+                                                                CASE "Posting Account Type" OF
+                                                                  "Posting Account Type"::"G/L Account":
+                                                                    BEGIN
+                                                                      GLAcc.GET("Posting Account No.");
+                                                                      GLAcc.TESTFIELD("Direct Posting",TRUE);
+                                                                      GLAcc.CheckGLAcc;
+                                                                    END;
+
+                                                                  "Posting Account Type"::"Lessor Pay Type":
+                                                                    IF "Posting Account No." <> '' THEN
+                                                                      LessorIntegration.ValidatePayType("Posting Account No.");
+
+                                                                  "Posting Account Type"::"Bluegarden Pay Type":
+                                                                    IF "Posting Account No." <> '' THEN
+                                                                      BluegardenIntegration.ValidatePayType("Posting Account No.");
+                                                                END;
+
+                                                                IF "Posting Account No." <> xRec."Posting Account No." THEN
+                                                                  CheckForExistingDocuments;
+                                                              END;
+
+                                                   CaptionML=ENU=Posting Account No. }
+    { 45  ;   ;Gen. Prod. Posting Group;Code10    ;TableRelation="Gen. Product Posting Group";
+                                                   CaptionML=ENU=Gen. Prod. Posting Group }
+    { 46  ;   ;Gen. Bus. Posting Group;Code10     ;TableRelation="Gen. Business Posting Group";
+                                                   CaptionML=ENU=Gen. Bus. Posting Group }
+    { 58  ;   ;VAT Prod. Posting Group;Code10     ;TableRelation="VAT Product Posting Group";
+                                                   CaptionML=ENU=VAT Prod. Posting Group }
+    { 59  ;   ;VAT Bus. Posting Group;Code10      ;TableRelation="VAT Business Posting Group";
+                                                   CaptionML=ENU=VAT Bus. Posting Group }
+  }
+  KEYS
+  {
+    {    ;Type,No.,Country/Region Type,Country/Region Code,Employee Group,Employee No.;
+                                                   Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      WrongPostingAccountType@1160040000 : TextConst 'ENU=Account Type must be G/L Account or Blank when Type is Expense.';
+      ExpenseWithPostingInfo@1160040001 : TextConst 'ENU=There are %1 unposted Expenses with account number ''%2'' for Expense Type %3.\Do you want to update all of them to account ''%4''?';
+      MileageWithPostingInfo@1160040002 : TextConst 'ENU=There are %1 unposted Mileage with account number ''%2'' for vehicle %3.\Do you want to update all of them to account ''%4''?';
+
+    PROCEDURE FindPostingSetup@1160040000(Expense@1160040000 : Code[20];CountryRegion@1160040001 : Code[20];Employee@1160040002 : Code[50];Group@1160040003 : Code[20]) : Boolean;
+    VAR
+      ExpPostingSetup@1160040004 : Record 6086309;
+    BEGIN
+      //EMPLOYEE,EMPLOYEE GROUP
+      ExpPostingSetup.SETRANGE("No.",Expense);
+      ExpPostingSetup.SETRANGE(Type,Type::Expense);
+      ExpPostingSetup.SETRANGE("Country/Region Type","Country/Region Type"::Country);
+      ExpPostingSetup.SETRANGE("Country/Region Code",CountryRegion);
+      ExpPostingSetup.SETRANGE("Employee No.",Employee);
+      ExpPostingSetup.SETRANGE("Employee Group",Group);
+      IF ExpPostingSetup.FINDFIRST THEN BEGIN
+        Rec := ExpPostingSetup;
+        EXIT(TRUE);
+      END;
+
+      ExpPostingSetup.SETRANGE("Country/Region Type","Country/Region Type"::"All Countries/Regions");
+      ExpPostingSetup.SETRANGE("Country/Region Code");
+      IF ExpPostingSetup.FINDFIRST THEN BEGIN
+        Rec := ExpPostingSetup;
+        EXIT(TRUE);
+      END;
+
+      //EMPLOYEE
+      ExpPostingSetup.SETRANGE("Employee Group");
+      ExpPostingSetup.SETRANGE("Country/Region Type","Country/Region Type"::Country);
+      ExpPostingSetup.SETRANGE("Country/Region Code",CountryRegion);
+      IF ExpPostingSetup.FINDFIRST THEN BEGIN
+        Rec := ExpPostingSetup;
+        EXIT(TRUE);
+      END;
+
+      ExpPostingSetup.SETRANGE("Country/Region Type","Country/Region Type"::"All Countries/Regions");
+      ExpPostingSetup.SETRANGE("Country/Region Code");
+      IF ExpPostingSetup.FINDFIRST THEN BEGIN
+        Rec := ExpPostingSetup;
+        EXIT(TRUE);
+      END;
+
+      //EMPLOYEE GROUP
+      ExpPostingSetup.SETRANGE("Employee No.");
+      ExpPostingSetup.SETRANGE("Employee Group",Group);
+      ExpPostingSetup.SETRANGE("Country/Region Type","Country/Region Type"::Country);
+      ExpPostingSetup.SETRANGE("Country/Region Code",CountryRegion);
+      IF ExpPostingSetup.FINDFIRST THEN BEGIN
+        Rec := ExpPostingSetup;
+        EXIT(TRUE);
+      END;
+
+      ExpPostingSetup.SETRANGE("Country/Region Type","Country/Region Type"::"All Countries/Regions");
+      ExpPostingSetup.SETRANGE("Country/Region Code");
+      IF ExpPostingSetup.FINDFIRST THEN BEGIN
+        Rec := ExpPostingSetup;
+        EXIT(TRUE);
+      END;
+
+      //GENERIC
+      ExpPostingSetup.SETRANGE("Employee Group");
+      ExpPostingSetup.SETRANGE("Country/Region Type","Country/Region Type"::Country);
+      ExpPostingSetup.SETRANGE("Country/Region Code",CountryRegion);
+      IF ExpPostingSetup.FINDFIRST THEN BEGIN
+        Rec := ExpPostingSetup;
+        EXIT(TRUE);
+      END;
+
+      ExpPostingSetup.SETRANGE("Country/Region Type","Country/Region Type"::"All Countries/Regions");
+      ExpPostingSetup.SETRANGE("Country/Region Code");
+      IF ExpPostingSetup.FINDFIRST THEN BEGIN
+        Rec := ExpPostingSetup;
+        EXIT(TRUE);
+      END;
+    END;
+
+    PROCEDURE FindMileagePostingSetup@1160040001(Vehicle@1160040003 : Code[20];Employee@1160040001 : Code[50];Group@1160040000 : Code[20]) : Boolean;
+    VAR
+      ExpPostingSetup@1160040002 : Record 6086309;
+    BEGIN
+      ExpPostingSetup.SETRANGE("No.",Vehicle);
+      ExpPostingSetup.SETRANGE(Type,Type::Mileage);
+      ExpPostingSetup.SETRANGE("Country/Region Type","Country/Region Type"::"All Countries/Regions");
+      ExpPostingSetup.SETRANGE("Employee No.",Employee);
+      ExpPostingSetup.SETRANGE("Employee Group",Group);
+      IF ExpPostingSetup.FINDFIRST THEN BEGIN
+        Rec := ExpPostingSetup;
+        EXIT(TRUE);
+      END;
+
+      ExpPostingSetup.SETRANGE("Employee Group");
+      IF ExpPostingSetup.FINDFIRST THEN BEGIN
+        Rec := ExpPostingSetup;
+        EXIT(TRUE);
+      END;
+
+      ExpPostingSetup.SETRANGE("Employee No.");
+      ExpPostingSetup.SETRANGE("Employee Group",Group);
+      IF ExpPostingSetup.FINDFIRST THEN BEGIN
+        Rec := ExpPostingSetup;
+        EXIT(TRUE);
+      END;
+
+      ExpPostingSetup.SETRANGE("Employee Group");
+      IF ExpPostingSetup.FINDFIRST THEN BEGIN
+        Rec := ExpPostingSetup;
+        EXIT(TRUE);
+      END;
+    END;
+
+    PROCEDURE LookupPostingAccount@1000000000(VAR Text@1000000000 : Text[1024]) : Boolean;
+    VAR
+      GLAcc@1000000003 : Record 15;
+      LessorIntegration@1000000002 : Codeunit 6086327;
+      BluegardenIntegration@1000000001 : Codeunit 6086328;
+    BEGIN
+      TESTFIELD("Posting Account Type");
+      CASE "Posting Account Type" OF
+        "Posting Account Type"::"G/L Account":
+          BEGIN
+            IF GLAcc.GET(Text) THEN;
+            IF PAGE.RUNMODAL(0,GLAcc) = ACTION::LookupOK THEN BEGIN
+              Text := GLAcc."No.";
+              EXIT(TRUE);
+            END;
+          END;
+
+        "Posting Account Type"::"Lessor Pay Type":
+          EXIT(LessorIntegration.LookupPayType(Text));
+
+        "Posting Account Type"::"Bluegarden Pay Type":
+          EXIT(BluegardenIntegration.LookupPayType(Text));
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckForExistingDocuments@1160040002();
+    VAR
+      Expense@1160040000 : Record 6086320;
+      Mileage@1160040001 : Record 6086338;
+      ContiniaUserSetup@1160040003 : Record 6086002;
+    BEGIN
+      CASE Type OF
+        Type::Expense:
+          BEGIN
+            Expense.SETRANGE(Posted,FALSE);
+            Expense.SETRANGE("Expense Type","No.");
+            Expense.SETRANGE("Expense Type","No.");
+            Expense.SETRANGE("Exp. Account Manually Changed",FALSE);
+            Expense.SETRANGE("Expense Account Type",xRec."Posting Account Type");
+            IF "Employee No." <> '' THEN
+              Expense.SETRANGE("Continia User ID","Employee No.");
+            IF "Country/Region Code" <> '' THEN
+              Expense.SETRANGE("Country/Region Code","Country/Region Code");
+            IF NOT Expense.FINDSET THEN
+              EXIT;
+            REPEAT
+              Expense.MARK(TRUE);
+              IF "Employee Group" <> '' THEN BEGIN
+                ContiniaUserSetup.GET(Expense."Continia User ID");
+                IF ContiniaUserSetup."Expense User Group" <> "Employee Group" THEN
+                  Expense.MARK(FALSE);
+              END;
+            UNTIL Expense.NEXT = 0;
+            Expense.MARKEDONLY(TRUE);
+            IF NOT Expense.ISEMPTY THEN
+              IF CONFIRM(ExpenseWithPostingInfo,FALSE,FORMAT(Expense.COUNT),xRec."Posting Account No.","No.","Posting Account No.")
+              THEN BEGIN
+                Expense.FINDSET;
+                REPEAT
+                  Expense.VALIDATE("Expense Account Type","Posting Account Type");
+                  Expense.VALIDATE("Expense Account","Posting Account No.");
+                  Expense.MODIFY;
+                UNTIL Expense.NEXT = 0;
+              END;
+          END;
+
+        Type::Mileage:
+          BEGIN
+            Mileage.SETRANGE(Posted,FALSE);
+            Mileage.SETRANGE("Mileage Account Type",xRec."Posting Account Type");
+            Mileage.SETRANGE("Vehicle Code","No.");
+            Mileage.SETRANGE("Mileage Account",xRec."Posting Account No.");
+            IF "Employee No." <> '' THEN
+              Mileage.SETRANGE("Continia User ID","Employee No.");
+            IF NOT Mileage.FINDSET THEN
+              EXIT;
+            REPEAT
+              Mileage.MARK(TRUE);
+              IF "Employee Group" <> '' THEN BEGIN
+                ContiniaUserSetup.GET(Mileage."Continia User ID");
+                IF ContiniaUserSetup."Expense User Group" <> "Employee Group" THEN
+                  Mileage.MARK(FALSE);
+              END;
+            UNTIL Mileage.NEXT = 0;
+            Mileage.MARKEDONLY(TRUE);
+            IF NOT Mileage.ISEMPTY THEN
+              IF CONFIRM(MileageWithPostingInfo,FALSE,FORMAT(Mileage.COUNT),xRec."Posting Account No.","No.","Posting Account No.")
+              THEN BEGIN
+                Mileage.FINDSET;
+                REPEAT
+                  Mileage.VALIDATE("Mileage Account Type","Posting Account Type");
+                  Mileage.VALIDATE("Mileage Account","Posting Account No.");
+                  Mileage.MODIFY;
+                UNTIL Mileage.NEXT = 0;
+              END;
+          END;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

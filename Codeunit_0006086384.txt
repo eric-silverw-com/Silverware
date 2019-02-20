@@ -1,0 +1,276 @@
+OBJECT Codeunit 6086384 Exp. Header Inbox-Check
+{
+  OBJECT-PROPERTIES
+  {
+    Date=06/18/18;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.06;
+  }
+  PROPERTIES
+  {
+    TableNo=6086341;
+    OnRun=VAR
+            GLSetup@1160040004 : Record 98;
+            EMDimInbox@1160040000 : Record 6086362;
+            EMDim@1160040009 : Record 6086360;
+            ConfiguredField@1160040006 : Record 6086346;
+            Expense@1000 : Record 6086320;
+            Mileage@1001 : Record 6086338;
+            ExpHeaderReopen@1160040007 : Codeunit 6086380;
+            ExpHeaderSendToUser@1160040003 : Codeunit 6086382;
+            FileManagement@1160040005 : Codeunit 6085584;
+            EmptyGuid@1160040001 : GUID;
+            IsNew@1160040002 : Boolean;
+            EmOnline@1160040008 : Codeunit 6086305;
+          BEGIN
+            IF "Exp. Header GUID" = EmptyGuid THEN
+              IsNew := TRUE
+            ELSE BEGIN
+              ExpHeader.SETCURRENTKEY("Exp. Header GUID");
+              ExpHeader.SETRANGE("Exp. Header GUID","Exp. Header GUID");
+              IF ExpHeader.FINDFIRST THEN
+                ExpHeader.TESTFIELD(Posted,FALSE)
+              ELSE
+                IsNew := TRUE;
+            END;
+
+            IF NOT IsNew THEN BEGIN
+              IF ExpHeader.Posted THEN
+                ERROR(ExpPostedErr,ExpHeader."Document Type",ExpHeader."No.");
+              ExpHeader.TestStatusOpenOrPendingExpUser;
+              TESTFIELD("Continia User ID",ExpHeader."Continia User ID");
+            END;
+
+            ExpHeader.SetSuspendInboxCheck(TRUE);
+            ExpHeader.SetSkipSendToExpUser(TRUE);
+            ExpHeader."Document Type" := ExpHeader."Document Type"::Settlement;
+            IF IsNew THEN BEGIN
+              ExpHeader."No." := '';
+              ExpHeader.INSERT(TRUE);
+              ExpHeader.VALIDATE("Continia User ID",Rec."Continia User ID");
+            END;
+
+            ExpHeader.VALIDATE(Description,Rec.Description);
+            ExpHeader.VALIDATE("Description 2",Rec."Description 2");
+            IF EmOnline.ConfigFieldActive(ConfiguredField.Type::Settlement,'JOBNO') THEN
+              ExpHeader.VALIDATE("Job No.",Rec."Job No.");
+            IF EmOnline.ConfigFieldActive(ConfiguredField.Type::Settlement,'TASK') THEN
+              ExpHeader.VALIDATE("Job Task No.",Rec."Job Task No.");
+
+            IF EmOnline.ConfigFieldActive(ConfiguredField.Type::Settlement,'BILLABLE') THEN
+              ExpHeader.VALIDATE(Billable,Billable);
+
+            IF EmOnline.ConfigFieldActive(ConfiguredField.Type::Settlement,'COUNTRY/REGION') THEN
+              ExpHeader.VALIDATE("Country/Region Code",Rec."Country/Region Code");
+            IF EmOnline.ConfigFieldActive(ConfiguredField.Type::Settlement,'CURRENCY') THEN
+              ExpHeader.VALIDATE("Currency Code",Rec."Currency Code");
+
+            ExpHeader.VALIDATE("Exp. Header GUID",Rec."Exp. Header GUID");
+            ExpHeader."Expense Header Completed" := "Expense Header Completed";
+            ExpHeader."Continia Online Version No." := "Continia Online Version No.";
+            ExpHeader.MODIFY;
+
+            EMDim.SETCURRENTKEY("Table ID","Document Type","Document No.","Doc. Ref. No.");
+            EMDim.SETRANGE("Table ID",DATABASE::"Expense Header");
+            EMDim.SETRANGE("Document Type",ExpHeader."Document Type"::Settlement);
+            EMDim.SETRANGE("Document No.",ExpHeader."No.");
+            EMDim.SETRANGE("Doc. Ref. No.",0);
+            EMDim.DELETEALL;
+
+            CLEAR(ExpHeader."Global Dimension 1 Code");
+            CLEAR(ExpHeader."Global Dimension 2 Code");
+            ExpHeader.AddDefaultDim(0);
+            ExpHeader.MODIFY;
+
+            EMDimInbox.SETRANGE("Table ID",DATABASE::"Expense Header Inbox");
+            EMDimInbox.SETRANGE("Document Type",0);
+            EMDimInbox.SETRANGE("Document No.",'');
+            EMDimInbox.SETRANGE("Doc. Ref. No.","Entry No.");
+            IF EMDimInbox.FINDSET THEN BEGIN
+              GLSetup.GET;
+              REPEAT
+                CLEAR(EMDim);
+                EMDim."Table ID" := DATABASE::"Expense Header";
+                EMDim."Document Type" := EMDim."Document Type"::Settlement;
+                EMDim."Document No." := ExpHeader."No.";
+                EMDim."Doc. Ref. No." := 0;
+
+                IF EMDimInbox."Dimension Code" <> '' THEN BEGIN
+                  EMDim.VALIDATE("Dimension Code",EMDimInbox."Dimension Code");
+                  EMDim.VALIDATE("Dimension Value Code",EMDimInbox."Dimension Value Code");
+                END ELSE BEGIN
+                  EMDim.VALIDATE("Field Code",EMDimInbox."Field Code");
+                  EMDim.VALIDATE("Field Value",EMDimInbox."Field Value");
+                END;
+
+                IF NOT EMDim.INSERT(TRUE) THEN
+                  EMDim.MODIFY(TRUE);
+              UNTIL EMDimInbox.NEXT = 0;
+            END;
+
+            ExpHeader.GET(ExpHeader."Document Type",ExpHeader."No.");
+
+            IF "Expense Header No." <> ExpHeader."No." THEN BEGIN
+              "Expense Header No." := ExpHeader."No.";
+              MODIFY;
+            END;
+
+            IF "Expense Header No." <> '' THEN BEGIN
+              ExpHeader.GET("Expense Header Type","Expense Header No.");
+
+              ExpHeader.Status := ExpHeader.Status::Open;
+              ExpHeader.MODIFY;
+
+              IF NOT "Expense Header Completed" THEN BEGIN
+                IF IsNew OR RecChangedByNAVAfterImport(ExpHeader,EMDim,"Entry No.") THEN BEGIN
+                  IF OtherInboxEntryExists(Rec) THEN
+                    ExpHeader.ThrowInboxError;
+                  ExpHeaderSendToUser.UpdateForced(ExpHeader);
+                END ELSE
+                  ExpHeader.Status := ExpHeader.Status::"Pending Expense User";
+
+                ExpHeader.MODIFY;
+              END ELSE BEGIN
+                CheckLinesInboxAndThrowError;
+
+                Expense.SETCURRENTKEY("Settlement No.");
+                Expense.SETRANGE("Settlement No.",ExpHeader."No.");
+                Expense.MODIFYALL(Status,Expense.Status::Open);
+
+                Mileage.SETCURRENTKEY("Settlement No.");
+                Mileage.SETRANGE("Settlement No.",ExpHeader."No.");
+                Mileage.MODIFYALL(Status,Mileage.Status::Open);
+              END;
+            END;
+
+            ExpHeader.SetSuspendInboxCheck(FALSE);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ExpHeader@1160040001 : Record 6086339;
+      GlobalEMAttachmentTemp@1160040005 : TEMPORARY Record 6086359;
+      ExpPostedErr@1160040000 : TextConst 'ENU=%1 %2 has been posted.';
+      ProcessInboxFirst@1000 : TextConst 'ENU=%1 %2 needs to be processed first.';
+
+    PROCEDURE GetExpHeaderType@1160040000() : Integer;
+    BEGIN
+      EXIT(ExpHeader."Document Type");
+    END;
+
+    PROCEDURE GetExpHeaderNo@1160040001() : Code[20];
+    BEGIN
+      EXIT(ExpHeader."No.");
+    END;
+
+    PROCEDURE RecChangedByNAVAfterImport@1160040003(ExpHeader@1160040002 : Record 6086339;VAR EMDim@1160040003 : Record 6086360;InboxEntryNo@1160040000 : Integer) : Boolean;
+    VAR
+      ExpHeaderInbox@1160040001 : Record 6086341;
+      EMDimInbox@1160040004 : Record 6086362;
+      DiffFound@1160040005 : Boolean;
+    BEGIN
+      ExpHeaderInbox.GET(InboxEntryNo);
+
+      IF ExpHeaderInbox."Expense Header No." = '' THEN
+        EXIT(FALSE);
+
+      IF ExpHeader."Exp. Header GUID" <> ExpHeaderInbox."Exp. Header GUID" THEN
+        EXIT(TRUE);
+
+      //DIMENSIONS
+      EMDim.RESET;
+      EMDim.SETRANGE("Table ID",DATABASE::"Expense Header");
+      EMDim.SETRANGE("Document Type",ExpHeader."Document Type");
+      EMDim.SETRANGE("Document No.",ExpHeader."No.");
+      EMDim.SETRANGE("Doc. Ref. No.",0);
+      IF EMDim.FINDSET THEN
+        REPEAT
+          IF EMDimInbox.GET(DATABASE::"Expense Header",0,'',ExpHeaderInbox."Entry No.",EMDim."Dimension Code",EMDim."Field Code")
+          THEN BEGIN
+            IF (EMDim."Dimension Value Code" <> EMDimInbox."Dimension Value Code") OR
+               (EMDim."Field Value" <> EMDimInbox."Field Value")
+            THEN
+              DiffFound := TRUE;
+          END ELSE
+            DiffFound := TRUE;
+
+          IF DiffFound THEN
+            IF EMDim."Dimension Code" <> '' THEN
+              EXIT(IsConfiguredField(EMDim."Dimension Code"))
+            ELSE
+              EXIT(IsConfiguredField(EMDim."Field Code"));
+        UNTIL EMDim.NEXT = 0;
+
+      EMDimInbox.SETRANGE("Table ID",DATABASE::"Expense Header Inbox");
+      EMDimInbox.SETRANGE("Document Type",0);
+      EMDimInbox.SETRANGE("Document No.",'');
+      EMDimInbox.SETRANGE("Doc. Ref. No.",ExpHeaderInbox."Entry No.");
+      IF EMDimInbox.FINDSET THEN
+        REPEAT
+          IF EMDim.GET(
+             DATABASE::"Expense Header",ExpHeader."Document Type",ExpHeader."No.",
+             0,EMDimInbox."Dimension Code",EMDimInbox."Field Code")
+          THEN BEGIN
+            IF (EMDim."Dimension Value Code" <> EMDimInbox."Dimension Value Code") OR
+               (EMDim."Field Value" <> EMDimInbox."Field Value")
+            THEN
+              DiffFound := TRUE;
+          END ELSE
+            DiffFound := TRUE;
+
+          IF DiffFound THEN
+            IF EMDimInbox."Dimension Code" <> '' THEN
+              EXIT(IsConfiguredField(EMDimInbox."Dimension Code"))
+            ELSE
+              EXIT(IsConfiguredField(EMDimInbox."Field Code"));
+
+        UNTIL EMDimInbox.NEXT = 0;
+    END;
+
+    PROCEDURE IsConfiguredField@1160040010(FldCode@1160040002 : Code[20]) : Boolean;
+    VAR
+      FieldType@1160040000 : Record 6086345;
+      ConfiguredFields@1160040001 : Record 6086346;
+    BEGIN
+      EXIT(ConfiguredFields.IsConfiguredFieldForTable(DATABASE::"Expense Header",FieldType.GetFieldFromDim(FldCode)));
+    END;
+
+    LOCAL PROCEDURE OtherInboxEntryExists@1(CurrentExpHeaderInbox@1000 : Record 6086341) : Boolean;
+    VAR
+      ExpHeaderInbox@1001 : Record 6086341;
+    BEGIN
+      ExpHeaderInbox.SETCURRENTKEY("Exp. Header GUID");
+      ExpHeaderInbox.SETRANGE("Exp. Header GUID",CurrentExpHeaderInbox."Exp. Header GUID");
+      ExpHeaderInbox.SETFILTER("Entry No.",'<>%1',CurrentExpHeaderInbox."Entry No.");
+      ExpHeaderInbox.SETFILTER(Status,'%1|%2',ExpHeaderInbox.Status::Pending,ExpHeaderInbox.Status::Error);
+      IF NOT ExpHeaderInbox.ISEMPTY THEN
+        EXIT(TRUE);
+    END;
+
+    PROCEDURE CheckLinesInboxAndThrowError@1160040002();
+    VAR
+      ExpInbox@1160040000 : Record 6086323;
+      MilInbox@1160040001 : Record 6086353;
+    BEGIN
+      ExpInbox.SETCURRENTKEY("Expense Header GUID");
+      ExpInbox.SETRANGE("Expense Header GUID",ExpHeader."Exp. Header GUID");
+      ExpInbox.SETFILTER(Status,'%1|%2',ExpInbox.Status::Pending,ExpInbox.Status::Error);
+      ExpInbox.SETRANGE("Expense Completed",FALSE); //OTHERWISE DEADLOCK CAN OCCUR
+      IF ExpInbox.FINDFIRST THEN
+        ERROR(ProcessInboxFirst,ExpInbox.TABLECAPTION,ExpInbox."Entry No.");
+
+      MilInbox.SETCURRENTKEY("Expense Header GUID");
+      MilInbox.SETRANGE("Expense Header GUID",ExpHeader."Exp. Header GUID");
+      MilInbox.SETFILTER(Status,'%1|%2',MilInbox.Status::Pending,MilInbox.Status::Error);
+      MilInbox.SETRANGE("Mileage Completed",FALSE); //OTHERWISE DEADLOCK CAN OCCUR
+      IF MilInbox.FINDFIRST THEN
+        ERROR(ProcessInboxFirst,MilInbox.TABLECAPTION,MilInbox."Entry No.");
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

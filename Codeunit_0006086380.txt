@@ -1,0 +1,100 @@
+OBJECT Codeunit 6086380 Exp. Header - Reopen
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/10/17;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60;
+  }
+  PROPERTIES
+  {
+    TableNo=6086339;
+    OnRun=VAR
+            ExpHeader@1160040000 : Record 6086339;
+          BEGIN
+            ExpHeader := Rec;
+            Code(ExpHeader);
+            Rec := ExpHeader;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      EMAppBridge@1000 : Codeunit 6086369;
+      SkipDelete@1160040000 : Boolean;
+      InboxExistsErr@1160040001 : TextConst 'ENU=Unprocessed inbox transactions exist. Please process them.';
+
+    LOCAL PROCEDURE Code@1160040001(VAR ExpHeader@1160040000 : Record 6086339);
+    VAR
+      EMOnlineMgt@1160040001 : Codeunit 6086305;
+      Expense@1160040002 : Record 6086320;
+      Mileage@1160040003 : Record 6086338;
+    BEGIN
+      WITH ExpHeader DO BEGIN
+        TESTFIELD(Posted,FALSE);
+
+        IF Status = Status::Open THEN
+          EXIT;
+
+        IF ExistsInInbox THEN
+          ERROR(InboxExistsErr);
+
+        EMAppBridge.CancelApprovalRequest(DATABASE::"Expense Header","No.");
+        GET("Document Type","No.");
+
+        IF Status = Status::"Pending Expense User" THEN
+          IF NOT SkipDelete THEN
+            EMOnlineMgt.DeprecateSettlement("Exp. Header GUID",'',TRUE);
+
+        Status := Status::Open;
+        "Expense Header Completed" := FALSE;
+        MODIFY(TRUE);
+
+        CODEUNIT.RUN(CODEUNIT::"Exp. Header - Validate",ExpHeader);
+
+        Expense.SETCURRENTKEY("Settlement No.");
+        Expense.SETRANGE("Settlement No.","No.");
+        IF Expense.FINDSET THEN
+          REPEAT
+            IF NOT SkipDelete THEN
+              EMOnlineMgt.DeprecateExpense(Expense."Expense GUID",'',FALSE);
+            Expense.Status := Status;
+            Expense."Expense Completed" := FALSE;
+            Expense.MODIFY;
+
+            CODEUNIT.RUN(CODEUNIT::"Expense-Validate",Expense);
+          UNTIL Expense.NEXT = 0;
+
+        Mileage.SETCURRENTKEY("Settlement No.");
+        Mileage.SETRANGE("Settlement No.","No.");
+        IF Mileage.FINDSET THEN
+          REPEAT
+            IF NOT SkipDelete THEN
+              EMOnlineMgt.DeprecateMileage(Mileage."Mileage GUID",'',FALSE);
+            Mileage.Status := Status;
+            Mileage."Mileage Completed" := FALSE;
+            Mileage.MODIFY;
+
+            CODEUNIT.RUN(CODEUNIT::"Mileage-Validate",Mileage);
+          UNTIL Mileage.NEXT = 0;
+
+      END;
+    END;
+
+    PROCEDURE ReopenWithoutDelete@1160040000(VAR Rec@1160040000 : Record 6086339);
+    VAR
+      ExpHeader@1160040001 : Record 6086339;
+    BEGIN
+      SkipDelete := TRUE;
+
+      ExpHeader := Rec;
+      Code(ExpHeader);
+      Rec := ExpHeader;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

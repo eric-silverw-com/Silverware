@@ -1,0 +1,112 @@
+OBJECT Codeunit 6086353 Send Expense Status Report
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/02/17;
+    Time=[ 1:00:00 AM];
+    Version List=EMW17.10.00.2.60;
+  }
+  PROPERTIES
+  {
+    TableNo=472;
+    OnRun=BEGIN
+            SendExpenseStatusReport;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      SendingTxt@1000 : TextConst 'ENU=Sending Status Report by E-mail...\@1@@@@@@@@@@@@@@@@@@@@@@@@@@';
+      MailSubjectTxt@1003 : TextConst 'ENU=Status Report';
+      MailIntroTxt@1002 : TextConst 'ENU=Dear %1,';
+      MailTxt@1001 : TextConst 'ENU=Your status report is attached to this E-mail.';
+      SmtpMailMgt@1004 : Codeunit 6085598;
+      EMSetup@1005 : Record 6086300;
+      ReportNameTxt@1006 : TextConst 'ENU=Status Report for %1';
+
+    PROCEDURE SendExpenseStatusReport@1();
+    VAR
+      ContiniaUserSetup@1000 : Record 6086002;
+      ContiniaUser@1006 : Record 6086001;
+      Window@1003 : Dialog;
+      TotalCount@1004 : Integer;
+      Cnt@1005 : Integer;
+    BEGIN
+      EMSetup.GET;
+
+      ContiniaUserSetup.SETRANGE("Expense Management User",TRUE);
+      IF ContiniaUserSetup.FINDSET THEN BEGIN
+        IF GUIALLOWED THEN BEGIN
+          Window.OPEN(SendingTxt);
+          TotalCount := ContiniaUserSetup.COUNT;
+        END;
+
+        REPEAT
+          IF GUIALLOWED THEN BEGIN
+            Cnt := Cnt + 1;
+            Window.UPDATE(1,ROUND(Cnt / TotalCount * 10000,1,'>'));
+          END;
+
+          IF ContiniaUser.GET(ContiniaUserSetup."Continia User ID") THEN
+            IF ContiniaUser."E-Mail" <> '' THEN BEGIN
+              SmtpMailMgt.AddTo(ContiniaUser.Name,ContiniaUser."E-Mail");
+              SmtpMailMgt.SetSubject('Expense Management' + MailSubjectTxt);
+
+              SmtpMailMgt.AppendToBody(Bold(STRSUBSTNO(MailIntroTxt,ContiniaUser.Name)),TRUE);
+              SmtpMailMgt.AppendLineBreakToBody;
+
+              AppendToBody(MailTxt);
+
+              IF CreateAndAttachReportAsPDF(ContiniaUser) THEN
+                IF NOT SmtpMailMgt.Send THEN
+                  SmtpMailMgt.DisplayLastError;
+
+              CLEAR(SmtpMailMgt);
+            END;
+        UNTIL ContiniaUserSetup.NEXT = 0;
+
+        IF GUIALLOWED THEN
+          Window.CLOSE;
+      END;
+    END;
+
+    PROCEDURE Bold@1160040000(text@1160040000 : Text[1024]) : Text[1024];
+    BEGIN
+      EXIT(STRSUBSTNO('<b>%1</b>',text));
+    END;
+
+    PROCEDURE AppendToBody@1160040005(text@1160040000 : Text[1024]);
+    BEGIN
+      SmtpMailMgt.AppendToBody(text,TRUE);
+      SmtpMailMgt.AppendLineBreakToBody;
+    END;
+
+    PROCEDURE CreateAndAttachReportAsPDF@10(ContiniaUser@1001 : Record 6086001) : Boolean;
+    VAR
+      ExpStatusRep@1000 : Report 6086300;
+      FileMgt@1002 : Codeunit 419;
+      DateFilter@1004 : Text[30];
+      FileName@1003 : Text;
+    BEGIN
+      DateFilter := FORMAT(CALCDATE(EMSetup."Report Starting Date Formula",WORKDATE)) + '..' + FORMAT(CALCDATE(EMSetup."Report Ending Date Formula",WORKDATE));
+
+      ExpStatusRep.SetGlobalVars(EMSetup."Include Posted in Report",EMSetup."Include Not Posted in Report",DateFilter);
+
+      ContiniaUser.SETRECFILTER;
+      ExpStatusRep.SETTABLEVIEW(ContiniaUser);
+
+      FileName := FileMgt.ServerTempFileName('pdf');
+      ExpStatusRep.SAVEASPDF(FileName);
+      IF NOT FILE.EXISTS(FileName) THEN
+        EXIT(FALSE);
+
+      SmtpMailMgt.AddAttachment(FileName);
+      EXIT(TRUE);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

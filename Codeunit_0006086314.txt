@@ -1,0 +1,393 @@
+OBJECT Codeunit 6086314 Reminder E-Mail
+{
+  OBJECT-PROPERTIES
+  {
+    Date=09/11/17;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.01;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            Code;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      AmountCap@1005 : TextConst 'ENU=Amount';
+      AmountLCYCap@1006 : TextConst 'ENU=Amount (LCY)';
+      CurrencyCodeCap@1009 : TextConst 'ENU=Currency';
+      DescriptionCap@1004 : TextConst 'ENU=Description';
+      DocumentDateCap@1002 : TextConst 'ENU=Date';
+      ExpenseTypeCap@1003 : TextConst 'ENU=Type';
+      CodeTxt@1160040008 : TextConst 'ENU=Code';
+      LinkCap@1007 : TextConst 'ENU=Link';
+      ListTitleCaption@1001 : TextConst 'ENU=Reminders that need attention (%1)';
+      NoRemSentTxt@1160040003 : TextConst 'ENU=No E-mail was sent.\\There was no reminder pending or the selected Expense is not pending the expense user.';
+      RemimdersSentTxt@1160040004 : TextConst 'ENU=%1 reminder e-mails sent.';
+      ReminderEmailTemplaterErr@1160040001 : TextConst 'ENU=You must import the reminder e-mail template in the %1 page';
+      ReminderPortalTitle@1160040000 : TextConst 'ENU=See all Reminders on Web Portal';
+      ReminderTextCap@1011 : TextConst 'ENU=Open Reminder in web browser';
+      SendingReminderTxt@1160040002 : TextConst 'ENU=Sending Reminder to: #1###############';
+      SettlementTxt@1160040005 : TextConst 'ENU=Settlement';
+      ExpenseTxt@1160040006 : TextConst 'ENU=Expense';
+      MileageTxt@1160040007 : TextConst 'ENU=Mileage';
+
+    PROCEDURE Code@1160040003();
+    VAR
+      ContiniaUserSetup@1160040001 : Record 6086002;
+    BEGIN
+      SendNotificationEmails(ContiniaUserSetup,FALSE);
+    END;
+
+    PROCEDURE SendExpNotificationEmails@1160040006(VAR Expense@1160040000 : Record 6086320;Force@1160040001 : Boolean);
+    VAR
+      ContiniaUserSetup@1160040002 : Record 6086002;
+    BEGIN
+      Expense.SETRANGE(Status,Expense.Status::"Pending Expense User");
+      IF Expense.FINDSET THEN BEGIN
+        REPEAT
+          IF ContiniaUserSetup.GET(Expense."Continia User ID") THEN
+            ContiniaUserSetup.MARK(TRUE);
+        UNTIL Expense.NEXT = 0;
+
+        ContiniaUserSetup.MARKEDONLY(TRUE);
+        SendNotificationEmails(ContiniaUserSetup,Force);
+      END;
+    END;
+
+    PROCEDURE SendMilNotificationEmails@1160040007(VAR Mileage@1160040000 : Record 6086338;Force@1160040001 : Boolean);
+    VAR
+      ContiniaUserSetup@1160040002 : Record 6086002;
+    BEGIN
+      Mileage.SETRANGE(Status,Mileage.Status::"Pending Expense User");
+      IF Mileage.FINDSET THEN BEGIN
+        REPEAT
+          IF ContiniaUserSetup.GET(Mileage."Continia User ID") THEN
+            ContiniaUserSetup.MARK(TRUE);
+        UNTIL Mileage.NEXT = 0;
+
+        ContiniaUserSetup.MARKEDONLY(TRUE);
+        SendNotificationEmails(ContiniaUserSetup,Force);
+      END;
+    END;
+
+    PROCEDURE SendExpHeaderNotEmails@1160040000(VAR ExpHeader@1160040000 : Record 6086339;Force@1160040001 : Boolean);
+    VAR
+      ContiniaUserSetup@1160040002 : Record 6086002;
+    BEGIN
+      ExpHeader.SETRANGE(Status,ExpHeader.Status::"Pending Expense User");
+      IF ExpHeader.FINDSET THEN BEGIN
+        REPEAT
+          IF ContiniaUserSetup.GET(ExpHeader."Continia User ID") THEN
+            ContiniaUserSetup.MARK(TRUE);
+        UNTIL ExpHeader.NEXT = 0;
+
+        ContiniaUserSetup.MARKEDONLY(TRUE);
+        SendNotificationEmails(ContiniaUserSetup,Force);
+      END;
+    END;
+
+    LOCAL PROCEDURE SendNotificationEmails@1160040002(VAR ContiniaUserSetup@1009 : Record 6086002;Force@1160040006 : Boolean);
+    VAR
+      ContiniaUser@1160040008 : Record 6086001;
+      EMSetup@1003 : Record 6086300;
+      Expense@1160040002 : Record 6086320;
+      Mileage@1160040013 : Record 6086338;
+      EMReminder@1013 : Record 6086364;
+      ExpHeader@1160040000 : Record 6086339;
+      BigStringLines@1011 : Codeunit 6085587;
+      BigStringTemplate@1010 : Codeunit 6085587;
+      SmtpMailManagement@1001 : Codeunit 6085598;
+      ExpenseApprovalEMail@1000 : Codeunit 6086313;
+      Window@1160040007 : Dialog;
+      TempFile@1007 : File;
+      NVInStream@1006 : InStream;
+      ClassText@1160040011 : Text[30];
+      FileData@1004 : Text[1024];
+      Filename@1005 : Text[1024];
+      FontColorText@1160040010 : Text[30];
+      RemindersUrl@1017 : Text[1024];
+      LineNo@1160040003 : Integer;
+      NoOfMails@1018 : Integer;
+      SendEmail@1160040005 : Boolean;
+    BEGIN
+      NoOfMails := 0;
+
+      // GET REMINDER TEMPLATE
+      EMSetup.GET;
+      EMSetup.CALCFIELDS("Reminder Template");
+      IF NOT EMSetup."Reminder Template".HASVALUE THEN
+        ERROR(ReminderEmailTemplaterErr,EMSetup.TABLECAPTION);
+
+      TempFile.CREATETEMPFILE;
+      Filename := TempFile.NAME;
+      TempFile.CLOSE;
+      TempFile.CREATE(Filename);
+      EMSetup."Reminder Template".CREATEINSTREAM(NVInStream);
+      WHILE NVInStream.READ(FileData) <> 0 DO
+        TempFile.WRITE(FileData);
+      TempFile.CLOSE;
+
+      IF ContiniaUserSetup.FINDSET THEN BEGIN
+
+        IF GUIALLOWED THEN
+          Window.OPEN(SendingReminderTxt);
+
+        REPEAT
+          // MAIL SETUP
+          RemindersUrl := GetReminderUrl(ContiniaUserSetup."Continia User ID");
+          ContiniaUser.GET(ContiniaUserSetup."Continia User ID");
+          ExpenseApprovalEMail.SetupMail(SmtpMailManagement,ContiniaUserSetup,
+            STRSUBSTNO(EMSetup."Reminder E-Mail Subject",ContiniaUser.Name));
+
+          BigStringTemplate.Clear;
+          BigStringTemplate.LoadFromFile(Filename);
+          BigStringTemplate.Replace('#LISTTITLE#',STRSUBSTNO(ListTitleCaption,FORMAT(TODAY,0,'<day,2>-<month,2>-<year4>')));
+          BigStringTemplate.Replace('#LISTLABELS#',CreateReminderHeader('<tr><th>','</th><th>','</th></tr>'));
+
+          SendEmail := Force;
+          LineNo := 0;
+          BigStringLines.Clear;
+
+          //
+          // BUILD LINES
+          //
+
+          ExpHeader.RESET;
+          ExpHeader.SETCURRENTKEY("Continia User ID");
+          ExpHeader.SETRANGE("Continia User ID",ContiniaUserSetup."Continia User ID");
+          ExpHeader.SETRANGE(Status,ExpHeader.Status::"Pending Expense User");
+          ExpHeader.SETRANGE(Posted,FALSE);
+          IF ExpHeader.FINDSET THEN
+            REPEAT
+              CLEAR(FontColorText);
+              LineNo += 1;
+
+              IF ReminderFound(ExpHeader.NextReminderDate) THEN BEGIN
+                SendEmail := TRUE;
+                EMReminder.CreateReminder(
+                  DATABASE::"Expense Header",ExpHeader."Document Type"::Settlement,
+                  ExpHeader."No.",0,Expense."Continia User ID");
+                FontColorText := '<font color="red">';
+              END;
+
+              IF LineNo MOD 2 = 0 THEN
+                ClassText := '<tr class="even">'
+              ELSE
+                ClassText := '<tr class="odd">';
+
+              BigStringLines.Append(
+                CreateSettlementReminderLine(
+                  ExpHeader,FontColorText + ClassText + '<td>','</td><td>','</td><td align="right">','</td></tr>'));
+            UNTIL ExpHeader.NEXT = 0;
+
+          Expense.RESET;
+          Expense.SETCURRENTKEY("Continia User ID","Document Date");
+          Expense.SETRANGE("Continia User ID",ContiniaUserSetup."Continia User ID");
+          Expense.SETRANGE(Status,Expense.Status::"Pending Expense User");
+          Expense.SETRANGE(Posted,FALSE);
+          Expense.SETRANGE("Settlement No.",'');
+          IF Expense.FINDSET THEN
+            REPEAT
+              CLEAR(FontColorText);
+              LineNo += 1;
+
+              IF ReminderFound(Expense.NextReminderDate) THEN BEGIN
+                SendEmail := TRUE;
+                EMReminder.CreateReminder(DATABASE::Expense,0,'',Expense."Entry No.",Expense."Continia User ID");
+                FontColorText := '<font color="red">';
+              END;
+
+              IF LineNo MOD 2 = 0 THEN
+                ClassText := '<tr class="even">'
+              ELSE
+                ClassText := '<tr class="odd">';
+
+              BigStringLines.Append(
+                CreateExpReminderLine(Expense,FontColorText + ClassText + '<td>','</td><td>','</td><td align="right">','</td></tr>'));
+
+            UNTIL Expense.NEXT = 0;
+
+          Mileage.RESET;
+          Mileage.SETCURRENTKEY("Continia User ID");
+          Mileage.SETRANGE("Continia User ID",ContiniaUserSetup."Continia User ID");
+          Mileage.SETRANGE(Status,Mileage.Status::"Pending Expense User");
+          Mileage.SETRANGE(Posted,FALSE);
+          Mileage.SETRANGE("Settlement No.",'');
+          IF Mileage.FINDSET THEN
+            REPEAT
+              CLEAR(FontColorText);
+              LineNo += 1;
+
+              IF ReminderFound(Mileage.NextReminderDate) THEN BEGIN
+                SendEmail := TRUE;
+                EMReminder.CreateReminder(DATABASE::Mileage,0,'',Mileage."Entry No.",Mileage."Continia User ID");
+                FontColorText := '<font color="red">';
+              END;
+
+              IF LineNo MOD 2 = 0 THEN
+                ClassText := '<tr class="even">'
+              ELSE
+                ClassText := '<tr class="odd">';
+
+              BigStringLines.Append(
+                CreateMilReminderLine(Mileage,FontColorText + ClassText + '<td>','</td><td>','</td><td align="right">','</td></tr>'));
+
+            UNTIL Mileage.NEXT = 0;
+
+          //
+          //SEND MAIL
+          //
+
+          IF SendEmail THEN BEGIN
+            IF GUIALLOWED THEN
+              Window.UPDATE(1,FORMAT(ContiniaUserSetup."Continia User ID"));
+
+            BigStringTemplate.Replace2('#LISTLINES#',BigStringLines);
+            BigStringTemplate.Replace('#PORTALURL#',RemindersUrl);
+            BigStringTemplate.Replace('#PORTALTITLE#',ReminderPortalTitle);
+
+            // SEND E-MAIL
+            SmtpMailManagement.SetBodyFromBigStringMgnt(BigStringTemplate);
+            SmtpMailManagement.SetStartTLS(EMSetup."SMTP Require SSL/TLS");
+            IF NOT SmtpMailManagement.Send THEN
+              SmtpMailManagement.DisplayLastError;
+
+            NoOfMails := NoOfMails + 1;
+          END;
+
+        UNTIL ContiniaUserSetup.NEXT = 0;
+
+        IF GUIALLOWED THEN
+          Window.CLOSE;
+
+      END;
+
+      IF GUIALLOWED THEN
+        IF NoOfMails = 0 THEN
+          MESSAGE(NoRemSentTxt)
+        ELSE
+          MESSAGE(RemimdersSentTxt,NoOfMails);
+    END;
+
+    LOCAL PROCEDURE GetReminderUrl@4(_UserID@1001 : Code[50]) : Text[1024];
+    VAR
+      EMOnlineMgt@1160040000 : Codeunit 6086305;
+      Email@1000 : Text[1024];
+    BEGIN
+      Email := GetUserEmail(_UserID);
+      IF Email <> '' THEN
+        EXIT(EMOnlineMgt.GetBaseServerUrl + 'account/login');
+    END;
+
+    LOCAL PROCEDURE GetUserEmail@1(_UserID@1000 : Code[50]) : Text[250];
+    VAR
+      ContiniaUser@1001 : Record 6086001;
+    BEGIN
+      IF ContiniaUser.GET(_UserID) THEN
+        EXIT(ContiniaUser."E-Mail");
+
+      EXIT('');
+    END;
+
+    LOCAL PROCEDURE CreateReminderHeader@1160040016(FirstSeparator@1160040000 : Text[30];SecondSeparator@1160040001 : Text[30];LastSeparator@1160040002 : Text[30]) : Text[1024];
+    BEGIN
+      EXIT(
+        FirstSeparator +
+        DocumentDateCap + SecondSeparator +
+        ExpenseTypeCap + SecondSeparator +
+        CodeTxt + SecondSeparator +
+        DescriptionCap + SecondSeparator +
+        CurrencyCodeCap + SecondSeparator +
+        AmountCap + SecondSeparator +
+        AmountLCYCap + SecondSeparator +
+        LinkCap + LastSeparator);
+    END;
+
+    LOCAL PROCEDURE CreateExpReminderLine@1160040004(VAR Expense@1000 : Record 6086320;FirstSeparator@1160040000 : Text[50];SecondSeparator@1160040001 : Text[50];RightAlignSeparator@1160040004 : Text[50];LastSeparator@1160040002 : Text[50]) : Text[1024];
+    VAR
+      ExpHeader@1160040006 : Record 6086339;
+      EMOnlineMgt@1160040003 : Codeunit 6086305;
+      ReminderUrlSrc@1160040005 : Text[1024];
+      ReminderUrl@1160040007 : Text[1024];
+    BEGIN
+      ReminderUrlSrc := '<a href="%1">%2</a>';
+      ReminderUrl := EMOnlineMgt.GetExpenseReminderUrl(Expense);
+
+      EXIT(
+        FirstSeparator +
+        FORMAT(Expense."Document Date",0,'<day,2>-<month,2>-<year4>') + SecondSeparator +
+        ExpenseTxt + SecondSeparator +
+        Expense."Expense Type" + SecondSeparator +
+        FORMAT(Expense.Description) + SecondSeparator +
+        FORMAT(Expense."Currency Code") +
+        RightAlignSeparator + GetAmtTxt(Expense.Amount) +
+        RightAlignSeparator + GetAmtTxt(Expense."Amount (LCY)") + SecondSeparator +
+        STRSUBSTNO(ReminderUrlSrc,ReminderUrl,ReminderTextCap) + LastSeparator);
+    END;
+
+    LOCAL PROCEDURE CreateMilReminderLine@1160040005(VAR Mileage@1000 : Record 6086338;FirstSeparator@1160040000 : Text[50];SecondSeparator@1160040001 : Text[50];RightAlignSeparator@1160040004 : Text[50];LastSeparator@1160040002 : Text[50]) : Text[1024];
+    VAR
+      ExpHeader@1160040007 : Record 6086339;
+      EMOnlineMgt@1160040003 : Codeunit 6086305;
+      ReminderUrlSrc@1160040005 : Text[1024];
+    BEGIN
+      ReminderUrlSrc := '<a href="%1">%2</a>';
+
+      EXIT(
+        FirstSeparator +
+        FORMAT(Mileage."Registration Date",0,'<day,2>-<month,2>-<year4>') + SecondSeparator +
+        MileageTxt + SecondSeparator +
+        Mileage."Vehicle Code" + SecondSeparator +
+        FORMAT(Mileage.Description) + SecondSeparator +
+        '' +
+        RightAlignSeparator + GetAmtTxt(Mileage."Amount (LCY)") +
+        RightAlignSeparator + GetAmtTxt(Mileage."Amount (LCY)") + SecondSeparator +
+        STRSUBSTNO(ReminderUrlSrc,EMOnlineMgt.GetMileageReminderUrl(Mileage),ReminderTextCap) + LastSeparator);
+    END;
+
+    LOCAL PROCEDURE CreateSettlementReminderLine@1160040011(VAR ExpHeader@1000 : Record 6086339;FirstSeparator@1160040000 : Text[50];SecondSeparator@1160040001 : Text[50];RightAlignSeparator@1160040004 : Text[50];LastSeparator@1160040002 : Text[50]) : Text[1024];
+    VAR
+      EMOnlineMgt@1160040003 : Codeunit 6086305;
+      ReminderUrlSrc@1160040005 : Text[1024];
+    BEGIN
+      ReminderUrlSrc := '<a href="%1">%2</a>';
+
+      EXIT(
+        FirstSeparator +
+        FORMAT(ExpHeader."Date Created",0,'<day,2>-<month,2>-<year4>') + SecondSeparator +
+        SettlementTxt + ' (' + ExpHeader.GetOverviewDetails + ')' + SecondSeparator +
+        '' + SecondSeparator +
+        FORMAT(ExpHeader.Description) + SecondSeparator +
+        '' +
+        RightAlignSeparator + GetAmtTxt(ExpHeader.GetAmountLCY) +
+        RightAlignSeparator + GetAmtTxt(ExpHeader.GetAmountLCY) + SecondSeparator +
+        STRSUBSTNO(ReminderUrlSrc,EMOnlineMgt.GetSettlementReminderUrl(ExpHeader),ReminderTextCap) + LastSeparator);
+    END;
+
+    PROCEDURE ReminderFound@1160040001(NextReminderDate@1160040000 : Date) : Boolean;
+    BEGIN
+      EXIT ((NextReminderDate <> 0D) AND (NextReminderDate <= TODAY));
+    END;
+
+    PROCEDURE MakeBold@1160040009(Text@1160040000 : Text[1024]) : Text[1024];
+    BEGIN
+      EXIT('<b>' + Text + '</b>');
+    END;
+
+    LOCAL PROCEDURE GetAmtTxt@5(Amount@1001 : Decimal) : Text[50];
+    VAR
+      GLSetup@1000 : Record 98;
+    BEGIN
+      GLSetup.GET;
+      EXIT(FORMAT(Amount,0,STRSUBSTNO('<Precision,%1><Standard Format,0>',GLSetup."Amount Decimal Places")));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

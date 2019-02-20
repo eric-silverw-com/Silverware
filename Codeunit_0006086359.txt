@@ -1,0 +1,382 @@
+OBJECT Codeunit 6086359 EM Move to Company
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/10/17;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      TextMovedCompany@1160040000 : TextConst 'ENU=%1 has been moved to %2';
+      NoSelectionWasMade@1160040001 : TextConst 'ENU=No Selection was made';
+      SettlementText@1160040002 : TextConst 'ENU=Settlement';
+      MoveToCompany@1160040005 : Text[30];
+
+    PROCEDURE HandleMovement@1160040002(RecordToMove@1160040000 : RecordRef);
+    VAR
+      ExpenseHeader@1160040001 : Record 6086339;
+      Expense@1160040002 : Record 6086320;
+      Mileage@1160040004 : Record 6086338;
+      MoveWhat@1160040005 : Text[250];
+    BEGIN
+      IF NOT SelectCompany THEN
+        ERROR(NoSelectionWasMade);
+
+      CASE RecordToMove.NUMBER OF
+        DATABASE::"Expense Header":
+          BEGIN
+            RecordToMove.SETTABLE(ExpenseHeader);
+            MoveSettlement(ExpenseHeader);
+            MoveWhat := SettlementText;
+          END;
+        DATABASE::Expense :
+          BEGIN
+            RecordToMove.SETTABLE(Expense);
+            MoveExpense(Expense);
+            MoveWhat := Expense.TABLECAPTION;
+          END;
+        DATABASE::Mileage :
+          BEGIN
+            RecordToMove.SETTABLE(Mileage);
+            MoveMileage(Mileage);
+            MoveWhat := Mileage.TABLECAPTION;
+          END;
+      END;
+
+      MESSAGE(TextMovedCompany,MoveWhat,MoveToCompany);
+    END;
+
+    PROCEDURE MoveSettlement@1160040007(ExpenseHeader@1160040001 : Record 6086339);
+    VAR
+      Expense@1160040002 : Record 6086320;
+      Mileage@1160040003 : Record 6086338;
+      NewExpenseHeaderInbox@1160040004 : Record 6086341;
+      EMAttachment@1160040010 : Record 6086359;
+      EMDim@1160040009 : Record 6086360;
+      NewEMDimInbox@1160040008 : Record 6086362;
+      NewEMAttachmentInbox@1160040007 : Record 6086363;
+      FileManagement@1160040006 : Codeunit 6085584;
+      EntryNo@1160040005 : Integer;
+    BEGIN
+      WITH ExpenseHeader DO BEGIN
+        TESTFIELD(Status,Status::Open);
+        TESTFIELD("On Hold",'');
+        TESTFIELD("Exp. Header GUID");
+
+        // TEST EXPENSES AND MILEAGE
+        Expense.SETCURRENTKEY("Settlement No.","Settlement Line No.");
+        Expense.SETFILTER("Settlement No.","No.");
+        IF Expense.FINDSET THEN
+          REPEAT
+            Expense.TESTFIELD("Matched to Bank Transaction",FALSE);
+            Expense.TESTFIELD(Status,Status::Open);
+          UNTIL Expense.NEXT = 0;
+
+        Mileage.SETCURRENTKEY("Settlement No.","Settlement Line No.");
+        Mileage.SETFILTER("Settlement No.","No.");
+        IF Mileage.FINDSET THEN
+          REPEAT
+            Mileage.TESTFIELD(Status,Status::Open);
+          UNTIL Mileage.NEXT = 0;
+
+        // CREATE SETTLEMENT
+        NewExpenseHeaderInbox.CHANGECOMPANY(MoveToCompany);
+        NewEMAttachmentInbox.CHANGECOMPANY(MoveToCompany);
+        NewEMDimInbox.CHANGECOMPANY(MoveToCompany);
+
+        IF NewExpenseHeaderInbox.FINDLAST THEN
+          EntryNo := NewExpenseHeaderInbox."Entry No." + 1
+        ELSE
+          EntryNo := 1;
+
+        NewExpenseHeaderInbox.INIT;
+        NewExpenseHeaderInbox."Entry No." := EntryNo;
+        NewExpenseHeaderInbox.INSERT;
+
+        NewExpenseHeaderInbox."Continia User ID" := "Continia User ID";
+        NewExpenseHeaderInbox."Continia User Name" := "Continia User Name";
+        NewExpenseHeaderInbox.Description := Description;
+        NewExpenseHeaderInbox."Description 2" := "Description 2";
+        NewExpenseHeaderInbox."Country/Region Code" := "Country/Region Code";
+        NewExpenseHeaderInbox."Currency Code" := "Currency Code";
+        NewExpenseHeaderInbox."Job No." := "Job No.";
+        NewExpenseHeaderInbox."Job Task No." := "Job Task No.";
+        NewExpenseHeaderInbox."Expense Header Type" := "Document Type";
+        NewExpenseHeaderInbox."Expense Header Completed" := TRUE;
+        NewExpenseHeaderInbox.Billable := Billable;
+        NewExpenseHeaderInbox."Created by User ID" := USERID;
+        NewExpenseHeaderInbox."Processed Date/Time" := CURRENTDATETIME;
+        NewExpenseHeaderInbox."Exp. Header GUID" := "Exp. Header GUID";
+        NewExpenseHeaderInbox.MODIFY;
+
+        EMDim.SETCURRENTKEY("Table ID","Document Type","Document No.","Doc. Ref. No.");
+        EMDim.SETRANGE("Table ID",DATABASE::"Expense Header");
+        EMDim.SETRANGE("Document Type","Document Type"::Settlement);
+        EMDim.SETRANGE("Document No.","No.");
+        IF EMDim.FINDFIRST THEN
+          REPEAT
+            NewEMDimInbox."Table ID" := DATABASE::"Expense Header Inbox";
+            NewEMDimInbox."Document Type" := 0;
+            NewEMDimInbox."Document No." := '';
+            NewEMDimInbox."Doc. Ref. No." := NewExpenseHeaderInbox."Entry No.";
+            NewEMDimInbox."Dimension Code" := EMDim."Dimension Code";
+            NewEMDimInbox."Field Code" := EMDim."Field Code";
+            NewEMDimInbox."Dimension Value Code" := EMDim."Dimension Value Code";
+            NewEMDimInbox."Field Value" := EMDim."Field Value";
+            NewEMDimInbox.INSERT;
+          UNTIL EMDim.NEXT = 0;
+
+        // MOVE EXPENSES AND MILEAGES
+        Expense.RESET;
+        Expense.SETFILTER("Settlement No.","No.");
+        IF Expense.FINDSET THEN
+          REPEAT
+            MoveExpense(Expense);
+          UNTIL Expense.NEXT = 0;
+
+        Mileage.RESET;
+        Mileage.SETFILTER("Settlement No.","No.");
+        IF Mileage.FINDSET THEN
+          REPEAT
+            MoveMileage(Mileage);
+          UNTIL Mileage.NEXT = 0;
+
+        DELETE(TRUE);
+      END;
+    END;
+
+    PROCEDURE MoveExpense@1160040003(Expense@1160040001 : Record 6086320);
+    VAR
+      NewExpenseInbox@1160040011 : Record 6086323;
+      EMAttachment@1160040010 : Record 6086359;
+      EMDim@1160040009 : Record 6086360;
+      NewEMDimInbox@1160040008 : Record 6086362;
+      NewEMAttachmentInbox@1160040007 : Record 6086363;
+      ExpAttendee@1160040006 : Record 6086308;
+      NexExpAttendeeInbox@1160040005 : Record 6086325;
+      NewEMSetup@1160040003 : Record 6086300;
+      NewContCompSetup@1160040000 : Record 6192773;
+      EMDocFileSystem@1160040012 : Codeunit 6086396;
+      EMDocBlobStorageMgt@1160040013 : Codeunit 6086398;
+      EntryNo@1160040002 : Integer;
+    BEGIN
+      WITH Expense DO BEGIN
+        TESTFIELD(Status,Status::Open);
+        TESTFIELD("Matched to Bank Transaction",FALSE);
+
+        NewExpenseInbox.CHANGECOMPANY(MoveToCompany);
+        NewEMAttachmentInbox.CHANGECOMPANY(MoveToCompany);
+        NewEMDimInbox.CHANGECOMPANY(MoveToCompany);
+        NexExpAttendeeInbox.CHANGECOMPANY(MoveToCompany);
+
+        CLEAR(NewExpenseInbox."Expense GUID");
+        IF NewExpenseInbox.FINDLAST THEN
+          EntryNo := NewExpenseInbox."Entry No." + 1
+        ELSE
+          EntryNo := 1;
+        NewExpenseInbox.INIT;
+        NewExpenseInbox."Entry No." := EntryNo;
+        NewExpenseInbox.INSERT;
+
+        NewExpenseInbox."Continia User ID" := "Continia User ID";
+        NewExpenseInbox.Description := Description;
+        NewExpenseInbox."Description 2" := "Description 2";
+        NewExpenseInbox."Document Date" := "Document Date";
+        NewExpenseInbox."Country/Region Code" := "Country/Region Code";
+        NewExpenseInbox."Currency Code" := "Currency Code";
+        NewExpenseInbox.Amount := Amount;
+        NewExpenseInbox."Job No." := "Job No.";
+        NewExpenseInbox."Job Task No." := "Job Task No.";
+        NewExpenseInbox."Cash/Private Card" := "Cash/Private Card";
+        NewExpenseInbox."Expense GUID" := "Expense GUID";
+        NewExpenseInbox."Expense Header GUID" := "Expense Header GUID";
+        NewExpenseInbox."Imported Date/Time" := CURRENTDATETIME;
+        NewExpenseInbox."Imported by User ID" := USERID;
+        NewExpenseInbox."Expense Type" := "Expense Type";
+        NewExpenseInbox."Expense Completed" := TRUE;
+        NewExpenseInbox.MODIFY;
+
+        EMDim.SETCURRENTKEY("Table ID","Document Type","Document No.","Doc. Ref. No.");
+        EMDim.SETRANGE("Table ID",DATABASE::Expense);
+        EMDim.SETRANGE("Document Type",0);
+        EMDim.SETRANGE("Document No.",'');
+        EMDim.SETRANGE("Doc. Ref. No.","Entry No.");
+        IF EMDim.FINDFIRST THEN
+          REPEAT
+            NewEMDimInbox."Table ID" := DATABASE::"Expense Inbox";
+            NewEMDimInbox."Document Type" := 0;
+            NewEMDimInbox."Document No." := '';
+            NewEMDimInbox."Doc. Ref. No." := NewExpenseInbox."Entry No.";
+            NewEMDimInbox."Dimension Code" := EMDim."Dimension Code";
+            NewEMDimInbox."Field Code" := EMDim."Field Code";
+            NewEMDimInbox."Dimension Value Code" := EMDim."Dimension Value Code";
+            NewEMDimInbox."Field Value" := EMDim."Field Value";
+            NewEMDimInbox.INSERT;
+          UNTIL EMDim.NEXT = 0;
+
+        IF NewEMAttachmentInbox.FINDLAST THEN;
+
+        EMAttachment.SETRANGE("Table ID",DATABASE::Expense);
+        EMAttachment.SETRANGE("Document Type",0);
+        EMAttachment.SETRANGE("Document No.",'');
+        EMAttachment.SETRANGE("Doc. Ref. No.","Entry No.");
+        IF EMAttachment.FINDFIRST THEN BEGIN
+          NewEMSetup.CHANGECOMPANY(MoveToCompany);
+          NewEMSetup.GET;
+
+          NewContCompSetup.CHANGECOMPANY(MoveToCompany);
+          NewContCompSetup.GET;
+
+          REPEAT
+            NewEMAttachmentInbox."Table ID" := DATABASE::"Expense Inbox";
+            NewEMAttachmentInbox."Document Type" := 0;
+            NewEMAttachmentInbox."Document No." := '';
+            NewEMAttachmentInbox."Doc. Ref. No." := NewExpenseInbox."Entry No.";
+            NewEMAttachmentInbox."Entry No." := EMAttachment."Entry No.";
+            NewEMAttachmentInbox."Attachment GUID" := CREATEGUID;
+            NewEMAttachmentInbox."File Name" := EMAttachment."File Name";
+            NewEMAttachmentInbox.INSERT;
+
+            NewEMAttachmentInbox.SetSetup(NewEMSetup,NewContCompSetup);
+            NewEMAttachmentInbox.SetAttachment(EMAttachment.GetAttachmentServerFileName);
+          UNTIL EMAttachment.NEXT = 0;
+        END;
+
+        ExpAttendee.SETRANGE("Expense Entry No.","Entry No.");
+        IF ExpAttendee.FINDSET THEN
+          REPEAT
+            NexExpAttendeeInbox.TRANSFERFIELDS(ExpAttendee);
+            NexExpAttendeeInbox."Expense Entry No." := NewExpenseInbox."Entry No.";
+            NexExpAttendeeInbox.INSERT;
+          UNTIL ExpAttendee.NEXT = 0;
+
+        DELETE(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE MoveMileage@1160040004(Mileage@1160040010 : Record 6086338);
+    VAR
+      NewMileageInbox@1160040009 : Record 6086353;
+      EMAttachment@1160040004 : Record 6086359;
+      EMDim@1160040006 : Record 6086360;
+      NewEMDimInbox@1160040005 : Record 6086362;
+      NewEMAttachmentInbox@1160040003 : Record 6086363;
+      NewEMSetup@1160040008 : Record 6086300;
+      NewContCompSetup@1160040001 : Record 6192773;
+      EMDocFileSystem@1160040007 : Codeunit 6086396;
+      EMDocBlobStorageMgt@1160040002 : Codeunit 6086398;
+      EntryNo@1160040000 : Integer;
+    BEGIN
+      WITH Mileage DO BEGIN
+        TESTFIELD(Status,Status::Open);
+
+        NewMileageInbox.CHANGECOMPANY(MoveToCompany);
+        NewEMAttachmentInbox.CHANGECOMPANY(MoveToCompany);
+        NewEMDimInbox.CHANGECOMPANY(MoveToCompany);
+
+        CLEAR(NewMileageInbox."Mileage GUID");
+        IF NewMileageInbox.FINDLAST THEN
+          EntryNo := NewMileageInbox."Entry No." + 1
+        ELSE
+          EntryNo := 1;
+        NewMileageInbox.INIT;
+        NewMileageInbox."Entry No." := EntryNo;
+        NewMileageInbox.INSERT;
+
+        NewMileageInbox."Continia User ID" := "Continia User ID";
+        NewMileageInbox.Description := Description;
+        NewMileageInbox."Registration Date" := "Registration Date";
+        NewMileageInbox."Amount (LCY)" := "Amount (LCY)";
+        NewMileageInbox."Date Created" := TODAY;
+        NewMileageInbox."Job No." := "Job No.";
+        NewMileageInbox."Job Task No." := "Job Task No.";
+        NewMileageInbox."From Address" := "From Address";
+        NewMileageInbox."To Address" := "To Address";
+        NewMileageInbox."Total Distance" := "Total Distance";
+        NewMileageInbox.Billable := Billable;
+        NewMileageInbox."From Home" := "From Home";
+        NewMileageInbox."To Home" := "To Home";
+        NewMileageInbox."Travel Time" := "Travel Time";
+        NewMileageInbox."Mileage GUID" := "Mileage GUID";
+        NewMileageInbox."Expense Header GUID" := "Expense Header GUID";
+        NewMileageInbox."Imported Date/Time" := CURRENTDATETIME;
+        NewMileageInbox."Imported by User ID" := USERID;
+        NewMileageInbox."Mileage Completed" := TRUE;
+        NewMileageInbox.MODIFY;
+
+        EMDim.SETCURRENTKEY("Table ID","Document Type","Document No.","Doc. Ref. No.");
+        EMDim.SETRANGE("Table ID",DATABASE::Mileage);
+        EMDim.SETRANGE("Document Type",0);
+        EMDim.SETRANGE("Document No.",'');
+        EMDim.SETRANGE("Doc. Ref. No.","Entry No.");
+        IF EMDim.FINDFIRST THEN
+          REPEAT
+            NewEMDimInbox."Table ID" := DATABASE::"Mileage Inbox";
+            NewEMDimInbox."Document Type" := 0;
+            NewEMDimInbox."Document No." := '';
+            NewEMDimInbox."Doc. Ref. No." := NewMileageInbox."Entry No.";
+            NewEMDimInbox."Dimension Code" := EMDim."Dimension Code";
+            NewEMDimInbox."Field Code" := EMDim."Field Code";
+            NewEMDimInbox."Dimension Value Code" := EMDim."Dimension Value Code";
+            NewEMDimInbox."Field Value" := EMDim."Field Value";
+            NewEMDimInbox.INSERT;
+          UNTIL EMDim.NEXT = 0;
+
+        EMAttachment.SETRANGE("Table ID",DATABASE::Mileage);
+        EMAttachment.SETRANGE("Document Type",0);
+        EMAttachment.SETRANGE("Document No.",'');
+        EMAttachment.SETRANGE("Doc. Ref. No.","Entry No.");
+        IF NewEMAttachmentInbox.FINDLAST THEN;
+        IF EMAttachment.FINDFIRST THEN BEGIN
+          NewEMSetup.CHANGECOMPANY(MoveToCompany);
+          NewEMSetup.GET;
+
+          NewContCompSetup.CHANGECOMPANY(MoveToCompany);
+          NewContCompSetup.GET;
+
+          REPEAT
+            NewEMAttachmentInbox."Table ID" := DATABASE::"Mileage Inbox";
+            NewEMAttachmentInbox."Document Type" := 0;
+            NewEMAttachmentInbox."Document No." := '';
+            NewEMAttachmentInbox."Doc. Ref. No." := NewMileageInbox."Entry No.";
+            NewEMAttachmentInbox."Entry No." := EMAttachment."Entry No." + 1;
+            NewEMAttachmentInbox."Attachment GUID" := CREATEGUID;
+            NewEMAttachmentInbox."File Name" := EMAttachment."File Name";
+            NewEMAttachmentInbox.INSERT;
+
+            NewEMAttachmentInbox.SetSetup(NewEMSetup,NewContCompSetup);
+            NewEMAttachmentInbox.SetAttachment(EMAttachment.GetAttachmentServerFileName);
+          UNTIL EMAttachment.NEXT = 0;
+        END;
+
+        DELETE(TRUE);
+
+      END;
+    END;
+
+    LOCAL PROCEDURE SelectCompany@1160040000() : Boolean;
+    VAR
+      Company@1160040001 : Record 2000000006;
+    BEGIN
+      Company.SETFILTER(Name,'<>%1',COMPANYNAME);
+      IF PAGE.RUNMODAL(357,Company) = ACTION::LookupOK THEN BEGIN
+        MoveToCompany := Company.Name;
+        EXIT(TRUE);
+      END;
+
+      CLEAR(MoveToCompany);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,247 @@
+OBJECT Table 6086311 Continia User Credit Card
+{
+  OBJECT-PROPERTIES
+  {
+    Date=06/12/18;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.06;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 270=r;
+    OnInsert=VAR
+               ContiniaUserSetup@1160040000 : Record 6086002;
+             BEGIN
+               TESTFIELD("Continia User ID");
+
+               IF ContiniaUserSetup.GET("Continia User ID") THEN
+                 IF NOT ContiniaUserSetup."Expense Management User" THEN BEGIN
+                   ContiniaUserSetup."Expense Management User" := TRUE;
+                   ContiniaUserSetup.MODIFY;
+                 END;
+             END;
+
+    OnModify=BEGIN
+               TESTFIELD("Continia User ID");
+             END;
+
+    OnDelete=BEGIN
+               FailIfIncompletedBankTrans("Card No.",TRUE);
+             END;
+
+    CaptionML=ENU=Continia User Credit Card;
+    LookupPageID=Page6086331;
+    DrillDownPageID=Page6086331;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Continia User ID    ;Code50        ;TableRelation="Continia User Setup";
+                                                   CaptionML=ENU=Continia User ID;
+                                                   NotBlank=Yes }
+    { 3   ;   ;Card No.            ;Code20        ;OnValidate=VAR
+                                                                UserCreditCard@1160040000 : Record 6086311;
+                                                              BEGIN
+                                                                IF "Card No." <> '' THEN BEGIN
+                                                                  UserCreditCard.SETCURRENTKEY("Card No.");
+                                                                  UserCreditCard.SETRANGE("Card No.","Card No.");
+                                                                  UserCreditCard.SETFILTER("Continia User ID",'<>%1',UserCreditCard."Continia User ID");
+                                                                  IF UserCreditCard.FINDFIRST THEN
+                                                                    ERROR(DoubleCardErr,"Card No.",UserCreditCard."Continia User ID");
+                                                                END;
+
+                                                                IF ("Card No." <> xRec."Card No.") AND (xRec."Card No." <> '') THEN
+                                                                  FailIfIncompletedBankTrans(xRec."Card No.",TRUE);
+                                                              END;
+
+                                                   CaptionML=ENU=Card No.;
+                                                   NotBlank=Yes }
+    { 10  ;   ;Account Type        ;Option        ;OnValidate=VAR
+                                                                EMSetup@1160040000 : Record 6086300;
+                                                              BEGIN
+                                                                IF "Account Type" <> xRec."Account Type" THEN
+                                                                  VALIDATE("Account No.",'');
+
+                                                                IF "Account Type" = "Account Type"::Vendor THEN BEGIN
+                                                                  EMSetup.GET;
+                                                                  EMSetup.TESTFIELD("Expense Posting",EMSetup."Expense Posting"::"Always Purchase Invoice");
+                                                                  EMSetup.TESTFIELD("Post Bank Trans. on Import",FALSE);
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ENU=Bank Account Type;
+                                                   OptionCaptionML=ENU=G/L Account,,Vendor,Bank Account;
+                                                   OptionString=G/L Account,,Vendor,Bank Account }
+    { 11  ;   ;Account No.         ;Code20        ;TableRelation=IF (Account Type=CONST(G/L Account)) "G/L Account"
+                                                                 ELSE IF (Account Type=CONST(Bank Account)) "Bank Account"
+                                                                 ELSE IF (Account Type=CONST(Vendor)) Vendor;
+                                                   OnValidate=VAR
+                                                                EMSetup@1160040000 : Record 6086300;
+                                                                BankTransaction@1160040001 : Record 6086330;
+                                                              BEGIN
+                                                                ValidateAccount;
+
+                                                                BankTransaction.SETCURRENTKEY("Card No.");
+                                                                BankTransaction.SETRANGE("Card No.","Card No.");
+                                                                BankTransaction.MODIFYALL("Bank Account Type","Account Type");
+                                                                BankTransaction.MODIFYALL("Bank Account No.","Account No.");
+
+                                                                IF CurrencyChanged THEN
+                                                                  IF NOT CONFIRM(CurrencyChangedConfirm,FALSE) THEN
+                                                                    ERROR('');
+
+                                                                EMSetup.GET;
+                                                                IF EMSetup."Post Bank Trans. on Import" THEN
+                                                                  FailIfIncompletedBankTrans("Card No.",TRUE);
+
+                                                                IF CurrencyChanged THEN
+                                                                  UpdateBankTransCurrCode(
+                                                                    GetAccountCurrencyCode(xRec."Account Type",xRec."Account No."),GetAccountCurrencyCode("Account Type","Account No."),
+                                                                      "Continia User ID");
+                                                              END;
+
+                                                   CaptionML=ENU=Bank Account No. }
+  }
+  KEYS
+  {
+    {    ;Continia User ID,Card No.               ;Clustered=Yes }
+    {    ;Card No.                                 }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      CurrencyChangedConfirm@1160040000 : TextConst 'ENU=The currency of the account has been changed. Are you sure you want to update all the unposted expense?';
+      DoubleCardErr@1000 : TextConst 'ENU=There is already a card with number %1 associated to %2.';
+      MatchedExpToPostTxt@1160040002 : TextConst 'ENU=All matched expenses must be posted.';
+      BnkTrMustBePostedTxt@1160040001 : TextConst 'ENU=All bank transactions must be matched and posted.';
+
+    PROCEDURE GetAccountCurrencyCode@1160040003(AccountType@1160040000 : 'G/L Account,,Vendor,Bank Account';AccountNo@1160040003 : Code[20]) : Code[10];
+    VAR
+      Vendor@1160040002 : Record 23;
+      BankAccount@1160040001 : Record 270;
+    BEGIN
+      IF AccountNo = '' THEN
+        EXIT;
+
+      CASE AccountType OF
+        AccountType::"G/L Account":
+          EXIT;
+
+        AccountType::Vendor:
+          IF Vendor.GET(AccountNo) THEN
+            EXIT(Vendor."Currency Code");
+
+        AccountType::"Bank Account":
+          IF BankAccount.GET(AccountNo) THEN
+            EXIT(BankAccount."Currency Code");
+      END;
+    END;
+
+    LOCAL PROCEDURE ValidateAccount@1160040001();
+    BEGIN
+      CheckAccount("Account Type","Account No.");
+    END;
+
+    PROCEDURE CheckAccount@1160040004(AccountType@1160040004 : 'G/L Account,,Vendor,Bank Account';AccountNo@1160040003 : Code[20]);
+    VAR
+      GLAccount@1160040001 : Record 15;
+      Vendor@1160040002 : Record 23;
+      Bank@1160040000 : Record 270;
+    BEGIN
+      IF "Account No." = '' THEN
+        EXIT;
+
+      CASE "Account Type" OF
+        "Account Type"::"G/L Account" :
+          BEGIN
+            GLAccount.GET("Account No.");
+            GLAccount.CheckGLAcc;
+            GLAccount.TESTFIELD("Direct Posting");
+          END;
+
+        "Account Type"::Vendor :
+          BEGIN
+            Vendor.GET("Account No.");
+            Vendor.TESTFIELD(Blocked,Vendor.Blocked::" ");
+          END;
+
+        "Account Type"::"Bank Account" :
+          BEGIN
+            Bank.GET("Account No.");
+            Bank.TESTFIELD(Blocked,FALSE);
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE CurrencyChanged@1160040000() : Boolean;
+    BEGIN
+      IF "Account No." <> xRec."Account No." THEN
+        EXIT(GetAccountCurrencyCode(xRec."Account Type",xRec."Account No.") <> GetAccountCurrencyCode("Account Type","Account No."));
+    END;
+
+    PROCEDURE UpdateBankTransCurrCode@1160040002(OldCurrencyCode@1160040002 : Code[10];NewCurrencyCode@1160040003 : Code[10];ContiniaUserID@1160040001 : Code[50]);
+    VAR
+      Expense@1160040005 : Record 6086320;
+      BankTransaction@1160040000 : Record 6086330;
+    BEGIN
+      BankTransaction.SETRANGE("Card No.","Card No.");
+      BankTransaction.SETRANGE("Continia User ID",ContiniaUserID);
+      IF BankTransaction.FINDSET THEN
+        REPEAT
+          IF Expense.GET(BankTransaction.GetMatchedExpenseEntryNo) THEN BEGIN
+            IF (NOT Expense.Posted) AND (Expense."Bank Currency Code" = OldCurrencyCode) THEN BEGIN
+              Expense.VALIDATE("Bank Currency Code",NewCurrencyCode);
+              Expense."Bank-Currency Amount" := BankTransaction."Bank-Currency Amount";
+              Expense.MODIFY;
+
+              BankTransaction."Bank Currency Code" := NewCurrencyCode;
+              BankTransaction.MODIFY;
+            END;
+          END ELSE BEGIN
+            BankTransaction."Bank Currency Code" := NewCurrencyCode;
+            BankTransaction.MODIFY;
+          END;
+        UNTIL BankTransaction.NEXT = 0;
+    END;
+
+    PROCEDURE FailIfIncompletedBankTrans@1160040007(CardNo@1160040004 : Code[20];FailOnUnmatchedTrans@1160040003 : Boolean);
+    VAR
+      Expense@1160040002 : Record 6086320;
+      EMSetup@1160040001 : Record 6086300;
+      BankTransaction@1160040000 : Record 6086330;
+    BEGIN
+      BankTransaction.SETCURRENTKEY("Card No.");
+      BankTransaction.SETRANGE("Card No.",CardNo);
+      BankTransaction.SETRANGE("Matched to Expense",TRUE);
+      IF BankTransaction.FINDSET THEN
+        REPEAT
+          Expense.GET(BankTransaction.GetMatchedExpenseEntryNo);
+          IF NOT Expense.Posted THEN
+            ERROR(MatchedExpToPostTxt);
+        UNTIL BankTransaction.NEXT = 0;
+
+      IF FailOnUnmatchedTrans THEN BEGIN
+        BankTransaction.SETRANGE("Matched to Expense",FALSE);
+        IF NOT BankTransaction.ISEMPTY THEN
+          ERROR(BnkTrMustBePostedTxt);
+      END;
+    END;
+
+    PROCEDURE InitAccountTypeAndNo@1160040006();
+    VAR
+      EMSetup@1160040000 : Record 6086300;
+    BEGIN
+      EMSetup.GET;
+      IF EMSetup."Card Transaction Bal. No." <> '' THEN BEGIN
+        "Account Type" := EMSetup."Card Transaction Bal. Type";
+        "Account No." := EMSetup."Card Transaction Bal. No.";
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

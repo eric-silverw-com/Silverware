@@ -1,0 +1,852 @@
+OBJECT Table 6086339 Expense Header
+{
+  OBJECT-PROPERTIES
+  {
+    Date=06/13/18;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.06;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 311=r,
+                TableData 6086002=r,
+                TableData 6086300=r,
+                TableData 6086341=r;
+    OnInsert=VAR
+               EMSetup@1160040000 : Record 6086300;
+               NoSeriesMgt@1160040001 : Codeunit 396;
+               SalesSetup@1160040003 : Record 311;
+             BEGIN
+               EMSetup.GET;
+               EMSetup.TESTFIELD("Enable Settlement",TRUE);
+
+               IF "No." = '' THEN BEGIN
+                 EMSetup.TESTFIELD("Settlement Nos.");
+                 NoSeriesMgt.InitSeries(EMSetup."Settlement Nos.",xRec."No. Series",WORKDATE,"No.","No. Series");
+               END;
+
+               AddDefaultDim(0);
+
+               "Posting Date" := WORKDATE;
+               "Date Created" := TODAY;
+               "Created by User ID" := USERID;
+
+               IF SalesSetup.GET THEN
+                 IF SalesSetup."Default Posting Date" = SalesSetup."Default Posting Date"::"No Date" THEN
+                   "Posting Date" := 0D;
+
+               "Posting Description" := FORMAT("Document Type") + ' ' + "No.";
+               ExpHeaderValidate.RUN(Rec);
+             END;
+
+    OnModify=BEGIN
+               TESTFIELD(Posted,FALSE);
+               TestStatusOpenOrPendingExpUser;
+               CheckInboxAndThrowError;
+
+               SendToExpenseUser;
+             END;
+
+    OnDelete=VAR
+               Mileage@1160040001 : Record 6086338;
+               Expense@1160040002 : Record 6086320;
+               Expense2@1160040006 : Record 6086320;
+               EMDimension@1160040003 : Record 6086360;
+               EMComment@1160040004 : Record 6086361;
+               EMCommentLine@1160040007 : Record 6086371;
+               EMReminder@1160040008 : Record 6086364;
+               ExpHeaderInbox@1160040009 : Record 6086341;
+               EMApprovalsBridge@1160040005 : Codeunit 6086369;
+               EMOnlineMgt@1160040000 : Codeunit 6086305;
+             BEGIN
+               TESTFIELD(Posted,FALSE);
+               TestStatusOpenOrPendingExpUser;
+
+               CheckInboxAndThrowError;
+
+               Expense.SETCURRENTKEY("Settlement No.");
+               Expense.SETRANGE("Settlement No.","No.");
+               Expense.SETRANGE("Matched to Bank Transaction",FALSE);
+
+               Mileage.SETCURRENTKEY("Settlement No.");
+               Mileage.SETRANGE("Settlement No.","No.");
+
+               IF NOT HideUI THEN
+                 IF NOT (Expense.ISEMPTY AND Mileage.ISEMPTY) THEN
+                   IF NOT CONFIRM(DeleteSettlementTxt,FALSE) THEN
+                     ERROR('');
+
+               Expense.SETRANGE("Matched to Bank Transaction",TRUE);
+               IF Expense.FINDFIRST THEN
+                 REPEAT
+                   Expense2 := Expense;
+                   Expense2.VALIDATE("Settlement No.",'');
+                   Expense2.MODIFY(TRUE);
+                 UNTIL Expense.NEXT = 0;
+
+               Expense.SETRANGE("Matched to Bank Transaction",FALSE);
+               Expense.DELETEALL(TRUE);
+               Mileage.DELETEALL(TRUE);
+
+               EMDimension.LOCKTABLE;
+               EMDimension.SETCURRENTKEY("Table ID","Document Type","Document No.","Doc. Ref. No.");
+               EMDimension.SETRANGE("Table ID",DATABASE::"Expense Header");
+               EMDimension.SETRANGE("Document Type",EMDimension."Document Type"::Settlement);
+               EMDimension.SETRANGE("Document No.","No.");
+               EMDimension.SETRANGE("Doc. Ref. No.",0);
+               EMDimension.DELETEALL;
+
+               EMComment.SETCURRENTKEY("Table ID","Document Type","Document No.","Doc. Ref. No.");
+               EMComment.SETRANGE("Table ID",DATABASE::"Expense Header");
+               EMComment.SETRANGE("Document Type",EMDimension."Document Type"::Settlement);
+               EMComment.SETRANGE("Document No.","No.");
+               EMComment.SETRANGE("Doc. Ref. No.",0);
+               EMComment.DELETEALL(TRUE);
+
+               EMReminder.SETCURRENTKEY("Table ID","Document Type","Document No.","Doc. Ref. No.");
+               EMReminder.SETRANGE("Table ID",DATABASE::"Expense Header");
+               EMReminder.SETRANGE("Document Type",EMReminder."Document Type"::Settlement);
+               EMReminder.SETRANGE("Document No.","No.");
+               EMReminder.SETRANGE("Doc. Ref. No.",0);
+               EMReminder.DELETEALL(TRUE);
+
+               EMCommentLine.SETRANGE("Table Name",EMCommentLine."Table Name"::"Expense Header");
+               EMCommentLine.SETRANGE("No.","No.");
+               EMCommentLine.DELETEALL(TRUE);
+
+               EMApprovalsBridge.DeleteApprovalEntries(DATABASE::"Expense Header","No.");
+
+               IF Status = Status::"Pending Expense User" THEN
+                 EMOnlineMgt.PhysicalDeleteDocFromCO(DATABASE::"Expense Header","Exp. Header GUID",TRUE);
+             END;
+
+    OnRename=BEGIN
+               ERROR(CannotRename,TABLECAPTION);
+             END;
+
+    CaptionML=ENU=Expense Header;
+    LookupPageID=Page6086384;
+    DrillDownPageID=Page6086384;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Document Type       ;Option        ;CaptionML=ENU=Document Type;
+                                                   OptionCaptionML=ENU=Budget,Settlement;
+                                                   OptionString=Budget,Settlement }
+    { 2   ;   ;No.                 ;Code20        ;OnValidate=VAR
+                                                                EMSetup@1160040000 : Record 6086300;
+                                                                NoSeriesMgt@1160040001 : Codeunit 396;
+                                                              BEGIN
+                                                                IF "No." <> xRec."No." THEN BEGIN
+                                                                  EMSetup.GET;
+                                                                  NoSeriesMgt.TestManual(EMSetup."Settlement Nos.");
+                                                                  "No. Series" := '';
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ENU=No. }
+    { 3   ;   ;Continia User ID    ;Code50        ;TableRelation="Continia User Setup";
+                                                   OnValidate=VAR
+                                                                ContiniaUser@1160040000 : Record 6086001;
+                                                                UserResp@1160040001 : Record 6086379;
+                                                              BEGIN
+                                                                CheckLinesExist;
+
+                                                                IF "Continia User ID" <> '' THEN
+                                                                  ContiniaUser.GET("Continia User ID")
+                                                                ELSE
+                                                                  CLEAR(ContiniaUser);
+
+                                                                "Continia User Name" := ContiniaUser.Name;
+                                                                AddDefaultDim(CurrFieldNo);
+
+                                                                UserResp.VerifyUser("Continia User ID");
+                                                              END;
+
+                                                   CaptionML=ENU=Continia User ID }
+    { 4   ;   ;Continia User Name  ;Text50        ;CaptionML=ENU=Name }
+    { 5   ;   ;Description         ;Text50        ;CaptionML=ENU=Description }
+    { 6   ;   ;Date Created        ;Date          ;CaptionML=ENU=Date Created;
+                                                   Editable=No }
+    { 7   ;   ;Description 2       ;Text50        ;CaptionML=ENU=Description 2 }
+    { 8   ;   ;Created by User ID  ;Code50        ;CaptionML=ENU=Created by User ID;
+                                                   Editable=No }
+    { 9   ;   ;Global Dimension 1 Code;Code20     ;TableRelation="Dimension Value".Code WHERE (Global Dimension No.=CONST(1));
+                                                   OnValidate=VAR
+                                                                EMDimMgt@1160040000 : Codeunit 6086318;
+                                                              BEGIN
+                                                                EMDimMgt.UpdateEMDimForGlobalDim(DATABASE::"Expense Header","Document Type","No.",0,1,"Global Dimension 1 Code");
+                                                                ExpHeaderValidate.RUN(Rec);
+                                                              END;
+
+                                                   CaptionML=ENU=Global Dimension 1 Code;
+                                                   CaptionClass='1,1,1' }
+    { 10  ;   ;Global Dimension 2 Code;Code20     ;TableRelation="Dimension Value".Code WHERE (Global Dimension No.=CONST(2));
+                                                   OnValidate=VAR
+                                                                EMDimMgt@1160040000 : Codeunit 6086318;
+                                                              BEGIN
+                                                                EMDimMgt.UpdateEMDimForGlobalDim(DATABASE::"Expense Header","Document Type","No.",0,2,"Global Dimension 2 Code");
+                                                                ExpHeaderValidate.RUN(Rec);
+                                                              END;
+
+                                                   CaptionML=ENU=Global Dimension 2 Code;
+                                                   CaptionClass='1,1,2' }
+    { 11  ;   ;Job No.             ;Code20        ;TableRelation=Job;
+                                                   OnValidate=VAR
+                                                                ConfiguredField@1160040000 : Record 6086346;
+                                                              BEGIN
+                                                                AddDefaultDim(CurrFieldNo);
+                                                                VALIDATE(Billable,"Job Task No." <> '');
+                                                              END;
+
+                                                   CaptionML=ENU=Job No. }
+    { 12  ;   ;Job Task No.        ;Code20        ;TableRelation="Job Task"."Job Task No." WHERE (Job No.=FIELD(Job No.));
+                                                   OnValidate=BEGIN
+                                                                VALIDATE(Billable,"Job Task No." <> '');
+                                                              END;
+
+                                                   CaptionML=ENU=Job Task No. }
+    { 13  ;   ;Status              ;Option        ;CaptionML=ENU=Status;
+                                                   OptionCaptionML=ENU=Open,Pending Expense User,Pending Approval,Released;
+                                                   OptionString=Open,Pending Expense User,Pending Approval,Released;
+                                                   Editable=No }
+    { 14  ;   ;Posted              ;Boolean       ;OnValidate=VAR
+                                                                MileageDetails@1160040000 : Record 6086365;
+                                                              BEGIN
+                                                              END;
+
+                                                   CaptionML=ENU=Posted;
+                                                   Editable=No }
+    { 15  ;   ;Posted Date/Time    ;DateTime      ;CaptionML=ENU=Posted Date Time;
+                                                   Editable=No }
+    { 16  ;   ;Posted by User ID   ;Code50        ;CaptionML=ENU=Posted by User ID;
+                                                   Editable=No }
+    { 17  ;   ;Admin Comment       ;Text250       ;CaptionML=ENU=Admin Comment }
+    { 19  ;   ;No. Series          ;Code10        ;TableRelation="No. Series";
+                                                   CaptionML=[ENU=No. Series;
+                                                              ENC=No. Series];
+                                                   Editable=No }
+    { 20  ;   ;On Hold             ;Code3         ;CaptionML=ENU=On Hold }
+    { 21  ;   ;Exp. Header GUID    ;GUID          ;CaptionML=ENU=Exp. Header GUID }
+    { 22  ;   ;Comment             ;Boolean       ;FieldClass=FlowField;
+                                                   CalcFormula=Exist("EM Comment Line" WHERE (Table Name=CONST(Expense Header),
+                                                                                              No.=FIELD(No.)));
+                                                   CaptionML=ENU=Comment;
+                                                   Editable=No }
+    { 23  ;   ;Country/Region Code ;Code10        ;TableRelation=Country/Region;
+                                                   CaptionML=ENU=Country/Region Code;
+                                                   NotBlank=Yes }
+    { 24  ;   ;Currency Code       ;Code10        ;TableRelation=Currency;
+                                                   CaptionML=ENU=Currency Code }
+    { 25  ;   ;Expense Header Completed;Boolean   ;CaptionML=ENU=Settlement Completed }
+    { 26  ;   ;Continia Online Version No.;Text100;CaptionML=ENU=Continia Online Version No. }
+    { 30  ;   ;Posting Date        ;Date          ;CaptionML=ENU=Posting Date }
+    { 33  ;   ;Billable            ;Boolean       ;OnValidate=BEGIN
+                                                                IF Billable AND ("Job No." <> '') AND ("Job Task No." <> '') THEN
+                                                                  VALIDATE("Job Line Type","Job Line Type"::Contract)
+                                                                ELSE
+                                                                  VALIDATE("Job Line Type","Job Line Type"::" ");
+                                                              END;
+
+                                                   CaptionML=ENU=Billable }
+    { 34  ;   ;Job Line Type       ;Option        ;OnValidate=BEGIN
+                                                                IF "Job Line Type" = "Job Line Type"::Contract THEN BEGIN
+                                                                  TESTFIELD("Job No.");
+                                                                  TESTFIELD("Job Task No.");
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ENU=Job Line Type;
+                                                   OptionCaptionML=ENU=" ,Budget,Billable,Both Budget and Billable";
+                                                   OptionString=[ ,Schedule,Contract,Both Schedule and Contract] }
+    { 40  ;   ;Posting Description ;Text30        ;CaptionML=ENU=Posting Description }
+    { 100 ;   ;Expense Total (LCY) ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum(Expense."Amount (LCY)" WHERE (Settlement No.=FIELD(No.)));
+                                                   CaptionML=ENU=Expense Total (LCY);
+                                                   Editable=No }
+    { 101 ;   ;Mileage Total (LCY) ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum(Mileage."Amount (LCY)" WHERE (Settlement No.=FIELD(No.)));
+                                                   CaptionML=ENU=Mileage Total (LCY);
+                                                   Editable=No }
+    { 113 ;   ;Created Doc. Type   ;Integer       ;CaptionML=ENU=Created Doc. Type;
+                                                   Editable=No }
+    { 114 ;   ;Created Doc. Subtype;Integer       ;CaptionML=ENU=Created Doc. Subtype;
+                                                   Editable=No }
+    { 115 ;   ;Created Doc. ID     ;Code20        ;CaptionML=ENU=Created Doc. ID;
+                                                   Editable=No }
+    { 116 ;   ;Created Doc. Ref. No.;Integer      ;CaptionML=ENU=Created Doc. Ref. No.;
+                                                   Editable=No }
+  }
+  KEYS
+  {
+    {    ;Document Type,No.                       ;Clustered=Yes }
+    {    ;Exp. Header GUID                         }
+    {    ;Continia User ID,Status                  }
+    {    ;Posted,Continia User ID,Status           }
+    {    ;Created Doc. Type,Created Doc. Subtype,Created Doc. ID,Created Doc. Ref. No. }
+    {    ;Posted,Posted Date/Time,Document Type,No. }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      CannotChangeFldTxt@1160040000 : TextConst 'ENU="You can not change the %1 field because %2 %3 has %4 = %5 and the %6 has already been assigned %7 %8."';
+      CannotModifyField@1160040001 : TextConst 'ENU=%1 cannot be modified because one or more lines exist.';
+      CannotRename@1160040003 : TextConst 'ENU=You cannot rename a %1.;ENC=You cannot rename a %1.';
+      SkipSendToExpUser@1160040004 : Boolean;
+      ExpensesTxt@1160040005 : TextConst 'ENU=Expenses';
+      ExpHeaderValidate@1160040006 : Codeunit 6086381;
+      StatusNotAllowed@1160040007 : TextConst 'ENU=Status must be Open or Pending Expense User in %1 %2.';
+      OneOrMoreInboxError@1160040009 : TextConst 'ENU=There are one or more unprocessed entries in the %1.';
+      ProcessInboxAsapTxt@1160040008 : TextConst 'ENU=\\You should process these as soon as possible.';
+      DeleteSettlementTxt@1160040014 : TextConst 'ENU=This will delete all lines on the Settlement.\\Do you want to continue?';
+      HideUI@1160040015 : Boolean;
+      SuspendInboxCheck@1160040002 : Boolean;
+      EMInboxFoundErr@1160040010 : TextConst 'ENU=%1 %2 cannot be updated as there are one or more unprocessed lines in the %3.\\Please process the related lines in the %3 before making changes to this %1.';
+
+    PROCEDURE AssistEditNoSeries@2(OldExpHeader@1000 : Record 6086339) : Boolean;
+    VAR
+      EMSetup@1160040000 : Record 6086300;
+      NoSeriesMgt@1160040001 : Codeunit 396;
+    BEGIN
+      EMSetup.GET;
+      EMSetup.TESTFIELD("Settlement Nos.");
+      IF NoSeriesMgt.SelectSeries(EMSetup."Settlement Nos.",OldExpHeader."No. Series","No. Series") THEN BEGIN
+        NoSeriesMgt.SetSeries("No.");
+        EXIT(TRUE);
+      END;
+    END;
+
+    PROCEDURE LinesExist@1160040000() : Boolean;
+    VAR
+      Expense@1160040000 : Record 6086320;
+      Mileage@1160040001 : Record 6086338;
+    BEGIN
+      IF "No." = '' THEN
+        EXIT;
+
+      Expense.SETCURRENTKEY("Settlement No.");
+      Expense.SETRANGE("Settlement No.","No.");
+      IF NOT Expense.ISEMPTY THEN
+        EXIT(TRUE);
+
+      Mileage.SETCURRENTKEY("Settlement No.");
+      Mileage.SETRANGE("Settlement No.","No.");
+      IF NOT Mileage.ISEMPTY THEN
+        EXIT(TRUE);
+    END;
+
+    PROCEDURE Code2Int@1160040001(CodeVal@1160040000 : Code[50]) IntVal : Integer;
+    BEGIN
+      IF CodeVal = '' THEN
+        EXIT;
+
+      EVALUATE(IntVal,CodeVal);
+    END;
+
+    PROCEDURE SetSkipSendToExpUser@1160040002(NewSkipSendToExpUser@1160040000 : Boolean);
+    BEGIN
+      SkipSendToExpUser := NewSkipSendToExpUser;
+    END;
+
+    PROCEDURE SendToExpenseUser@1160040012();
+    VAR
+      SendToExpUser@1160040000 : Codeunit 6086382;
+    BEGIN
+      IF SkipSendToExpUser THEN
+        EXIT;
+
+      IF Status = Status::"Pending Expense User" THEN
+        SendToExpUser.Update(Rec);
+    END;
+
+    PROCEDURE GetEmployeeEmail@1160040029() : Text[250];
+    VAR
+      ContiniaUser@1160040000 : Record 6086001;
+    BEGIN
+      IF ContiniaUser.GET("Continia User ID") THEN
+        EXIT(ContiniaUser."E-Mail");
+    END;
+
+    PROCEDURE GetOverviewDetails@1160040033() AddInfo : Text[1024];
+    VAR
+      Expense@1160040000 : Record 6086320;
+      Mileage@1160040001 : Record 6086338;
+    BEGIN
+      IF "No." <> '' THEN BEGIN
+        Expense.SETCURRENTKEY("Settlement No.");
+        Expense.SETRANGE("Settlement No.","No.");
+        IF Expense.COUNT = 1 THEN
+          AddTextTo(AddInfo,FORMAT(Expense.COUNT) + ' ' + Expense.TABLECAPTION)
+        ELSE
+          IF Expense.COUNT > 1 THEN
+            AddTextTo(AddInfo,FORMAT(Expense.COUNT) + ' ' + ExpensesTxt);
+
+        Mileage.SETCURRENTKEY("Settlement No.");
+        Mileage.SETRANGE("Settlement No.","No.");
+        IF Mileage.COUNT > 0 THEN
+          AddTextTo(AddInfo,FORMAT(Mileage.COUNT) + ' ' + Mileage.TABLECAPTION);
+      END;
+    END;
+
+    LOCAL PROCEDURE AddTextTo@1160040035(VAR ReturnTxt@1160040001 : Text[1024];TxtToAdd@1160040000 : Text[1024]);
+    BEGIN
+      IF TxtToAdd = '' THEN
+        EXIT;
+
+      IF (STRLEN(TxtToAdd) + STRLEN(ReturnTxt)) > MAXSTRLEN(ReturnTxt) THEN
+        EXIT;
+
+      IF ReturnTxt = '' THEN
+        ReturnTxt := TxtToAdd
+      ELSE
+        ReturnTxt := ReturnTxt + ', ' + TxtToAdd;
+    END;
+
+    PROCEDURE LookupDimensions@1160040025();
+    BEGIN
+      DrillDownDimensions(PAGE::"Expense Dimensions");
+    END;
+
+    PROCEDURE LookupExtraFields@1160040028();
+    BEGIN
+      DrillDownDimensions(PAGE::"Expense Extra Fields");
+    END;
+
+    LOCAL PROCEDURE DrillDownDimensions@1160040014(FormID@1160040004 : Integer);
+    VAR
+      EMDim@1160040000 : Record 6086360;
+      TempEMDim@1160040002 : TEMPORARY Record 6086360;
+      ExpDim@1160040001 : Page 6086356;
+      ExpExtraFields@1160040005 : Page 6086358;
+    BEGIN
+      EMDim.SETRANGE("Table ID",DATABASE::"Expense Header");
+      EMDim.SETRANGE("Document Type","Document Type");
+      EMDim.SETRANGE("Document No.","No.");
+      EMDim.SETRANGE("Doc. Ref. No.",0);
+
+      IF NOT Posted THEN BEGIN
+        IF EMDim.FINDSET THEN
+          REPEAT
+            TempEMDim := EMDim;
+            TempEMDim.INSERT;
+          UNTIL EMDim.NEXT = 0;
+
+        TempEMDim.SETRANGE("Table ID",DATABASE::"Expense Header");
+        TempEMDim.SETRANGE("Document Type","Document Type");
+        TempEMDim.SETRANGE("Document No.","No.");
+        TempEMDim.SETRANGE("Doc. Ref. No.",0);
+        PAGE.RUNMODAL(FormID,TempEMDim);
+
+        IF EMDim.EMDimUpdated(TempEMDim,DATABASE::"Expense Header","Document Type","No.",0) THEN BEGIN
+          EMDim.DELETEALL(TRUE);
+
+          IF TempEMDim.FINDSET THEN
+            REPEAT
+              EMDim := TempEMDim;
+              EMDim.INSERT(TRUE);
+            UNTIL TempEMDim.NEXT = 0;
+
+          GET("Document Type","No.");
+          SendToExpenseUser;
+
+          CODEUNIT.RUN(CODEUNIT::"Exp. Header - Validate",Rec);
+        END;
+      END ELSE
+        CASE FormID OF
+          PAGE::"Expense Dimensions":
+            BEGIN
+              ExpDim.SETTABLEVIEW(EMDim);
+              ExpDim.SetReadOnly;
+              ExpDim.RUNMODAL;
+            END;
+
+          PAGE::"Expense Extra Fields":
+            BEGIN
+              ExpExtraFields.SETTABLEVIEW(EMDim);
+              ExpExtraFields.SetReadOnly;
+              ExpExtraFields.RUNMODAL;
+            END;
+        END;
+    END;
+
+    PROCEDURE AddDefaultDim@1160040024(ValidatedFieldNo@1160040002 : Integer);
+    VAR
+      ContiniaUserSetup@1160040001 : Record 6086002;
+      EMDimMgt@1160040000 : Codeunit 6086318;
+    BEGIN
+      DeleteOldDefaultDim;
+
+      IF ContiniaUserSetup.GET("Continia User ID") THEN BEGIN
+        IF ContiniaUserSetup.GetSalesPurchCode <> '' THEN
+          EMDimMgt.InsertDefaultDimExpHeader(DATABASE::"Salesperson/Purchaser",ContiniaUserSetup.GetSalesPurchCode,Rec);
+
+        IF ContiniaUserSetup."Vendor No." <> '' THEN
+          EMDimMgt.InsertDefaultDimExpHeader(DATABASE::Vendor,ContiniaUserSetup."Vendor No.",Rec);
+      END;
+
+      IF "Job No." <> '' THEN
+        EMDimMgt.InsertDefaultDimExpHeader(DATABASE::Job,"Job No.",Rec);
+
+      CASE ValidatedFieldNo OF
+        FIELDNO("Continia User ID"):
+          IF ContiniaUserSetup.GET("Continia User ID") THEN BEGIN
+            IF ContiniaUserSetup.GetSalesPurchCode <> '' THEN
+              EMDimMgt.InsertDefaultDimExpHeader(DATABASE::"Salesperson/Purchaser",ContiniaUserSetup.GetSalesPurchCode,Rec);
+
+            IF ContiniaUserSetup."Vendor No." <> '' THEN
+              EMDimMgt.InsertDefaultDimExpHeader(DATABASE::Vendor,ContiniaUserSetup."Vendor No.",Rec);
+          END;
+
+        FIELDNO("Job No."):
+          IF "Job No." <> '' THEN
+            EMDimMgt.InsertDefaultDimExpHeader(DATABASE::Job,"Job No.",Rec);
+      END;
+    END;
+
+    PROCEDURE DeleteOldDefaultDim@1160040026();
+    VAR
+      ContiniaUser@1160040001 : Record 6086002;
+      EMDimMgt@1160040000 : Codeunit 6086318;
+    BEGIN
+      IF ContiniaUser.GET(xRec."Continia User ID") THEN BEGIN
+        IF ContiniaUser.GetSalesPurchCode <> '' THEN
+          EMDimMgt.DeleteDefaultDimExpHeader(DATABASE::"Salesperson/Purchaser",ContiniaUser.GetSalesPurchCode,Rec);
+
+        IF ContiniaUser."Vendor No." <> '' THEN
+          EMDimMgt.DeleteDefaultDimExpHeader(DATABASE::Vendor,ContiniaUser."Vendor No.",Rec);
+      END;
+
+      IF xRec."Job No." <> '' THEN
+        EMDimMgt.DeleteDefaultDimExpHeader(DATABASE::Job,xRec."Job No.",Rec);
+    END;
+
+    PROCEDURE GetAmountLCY@1160040003() : Decimal;
+    BEGIN
+      CALCFIELDS("Expense Total (LCY)","Mileage Total (LCY)");
+      EXIT("Expense Total (LCY)" + "Mileage Total (LCY)");
+    END;
+
+    PROCEDURE GetDataCaption@1160040004() : Text[250];
+    BEGIN
+      EXIT(FORMAT("Document Type") + ' ' + "No.");
+    END;
+
+    PROCEDURE ExistsInInbox@1160040020() : Boolean;
+    VAR
+      ExpHeaderInbox@1160040000 : Record 6086341;
+      ExpenseInbox@1160040001 : Record 6086323;
+      MileageInbox@1160040002 : Record 6086353;
+    BEGIN
+      ExpHeaderInbox.SETCURRENTKEY("Exp. Header GUID");
+      ExpHeaderInbox.SETRANGE("Exp. Header GUID","Exp. Header GUID");
+      ExpHeaderInbox.SETFILTER(Status,'%1|%2',ExpHeaderInbox.Status::Pending,ExpHeaderInbox.Status::Error);
+      IF NOT ExpHeaderInbox.ISEMPTY THEN
+        EXIT(TRUE);
+
+      ExpenseInbox.SETCURRENTKEY("Expense Header GUID");
+      ExpenseInbox.SETRANGE("Expense Header GUID","Exp. Header GUID");
+      ExpenseInbox.SETFILTER(Status,'%1|%2',ExpenseInbox.Status::Pending,ExpenseInbox.Status::Error);
+      IF NOT ExpenseInbox.ISEMPTY THEN
+        EXIT(TRUE);
+
+      MileageInbox.SETCURRENTKEY("Expense Header GUID");
+      MileageInbox.SETRANGE("Expense Header GUID","Exp. Header GUID");
+      MileageInbox.SETFILTER(Status,'%1|%2',MileageInbox.Status::Pending,MileageInbox.Status::Error);
+      IF NOT MileageInbox.ISEMPTY THEN
+        EXIT(TRUE);
+    END;
+
+    PROCEDURE CheckInboxAndThrowError@1();
+    BEGIN
+      IF NOT SuspendInboxCheck THEN
+        IF ExistsInInbox THEN
+          ThrowInboxError;
+    END;
+
+    PROCEDURE ThrowInboxError@3();
+    VAR
+      ExpHeaderInbox@1000 : Record 6086339;
+    BEGIN
+      ERROR(EMInboxFoundErr,TABLECAPTION,"No.",ExpHeaderInbox.TABLECAPTION);
+    END;
+
+    PROCEDURE Navigate@1160040005();
+    VAR
+      NavigateSettlement@1160040000 : Codeunit 6086326;
+    BEGIN
+      NavigateSettlement.NavigateSettlements(Rec);
+    END;
+
+    PROCEDURE HasApprovalComment@1160040022() : Boolean;
+    VAR
+      ApprovalCmtLine@1160040000 : Record 455;
+      Expense@1160040001 : Record 6086320;
+      Mileage@1160040002 : Record 6086338;
+    BEGIN
+      ApprovalCmtLine.SETCURRENTKEY("Table ID","Document Type","Document No.");
+      ApprovalCmtLine.SETRANGE("Table ID",DATABASE::"Expense Header");
+      ApprovalCmtLine.SETRANGE("Document Type",ApprovalCmtLine."Document Type"::Invoice);
+      ApprovalCmtLine.SETRANGE("Document No.","No.");
+      IF NOT ApprovalCmtLine.ISEMPTY THEN
+        EXIT(TRUE);
+
+      Expense.SETCURRENTKEY("Settlement No.");
+      Expense.SETRANGE("Settlement No.","No.");
+      IF Expense.FINDSET THEN
+        REPEAT
+          IF Expense.HasApprovalComment THEN
+            EXIT(TRUE);
+        UNTIL Expense.NEXT = 0;
+
+      Mileage.SETCURRENTKEY("Settlement No.");
+      Mileage.SETRANGE("Settlement No.","No.");
+      IF Mileage.FINDSET THEN
+        REPEAT
+          IF Mileage.HasApprovalComment THEN
+            EXIT(TRUE);
+        UNTIL Mileage.NEXT = 0;
+    END;
+
+    PROCEDURE HasSettlementComment@1160040006() : Boolean;
+    VAR
+      Expense@1160040001 : Record 6086320;
+      Mileage@1160040000 : Record 6086338;
+    BEGIN
+      CALCFIELDS(Comment);
+      IF Comment THEN
+        EXIT(TRUE);
+
+      Expense.SETCURRENTKEY("Settlement No.");
+      Expense.SETRANGE("Settlement No.","No.");
+      IF Expense.FINDSET THEN
+        REPEAT
+          IF Expense.HasExpenseComment THEN
+            EXIT(TRUE);
+        UNTIL Expense.NEXT = 0;
+
+      Mileage.SETCURRENTKEY("Settlement No.");
+      Mileage.SETRANGE("Settlement No.","No.");
+      IF Mileage.FINDSET THEN
+        REPEAT
+          IF Mileage.HasMileageComment THEN
+            EXIT(TRUE);
+        UNTIL Mileage.NEXT = 0;
+    END;
+
+    PROCEDURE LookupComments@1160040037();
+    VAR
+      EMCmtMgt@1160040000 : Codeunit 6086323;
+    BEGIN
+      EMCmtMgt.LookupComments(DATABASE::"Expense Header","Document Type"::Settlement,"No.",0);
+    END;
+
+    PROCEDURE HasErrorComment@1160040017(ShowFirstError@1000 : Boolean) : Boolean;
+    VAR
+      EMCmtMgt@1160040001 : Codeunit 6086323;
+    BEGIN
+      EXIT(EMCmtMgt.HasErrorComments(DATABASE::"Expense Header","Document Type","No.",0,ShowFirstError,TRUE));
+    END;
+
+    PROCEDURE HasWarningComment@1160040008(ShowFirstError@1000 : Boolean) : Boolean;
+    VAR
+      EMCmtMgt@1160040001 : Codeunit 6086323;
+    BEGIN
+      EXIT(EMCmtMgt.HasWarningComments(DATABASE::"Expense Header","Document Type","No.",0,ShowFirstError,TRUE));
+    END;
+
+    PROCEDURE CheckUnProcessedInbox@1160040007();
+    VAR
+      UserResp@1000 : Record 6086379;
+      ExpHeaderInbox@1160040000 : Record 6086341;
+      TextMessage@1160040002 : Text[1024];
+    BEGIN
+      IF UserResp.GetResponsibilityFilter <> '' THEN
+        EXIT;
+
+      ExpHeaderInbox.SETFILTER(Status,'<>%1',ExpHeaderInbox.Status::Accepted);
+      IF NOT ExpHeaderInbox.ISEMPTY THEN
+        TextMessage := STRSUBSTNO(OneOrMoreInboxError,ExpHeaderInbox.TABLECAPTION);
+
+      IF TextMessage <> '' THEN
+        MESSAGE(TextMessage + ProcessInboxAsapTxt);
+    END;
+
+    PROCEDURE UpdatePostingDate@1160040009(PostingDatePolicy@1160040000 : 'FirstDate,LastDate');
+    VAR
+      Expense@1160040001 : Record 6086320;
+      Mileage@1160040002 : Record 6086338;
+      NewPostingDate@1160040003 : Date;
+    BEGIN
+      NewPostingDate := "Posting Date";
+
+      Expense.SETCURRENTKEY("Settlement No.");
+      Expense.SETRANGE("Settlement No.","No.");
+      IF Expense.FINDFIRST THEN
+        REPEAT
+          IF PostingDatePolicy = PostingDatePolicy::FirstDate THEN
+            IF (NewPostingDate = 0D) OR (NewPostingDate > Expense."Document Date") THEN
+              NewPostingDate := Expense."Document Date";
+
+          IF PostingDatePolicy = PostingDatePolicy::LastDate THEN
+            IF (NewPostingDate = 0D) OR (NewPostingDate < Expense."Document Date") THEN
+              NewPostingDate := Expense."Document Date";
+        UNTIL Expense.NEXT = 0;
+
+      Mileage.SETCURRENTKEY("Settlement No.");
+      Mileage.SETRANGE("Settlement No.","No.");
+      IF Mileage.FINDFIRST THEN
+        REPEAT
+          IF PostingDatePolicy = PostingDatePolicy::FirstDate THEN
+            IF (NewPostingDate = 0D) OR (NewPostingDate > Mileage."Registration Date") THEN
+              NewPostingDate := Mileage."Registration Date";
+
+          IF PostingDatePolicy = PostingDatePolicy::LastDate THEN
+            IF (NewPostingDate = 0D) OR (NewPostingDate < Mileage."Registration Date") THEN
+              NewPostingDate := Mileage."Registration Date";
+        UNTIL Mileage.NEXT = 0;
+
+      IF "Posting Date" <> NewPostingDate THEN BEGIN
+        "Posting Date" := NewPostingDate;
+        MODIFY;
+      END;
+    END;
+
+    PROCEDURE AttachExpensesToSettlement@1160040040();
+    VAR
+      Expense@1160040000 : Record 6086320;
+      Expense2@1160040004 : Record 6086320;
+      ExpenseForm@1160040002 : Page 6086317;
+      ConfirmTxt@1160040003 : Text[250];
+    BEGIN
+      TestStatusOpenOrPendingExpUser;
+
+      Expense.SETCURRENTKEY(Posted,"Continia User ID",Status,"Document Date");
+      Expense.FILTERGROUP(4);
+      Expense.SETRANGE("Continia User ID","Continia User ID");
+      Expense.SETRANGE(Posted,FALSE);
+      Expense.SETRANGE("Settlement No.",'');
+      Expense.FILTERGROUP(0);
+
+      ExpenseForm.LOOKUPMODE := TRUE;
+      ExpenseForm.SETTABLEVIEW(Expense);
+      IF ExpenseForm.RUNMODAL = ACTION::LookupOK THEN BEGIN
+        ExpenseForm.GetSelectionFilter(Expense);
+
+        IF Expense.FINDSET THEN
+          REPEAT
+            Expense2.GET(Expense."Entry No.");
+
+            IF (Status = Status::Open) AND
+               (Expense2.Status = Expense2.Status::"Pending Expense User")
+            THEN
+              CODEUNIT.RUN(CODEUNIT::"Expense - Reopen",Expense2);
+
+            Expense2.GET(Expense."Entry No.");
+            Expense2.VALIDATE("Settlement No.","No.");
+            Expense2.MODIFY(TRUE);
+          UNTIL Expense.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE AttachMileageToSettlement@1160040010();
+    VAR
+      Mileage@1160040000 : Record 6086338;
+      Mileage2@1160040004 : Record 6086338;
+      MileageForm@1160040002 : Page 6086378;
+      ConfirmTxt@1160040003 : Text[250];
+    BEGIN
+      TestStatusOpenOrPendingExpUser;
+
+      Mileage.SETCURRENTKEY(Posted,"Continia User ID",Status,"Registration Date");
+      Mileage.FILTERGROUP(4);
+      Mileage.SETRANGE("Continia User ID","Continia User ID");
+      Mileage.SETRANGE(Posted,FALSE);
+      Mileage.SETRANGE("Settlement No.",'');
+      Mileage.FILTERGROUP(0);
+
+      MileageForm.LOOKUPMODE := TRUE;
+      MileageForm.SETTABLEVIEW(Mileage);
+      IF MileageForm.RUNMODAL = ACTION::LookupOK THEN BEGIN
+        MileageForm.GetSelectionFilter(Mileage);
+
+        IF Mileage.FINDSET THEN
+          REPEAT
+            Mileage2.GET(Mileage."Entry No.");
+
+            IF (Status = Status::Open) AND
+               (Mileage2.Status = Mileage2.Status::"Pending Expense User")
+            THEN
+              CODEUNIT.RUN(CODEUNIT::"Mileage-Reopen",Mileage2);
+
+            Mileage2.VALIDATE("Settlement No.","No.");
+            Mileage2.MODIFY(TRUE);
+          UNTIL Mileage.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE SetHideUI@1160040011();
+    BEGIN
+      HideUI := TRUE;
+    END;
+
+    PROCEDURE TestStatusOpenOrPendingExpUser@1160040013();
+    BEGIN
+      IF NOT (Status IN [Status::Open,Status::"Pending Expense User"]) THEN
+        ERROR(StatusNotAllowed,"Document Type","No.");
+    END;
+
+    PROCEDURE NextReminderDate@1160040018() : Date;
+    VAR
+      EMReminder@1160040000 : Record 6086364;
+    BEGIN
+      EXIT(
+        EMReminder.NextReminderDate(
+          "Continia User ID",DATABASE::"Expense Header","Document Type"::Settlement,"No.",0,FirstDocumentDate));
+    END;
+
+    PROCEDURE SetSuspendInboxCheck@1160040016(NewSuspend@1160040000 : Boolean);
+    BEGIN
+      SuspendInboxCheck := NewSuspend;
+    END;
+
+    PROCEDURE CheckLinesExist@1160040015();
+    BEGIN
+      IF LinesExist THEN
+        ERROR(CannotModifyField,FIELDCAPTION("Continia User ID"));
+    END;
+
+    PROCEDURE FirstDocumentDate@1160040019() FirstDate : Date;
+    VAR
+      Expense@1160040000 : Record 6086320;
+      Mileage@1160040001 : Record 6086338;
+      DocEarliestDate@1160040002 : Date;
+    BEGIN
+      FirstDate := "Date Created";
+
+      Expense.SETCURRENTKEY("Settlement No.");
+      Expense.SETRANGE("Settlement No.","No.");
+      IF Expense.FINDSET THEN
+        REPEAT
+          DocEarliestDate := Expense.GetEarliestDate;
+          IF (DocEarliestDate <> 0D) AND (DocEarliestDate < FirstDate) THEN
+            FirstDate := DocEarliestDate;
+        UNTIL Expense.NEXT = 0;
+
+      Mileage.SETCURRENTKEY("Settlement No.");
+      Mileage.SETRANGE("Settlement No.","No.");
+      IF Mileage.FINDSET THEN
+        REPEAT
+          DocEarliestDate := Mileage.GetEarliestDate;
+          IF (DocEarliestDate <> 0D) AND (DocEarliestDate < FirstDate) THEN
+            FirstDate := DocEarliestDate;
+        UNTIL Mileage.NEXT = 0;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

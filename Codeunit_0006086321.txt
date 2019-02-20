@@ -1,0 +1,233 @@
+OBJECT Codeunit 6086321 Expense-Validate
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/30/18;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.06;
+  }
+  PROPERTIES
+  {
+    TableNo=6086320;
+    Permissions=TableData 6086002=r,
+                TableData 6086307=r,
+                TableData 6086321=r,
+                TableData 6086323=r,
+                TableData 6086330=r,
+                TableData 6086361=rimd;
+    OnRun=BEGIN
+            Code(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      AccountMissmatch@1160040007 : TextConst 'ENU=The %1 %2 is different from the current setup output %3';
+      AllocateDiff@1160040011 : TextConst 'ENU=The allocated amount %1 does not match the expense amount %2';
+      AllocationEntry@1160040010 : TextConst 'ENU=Allocation with %1 %2:';
+      AttachmentsMissing@1160040001 : TextConst 'ENU=Attachments missing';
+      BankAccLCY@1160040009 : TextConst 'ENU=The credit card account currency code has been changed after this expense was received. In order to correct it please revalidate account on the credit card %1';
+      FieldMissing@1160040003 : TextConst 'ENU=%1 must be specified';
+      InboxError@1160040005 : TextConst 'ENU=This expense exists in the Expense Inbox and must be processed from there';
+      InvalidMatch@1160040000 : TextConst 'ENU=Expense cannot be matched when %1 is set';
+      MissingAccount@1160040002 : TextConst 'ENU=%1 is missing. Posting Setup for %2 ''%3'' is most likely not configured correctly';
+      NotMatched@1160040004 : TextConst 'ENU=Expense must be matched when %1 is not set';
+      ExcludeInboxCheck@1160040008 : Boolean;
+      AttendeesRequired@1160040012 : TextConst 'ENU=It is mandatory to specify attendees when %1 is %2.';
+
+    LOCAL PROCEDURE Code@1160040031(Expense@1160040001 : Record 6086320);
+    VAR
+      ContiniaUserSetup@1160040008 : Record 6086002;
+      ExpenseType@1160040009 : Record 6086307;
+      ExpenseAllocation@1160040010 : Record 6086321;
+      ExpenseInbox@1160040003 : Record 6086323;
+      BankTransaction@1160040007 : Record 6086330;
+      EMComment@1160040000 : Record 6086361;
+      EMDimMgt@1160040006 : Codeunit 6086318;
+      ExpCmtMgt@1160040002 : Codeunit 6086323;
+      ValidationError@1160040012 : Text[250];
+      NewCalculatedAccount@1160040004 : Code[20];
+      AllocatedAmt@1160040011 : Decimal;
+      EmptyGUID@1160040005 : GUID;
+    BEGIN
+      EMComment.SETRANGE("Table ID",DATABASE::Expense);
+      EMComment.SETRANGE("Document Type",0);
+      EMComment.SETRANGE("Document No.",'');
+      EMComment.SETRANGE("Doc. Ref. No.",Expense."Entry No.");
+      EMComment.SETRANGE("Validation Comment",TRUE);
+      EMComment.DELETEALL;
+
+      IF Expense."Continia User ID" = '' THEN
+        ExpCmtMgt.AddComment(DATABASE::Expense,0,'',Expense."Entry No.",
+          EMComment.Importance::Error,'NO EMPLOYEE',STRSUBSTNO(FieldMissing,Expense.FIELDCAPTION("Continia User ID")),TRUE);
+
+      IF Expense."Document Date" = 0D THEN
+        ExpCmtMgt.AddComment(DATABASE::Expense,0,'',Expense."Entry No.",
+          EMComment.Importance::Error,'NO DOCUMENT DATE',STRSUBSTNO(FieldMissing,Expense.FIELDCAPTION("Document Date")),TRUE);
+
+      IF Expense."Document Date" <> 0D THEN
+        IF DATE2DMY(Expense."Document Date",3) > 2100 THEN
+          ExpCmtMgt.AddComment(DATABASE::Expense,0,'',Expense."Entry No.",EMComment.Importance::Error,
+            'INVALID DOC. DATE',STRSUBSTNO(FieldMissing,Expense.FIELDCAPTION("Document Date")),TRUE);
+
+      IF (Expense."Expense Type" = '') AND (Expense."Job No." = '') THEN
+        ExpCmtMgt.AddComment(DATABASE::Expense,0,'',Expense."Entry No.",
+          EMComment.Importance::Error,'NO EXPENSE TYPE',STRSUBSTNO(FieldMissing,Expense.FIELDCAPTION("Expense Type")),TRUE);
+
+      Expense.CALCFIELDS("No. of Attachments");
+      IF Expense."No. of Attachments" = 0 THEN
+        IF NOT Expense."No Refund" THEN
+          ExpCmtMgt.AddComment(DATABASE::Expense,0,'',
+            Expense."Entry No.",EMComment.Importance::Warning,'NO ATTACHMENT',AttachmentsMissing,TRUE);
+
+      IF Expense."Matched to Bank Transaction" AND Expense."Cash/Private Card" THEN
+        ExpCmtMgt.AddComment(DATABASE::Expense,0,'',Expense."Entry No.",
+          EMComment.Importance::Error,'INVALID MATCH',STRSUBSTNO(InvalidMatch,Expense.FIELDCAPTION("Cash/Private Card")),TRUE);
+
+      IF (NOT Expense."Matched to Bank Transaction") AND (NOT Expense."Cash/Private Card") THEN
+        ExpCmtMgt.AddComment(DATABASE::Expense,0,'',Expense."Entry No.",
+          EMComment.Importance::Error,'MATCH MISSING',STRSUBSTNO(NotMatched,Expense.FIELDCAPTION("Cash/Private Card")),TRUE);
+
+      IF (Expense."Expense Type" <> '') AND (Expense."Expense Account" = '') THEN
+        ExpCmtMgt.AddComment(DATABASE::Expense,0,'',Expense."Entry No.",EMComment.Importance::Error,'MISSING ACCOUNT',
+          STRSUBSTNO(MissingAccount,
+            Expense.FIELDCAPTION("Expense Account"),
+            Expense.FIELDCAPTION("Expense Type"),
+            Expense."Expense Type"),
+          TRUE);
+
+      IF (Expense."Expense Type" <> '') AND (Expense."Expense Account" <> '') AND Expense.PostingSetupChanged(NewCalculatedAccount) THEN
+        ExpCmtMgt.AddComment(DATABASE::Expense,0,'',Expense."Entry No.",EMComment.Importance::Warning,'ACCOUNT MISSMATCH',
+          STRSUBSTNO(AccountMissmatch,Expense.FIELDCAPTION("Expense Account"),Expense."Expense Account",NewCalculatedAccount),TRUE);
+
+      IF NOT ExcludeInboxCheck THEN BEGIN
+        IF Expense."Expense GUID" <> EmptyGUID THEN BEGIN
+          ExpenseInbox.SETCURRENTKEY("Expense GUID");
+          ExpenseInbox.SETRANGE("Expense GUID",Expense."Expense GUID");
+          ExpenseInbox.SETFILTER(Status,'%1|%2',ExpenseInbox.Status::Pending,ExpenseInbox.Status::Error);
+          IF ExpenseInbox.FINDFIRST THEN
+            ExpCmtMgt.AddComment(DATABASE::Expense,0,'',Expense."Entry No.",EMComment.Importance::Error,'INBOX ERROR',InboxError,TRUE);
+        END;
+      END;
+
+      IF ContiniaUserSetup.GET(Expense."Continia User ID") THEN
+        IF NOT EMDimMgt.CheckDefaultDim(
+           ValidationError,DATABASE::Expense,0,'',Expense."Entry No.",DATABASE::Vendor,ContiniaUserSetup."Vendor No.")
+        THEN
+          ExpCmtMgt.AddComment(DATABASE::Expense,0,'',Expense."Entry No.",
+            EMComment.Importance::Error,'GLACCDEFDIMNVD',ValidationError,TRUE);
+
+      IF (Expense."Expense Type" <> '') AND (NOT Expense."Exp. Account Manually Changed") THEN
+        IF ExpenseType.GET(Expense."Expense Type") THEN
+          IF NOT EMDimMgt.CheckDefaultDim(
+             ValidationError,DATABASE::Expense,0,'',Expense."Entry No.",DATABASE::"Expense Type",Expense."Expense Type")
+          THEN
+            ExpCmtMgt.AddComment(DATABASE::Expense,0,'',Expense."Entry No.",
+              EMComment.Importance::Error,'GLACCDEFDIMET',ValidationError,TRUE);
+
+      IF Expense."Expense Account" <> '' THEN
+        IF NOT EMDimMgt.CheckDefaultDim(
+           ValidationError,DATABASE::Expense,0,'',Expense."Entry No.",DATABASE::"G/L Account",Expense."Expense Account")
+        THEN
+          ExpCmtMgt.AddComment(DATABASE::Expense,0,'',Expense."Entry No.",
+            EMComment.Importance::Error,'GLACCDEFDIMEA',ValidationError,TRUE);
+
+      IF Expense."Job No." <> '' THEN
+        IF NOT EMDimMgt.CheckDefaultDim(ValidationError,DATABASE::Expense,0,'',Expense."Entry No.",DATABASE::Job,Expense."Job No.") THEN
+          ExpCmtMgt.AddComment(DATABASE::Expense,0,'',Expense."Entry No.",
+            EMComment.Importance::Error,'JOBDEFDIMEA',ValidationError,TRUE);
+
+      IF Expense."Matched to Bank Transaction" THEN
+        IF BankTransaction.GET(Expense.GetMatchingBankEntryNo) THEN
+          IF BankTransaction.GetBankAccountCurrencyCode <> Expense."Bank Currency Code" THEN
+            ExpCmtMgt.AddComment(DATABASE::Expense,0,'',Expense."Entry No.",EMComment.Importance::Error,'BANKACCLCY',
+            STRSUBSTNO(BankAccLCY,BankTransaction."Card No."),TRUE);
+
+      IF (Expense."Expense Type" <> '') AND ExpenseType.GET(Expense."Expense Type") THEN BEGIN
+        Expense.CALCFIELDS("No. of Attendees");
+        IF ExpenseType."Attendees Required" AND (Expense."No. of Attendees" = 0) THEN
+          ExpCmtMgt.AddComment(DATABASE::Expense,0,'',Expense."Entry No.",
+            EMComment.Importance::Error,'ATTENDEEEREQ',STRSUBSTNO(AttendeesRequired,ExpenseType.TABLECAPTION,ExpenseType.Code),TRUE);
+      END;
+
+      ExpenseAllocation.SETRANGE("Expense Entry No.",Expense."Entry No.");
+      IF ExpenseAllocation.FINDFIRST THEN
+        REPEAT
+
+          IF (ExpenseAllocation."Expense Type" = '') AND (ExpenseAllocation."Job No." = '') THEN
+            ExpCmtMgt.AddComment(DATABASE::Expense,0,'',Expense."Entry No.",
+              EMComment.Importance::Error,'NO EXPENSE TYPE',
+              STRSUBSTNO(AllocationEntry,ExpenseAllocation.FIELDCAPTION("Entry No."),ExpenseAllocation."Entry No.") +
+              STRSUBSTNO(FieldMissing,ExpenseAllocation.FIELDCAPTION("Expense Type")),TRUE);
+
+          IF ExpenseAllocation."Expense Account" = '' THEN
+            ExpCmtMgt.AddComment(DATABASE::Expense,0,'',Expense."Entry No.",EMComment.Importance::Error,'MISSING ACCOUNT',
+              STRSUBSTNO(AllocationEntry,ExpenseAllocation.FIELDCAPTION("Entry No."),ExpenseAllocation."Entry No.") +
+              STRSUBSTNO(MissingAccount,
+                ExpenseAllocation.FIELDCAPTION("Expense Account"),
+                ExpenseAllocation.FIELDCAPTION("Expense Type"),
+                ExpenseAllocation."Expense Type"),
+              TRUE);
+
+          IF (ExpenseAllocation."Expense Type" <> '') AND ExpenseType.GET(ExpenseAllocation."Expense Type") THEN BEGIN
+            ExpenseAllocation.CALCFIELDS("No. of Attendees");
+            IF ExpenseType."Attendees Required" AND (Expense."No. of Attendees" = 0) THEN
+              ExpCmtMgt.AddComment(DATABASE::Expense,0,'',Expense."Entry No.",
+                EMComment.Importance::Error,'ATTENDEEEREQ',
+                STRSUBSTNO(AttendeesRequired,ExpenseType.TABLECAPTION,ExpenseType.Code),TRUE);
+          END;
+
+          IF ContiniaUserSetup.GET(ExpenseAllocation."Continia User ID") THEN
+            IF NOT EMDimMgt.CheckDefaultDimForAllocation(
+               ValidationError,ExpenseAllocation."Entry No.",DATABASE::Vendor,ContiniaUserSetup."Vendor No.")
+            THEN
+              ExpCmtMgt.AddComment(DATABASE::Expense,0,'',Expense."Entry No.",
+                EMComment.Importance::Error,'ALLGLACCDEFDIMNVD',ValidationError,TRUE);
+
+          IF (ExpenseAllocation."Expense Type" <> '') AND (NOT ExpenseAllocation."Exp. Account Manually Changed") THEN
+            IF ExpenseType.GET(ExpenseAllocation."Expense Type") THEN
+              IF NOT EMDimMgt.CheckDefaultDimForAllocation(
+                 ValidationError,ExpenseAllocation."Entry No.",DATABASE::"Expense Type",ExpenseAllocation."Expense Type")
+              THEN
+                ExpCmtMgt.AddComment(DATABASE::Expense,0,'',Expense."Entry No.",
+                  EMComment.Importance::Error,'ALLGLACCDEFDIMET',ValidationError,TRUE);
+
+          IF ExpenseAllocation."Expense Account" <> '' THEN
+            IF NOT EMDimMgt.CheckDefaultDimForAllocation(
+               ValidationError,ExpenseAllocation."Entry No.",DATABASE::"G/L Account",ExpenseAllocation."Expense Account")
+            THEN
+              ExpCmtMgt.AddComment(DATABASE::Expense,0,'',Expense."Entry No.",
+                EMComment.Importance::Error,'ALLGLACCDEFDIMEA',ValidationError,TRUE);
+
+          IF ExpenseAllocation."Job No." <> '' THEN
+            IF NOT EMDimMgt.CheckDefaultDimForAllocation(
+              ValidationError,ExpenseAllocation."Entry No.",DATABASE::Job,ExpenseAllocation."Job No.") THEN
+                ExpCmtMgt.AddComment(DATABASE::Expense,0,'',Expense."Entry No.",
+                EMComment.Importance::Error,'ALLJOBDEFDIMEA',ValidationError,TRUE);
+
+          AllocatedAmt := AllocatedAmt + ExpenseAllocation.Amount;
+
+        UNTIL ExpenseAllocation.NEXT = 0;
+
+      IF (AllocatedAmt <> 0) AND (Expense.Amount <> AllocatedAmt) THEN
+        ExpCmtMgt.AddComment(DATABASE::Expense,0,'',Expense."Entry No.",
+          EMComment.Importance::Error,'ALLOCATEDIFF',STRSUBSTNO(AllocateDiff,AllocatedAmt,Expense.Amount),TRUE);
+    END;
+
+    PROCEDURE ExcludeInboxValidation@1160040000();
+    BEGIN
+      ExcludeInboxCheck := TRUE;
+    END;
+
+    PROCEDURE CheckWithoutInboxValidation@1160040001(Expense@1160040000 : Record 6086320);
+    BEGIN
+      ExcludeInboxCheck := TRUE;
+      Code(Expense);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

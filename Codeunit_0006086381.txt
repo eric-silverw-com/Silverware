@@ -1,0 +1,120 @@
+OBJECT Codeunit 6086381 Exp. Header - Validate
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/31/17;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.02;
+  }
+  PROPERTIES
+  {
+    TableNo=6086339;
+    Permissions=TableData 6086341=r,
+                TableData 6086361=rimd;
+    OnRun=BEGIN
+            Code(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      AccountMissmatch@1160040007 : TextConst 'ENU=The %1 %2 is different from the current setup output %3';
+      AllocateDiff@1160040011 : TextConst 'ENU=The allocated amount %1 does not match the expense amount %2';
+      AllocationEntry@1160040010 : TextConst 'ENU=Allocation with %1 %2:';
+      AttachmentsMissing@1160040001 : TextConst 'ENU=Attachments missing';
+      BankAccLCY@1160040009 : TextConst 'ENU=The credit card account currency code has been changed after this expense was received. In order to correct it please revalidate account on the credit card %1';
+      FieldMissing@1160040003 : TextConst 'ENU=%1 must be specified';
+      InboxError@1160040005 : TextConst 'ENU=This settlement exists in the Settlement Inbox and must be processed from there';
+      InvalidMatch@1160040000 : TextConst 'ENU=Expense cannot be matched when %1 is set';
+      JobProductPostingGroup@1160040006 : TextConst 'ENU=You cannot specify %1 and %2 in the same time';
+      MissingAccount@1160040002 : TextConst 'ENU=%1 is missing. Posting Setup for %2 ''%3'' is most likely not configured correctly';
+      NotMatched@1160040004 : TextConst 'ENU=Expense must be matched when %1 is not set';
+      ExcludeInboxCheck@1160040008 : Boolean;
+      ExpenseInboxError@1160040013 : TextConst 'ENU=Expense Inbox Entry %1 is not yet processed for this settlement.';
+      MileageInboxError@1160040012 : TextConst 'ENU=Mileage Inbox Entry %1 is not yet processed for this settlement.';
+
+    LOCAL PROCEDURE Code@1160040031(ExpHeader@1160040001 : Record 6086339);
+    VAR
+      ContiniaUserSetup@1160040008 : Record 6086002;
+      ExpHeaderInbox@1160040003 : Record 6086341;
+      EMComment@1160040000 : Record 6086361;
+      ExpInbox@1160040004 : Record 6086323;
+      MilInbox@1160040005 : Record 6086353;
+      EMDimMgt@1160040006 : Codeunit 6086318;
+      ExpCmtMgt@1160040002 : Codeunit 6086323;
+      ValidationError@1160040012 : Text[250];
+      EmptyGUID@1160040007 : GUID;
+    BEGIN
+      EMComment.SETRANGE("Table ID",DATABASE::"Expense Header");
+      EMComment.SETRANGE("Document Type",ExpHeader."Document Type");
+      EMComment.SETRANGE("Document No.",ExpHeader."No.");
+      EMComment.SETRANGE("Doc. Ref. No.",0);
+      EMComment.SETRANGE("Validation Comment",TRUE);
+      EMComment.DELETEALL;
+
+      IF ExpHeader."Continia User ID" = '' THEN
+        ExpCmtMgt.AddComment(DATABASE::"Expense Header",ExpHeader."Document Type"::Settlement,ExpHeader."No.",0,
+          EMComment.Importance::Error,'NO EMPLOYEE',STRSUBSTNO(FieldMissing,ExpHeader.FIELDCAPTION("Continia User ID")),TRUE);
+
+      IF ExpHeader."Exp. Header GUID" <> EmptyGUID THEN BEGIN
+        IF NOT ExcludeInboxCheck THEN BEGIN
+          ExpHeaderInbox.SETCURRENTKEY("Exp. Header GUID");
+          ExpHeaderInbox.SETRANGE("Exp. Header GUID",ExpHeader."Exp. Header GUID");
+          ExpHeaderInbox.SETFILTER(Status,'%1|%2',ExpHeaderInbox.Status::Pending,ExpHeaderInbox.Status::Error);
+          IF ExpHeaderInbox.FINDFIRST THEN
+            ExpCmtMgt.AddComment(
+              DATABASE::"Expense Header",ExpHeader."Document Type"::Settlement,ExpHeader."No.",0,
+              EMComment.Importance::Error,'INBOX ERROR',InboxError,TRUE);
+        END;
+
+        ExpInbox.SETCURRENTKEY("Expense Header GUID");
+        ExpInbox.SETRANGE("Expense Header GUID",ExpHeader."Exp. Header GUID");
+        ExpInbox.SETFILTER(Status,'%1|%2',ExpInbox.Status::Pending,ExpInbox.Status::Error);
+        IF ExpInbox.FINDFIRST THEN
+          ExpCmtMgt.AddComment(
+            DATABASE::"Expense Header",ExpHeader."Document Type"::Settlement,ExpHeader."No.",0,
+            EMComment.Importance::Error,'EXP INBOX ERROR',STRSUBSTNO(ExpenseInboxError,ExpInbox."Entry No."),TRUE);
+
+        MilInbox.SETCURRENTKEY("Expense Header GUID");
+        MilInbox.SETRANGE("Expense Header GUID",ExpHeader."Exp. Header GUID");
+        MilInbox.SETFILTER(Status,'%1|%2',MilInbox.Status::Pending,MilInbox.Status::Error);
+        IF MilInbox.FINDFIRST THEN
+          ExpCmtMgt.AddComment(
+            DATABASE::"Expense Header",ExpHeader."Document Type"::Settlement,ExpHeader."No.",0,
+            EMComment.Importance::Error,'MIL INBOX ERROR',STRSUBSTNO(MileageInboxError,MilInbox."Entry No."),TRUE);
+      END;
+
+      IF ContiniaUserSetup.GET(ExpHeader."Continia User ID") THEN
+        IF NOT EMDimMgt.CheckDefaultDim(
+           ValidationError,DATABASE::"Expense Header",ExpHeader."Document Type"::Settlement,ExpHeader."No.",0,DATABASE::Vendor,
+           ContiniaUserSetup."Vendor No.")
+        THEN
+          ExpCmtMgt.AddComment(DATABASE::"Expense Header",ExpHeader."Document Type"::Settlement,ExpHeader."No.",0,
+            EMComment.Importance::Error,'GLACCDEFDIMNVD',ValidationError,TRUE);
+
+      IF ExpHeader."Job No." <> '' THEN
+        IF NOT EMDimMgt.CheckDefaultDim(
+           ValidationError,DATABASE::"Expense Header",ExpHeader."Document Type"::Settlement,ExpHeader."No.",0,DATABASE::Job,ExpHeader.
+           "Job No.")
+        THEN
+          ExpCmtMgt.AddComment(DATABASE::"Expense Header",ExpHeader."Document Type"::Settlement,ExpHeader."No.",0,
+            EMComment.Importance::Error,'JOBDEFDIMEA',ValidationError,TRUE);
+    END;
+
+    PROCEDURE ExcludeInboxValidation@1160040002();
+    BEGIN
+      ExcludeInboxCheck := TRUE;
+    END;
+
+    PROCEDURE CheckWithoutInboxValidation@1160040001(ExpHeader@1160040000 : Record 6086339);
+    BEGIN
+      ExcludeInboxCheck := TRUE;
+      Code(ExpHeader);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

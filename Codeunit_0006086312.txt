@@ -1,0 +1,1108 @@
+OBJECT Codeunit 6086312 EM Approval Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=12/01/17;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.03;
+  }
+  PROPERTIES
+  {
+    TableNo=454;
+    Permissions=TableData 91=r,
+                TableData 454=rimd,
+                TableData 455=ri,
+                TableData 6085749=rimd,
+                TableData 6086002=r,
+                TableData 6086320=rm,
+                TableData 6086338=rm,
+                TableData 6086339=rm;
+    OnRun=BEGIN
+            VALIDATE("Table ID");
+            VALIDATE("Document No.");
+
+            Code("Table ID","Document No.");
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      DCApprovalMgmt@1160040021 : Codeunit 6085722;
+      DCApprovalsBridge@1160040020 : Codeunit 6085790;
+      EMApprovalsBridge@1160040009 : Codeunit 6086369;
+      UserFilterType@1160040016 : 'CurrUserOnly,CurrUserAndSharing,NoUserFilter';
+      SupressCmt@1160040022 : Boolean;
+      RejForcedByTxt@1160040012 : TextConst 'ENU=Rejection forced by %1.';
+      SameApproverAsUser@1160040000 : TextConst 'ENU=The Approver cannot be the same User.';
+      SharedByOoOTxt@1160040023 : TextConst 'ENU=Shared by %1 (out of office)';
+      SharedByTxt@1160040015 : TextConst 'ENU=Shared by %1';
+      Text001@161024041 : TextConst 'ENU=No open Approval Entry was found.';
+      Text003@161024039 : TextConst 'ENU=The Approval has been forwarded.';
+      Text007@161024035 : TextConst 'ENU=The %1 was rejected.';
+      Text008@161024016 : TextConst 'ENU=The %1 was sent back.';
+      Text009@161024033 : TextConst 'ENU=Send back to %1,Reject';
+      Text011@161024027 : TextConst 'ENU=Approval forced by %1.';
+      Text013@161024025 : TextConst 'ENU=You are not allowed to perform this action.\\In order to perform this action you must be member of the role ''%1''.';
+      Text019@161024019 : TextConst 'ENU=Approve && Forward,Forward without approval,Forward and send the Document back to me after Approval';
+      Text024@161024013 : TextConst 'ENU=The %1 was put on hold.';
+      Text025@161024012 : TextConst 'ENU=The %1 is no longer on hold.';
+      Text026@161024028 : TextConst 'ENU=Your approval limit does not allow you to approve this Expense.';
+      Text028@161024030 : TextConst 'ENU=Your approval limit does not allow you to forward this Expense.';
+      Text029@161024031 : TextConst 'ENU=Your approval limit does not allow you to update this Expense.';
+      Text031@161024044 : TextConst 'ENU=must be Open or Created.';
+      Text032@161024045 : TextConst 'ENU=Do you want to change %1 to %2?';
+      Text035@161024048 : TextConst 'ENU=Approver %1 changed to %2.';
+      Text036@161024049 : TextConst 'ENU=Approver %1 was deleted.';
+      UnknownTableID@1160040024 : TextConst 'ENU=Unknown Table ID %1';
+      Unsuported@1160040002 : TextConst 'ENU=%1 Unsupported';
+      UsrRequiresAppID@1160040025 : TextConst 'ENU=The user %1 requires an %2.';
+      SettlementCaption@1160040001 : TextConst 'ENU=Settlement';
+
+    LOCAL PROCEDURE Code@1160040015(TableID@1000 : Integer;DocumentNo@1160040000 : Code[20]);
+    BEGIN
+      GetApprover(TableID,DocumentNo);
+      IF NOT EMApprovalsBridge.IsWorkflowSupported THEN
+        FinishApprovalEntry(TableID,DocumentNo);
+      CalculateRecordStatus(TableID,DocumentNo);
+    END;
+
+    LOCAL PROCEDURE GetApprover@1160040012(TableID@1160040001 : Integer;DocumentNo@1160040000 : Code[20]);
+    VAR
+      Expense@1160040002 : Record 6086320;
+      Mileage@1160040003 : Record 6086338;
+      ExpHeader@1160040004 : Record 6086339;
+      UserSetup@1160040005 : Record 91;
+    BEGIN
+      CASE TableID OF
+        DATABASE::Expense:
+          BEGIN
+            Expense.GET(Code2Int(DocumentNo));
+            UserSetup.GET(Expense."Continia User ID");
+            InsertApprovalEntries(TableID,DocumentNo,UserSetup."Approver ID",Expense."Continia User ID",
+              Expense."Continia User ID",Expense.Amount,Expense."Amount (LCY)");
+          END;
+
+        DATABASE::Mileage:
+          BEGIN
+            Mileage.GET(Code2Int(DocumentNo));
+            UserSetup.GET(Mileage."Continia User ID");
+            InsertApprovalEntries(TableID,DocumentNo,UserSetup."Approver ID",Mileage."Continia User ID",
+              Mileage."Continia User ID",0,Mileage."Amount (LCY)");
+          END;
+
+        DATABASE::"Expense Header":
+          BEGIN
+            ExpHeader.GET(ExpHeader."Document Type"::Settlement,DocumentNo);
+            UserSetup.GET(ExpHeader."Continia User ID");
+            InsertApprovalEntries(TableID,DocumentNo,UserSetup."Approver ID",ExpHeader."Continia User ID",
+              ExpHeader."Continia User ID",0,ExpHeader.GetAmountLCY);
+          END;
+
+      END;
+    END;
+
+    PROCEDURE FinishApprovalEntry@1160040011(TableID@1160040003 : Integer;DocumentNo@1160040002 : Code[20]);
+    VAR
+      ApprovalEntry@1011 : Record 454;
+    BEGIN
+      WITH ApprovalEntry DO BEGIN
+        INIT;
+        EMApprovalsBridge.OrderByTableIDDocTypeAndSeq(ApprovalEntry);
+        SETRANGE("Table ID",TableID);
+        SETRANGE("Document Type","Document Type"::Invoice);
+        SETRANGE("Document No.",DocumentNo);
+        SETRANGE(Status,Status::Created);
+        IF FINDFIRST THEN BEGIN
+          Status := Status::Open;
+          MODIFY;
+          IF EMApprovalsBridge.IsApprovalsMailEnabled THEN
+            EMApprovalsBridge.SendApprovalsMail(TableID,DocumentNo,ApprovalEntry);
+        END;
+      END;
+    END;
+
+    PROCEDURE CalculateRecordStatus@1160040013(TableID@1160040006 : Integer;DocumentNo@1160040005 : Code[20]);
+    VAR
+      ApprovalEntry@1160040001 : Record 454;
+    BEGIN
+      ApprovalEntry.SETCURRENTKEY("Table ID","Document Type","Document No.");
+      ApprovalEntry.SETRANGE("Table ID",TableID);
+      ApprovalEntry.SETRANGE("Document Type",ApprovalEntry."Document Type"::Invoice);
+      ApprovalEntry.SETRANGE("Document No.",DocumentNo);
+      ApprovalEntry.SETFILTER(Status,'%1|%2',ApprovalEntry.Status::Created,ApprovalEntry.Status::Open);
+      IF NOT ApprovalEntry.ISEMPTY THEN
+        SetPendingStatus(TableID,DocumentNo)
+      ELSE BEGIN
+        SetApprovedStatus(TableID,DocumentNo);
+        SendReleaseNotification(TableID,DocumentNo);
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertApprovalEntries@1160040008(TableID@1160040007 : Integer;DocumentNo@1160040006 : Code[20];ApproverID@1160040000 : Code[50];CurrentUserID@1160040002 : Code[50];DocumentUserID@1160040005 : Code[50];ApprovalAmount@1160040008 : Decimal;ApprovalAmountLCY@1160040003 : Decimal);
+    VAR
+      ApproverUser@1160040001 : Record 91;
+      ApprovalEntry@1160040010 : Record 454;
+      ContiniaUserSetup@1160040009 : Record 6086002;
+      ApproveEntry@1160040004 : Boolean;
+      UserIsWithinApprovalLimits@1160040011 : Boolean;
+    BEGIN
+      IF ApproverID = '' THEN BEGIN
+        ApproverUser.GET(CurrentUserID);
+        ContiniaUserSetup.GET(CurrentUserID);
+      END ELSE BEGIN
+        ApproverUser.GET(ApproverID);
+        ContiniaUserSetup.GET(ApproverID);
+      END;
+
+      UserIsWithinApprovalLimits := ContiniaUserSetup."Unlimited Expense Approval" OR
+        ((ContiniaUserSetup."Expense Amount Approval Limit" > 0) AND
+         (ContiniaUserSetup."Expense Amount Approval Limit" <= ApprovalEntry."Amount (LCY)"));
+
+      IF EMApprovalsBridge.GetLimitType = ApprovalEntry."Limit Type"::"Approval Limits" THEN BEGIN
+        IF (ApproverUser."Approver ID" = '') AND (NOT UserIsWithinApprovalLimits) THEN
+          ERROR(UsrRequiresAppID,ApproverUser."User ID",ApproverUser.FIELDCAPTION("Approver ID"));
+
+        IF (ApproverUser."User ID" = ApproverUser."Approver ID") AND (NOT UserIsWithinApprovalLimits) THEN
+          ERROR(SameApproverAsUser);
+
+        IF (DocumentUserID = ApproverUser."User ID") THEN
+          ApproveEntry := TRUE;
+      END;
+
+      EMApprovalsBridge.InitializeApprovalEntry(TableID,DocumentNo,ApprovalEntry);
+      MakeApprovalEntry(ApprovalEntry,0,ContiniaUserSetup."Continia User ID",ApproveEntry);
+
+      // STOP CONDITIONS
+      CASE EMApprovalsBridge.GetLimitType OF
+        ApprovalEntry."Limit Type"::"Approval Limits":
+          IF ContiniaUserSetup."Unlimited Expense Approval" THEN
+            EXIT
+          ELSE
+            IF ApprovalAmountLCY <= ContiniaUserSetup."Expense Amount Approval Limit" THEN
+              EXIT;
+
+        ApprovalEntry."Limit Type"::"No Limits":
+          EXIT;
+
+        ELSE BEGIN
+          ApprovalEntry."Limit Type" := EMApprovalsBridge.GetLimitType;
+          ERROR(Unsuported,ApprovalEntry."Limit Type");
+        END;
+      END;
+
+      InsertApprovalEntries(TableID,DocumentNo,ApproverUser."Approver ID",ApproverUser."User ID",
+        DocumentUserID,ApprovalAmount,ApprovalAmountLCY);
+    END;
+
+    LOCAL PROCEDURE MakeApprovalEntry@10(ApprovalEntryArgument@1000 : Record 454;SequenceNo@1002 : Integer;ApproverId@1003 : Code[50];ApproveUnlimited@1160040001 : Boolean);
+    VAR
+      ApprovalEntry@1001 : Record 454;
+    BEGIN
+      WITH ApprovalEntry DO BEGIN
+        IF SequenceNo = 0 THEN
+          SequenceNo := EMApprovalsBridge.GetLastSequenceNo(ApprovalEntryArgument) + 1;
+
+        "Table ID" := ApprovalEntryArgument."Table ID";
+        "Document Type" := ApprovalEntryArgument."Document Type";
+        "Document No." := ApprovalEntryArgument."Document No.";
+        "Salespers./Purch. Code" := ApprovalEntryArgument."Salespers./Purch. Code";
+        "Sequence No." := SequenceNo;
+        "Sender ID" := GetCurrUserID;
+        "Approval Code" := 'EXPENSE';
+        Amount := ApprovalEntryArgument.Amount;
+        "Amount (LCY)" := ApprovalEntryArgument."Amount (LCY)";
+        "Currency Code" := ApprovalEntryArgument."Currency Code";
+        "Approver ID" := ApproverId;
+
+        IF ApproveUnlimited THEN
+          Status := Status::Approved
+        ELSE
+          Status := Status::Created;
+
+        "Date-Time Sent for Approval" := CREATEDATETIME(TODAY,TIME);
+        "Last Date-Time Modified" := CREATEDATETIME(TODAY,TIME);
+        "Last Modified By User ID" := GetCurrUserID;
+        "Due Date" := EMApprovalsBridge.GetApprovalDueDate;
+        "Available Credit Limit (LCY)" := ApprovalEntryArgument."Available Credit Limit (LCY)";
+        "Approval Type" := EMApprovalsBridge.GetApprovalType;
+        "Limit Type" := EMApprovalsBridge.GetLimitType;
+        "Original Approver ID" := "Approver ID";
+        EMApprovalsBridge.FinishApprovalEntry(ApprovalEntry,ApprovalEntryArgument);
+        DCApprovalsBridge.InsertApprovalEntry(ApprovalEntry);
+      END;
+    END;
+
+    PROCEDURE Approve@1000000040(TableID@1160040005 : Integer;DocumentNo@1160040004 : Code[20]);
+    VAR
+      ApprovalEntry@1160040003 : Record 454;
+    BEGIN
+      FilterApprovalEntry(ApprovalEntry,TableID,DocumentNo,UserFilterType::CurrUserAndSharing);
+      IF NOT HasUserDocumentPermission(ApprovalEntry) THEN
+        ERROR(Text026);
+
+      EMApprovalsBridge.ApproveApprovalRequest(ApprovalEntry);
+
+      SendReleaseNotification(TableID,DocumentNo);
+    END;
+
+    PROCEDURE Reject@1000000041(TableID@1160040005 : Integer;DocumentNo@1160040003 : Code[20]);
+    VAR
+      ApprovalEntry@1160040002 : Record 454;
+      EMOnlineMgt@1160040004 : Codeunit 6086305;
+      Answer@161024012 : 'Dialog Cancelled,Send Back,Reject';
+    BEGIN
+      FilterApprovalEntry(ApprovalEntry,TableID,DocumentNo,UserFilterType::CurrUserAndSharing);
+
+      IF GUIALLOWED THEN
+        Answer := DCApprovalMgmt.SendBackOrRejectApprovalReq(ApprovalEntry)
+      ELSE
+        Answer := Answer::Reject;
+
+      IF Answer = Answer::"Dialog Cancelled" THEN
+        ERROR('');
+
+      IF Answer = Answer::"Send Back" THEN
+        SendBackApprovalRequest(ApprovalEntry)
+      ELSE
+        EMApprovalsBridge.RejectApprovalRequest(ApprovalEntry);
+
+      IF GUIALLOWED THEN
+        IF ApprovalEntry.ISEMPTY THEN
+          IF Answer = Answer::"Send Back" THEN
+            MESSAGE(STRSUBSTNO(Text008,ApprovalEntry.TABLECAPTION))
+          ELSE
+            MESSAGE(STRSUBSTNO(Text007,ApprovalEntry.TABLECAPTION));
+    END;
+
+    PROCEDURE SendReleaseNotification@1160040007(TableID@1160040001 : Integer;DocumentNo@1160040000 : Code[20]) : Boolean;
+    VAR
+      Expense@1160040002 : Record 6086320;
+      Mileage@1160040003 : Record 6086338;
+      ExpHeader@1160040005 : Record 6086339;
+      SendExpToExpUser@1160040004 : Codeunit 6086324;
+      SendMileageToExpUser@1160040006 : Codeunit 6086343;
+      SendSettlementToExpUser@1160040008 : Codeunit 6086382;
+      EmptyGUID@1160040009 : GUID;
+    BEGIN
+      IF NOT SendReleaseNotificationAllowed THEN
+        EXIT;
+
+      CASE TableID OF
+        DATABASE::Expense:
+          BEGIN
+            Expense.GET(Code2Int(DocumentNo));
+            IF (Expense.Status = Expense.Status::Released) AND (Expense."Expense GUID" <> EmptyGUID) THEN BEGIN
+              Expense.SetSuspendInboxCheck(TRUE);
+              SendExpToExpUser.SendReleaseNotification(Expense);
+              EXIT(TRUE);
+            END;
+          END;
+
+        DATABASE::Mileage:
+          BEGIN
+            Mileage.GET(Code2Int(DocumentNo));
+            IF (Mileage.Status = Mileage.Status::Released) AND (Mileage."Mileage GUID" <> EmptyGUID) THEN BEGIN
+              Mileage.SetSuspendInboxCheck(TRUE);
+              SendMileageToExpUser.SendReleaseNotification(Mileage);
+              EXIT(TRUE);
+            END;
+          END;
+
+        DATABASE::"Expense Header":
+          BEGIN
+            ExpHeader.GET(ExpHeader."Document Type"::Settlement,DocumentNo);
+            IF (ExpHeader.Status = ExpHeader.Status::Released) AND (ExpHeader."Exp. Header GUID" <> EmptyGUID) THEN BEGIN
+              ExpHeader.SetSuspendInboxCheck(TRUE);
+              SendSettlementToExpUser.SendReleaseNotification(ExpHeader);
+              EXIT(TRUE);
+            END;
+          END;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE SendReleaseNotificationAllowed@1160040020() : Boolean;
+    VAR
+      EMSetup@1160040000 : Record 6086300;
+    BEGIN
+      EMSetup.GET;
+      EXIT(EMSetup."Send Release to App");
+    END;
+
+    PROCEDURE Delegate@1000000043(TableID@1160040002 : Integer;DocumentNo@1160040001 : Code[20]);
+    VAR
+      ApprovalEntry@1160040000 : Record 454;
+    BEGIN
+      IF NOT IsApprovalAdminUser(FALSE) THEN
+        FilterApprovalEntry(ApprovalEntry,TableID,DocumentNo,UserFilterType::CurrUserAndSharing)
+      ELSE
+        FilterApprovalEntry(ApprovalEntry,TableID,DocumentNo,UserFilterType::NoUserFilter);
+
+      IF NOT (HasUserDocumentPermission(ApprovalEntry) OR IsApprovalAdminUser(FALSE)) THEN
+        ERROR(Text028);
+
+      DelegateApprovalRequest(ApprovalEntry);
+
+      IF GUIALLOWED THEN
+        MESSAGE(Text003);
+    END;
+
+    PROCEDURE PutOnHold@161024049(TableID@1160040003 : Integer;DocumentNo@1160040002 : Code[20]);
+    VAR
+      ApprovalEntry@1160040000 : Record 454;
+      ApprovalCmtMgnt@161024013 : Codeunit 6085600;
+      RecID@1160040001 : RecordID;
+      ReasonCode@1160040004 : Code[10];
+    BEGIN
+      FilterApprovalEntry(ApprovalEntry,TableID,DocumentNo,UserFilterType::CurrUserAndSharing);
+      IF NOT (HasUserDocumentPermission(ApprovalEntry) OR IsApprovalAdminUser(FALSE)) THEN
+        ERROR(Text029);
+
+      IF GUIALLOWED THEN
+        ApprovalCmtMgnt.RequestComment(
+          TableID,ApprovalEntry."Document Type"::Invoice,ApprovalEntry."Document No.",RecID,'',0,ReasonCode);
+
+      OnHoldRecHandling(TableID,DocumentNo,COPYSTR(DCApprovalMgmt.RemoveDomainName(GetCurrUserID),1,3));
+
+      IF GUIALLOWED THEN
+        MESSAGE(STRSUBSTNO(Text024,GetTableCaption(TableID)));
+    END;
+
+    PROCEDURE RemoveOnHold@161024051(TableID@1160040003 : Integer;DocumentNo@1160040002 : Code[20]);
+    VAR
+      ApprovalEntry@1160040000 : Record 454;
+    BEGIN
+      FilterApprovalEntry(ApprovalEntry,TableID,DocumentNo,UserFilterType::CurrUserAndSharing);
+      IF NOT (HasUserDocumentPermission(ApprovalEntry) OR IsApprovalAdminUser(FALSE)) THEN
+        ERROR(Text029);
+
+      OnHoldRecHandling(TableID,DocumentNo,'');
+
+      IF GUIALLOWED THEN
+        MESSAGE(STRSUBSTNO(Text025,GetTableCaption(TableID)));
+    END;
+
+    PROCEDURE OnHoldRecHandling@1160040023(TableID@1160040003 : Integer;DocumentNo@1160040002 : Code[20];OnHoldCode@1160040001 : Code[3]);
+    VAR
+      Expense@1160040004 : Record 6086320;
+      Mileage@1160040005 : Record 6086338;
+      ExpHeader@1000 : Record 6086339;
+    BEGIN
+      CASE TableID OF
+        DATABASE::Expense:
+          BEGIN
+            Expense.GET(Code2Int(DocumentNo));
+            Expense."On Hold" := OnHoldCode;
+            Expense.MODIFY;
+          END;
+        DATABASE::Mileage:
+          BEGIN
+            Mileage.GET(Code2Int(DocumentNo));
+            Mileage."On Hold" := OnHoldCode;
+            Mileage.MODIFY;
+          END;
+        DATABASE::"Expense Header":
+          BEGIN
+            ExpHeader.GET(ExpHeader."Document Type"::Settlement,DocumentNo);
+            ExpHeader."On Hold" := OnHoldCode;
+            ExpHeader.MODIFY;
+          END;
+
+      END;
+    END;
+
+    PROCEDURE GetNextApprover@161024027(TableID@1160040000 : Integer;DocumentNo@1160040001 : Code[20]) : Code[50];
+    VAR
+      ApprovalEntry@161024013 : Record 454;
+    BEGIN
+      ApprovalEntry.SETRANGE("Table ID",TableID);
+      ApprovalEntry.SETRANGE("Document Type",ApprovalEntry."Document Type"::Invoice);
+      ApprovalEntry.SETRANGE("Document No.",DocumentNo);
+      ApprovalEntry.SETRANGE(Status,ApprovalEntry.Status::Open);
+      IF ApprovalEntry.FINDFIRST THEN
+        EXIT(ApprovalEntry."Approver ID");
+    END;
+
+    PROCEDURE DelegateApprovalRequest@161024013(VAR ApprovalEntry@161024015 : Record 454);
+    VAR
+      UserSetup@161024014 : Record 91;
+      ApprovalSharing@161024012 : Record 6085749;
+      ContiniaUser@1160040000 : Record 6086001;
+      Selection@161024021 : 'Cancel,ApproveAndDelegate,DelegateWithoutApproval,DelegateAndSendBack';
+    BEGIN
+      IF NOT (GetCurrUserID IN [ApprovalEntry."Sender ID",ApprovalEntry."Approver ID"]) THEN
+        IF NOT IsApprovalAdminUser(FALSE) THEN BEGIN
+          FilterApprovalSharingToUser(ApprovalSharing,GetCurrUserID);
+          ApprovalSharing.SETRANGE("Owner User ID",ApprovalEntry."Approver ID");
+          IF ApprovalSharing.ISEMPTY THEN
+            IsApprovalAdminUser(TRUE);
+        END;
+
+      IF NOT UserSetup.GET(GetCurrUserID) THEN
+        CLEAR(UserSetup);
+
+      IF ApprovalEntry."Approver ID" <> GetCurrUserID THEN
+        Selection := Selection::DelegateWithoutApproval
+      ELSE
+        Selection := STRMENU(Text019);
+
+      IF Selection = Selection::Cancel THEN
+        ERROR('');
+
+      IF ContiniaUser.GET(UserSetup.Substitute) THEN;
+
+      IF PAGE.RUNMODAL(PAGE::"Expense Delegate to User",ContiniaUser) <> ACTION::LookupOK THEN
+        ERROR('');
+
+      DCApprovalMgmt.DelegateApprovalRequest2(ApprovalEntry,Selection-1,ContiniaUser."User ID");
+    END;
+
+    PROCEDURE ForceApproval@161024026(TableID@1160040003 : Integer;DocumentNo@1160040005 : Code[20];AddApprovalComment@1160040004 : Boolean);
+    VAR
+      ApprovalEntry@161024021 : Record 454;
+      ApprovalCmtLine@161024013 : Record 455;
+      ExpHeader@1160040001 : Record 6086339;
+      EMCommentMgt@1160040000 : Codeunit 6086323;
+    BEGIN
+      IsApprovalAdminUser(TRUE);
+
+      IF TableID = DATABASE::"Expense Header" THEN
+        EMCommentMgt.HasErrorComments(TableID,ExpHeader."Document Type"::Settlement,DocumentNo,0,TRUE,TRUE)
+      ELSE BEGIN
+        EMCommentMgt.HasErrorComments(TableID,0,'',Code2Int(DocumentNo),TRUE,TRUE);
+      END;
+
+      EMApprovalsBridge.InitializeApprovalEntry(TableID,DocumentNo,ApprovalEntry);
+      MakeApprovalEntry(ApprovalEntry,0,GetCurrUserID,FALSE);
+
+      ApprovalEntry.SETRANGE("Table ID",TableID);
+      ApprovalEntry.SETRANGE("Document Type",ApprovalEntry."Document Type"::Invoice);
+      ApprovalEntry.SETRANGE("Document No.",DocumentNo);
+      ApprovalEntry.FINDLAST;
+      ApprovalEntry.Status := ApprovalEntry.Status::Approved;
+      ApprovalEntry.MODIFY;
+
+      SetApprovedStatus(TableID,DocumentNo);
+
+      IF NOT SupressCmt THEN
+        EMApprovalsBridge.CreateAppvlCmtLine(TableID,ApprovalEntry."Document Type",DocumentNo,
+          COPYSTR(STRSUBSTNO(Text011,GetCurrUserID),1,MAXSTRLEN(ApprovalCmtLine.Comment)));
+
+      SendReleaseNotification(TableID,DocumentNo);
+    END;
+
+    PROCEDURE IsApprovalAdminUser@161024028(ShowError@161024014 : Boolean) : Boolean;
+    VAR
+      AppAdminPermCheck@161024018 : Record 6085734;
+      EMSetup@161024019 : Record 6086300;
+      ExpenseNAVVersionDiff@1160040000 : Codeunit 6086319;
+    BEGIN
+      IF AppAdminPermCheck.WRITEPERMISSION THEN
+        EXIT(TRUE);
+
+      EMSetup.GET;
+      EMSetup.TESTFIELD("Approval Administrator Role ID");
+
+      IF ExpenseNAVVersionDiff.HasPermission(EMSetup."Approval Administrator Role ID") THEN
+        EXIT(TRUE);
+
+      IF ShowError THEN
+        ERROR(Text013,EMSetup."Approval Administrator Role ID");
+    END;
+
+    PROCEDURE SendApprovalEmails@161024015();
+    BEGIN
+      CODEUNIT.RUN(CODEUNIT::"Expense Approval E-Mail");
+    END;
+
+    PROCEDURE FilterApprovalEntry@1000000042(VAR ApprovalEntry@1000000001 : Record 454;TableID@1160040002 : Integer;DocumentNo@1160040001 : Code[20];UserFilterTypeArgument@161024012 : Integer);
+    VAR
+      SharingFilter@1160040000 : Text[1024];
+    BEGIN
+      ApprovalEntry.SETCURRENTKEY("Table ID","Document Type","Document No.");
+      ApprovalEntry.SETRANGE("Table ID",TableID);
+      ApprovalEntry.SETRANGE("Document Type",ApprovalEntry."Document Type"::Invoice);
+      ApprovalEntry.SETRANGE("Document No.",DocumentNo);
+      CASE UserFilterTypeArgument OF
+        UserFilterType::CurrUserOnly:
+          ApprovalEntry.SETRANGE("Approver ID",GetCurrUserID);
+
+        UserFilterType::CurrUserAndSharing:
+          BEGIN
+            SharingFilter := GetApprovalSharingToUserFilter(GetCurrUserID);
+            IF SharingFilter <> '' THEN
+              ApprovalEntry.SETFILTER("Approver ID",GetCurrUserID + '|' + SharingFilter)
+            ELSE
+              ApprovalEntry.SETRANGE("Approver ID",GetCurrUserID);
+          END;
+      END;
+      ApprovalEntry.SETRANGE(Status,ApprovalEntry.Status::Open);
+
+      IF NOT ApprovalEntry.FINDFIRST THEN
+        ERROR(Text001);
+    END;
+
+    PROCEDURE DrillDownApprovalEntries@1000000033(TableID@1160040001 : Integer;DocumentNo@1160040000 : Code[20]);
+    VAR
+      ApprovalEntry@1000000001 : Record 454;
+    BEGIN
+      ApprovalEntry.FILTERGROUP(4);
+      ApprovalEntry.SETRANGE("Table ID",TableID);
+      ApprovalEntry.SETRANGE("Document Type",ApprovalEntry."Document Type"::Invoice);
+      ApprovalEntry.SETRANGE("Document No.",DocumentNo);
+      ApprovalEntry.FILTERGROUP(0);
+      PAGE.RUN(PAGE::"Expense Approval Req. Entries",ApprovalEntry);
+    END;
+
+    PROCEDURE FilterApprovalSharingToUser@161024012(VAR ApprovalSharing@161024012 : Record 6085749;UserIDArgument@161024013 : Code[50]) : Boolean;
+    BEGIN
+      EXIT(DCApprovalMgmt.FilterApprovalSharingToUser(ApprovalSharing,UserIDArgument));
+    END;
+
+    PROCEDURE FilterApprovalSharingFromUser@161024020(VAR ApprovalSharing@161024012 : Record 6085749;UserIDArgument@161024013 : Code[50]) : Boolean;
+    BEGIN
+      EXIT(DCApprovalMgmt.FilterApprovalSharingFromUser(ApprovalSharing,UserIDArgument));
+    END;
+
+    PROCEDURE GetApprovalSharingToUserFilter@161024014(_UserId@161024013 : Code[50]) FilterString : Text[1024];
+    VAR
+      ApprovalSharing@161024012 : Record 6085749;
+    BEGIN
+      IF NOT FilterApprovalSharingToUser(ApprovalSharing,_UserId) THEN
+        EXIT;
+
+      IF ApprovalSharing.FINDFIRST THEN
+        REPEAT
+          IF FilterString = '' THEN
+            FilterString := ApprovalSharing."Owner User ID"
+          ELSE
+            FilterString := FilterString + '|' + ApprovalSharing."Owner User ID";
+        UNTIL ApprovalSharing.NEXT = 0;
+    END;
+
+    PROCEDURE HasUserDocumentPermission@161024022(ApprovalEntry@161024012 : Record 454) IsValidApprover : Boolean;
+    VAR
+      UserSetup@161024017 : Record 91;
+      ApprovalEntry2@161024014 : Record 454;
+      ApprovalSharing@161024016 : Record 6085749;
+      ContiniaUserSetup@1160040000 : Record 6086002;
+    BEGIN
+      ApprovalEntry.TESTFIELD(Status,ApprovalEntry.Status::Open);
+      IF ApprovalEntry."Advanced Approval" THEN
+        EXIT(TRUE);
+
+      IF ApprovalEntry."Approver ID" = GetCurrUserID THEN
+        EXIT(TRUE);
+
+      ApprovalEntry2.SETRANGE("Table ID",DATABASE::Expense);
+      ApprovalEntry2.SETRANGE("Document Type",ApprovalEntry."Document Type");
+      ApprovalEntry2.SETRANGE("Document No.",ApprovalEntry."Document No.");
+      ApprovalEntry2.SETFILTER("Sequence No.",'>%1',ApprovalEntry."Sequence No.");
+      IF NOT ApprovalEntry2.ISEMPTY THEN
+        EXIT(TRUE);
+
+      FilterApprovalSharingToUser(ApprovalSharing,GetCurrUserID);
+      ApprovalSharing.SETRANGE("Owner User ID",ApprovalEntry."Approver ID");
+      IF ApprovalSharing.FINDFIRST THEN
+        REPEAT
+          IF ApprovalSharing."Use Owners Limts & Permissions" THEN
+            UserSetup.GET(ApprovalSharing."Owner User ID")
+          ELSE
+            UserSetup.GET(ApprovalSharing."Shared to User ID");
+          ContiniaUserSetup.GET(UserSetup."User ID");
+
+          IF ContiniaUserSetup."Unlimited Expense Approval" THEN
+            IsValidApprover := TRUE
+          ELSE
+            IF ContiniaUserSetup."Expense Amount Approval Limit" >= ApprovalEntry."Amount (LCY)" THEN
+              IsValidApprover := TRUE;
+        UNTIL (ApprovalSharing.NEXT = 0) OR IsValidApprover;
+    END;
+
+    PROCEDURE GetApproverDisplayName@1160040000(ApproverID@1160040000 : Code[50]) : Text[250];
+    VAR
+      ContiniaUserSetup@1160040001 : Record 6086002;
+    BEGIN
+      IF ContiniaUserSetup.GET(ApproverID) THEN
+        EXIT(ContiniaUserSetup.GetName)
+      ELSE
+        EXIT(ApproverID);
+    END;
+
+    PROCEDURE SendBackApprovalRequest@1160040005(ApprovalEntry@1000 : Record 454);
+    BEGIN
+      DCApprovalMgmt.SendBackApprovalRequest(ApprovalEntry);
+
+      IF EMApprovalsBridge.IsApprovalsMailEnabled THEN
+        EMApprovalsBridge.SendApprovalsMail(ApprovalEntry."Table ID",ApprovalEntry."Document No.",ApprovalEntry);
+    END;
+
+    PROCEDURE BuildApprovalEntriesForUserExp@1160040001(VAR TempEMApprovalEntry@161024014 : TEMPORARY Record 6086319;IncludeNormalSharing@161024012 : Boolean;IncludeOutOfOfficeSharing@161024016 : Boolean);
+    VAR
+      TempApprovalEntry@1160040000 : TEMPORARY Record 454;
+      TableFilter@1160040001 : Text[50];
+    BEGIN
+      TableFilter := FORMAT(DATABASE::Expense) + '|' + FORMAT(DATABASE::Mileage) + '|' + FORMAT(DATABASE::"Expense Header");
+      DCApprovalMgmt.BuildApprovalEntriesForUser(TempApprovalEntry,TableFilter,IncludeNormalSharing,IncludeOutOfOfficeSharing);
+
+      BuildEMApprovalEntries(TempApprovalEntry,TempEMApprovalEntry);
+    END;
+
+    PROCEDURE BuildEMApprovalEntries@1160040004(VAR TempApprovalEntry@1160040001 : TEMPORARY Record 454;VAR TempEMApprovalEntry@1160040000 : TEMPORARY Record 6086319);
+    VAR
+      ContiniaUser@1160040002 : Record 6086001;
+      Expense@1160040003 : Record 6086320;
+      Mileage@1160040004 : Record 6086338;
+      ExpHeader@1160040006 : Record 6086339;
+      EntryNo@1160040005 : Integer;
+    BEGIN
+      TempEMApprovalEntry.RESET;
+      TempEMApprovalEntry.DELETEALL;
+
+      TempApprovalEntry.RESET;
+      IF NOT GUIALLOWED THEN
+        TempApprovalEntry.SETFILTER("Document Type",'<>%1',6);
+      IF TempApprovalEntry.FINDSET THEN
+        REPEAT
+          CLEAR(TempEMApprovalEntry);
+          TempEMApprovalEntry.TRANSFERFIELDS(TempApprovalEntry);
+          EntryNo := EntryNo + 1;
+          TempEMApprovalEntry."Entry No." := EntryNo;
+          TempEMApprovalEntry.INSERT;
+
+          IF TempApprovalEntry."Document Type" <> 6 THEN
+
+            CASE TempApprovalEntry."Table ID" OF
+              DATABASE::Expense:
+                IF Expense.GET(Code2Int(TempApprovalEntry."Document No.")) THEN BEGIN
+                  TempEMApprovalEntry."Approval Entry Type" := TempEMApprovalEntry."Approval Entry Type"::Expense;
+                  TempEMApprovalEntry."Continia User ID" := Expense."Continia User ID";
+                  Expense.CALCFIELDS("Continia User Name");
+                  TempEMApprovalEntry."Continia User Name" := Expense."Continia User Name";
+                  TempEMApprovalEntry."Document Date" := Expense."Document Date";
+                  TempEMApprovalEntry."No." := Expense."Expense Type";
+                  TempEMApprovalEntry.Description := Expense.Description;
+                  TempEMApprovalEntry."Description 2" := Expense."Description 2";
+                  TempEMApprovalEntry."On Hold" := Expense."On Hold";
+                  TempEMApprovalEntry."Currency Code" := Expense."Currency Code";
+                  TempEMApprovalEntry."Global Dimension 1 Code" := Expense."Global Dimension 1 Code";
+                  TempEMApprovalEntry."Global Dimension 2 Code" := Expense."Global Dimension 2 Code";
+                  TempEMApprovalEntry."Job No." := Expense."Job No.";
+                  TempEMApprovalEntry."Job Task No." := Expense."Job Task No.";
+                  TempEMApprovalEntry.Details := Expense.GetOverviewDetails;
+                END;
+
+              DATABASE::Mileage:
+                IF Mileage.GET(Code2Int(TempApprovalEntry."Document No.")) THEN BEGIN
+                  TempEMApprovalEntry."Approval Entry Type" := TempEMApprovalEntry."Approval Entry Type"::Mileage;
+                  TempEMApprovalEntry."Continia User ID" := Mileage."Continia User ID";
+                  Mileage.CALCFIELDS("Continia User Name");
+                  TempEMApprovalEntry."No." := Mileage."Vehicle Code";
+                  TempEMApprovalEntry."Continia User Name" := Mileage."Continia User Name";
+                  TempEMApprovalEntry."Document Date" := Mileage."Registration Date";
+                  TempEMApprovalEntry.Description := Mileage.Description;
+                  TempEMApprovalEntry."On Hold" := Mileage."On Hold";
+                  TempEMApprovalEntry."Global Dimension 1 Code" := Mileage."Global Dimension 1 Code";
+                  TempEMApprovalEntry."Global Dimension 2 Code" := Mileage."Global Dimension 2 Code";
+                  TempEMApprovalEntry."Job No." := Mileage."Job No.";
+                  TempEMApprovalEntry."Job Task No." := Mileage."Job Task No.";
+                  TempEMApprovalEntry.Details := Mileage.GetOverviewDetails;
+                END;
+
+              DATABASE::"Expense Header":
+                BEGIN
+                  IF ExpHeader.GET(ExpHeader."Document Type"::Settlement,TempApprovalEntry."Document No.") THEN BEGIN
+                    TempEMApprovalEntry."Approval Entry Type" := TempEMApprovalEntry."Approval Entry Type"::Settlement;
+                    TempEMApprovalEntry."Continia User ID" := ExpHeader."Continia User ID";
+                    TempEMApprovalEntry."Continia User Name" := ExpHeader."Continia User Name";
+                    TempEMApprovalEntry.Description := ExpHeader.Description;
+                    TempEMApprovalEntry."No." := ExpHeader."No.";
+                    TempEMApprovalEntry."On Hold" := ExpHeader."On Hold";
+                    TempEMApprovalEntry."Global Dimension 1 Code" := ExpHeader."Global Dimension 1 Code";
+                    TempEMApprovalEntry."Global Dimension 2 Code" := ExpHeader."Global Dimension 2 Code";
+                    TempEMApprovalEntry."Job No." := ExpHeader."Job No.";
+                    TempEMApprovalEntry."Job Task No." := ExpHeader."Job Task No.";
+                    TempEMApprovalEntry.Details := ExpHeader.GetOverviewDetails;
+                  END;
+
+                END ELSE
+                  ERROR(UnknownTableID,TempApprovalEntry."Table ID");
+            END;
+
+          //ADD SEPPARATOR
+          IF TempApprovalEntry."Document Type" = 6 THEN BEGIN
+            CLEAR(TempEMApprovalEntry."Table ID");
+
+            ContiniaUser.GET(TempApprovalEntry."Approver ID");
+            IF TempApprovalEntry."Temp. Entry Type" = TempApprovalEntry."Temp. Entry Type"::"Out of Office Sharing" THEN
+              TempEMApprovalEntry.Description := STRSUBSTNO(SharedByOoOTxt,ContiniaUser.Name)
+            ELSE
+              TempEMApprovalEntry.Description := STRSUBSTNO(SharedByTxt,ContiniaUser.Name);
+          END;
+
+          TempEMApprovalEntry.MODIFY;
+
+        UNTIL TempApprovalEntry.NEXT = 0;
+    END;
+
+    PROCEDURE CancelApprovalRequest@1160040014(TableID@1160040001 : Integer;DocNo@1160040000 : Code[20]);
+    VAR
+      ApprovalEntry@1002 : Record 454;
+      Expense@1160040002 : Record 6086320;
+      Mileage@1160040003 : Record 6086338;
+      ExpHeader@1160040006 : Record 6086339;
+    BEGIN
+      CASE TableID OF
+        DATABASE::Expense:
+          BEGIN
+            Expense.GET(Code2Int(DocNo));
+            Expense.TESTFIELD("Settlement No.",'');
+            IF Expense.Status IN [Expense.Status::Open,Expense.Status::"Pending Expense User"] THEN
+              EXIT;
+          END;
+        DATABASE::Mileage:
+          BEGIN
+            Mileage.GET(Code2Int(DocNo));
+            Mileage.TESTFIELD("Settlement No.",'');
+            IF Mileage.Status IN [Mileage.Status::Open,Mileage.Status::"Pending Expense User"] THEN
+              EXIT;
+          END;
+        DATABASE::"Expense Header":
+          BEGIN
+            ExpHeader.GET(ExpHeader."Document Type"::Settlement,FORMAT(DocNo));
+            IF ExpHeader.Status IN [ExpHeader.Status::Open,ExpHeader.Status::"Pending Expense User"] THEN
+              EXIT;
+          END;
+      END;
+
+      EMApprovalsBridge.OrderByTableIDDocTypeAndSeq(ApprovalEntry);
+      ApprovalEntry.SETRANGE("Table ID",TableID);
+      ApprovalEntry.SETRANGE("Document Type",ApprovalEntry."Document Type"::Invoice);
+      ApprovalEntry.SETRANGE("Document No.",DocNo);
+      ApprovalEntry.SETFILTER(Status,'<>%1&<>%2',ApprovalEntry.Status::Rejected,ApprovalEntry.Status::Canceled);
+      IF ApprovalEntry.FINDSET THEN
+        REPEAT
+          ApprovalEntry.Status := ApprovalEntry.Status::Canceled;
+          ApprovalEntry."Last Date-Time Modified" := CREATEDATETIME(TODAY,TIME);
+          ApprovalEntry."Last Modified By User ID" := GetCurrUserID;
+          ApprovalEntry.MODIFY;
+        UNTIL ApprovalEntry.NEXT = 0;
+
+      SetOpenStatus(TableID,DocNo);
+    END;
+
+    PROCEDURE GetNextApproverName@1160040017(TableID@1160040001 : Integer;DocumentNo@1160040000 : Code[20]) : Text[250];
+    VAR
+      ApprovalEntry@161024013 : Record 454;
+    BEGIN
+      ApprovalEntry.SETRANGE("Table ID",TableID);
+      ApprovalEntry.SETRANGE("Document Type",ApprovalEntry."Document Type"::Invoice);
+      ApprovalEntry.SETRANGE("Document No.",DocumentNo);
+      ApprovalEntry.SETRANGE(Status,ApprovalEntry.Status::Open);
+      IF ApprovalEntry.FINDFIRST THEN
+        EXIT(GetApproverDisplayName(ApprovalEntry."Approver ID"));
+    END;
+
+    PROCEDURE ManuallyEditAppvlEntry@1160040003(VAR ApprovalEntry@161024012 : Record 454);
+    VAR
+      ApprovalEntry2@161024013 : Record 454;
+      ApprovalCmtLine@161024014 : Record 455;
+    BEGIN
+      IsApprovalAdminUser(TRUE);
+
+      ApprovalEntry.TESTFIELD("Approver ID");
+
+      ApprovalEntry2 := ApprovalEntry;
+      IF NOT ApprovalEntry2.FIND THEN
+        EXIT;
+
+      IF ApprovalEntry2."Approver ID" <> '' THEN
+        IF NOT CONFIRM(Text032,TRUE,ApprovalEntry.FIELDCAPTION("Approver ID"),ApprovalEntry."Approver ID") THEN
+          ERROR('');
+
+      IF NOT (ApprovalEntry.Status IN [ApprovalEntry.Status::Open,ApprovalEntry.Status::Created]) THEN
+        ApprovalEntry.FIELDERROR(Status,Text031);
+
+      ApprovalEntry2.LOCKTABLE;
+      ApprovalEntry2.FIND;
+      IF ApprovalEntry2."Approver ID" <> ApprovalEntry."Approver ID" THEN BEGIN
+        EMApprovalsBridge.CreateAppvlCmtLine(ApprovalEntry."Table ID",ApprovalEntry."Document Type",ApprovalEntry."Document No.",
+          COPYSTR(STRSUBSTNO(Text035,ApprovalEntry2."Approver ID",ApprovalEntry."Approver ID"),
+          1,MAXSTRLEN(ApprovalCmtLine.Comment)));
+
+        ApprovalEntry2."Approver ID" := ApprovalEntry."Approver ID";
+        ApprovalEntry2.MODIFY;
+      END;
+    END;
+
+    PROCEDURE ManuallyDeleleteAppvlEntry@161024035(ApprovalEntry@161024012 : Record 454);
+    VAR
+      ApprovalCmtLine@161024014 : Record 455;
+    BEGIN
+      IsApprovalAdminUser(TRUE);
+
+      ApprovalEntry.TESTFIELD(Status,ApprovalEntry.Status::Created);
+
+      ApprovalEntry.DELETE(TRUE);
+
+      EMApprovalsBridge.CreateAppvlCmtLine(DATABASE::Expense,ApprovalEntry."Document Type",ApprovalEntry."Document No.",
+        COPYSTR(STRSUBSTNO(Text036,ApprovalEntry."Approver ID"),1,MAXSTRLEN(ApprovalCmtLine.Comment)));
+    END;
+
+    PROCEDURE Code2Int@1160040006(Code@1160040000 : Code[20]) int : Integer;
+    BEGIN
+      IF Code = '' THEN
+        EXIT;
+
+      EVALUATE(int,Code);
+    END;
+
+    PROCEDURE GetCurrUserID@1160040018() : Code[50];
+    BEGIN
+      EXIT(DCApprovalsBridge.GetCurrentUser);
+    END;
+
+    PROCEDURE SetCurrUserID@1160040019(NewCurrUserID@1160040000 : Code[50]);
+    BEGIN
+      DCApprovalsBridge.SetCurrentUser(NewCurrUserID);
+    END;
+
+    PROCEDURE SupressComment@1160040022();
+    BEGIN
+      SupressCmt := TRUE;
+    END;
+
+    PROCEDURE SetApprovedStatus@1160040009(TableID@1160040001 : Integer;DocNo@1160040000 : Code[20]);
+    VAR
+      Expense@1160040002 : Record 6086320;
+    BEGIN
+      ChangeRecordStatus(TableID,DocNo,Expense.Status::Released);
+    END;
+
+    PROCEDURE SetOpenStatus@1160040024(TableID@1160040001 : Integer;DocNo@1160040000 : Code[20]);
+    VAR
+      Expense@1160040003 : Record 6086320;
+      Status@1160040002 : 'Open,Pending Expense User,Pending Approval,Rejected,Approved';
+    BEGIN
+      ChangeRecordStatus(TableID,DocNo,Expense.Status::Open);
+    END;
+
+    PROCEDURE SetPendingStatus@1160040010(TableID@1160040001 : Integer;DocNo@1160040004 : Code[20]);
+    VAR
+      Expense@1160040003 : Record 6086320;
+      Status@1160040002 : 'Open,Pending Expense User,Pending Approval,Rejected,Approved';
+    BEGIN
+      ChangeRecordStatus(TableID,DocNo,Expense.Status::"Pending Approval");
+    END;
+
+    LOCAL PROCEDURE ChangeRecordStatus@1160040025(TableID@1160040002 : Integer;DocNo@1160040001 : Code[20];Status@1160040004 : Integer);
+    VAR
+      Expense@1160040000 : Record 6086320;
+      Mileage@1160040003 : Record 6086338;
+      ExpHeader@1160040007 : Record 6086339;
+    BEGIN
+      CASE TableID OF
+
+        DATABASE::Expense:
+          BEGIN
+            Expense.GET(Code2Int(DocNo));
+            Expense.VALIDATE(Status,Status);
+            Expense.MODIFY;
+
+            IF NOT EMApprovalsBridge.IsLimitedUser(USERID) THEN
+              CODEUNIT.RUN(CODEUNIT::"Expense-Validate",Expense);
+          END;
+
+        DATABASE::Mileage:
+          BEGIN
+            Mileage.GET(Code2Int(DocNo));
+            Mileage.VALIDATE(Status,Status);
+            Mileage.MODIFY;
+
+            IF NOT EMApprovalsBridge.IsLimitedUser(USERID) THEN
+              CODEUNIT.RUN(CODEUNIT::"Mileage-Validate",Mileage);
+          END;
+
+        DATABASE::"Expense Header":
+          BEGIN
+            ExpHeader.GET(ExpHeader."Document Type"::Settlement,DocNo);
+            ExpHeader.VALIDATE(Status,Status);
+            ExpHeader.MODIFY;
+
+            IF NOT EMApprovalsBridge.IsLimitedUser(USERID) THEN
+              CODEUNIT.RUN(CODEUNIT::"Exp. Header - Validate",ExpHeader);
+
+            Expense.SETCURRENTKEY("Settlement No.");
+            Expense.SETRANGE("Settlement No.",ExpHeader."No.");
+            Expense.MODIFYALL(Status,Status);
+
+            Mileage.SETCURRENTKEY("Settlement No.");
+            Mileage.SETRANGE("Settlement No.",ExpHeader."No.");
+            Mileage.MODIFYALL(Status,Status);
+          END;
+
+      END;
+    END;
+
+    PROCEDURE GetTableCaption@1160040026(TableID@1160040000 : Integer) : Text[250];
+    VAR
+      Expense@1160040001 : Record 6086320;
+      Mileage@1160040002 : Record 6086338;
+      ExpHeader@1160040003 : Record 6086339;
+    BEGIN
+      CASE TableID OF
+        DATABASE::Expense:
+          EXIT(Expense.TABLECAPTION);
+        DATABASE::Mileage:
+          EXIT(Mileage.TABLECAPTION);
+        DATABASE::"Expense Header":
+          EXIT(SettlementCaption);
+      END;
+    END;
+
+    PROCEDURE SendAppCmtToExpUser@1160040002(ApprovalEntry@1160040000 : Record 454;IsLimitedUser@6086300 : Boolean);
+    VAR
+      ApprCmtLine@1160040001 : Record 455;
+      Expense@1160040002 : Record 6086320;
+      Mileage@1160040009 : Record 6086338;
+      ExpHeader@1160040011 : Record 6086339;
+      ContiniaUser@1160040008 : Record 6086001;
+      ShortcutFieldFunctions@1160040003 : Codeunit 6086304;
+      EMAppMgt@1160040004 : Codeunit 6086312;
+      SendToUser@1160040006 : Codeunit 6086324;
+      EmOnlineMgt@1160040007 : Codeunit 6086305;
+      CommentTxt@1160040005 : Text[250];
+    BEGIN
+      ApprCmtLine.SETCURRENTKEY("Table ID","Document Type","Document No.");
+      ApprCmtLine.SETRANGE("Table ID",ApprovalEntry."Table ID");
+      ApprCmtLine.SETRANGE("Document Type",ApprovalEntry."Document Type");
+      ApprCmtLine.SETRANGE("Document No.",ApprovalEntry."Document No.");
+      IF NOT ApprCmtLine.FINDLAST THEN
+        EXIT;
+
+      //MULTIPLE COMMENT LINES
+      ApprCmtLine.SETCURRENTKEY("Table ID","Document Type","Document No.");
+      ApprCmtLine.SETRANGE("Table ID",ApprovalEntry."Table ID");
+      ApprCmtLine.SETRANGE("Document Type",ApprovalEntry."Document Type");
+      ApprCmtLine.SETRANGE("Document No.",ApprovalEntry."Document No.");
+      ApprCmtLine.SETRANGE("Date and Time",ApprCmtLine."Date and Time" - 1000,ApprCmtLine."Date and Time");
+      IF ApprCmtLine.FINDSET THEN
+        REPEAT
+          CommentTxt := CommentTxt + ApprCmtLine.Comment;
+        UNTIL (ApprCmtLine.NEXT = 0) OR ((STRLEN(CommentTxt) + MAXSTRLEN(ApprCmtLine.Comment)) > MAXSTRLEN(CommentTxt));
+
+      ContiniaUser.GET(ApprCmtLine."User ID");
+
+      CASE ApprovalEntry."Table ID" OF
+        DATABASE::Expense:
+          BEGIN
+            IF NOT IsLimitedUser THEN
+              ShortcutFieldFunctions.ValidateShortcutFieldValue(
+                ShortcutFieldFunctions.GetCommentShortcutFieldNo(ApprovalEntry."Table ID"),ApprovalEntry."Table ID",
+                0,'',Code2Int(ApprovalEntry."Document No."),CommentTxt);
+
+            Expense.GET(Code2Int(ApprovalEntry."Document No."));
+            Expense."Admin Comment" := COPYSTR(CommentTxt,1,MAXSTRLEN(Expense."Admin Comment"));
+            Expense.Status := Expense.Status::Open;
+            Expense.MODIFY;
+            CODEUNIT.RUN(CODEUNIT::"Expense - Send to Expense User",Expense);
+          END;
+        DATABASE::Mileage:
+          BEGIN
+            IF NOT IsLimitedUser THEN
+              ShortcutFieldFunctions.ValidateShortcutFieldValue(
+                ShortcutFieldFunctions.GetCommentShortcutFieldNo(ApprovalEntry."Table ID"),ApprovalEntry."Table ID",
+                0,'',Code2Int(ApprovalEntry."Document No."),CommentTxt);
+
+            Mileage.GET(Code2Int(ApprovalEntry."Document No."));
+            Mileage."Admin Comment" := COPYSTR(CommentTxt,1,MAXSTRLEN(Mileage."Admin Comment"));
+            Mileage.Status := Expense.Status::Open;
+            Mileage.MODIFY;
+            CODEUNIT.RUN(CODEUNIT::"Mileage-Send to Expense User",Mileage);
+          END;
+        DATABASE::"Expense Header":
+          BEGIN
+            IF NOT IsLimitedUser THEN
+              ShortcutFieldFunctions.ValidateShortcutFieldValue(
+                ShortcutFieldFunctions.GetCommentShortcutFieldNo(ApprovalEntry."Table ID"),ApprovalEntry."Table ID",
+                ExpHeader."Document Type"::Settlement,ApprovalEntry."Document No.",0,CommentTxt);
+
+            ExpHeader.GET(ExpHeader."Document Type"::Settlement,ApprovalEntry."Document No.");
+            ExpHeader."Admin Comment" := COPYSTR(CommentTxt,1,MAXSTRLEN(ExpHeader."Admin Comment"));
+            ExpHeader.Status := Expense.Status::Open;
+            ExpHeader.MODIFY;
+            CODEUNIT.RUN(CODEUNIT::"Exp. Header - Send to User",ExpHeader);
+          END;
+      END;
+    END;
+
+    PROCEDURE GetNoOfApprovalEntries@1160040016(TableID@1160040000 : Integer;DocNo@1160040001 : Code[20]) : Integer;
+    VAR
+      ApprovalEntry@1160040002 : Record 454;
+    BEGIN
+      ApprovalEntry.SETRANGE("Table ID",TableID);
+      ApprovalEntry.SETRANGE("Document Type",ApprovalEntry."Document Type"::Invoice);
+      ApprovalEntry.SETRANGE("Document No.",DocNo);
+      EXIT(ApprovalEntry.COUNT);
+    END;
+
+    PROCEDURE GetNoOfApprovalComments@1160040021(TableID@1160040002 : Integer;DocNo@1160040001 : Code[20]) : Integer;
+    VAR
+      ApprovalCmt@1160040000 : Record 455;
+    BEGIN
+      ApprovalCmt.SETCURRENTKEY("Table ID","Document Type","Document No.");
+      ApprovalCmt.SETRANGE("Table ID",TableID);
+      ApprovalCmt.SETRANGE("Document Type",ApprovalCmt."Document Type"::Invoice);
+      ApprovalCmt.SETRANGE("Document No.",DocNo);
+      EXIT(ApprovalCmt.COUNT);
+    END;
+
+    PROCEDURE DrillDownExpHeaderAppCmts@161024017(ExpHeader@1160040000 : Record 6086339) : Integer;
+    VAR
+      ApprovalCmt@1160040003 : Record 455;
+      ApprovalCmtMgt@1160040002 : Codeunit 6085600;
+      RecRef@1160040001 : RecordRef;
+    BEGIN
+      RecRef.GETTABLE(ExpHeader);
+      ApprovalCmtMgt.ShowComments(DATABASE::"Expense Header",ApprovalCmt."Document Type"::Invoice,ExpHeader."No.",RecRef.RECORDID);
+    END;
+
+    PROCEDURE DrillDownExpenseAppCmts@1160040027(Expense@1160040000 : Record 6086320) : Integer;
+    VAR
+      ApprovalCmt@1160040003 : Record 455;
+      ApprovalCmtMgt@1160040002 : Codeunit 6085600;
+      RecRef@1160040001 : RecordRef;
+    BEGIN
+      RecRef.GETTABLE(Expense);
+      ApprovalCmtMgt.ShowComments(DATABASE::Expense,ApprovalCmt."Document Type"::Invoice,FORMAT(Expense."Entry No."),RecRef.RECORDID);
+    END;
+
+    PROCEDURE DrillDownMileageAppCmts@1160040028(Mileage@1160040000 : Record 6086338) : Integer;
+    VAR
+      ApprovalCmt@1160040003 : Record 455;
+      ApprovalCmtMgt@1160040002 : Codeunit 6085600;
+      RecRef@1160040001 : RecordRef;
+    BEGIN
+      RecRef.GETTABLE(Mileage);
+      ApprovalCmtMgt.ShowComments(DATABASE::Mileage,ApprovalCmt."Document Type"::Invoice,FORMAT(Mileage."Entry No."),RecRef.RECORDID);
+    END;
+
+    PROCEDURE SelfApproveAllowed@1160040029() : Boolean;
+    VAR
+      EMSetup@1160040000 : Record 6086300;
+    BEGIN
+      EMSetup.GET;
+      EXIT(EMSetup."Auto Approve Own Documents");
+    END;
+
+    PROCEDURE SendApprovalRequest@1160040030(TableID@1160040000 : Integer;DocumentNo@1160040001 : Code[20]);
+    BEGIN
+      Code(TableID,DocumentNo);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

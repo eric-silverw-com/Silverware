@@ -1,0 +1,158 @@
+OBJECT Codeunit 6086345 Mileage-Validate
+{
+  OBJECT-PROPERTIES
+  {
+    Date=01/11/18;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.04;
+  }
+  PROPERTIES
+  {
+    TableNo=6086338;
+    Permissions=TableData 6086002=r,
+                TableData 6086323=r,
+                TableData 6086353=r,
+                TableData 6086355=rimd,
+                TableData 6086361=rimd;
+    OnRun=BEGIN
+            Code(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      AccountMissmatch@1160040007 : TextConst 'ENU=The %1 %2 is different from the current setup output %3';
+      FieldMissing@1160040003 : TextConst 'ENU=%1 must be specified';
+      VarianceLimits@1160040009 : TextConst 'ENU=There is a difference between the reported and the calculated distance';
+      ExcludeInboxCheck@1160040000 : Boolean;
+      InboxError@1160040001 : TextConst 'ENU=This mileage exists in the Mileage Inbox and must be processed from there';
+      ReimbursementMissmatch@1160040004 : TextConst 'ENU=%1 must be %2, when %3 is %4';
+
+    LOCAL PROCEDURE Code@1160040031(Mileage@1160040001 : Record 6086338);
+    VAR
+      ContiniaUserSetup@1160040003 : Record 6086002;
+      EMComment@1160040000 : Record 6086361;
+      MileageInbox@1160040005 : Record 6086353;
+      Mileage2@1160040008 : Record 6086338;
+      EMDimMgt@1160040006 : Codeunit 6086318;
+      ExpCmtMgt@1160040002 : Codeunit 6086323;
+      ValidationError@1160040007 : Text[250];
+      NewCalculatedAccount@1160040004 : Code[20];
+      EmptyGUID@1160040009 : GUID;
+    BEGIN
+      // THERE ARE 3 MOTHODS OF POSTING:
+      // 1. POSTING ON THIS VENDOR IN NAV (INTERNAL)
+      // 2. POSTING IN THE INTEGRATION SYSTEMS (EXTERNAL)
+      // 3. POSTING IN A NON-INTEGRATED SYSTEM (EXTERNAL,NO ACCOUNTS SPECIFIED);
+
+      EMComment.SETCURRENTKEY("Table ID","Document Type","Document No.","Doc. Ref. No.");
+      EMComment.SETRANGE("Table ID",DATABASE::Mileage);
+      EMComment.SETRANGE("Document Type",0);
+      EMComment.SETRANGE("Document No.",'');
+      EMComment.SETRANGE("Doc. Ref. No.",Mileage."Entry No.");
+      EMComment.SETRANGE("Validation Comment",TRUE);
+      EMComment.DELETEALL;
+
+      IF Mileage."Continia User ID" = '' THEN
+        ExpCmtMgt.AddComment(DATABASE::Mileage,0,'',Mileage."Entry No.",
+          EMComment.Importance::Error,'NO EMPLOYEE',STRSUBSTNO(FieldMissing,Mileage.FIELDCAPTION("Continia User ID")),TRUE);
+
+      IF Mileage."Registration Date" = 0D THEN
+        ExpCmtMgt.AddComment(DATABASE::Mileage,0,'',Mileage."Entry No.",
+          EMComment.Importance::Error,'NO REGISTRATION DATE',STRSUBSTNO(FieldMissing,Mileage.FIELDCAPTION("Registration Date")),TRUE);
+
+      IF Mileage."Registration Date" <> 0D THEN
+        IF DATE2DMY(Mileage."Registration Date",3) > 2100 THEN
+          ExpCmtMgt.AddComment(DATABASE::Mileage,0,'',Mileage."Entry No.",EMComment.Importance::Error,'INVALID REG. DATE',
+            STRSUBSTNO(FieldMissing,Mileage.FIELDCAPTION("Registration Date")),TRUE);
+
+      IF NOT Mileage.MileageBetweenVarianceLimits THEN
+        ExpCmtMgt.AddComment(DATABASE::Mileage,0,'',Mileage."Entry No.",
+          EMComment.Importance::Information,'VARIANCELIMIT',STRSUBSTNO(VarianceLimits),TRUE);
+
+      // VALIDATIONS ONLY FOR POSTING ON THE VENDOR
+      IF (Mileage."Reimbursement Method" = Mileage."Reimbursement Method"::"External System") AND
+         (Mileage."Mileage Account Type" = Mileage."Mileage Account Type"::" ")
+      THEN
+        EXIT;
+
+      IF Mileage."Mileage Account Type" = Mileage."Mileage Account Type"::" " THEN
+        ExpCmtMgt.AddComment(DATABASE::Mileage,0,'',Mileage."Entry No.",EMComment.Importance::Error,'MIL. ACC. TYPE',
+          STRSUBSTNO(FieldMissing,Mileage.FIELDCAPTION("Mileage Account Type")),TRUE)
+      ELSE BEGIN
+        IF (Mileage."Reimbursement Method" = Mileage."Reimbursement Method"::"Vendor (on User)") AND
+           (Mileage."Mileage Account Type" <> Mileage."Mileage Account Type"::"G/L Account")
+        THEN BEGIN
+          Mileage2."Reimbursement Method" := Mileage2."Reimbursement Method"::"External System";
+          ExpCmtMgt.AddComment(DATABASE::Mileage,0,'',Mileage."Entry No.",EMComment.Importance::Error,'MISSMATCHEXTERNAL',
+            STRSUBSTNO(ReimbursementMissmatch,Mileage.FIELDCAPTION("Reimbursement Method"),Mileage2."Reimbursement Method",
+              Mileage.FIELDCAPTION("Mileage Account Type"),Mileage."Mileage Account Type"),TRUE);
+        END;
+
+        IF (Mileage."Reimbursement Method" = Mileage."Reimbursement Method"::"External System") AND
+           (Mileage."Mileage Account Type" = Mileage."Mileage Account Type"::"G/L Account")
+        THEN BEGIN
+          Mileage2."Reimbursement Method" := Mileage2."Reimbursement Method"::"Vendor (on User)";
+          ExpCmtMgt.AddComment(DATABASE::Mileage,0,'',Mileage."Entry No.",EMComment.Importance::Error,'MISSMATCHINTERNAL',
+            STRSUBSTNO(ReimbursementMissmatch,Mileage.FIELDCAPTION("Reimbursement Method"),Mileage2."Reimbursement Method",
+              Mileage.FIELDCAPTION("Mileage Account Type"),Mileage."Mileage Account Type"),TRUE);
+        END;
+      END;
+
+      IF (Mileage."Mileage Account" = '') AND (Mileage."Job No." = '') AND
+         (Mileage."Mileage Account Type" <> Mileage."Mileage Account Type"::" ")
+      THEN
+        ExpCmtMgt.AddComment(DATABASE::Mileage,0,'',Mileage."Entry No.",
+          EMComment.Importance::Error,'NO MIL ACC',STRSUBSTNO(FieldMissing,Mileage.FIELDCAPTION("Mileage Account")),TRUE);
+
+      IF (Mileage."Mileage Account" <> '') AND Mileage.PostingSetupChanged(NewCalculatedAccount) THEN
+        ExpCmtMgt.AddComment(DATABASE::Mileage,0,'',Mileage."Entry No.",EMComment.Importance::Warning,'ACCOUNT MISSMATCH',
+          STRSUBSTNO(AccountMissmatch,Mileage.FIELDCAPTION("Mileage Account"),Mileage."Mileage Account",NewCalculatedAccount),TRUE);
+
+      IF NOT ExcludeInboxCheck THEN BEGIN
+        IF Mileage."Mileage GUID" <> EmptyGUID THEN BEGIN
+          MileageInbox.SETCURRENTKEY("Mileage GUID");
+          MileageInbox.SETRANGE("Mileage GUID",Mileage."Mileage GUID");
+          MileageInbox.SETFILTER(Status,'%1|%2',MileageInbox.Status::Pending,MileageInbox.Status::Error);
+          IF MileageInbox.FINDFIRST THEN
+            ExpCmtMgt.AddComment(DATABASE::Mileage,0,'',Mileage."Entry No.",EMComment.Importance::Error,'INBOX ERROR',InboxError,TRUE);
+        END;
+      END;
+
+      IF ContiniaUserSetup.GET(Mileage."Continia User ID") THEN
+        IF NOT EMDimMgt.CheckDefaultDim(
+           ValidationError,DATABASE::Mileage,0,'',Mileage."Entry No.",DATABASE::Vendor,ContiniaUserSetup."Vendor No.")
+        THEN
+          ExpCmtMgt.AddComment(DATABASE::Mileage,0,'',Mileage."Entry No.",
+            EMComment.Importance::Error,'GLACCDEFDIMNVD',ValidationError,TRUE);
+
+      IF Mileage."Mileage Account" <> '' THEN
+        IF NOT EMDimMgt.CheckDefaultDim(
+           ValidationError,DATABASE::Mileage,0,'',Mileage."Entry No.",DATABASE::"G/L Account",Mileage."Mileage Account")
+        THEN
+          ExpCmtMgt.AddComment(DATABASE::Mileage,0,'',Mileage."Entry No.",
+            EMComment.Importance::Error,'GLACCDEFDIMEA',ValidationError,TRUE);
+
+      IF Mileage."Job No." <> '' THEN
+        IF NOT EMDimMgt.CheckDefaultDim(ValidationError,DATABASE::Mileage,0,'',Mileage."Entry No.",DATABASE::Job,Mileage."Job No.") THEN
+          ExpCmtMgt.AddComment(DATABASE::Mileage,0,'',Mileage."Entry No.",
+            EMComment.Importance::Error,'JOBDEFDIMEA',ValidationError,TRUE);
+    END;
+
+    PROCEDURE ExcludeInboxValidation@1160040002();
+    BEGIN
+      ExcludeInboxCheck := TRUE;
+    END;
+
+    PROCEDURE CheckWithoutInboxValidation@1160040001(Mileage@1160040000 : Record 6086338);
+    BEGIN
+      ExcludeInboxCheck := TRUE;
+      Code(Mileage);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

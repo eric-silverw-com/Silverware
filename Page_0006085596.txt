@@ -2,19 +2,16 @@ OBJECT Page 6085596 DC Client Addin - Purch.
 {
   OBJECT-PROPERTIES
   {
-    Date=09/26/18;
+    Date=02/07/18;
     Time=[ 1:00:00 AM];
-    Version List=DCW17.00.00.5.00.04;
+    Version List=DCW17.00.00.4.50.05;
   }
   PROPERTIES
   {
     Permissions=TableData 6085780=rimd;
     CaptionML=ENU=Document Capture Client Addin;
-    InsertAllowed=No;
-    DeleteAllowed=No;
-    ModifyAllowed=No;
     SourceTable=Table38;
-    PageType=ListPart;
+    PageType=List;
     OnOpenPage=BEGIN
                  IF ContiniaUserProp.GET(USERID) AND (ContiniaUserProp."Image Zoom" > 0) THEN
                    CurrZoom := ContiniaUserProp."Image Zoom"
@@ -36,11 +33,10 @@ OBJECT Page 6085596 DC Client Addin - Purch.
                            CLEAR(Document);
                          UpdateImage;
                          SendCommand(CaptureXmlDoc);
-                       END ELSE
-                         IF (SendAllPendingCommands AND (NOT CaptureXmlDoc.IsEmpty)) THEN BEGIN
-                           SendAllPendingCommands := FALSE;
-                           SendCommand(CaptureXmlDoc);
-                         END;
+                       END ELSE IF (SendAllPendingCommands AND (NOT ISNULL(CaptureXmlDoc))) THEN BEGIN
+                         SendAllPendingCommands := FALSE;
+                         SendCommand(CaptureXmlDoc);
+                       END;
                        CLEAR(CaptureXmlDoc);
                      END;
 
@@ -48,16 +44,15 @@ OBJECT Page 6085596 DC Client Addin - Purch.
   CONTROLS
   {
     { 1000000000;;Container;
-                Name=ContentArea;
                 ContainerType=ContentArea }
 
     { 1000000001;1;Field  ;
                 Name=CaptureUI;
                 SourceExpr=CaptureUISource;
                 Visible=SHOWCAPTUREUI;
-                ControlAddIn=[Akeyto.DocumentCapture.Dynamics.Nav.UI;PublicKeyToken=0c53e51c0afe7001];
+                ControlAddIn=[Akeyto.DocumentCapture.Dynamics.Nav.UI;PublicKeyToken=44fe4ac2c6480df6];
                 OnControlAddIn=BEGIN
-                                 OnControlAddInEvent(Index,Data);
+                                 OnControlAddIn(Index,Data);
                                END;
 
                 ShowCaption=No }
@@ -66,7 +61,7 @@ OBJECT Page 6085596 DC Client Addin - Purch.
                 Name=CaptureUIWeb;
                 SourceExpr=CaptureUISource;
                 Visible=ShowCaptureWebUI;
-                ControlAddIn=[Continia.DocumentCapture.Dynamics.Nav.Web.UI;PublicKeyToken=0c53e51c0afe7001];
+                ControlAddIn=[Continia.DocumentCapture.Dynamics.Nav.Web.UI;PublicKeyToken=652b4f7dbff5f5b3];
                 ShowCaption=No }
 
   }
@@ -80,8 +75,10 @@ OBJECT Page 6085596 DC Client Addin - Purch.
       CEDOProxy@1160040000 : Codeunit 6085800;
       WebClientMgt@1001 : Codeunit 6085662;
       TIFFMgt@1002 : Codeunit 6085609;
-      CaptureXmlDoc@1000000010 : Codeunit 6192800;
+      FileMgt@6085577 : Codeunit 419;
+      CaptureXmlDoc@1000000010 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
       CaptureUISource@1000000000 : Text;
+      CurrentFilename@6085576 : Text;
       Channel@1000000011 : Code[50];
       CurrentPageText@1000000005 : Text[250];
       CurrentZoomText@1000000009 : Text[30];
@@ -100,27 +97,33 @@ OBJECT Page 6085596 DC Client Addin - Purch.
     PROCEDURE UpdateImage@1000000006();
     VAR
       TempDocFileInfo@1000 : Record 6085600;
-      TempFile@1002 : TEMPORARY Record 6085608;
-      FileName@1001 : Text[1024];
+      Filename@6085573 : Text[250];
     BEGIN
       IF Document."No." = '' THEN BEGIN
         IF CEDOProxy.IsCEDOEnabled THEN
           IF CEDOProxy.GetTempDocFilename(TempDocFileInfo,Rec) THEN
-            FileName := 'file://' + TempDocFileInfo."Styled XML Filename";
+            Filename := 'file://' + TempDocFileInfo."Styled XML Filename";
+      END ELSE
+        IF NOT WebClientMgt.IsWebClient THEN
+          Filename := Document.GetTiffFileName
+        ELSE
+          Filename := Document.GetTiffServerFileName;
 
-          IF NOT WebClientMgt.IsWebClient THEN
-            CaptureAddinLib.BuildSetImageCommand(FileName,TRUE,CaptureXmlDoc);
-      END;
-
-      IF (FileName = '') AND NOT Document.GetTiffFile(TempFile) THEN BEGIN
+      IF Filename = '' THEN BEGIN
         CaptureAddinLib.BuildClearImageCommand(CaptureXmlDoc);
         UpdateCurrPageNo(0);
         EXIT;
-      END ELSE
-        IF (FileName = '') AND NOT WebClientMgt.IsWebClient THEN BEGIN
-          FileName := TempFile.GetClientFilePath;
-          CaptureAddinLib.BuildSetImageCommand(FileName,TRUE,CaptureXmlDoc);
-        END;
+      END;
+
+      IF NOT WebClientMgt.IsWebClient THEN BEGIN
+        // CurrentFileName is always a temporary client side file.
+        IF CurrentFilename <> '' THEN
+          FileMgt.DeleteClientFile(CurrentFilename);
+
+        CurrentFilename := Filename;
+
+        CaptureAddinLib.BuildSetImageCommand(CurrentFilename,TRUE,CaptureXmlDoc);
+      END;
 
       UpdateCurrPageNo(1);
 
@@ -133,17 +136,14 @@ OBJECT Page 6085596 DC Client Addin - Purch.
 
     PROCEDURE UpdateCurrPageNo@1000000003(PageNo@1000000000 : Integer);
     VAR
-      TempFile@1001 : TEMPORARY Record 6085608;
       ImageDataUrl@1000 : Text;
     BEGIN
       Document.CALCFIELDS("No. of Pages");
-      Document.GetTiffFile(TempFile);
-
       CurrentPageNo := PageNo;
       CurrentPageText := STRSUBSTNO(Text002,CurrentPageNo);
 
       IF WebClientMgt.IsWebClient THEN BEGIN
-        ImageDataUrl := TIFFMgt.GetPageAsDataUrl(TempFile,PageNo);
+        ImageDataUrl := TIFFMgt.GetPageAsDataUrl(Document.GetTiffServerFileName,PageNo);
         CaptureAddinLib.BuildSetImageDataCommand(ImageDataUrl,TRUE,CaptureXmlDoc);
       END;
 
@@ -190,9 +190,9 @@ OBJECT Page 6085596 DC Client Addin - Purch.
       CaptureAddinLib.BuildZoomTextCommand(CurrentZoomText,CaptureXmlDoc);
     END;
 
-    PROCEDURE SendCommand@1000000002(VAR XmlDoc@1000000000 : Codeunit 6192800);
+    PROCEDURE SendCommand@1000000002(VAR XmlDoc@1000000000 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument");
     VAR
-      NewXmlDoc@161024012 : Codeunit 6192800;
+      NewXmlDoc@161024012 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
     BEGIN
       CaptureAddinLib.XmlToText(XmlDoc,CaptureUISource);
       CaptureAddinLib.TextToXml(NewXmlDoc,CaptureUISource);
@@ -248,31 +248,29 @@ OBJECT Page 6085596 DC Client Addin - Purch.
       CLEAR(CaptureXmlDoc);
     END;
 
-    PROCEDURE HandleXmlCommand@1000000007(Command@1000000000 : Text[1024];VAR InXmlDoc@1000000001 : Codeunit 6192800);
+    PROCEDURE HandleXmlCommand@1000000007(Command@1000000000 : Text[1024];VAR InXmlDoc@1000000001 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument");
     VAR
       XmlLib@1000000003 : Codeunit 6085573;
-      DocumentElement@1000 : Codeunit 6192801;
     BEGIN
-      InXmlDoc.GetDocumentElement(DocumentElement);
       CASE Command OF
         'ZoomTextChanged':
           BEGIN
-            CurrentZoomText := XmlLib.GetNodeText(DocumentElement,'Text');
+            CurrentZoomText := XmlLib.GetNodeText(InXmlDoc.DocumentElement,'Text');
             IF EVALUATE(CurrZoom,DELCHR(CurrentZoomText,'=','%')) THEN;
             Zoom(CurrZoom,TRUE);
           END;
 
         'PageTextChanged':
           BEGIN
-            CurrentPageText := XmlLib.GetNodeText(DocumentElement,'Text');
+            CurrentPageText := XmlLib.GetNodeText(InXmlDoc.DocumentElement,'Text');
             ParsePageText(CurrentPageText);
           END;
 
         'ChangePage':
-          UpdateCurrPageNo(XmlLib.Text2Int(XmlLib.GetNodeText(DocumentElement,'NewPageNo')));
+          UpdateCurrPageNo(XmlLib.Text2Int(XmlLib.GetNodeText(InXmlDoc.DocumentElement,'NewPageNo')));
       END;
 
-      IF NOT CaptureXmlDoc.IsEmpty THEN
+      IF NOT ISNULL(CaptureXmlDoc) THEN
         SendCommand(CaptureXmlDoc);
       CLEAR(CaptureXmlDoc);
     END;
@@ -309,10 +307,9 @@ OBJECT Page 6085596 DC Client Addin - Purch.
       CurrPage.UPDATE(FALSE);
     END;
 
-    LOCAL PROCEDURE OnControlAddInEvent@1160040000(Index@1000 : Integer;Data@1001 : Variant);
+    LOCAL PROCEDURE OnControlAddIn@1160040000(Index@1000 : Integer;Data@1001 : Variant);
     VAR
-      InXmlDoc@1002 : Codeunit 6192800;
-      DocumentElement@1004 : Codeunit 6192801;
+      InXmlDoc@1002 : DotNet "'System.Xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
       XmlLib@1003 : Codeunit 6085573;
     BEGIN
       CLEAR(CaptureXmlDoc);
@@ -320,17 +317,16 @@ OBJECT Page 6085596 DC Client Addin - Purch.
         HandleSimpleCommand(Data)
       ELSE BEGIN
         CaptureAddinLib.TextToXml(InXmlDoc,Data);
-        InXmlDoc.GetDocumentElement(DocumentElement);
         IF WebClientMgt.IsWebClient THEN
-          HandleXmlCommand(XmlLib.GetNodeText(DocumentElement,'Event'),InXmlDoc)
+          HandleXmlCommand(XmlLib.GetNodeText(InXmlDoc.DocumentElement,'Event'),InXmlDoc)
         ELSE
-          HandleXmlCommand(XmlLib.GetNodeText(DocumentElement,'Command'),InXmlDoc);
+          HandleXmlCommand(XmlLib.GetNodeText(InXmlDoc.DocumentElement,'Command'),InXmlDoc);
       END;
     END;
 
     EVENT CaptureUIWeb@-1::OnControlAddIn@1(index@1001 : Integer;data@1000 : Variant);
     BEGIN
-      OnControlAddInEvent(index,data)
+      OnControlAddIn(index,data)
     END;
 
     EVENT CaptureUIWeb@-1::AddInReady@2();

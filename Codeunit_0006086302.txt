@@ -1,0 +1,218 @@
+OBJECT Codeunit 6086302 Navigate Mileage - Find
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/02/18;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.06;
+  }
+  PROPERTIES
+  {
+    TableNo=6086014;
+    OnRun=VAR
+            DocEntryTemp@1160040000 : TEMPORARY Record 265;
+          BEGIN
+            FindRecords(DocEntryTemp,"Doc. No. Filter","Posting Date Filter");
+            Rec.TRANSFERFIELDS(DocEntryTemp);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1160040000 : TextConst 'ENU=Unable to find any entries or posting suggestion for this %1.';
+      Text002@1160040001 : TextConst 'ENU=The posting suggestion for this %1 has not been posted.';
+      Text003@116004012 : TextConst 'ENU="This is because %1 = %2."';
+
+    PROCEDURE FindRecords@1160040002(VAR DocEntry@161024014 : Record 265;DocNoFilter@161024013 : Code[250];PostingDateFilter@161024012 : Text[250]);
+    VAR
+      TempMileage@161024017 : TEMPORARY Record 6086338;
+      Mileage@1160040000 : Record 6086338;
+    BEGIN
+      IF Mileage.READPERMISSION THEN BEGIN
+        FilterMileage(TempMileage,DocNoFilter,PostingDateFilter);
+
+        InsertIntoDocEntry(DocEntry,DATABASE::Mileage,0,TempMileage.TABLECAPTION,TempMileage.COUNT);
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertIntoDocEntry@1160040001(VAR DocEntry@161024012 : Record 265;DocTableID@1000 : Integer;DocType@1003 : Option;DocTableName@1001 : Text[1024];DocNoOfRecords@1002 : Integer);
+    BEGIN
+      WITH DocEntry DO BEGIN
+        IF DocNoOfRecords = 0 THEN
+          EXIT;
+        INIT;
+        "Entry No." := "Entry No." + 1;
+        "Table ID" := DocTableID;
+        "Document Type" := DocType;
+        "Table Name" := COPYSTR(DocTableName,1,MAXSTRLEN("Table Name"));
+        "No. of Records" := DocNoOfRecords;
+        INSERT;
+      END;
+    END;
+
+    PROCEDURE FilterMileage@161024014(VAR Mileage2@161024014 : TEMPORARY Record 6086338;DocNoFilter@161024013 : Code[250];PostingDateFilter@161024012 : Text[250]);
+    VAR
+      GLEntry@1160040002 : Record 17;
+      JobLedgerEntry@6086300 : Record 169;
+      PurchHLine@1160040001 : Record 39;
+      GenJnlLine@1160040005 : Record 81;
+      PurchInvHeader@1160040000 : Record 122;
+      Mileage@1160040010 : Record 6086338;
+      LessorIntegration@1160040003 : Codeunit 6086327;
+    BEGIN
+      Mileage.SETCURRENTKEY("Created Doc. Type","Created Doc. Subtype","Created Doc. ID","Created Doc. Ref. No.");
+
+      IF PurchInvHeader.READPERMISSION THEN BEGIN
+        PurchInvHeader.SETFILTER("No.",DocNoFilter);
+        PurchInvHeader.SETFILTER("Posting Date",PostingDateFilter);
+        IF PurchInvHeader.FINDFIRST THEN
+          REPEAT
+            Mileage.SETRANGE("Created Doc. Type",DATABASE::"Purchase Line");
+            Mileage.SETRANGE("Created Doc. Subtype",PurchHLine."Document Type"::Invoice);
+            Mileage.SETRANGE("Created Doc. ID",PurchInvHeader."Pre-Assigned No.");
+            Mileage.SETRANGE("Settlement No.",'');
+            IF Mileage.FINDFIRST THEN
+              REPEAT
+                IF NOT Mileage2.GET(Mileage."Entry No.") THEN BEGIN
+                  Mileage2 := Mileage;
+                  Mileage2.INSERT;
+                END;
+              UNTIL Mileage.NEXT = 0;
+          UNTIL PurchInvHeader.NEXT = 0;
+      END;
+
+      IF GLEntry.READPERMISSION THEN BEGIN
+        GLEntry.SETCURRENTKEY("Document No.","Posting Date");
+        GLEntry.SETFILTER("Document No.",DocNoFilter);
+        GLEntry.SETFILTER("Posting Date",PostingDateFilter);
+        IF GLEntry.FINDFIRST THEN
+          REPEAT
+            Mileage.SETRANGE("Created Doc. Type",DATABASE::"Gen. Journal Line");
+            Mileage.SETRANGE("Created Doc. Subtype",GenJnlLine."Document Type"::" ");
+            Mileage.SETRANGE("Created Doc. ID",GLEntry."Document No.");
+            Mileage.SETRANGE("Settlement No.",'');
+            IF Mileage.FINDFIRST THEN
+              REPEAT
+                IF NOT Mileage2.GET(Mileage."Entry No.") THEN BEGIN
+                  Mileage2 := Mileage;
+                  Mileage2.INSERT;
+                END;
+              UNTIL Mileage.NEXT = 0;
+          UNTIL GLEntry.NEXT = 0;
+      END;
+
+      IF JobLedgerEntry.READPERMISSION THEN BEGIN
+        JobLedgerEntry.SETCURRENTKEY("Document No.","Posting Date");
+        JobLedgerEntry.SETFILTER("Document No.",DocNoFilter);
+        JobLedgerEntry.SETFILTER("Posting Date",PostingDateFilter);
+        IF JobLedgerEntry.FINDFIRST THEN
+          REPEAT
+            Mileage.SETRANGE("Created Doc. Type",DATABASE::"Gen. Journal Line");
+            Mileage.SETRANGE("Created Doc. Subtype",GenJnlLine."Document Type"::" ");
+            Mileage.SETRANGE("Created Doc. ID",JobLedgerEntry."Document No.");
+            Mileage.SETRANGE("Settlement No.",'');
+            IF Mileage.FINDFIRST THEN
+              REPEAT
+                IF NOT Mileage2.GET(Mileage."Entry No.") THEN BEGIN
+                  Mileage2 := Mileage;
+                  Mileage2.INSERT;
+                END;
+              UNTIL Mileage.NEXT = 0;
+          UNTIL JobLedgerEntry.NEXT = 0;
+      END;
+
+      LessorIntegration.FilterMileageFromPayEntry(Mileage2,DocNoFilter,PostingDateFilter);
+    END;
+
+    PROCEDURE NavigateMileage@1160040004(Mileage@1160040000 : Record 6086338);
+    VAR
+      GLEntry@1160040002 : Record 17;
+      JobLedgerEntry@6086300 : Record 169;
+      PurchHeader@1160040003 : Record 38;
+      GenJnlLine@1160040005 : Record 81;
+      PurchInvHeader@1160040004 : Record 122;
+      GenJnlBatch@1160040008 : Record 232;
+      EMSetup@1160040006 : Record 6086300;
+      NavigateForm@1160040001 : Page 344;
+      GenJnlManagement@1160040009 : Codeunit 230;
+      LessorIntegration@1160040010 : Codeunit 6086327;
+    BEGIN
+      CASE Mileage."Created Doc. Type" OF
+        DATABASE::"Purchase Line":
+          BEGIN
+            IF PurchInvHeader.READPERMISSION THEN BEGIN
+              PurchInvHeader.SETCURRENTKEY("Pre-Assigned No.");
+              PurchInvHeader.SETRANGE("Pre-Assigned No.",Mileage."Created Doc. ID");
+              IF PurchInvHeader.FINDFIRST THEN BEGIN
+                NavigateForm.SetDoc(PurchInvHeader."Posting Date",PurchInvHeader."No.");
+                NavigateForm.RUN;
+                EXIT;
+              END;
+            END;
+
+            IF PurchHeader.READPERMISSION THEN
+              IF PurchHeader.GET(Mileage."Created Doc. Subtype",Mileage."Created Doc. ID") THEN BEGIN
+                PAGE.RUN(PAGE::"Purchase Invoice",PurchHeader);
+                MESSAGE(Text002,Mileage.TABLECAPTION);
+                EXIT;
+              END;
+          END;
+
+        DATABASE::"Gen. Journal Line":
+          BEGIN
+            IF GLEntry.READPERMISSION THEN BEGIN
+              GLEntry.SETCURRENTKEY("Document No.","Posting Date");
+              GLEntry.SETFILTER("Document No.",Mileage."Created Doc. ID");
+              IF GLEntry.FINDFIRST THEN BEGIN
+                NavigateForm.SetDoc(GLEntry."Posting Date",Mileage."Created Doc. ID");
+                NavigateForm.RUN;
+                EXIT;
+              END;
+            END;
+
+            IF JobLedgerEntry.READPERMISSION THEN BEGIN
+              JobLedgerEntry.SETCURRENTKEY("Document No.","Posting Date");
+              JobLedgerEntry.SETFILTER("Document No.",Mileage."Created Doc. ID");
+              IF JobLedgerEntry.FINDFIRST THEN BEGIN
+                NavigateForm.SetDoc(JobLedgerEntry."Posting Date",Mileage."Created Doc. ID");
+                NavigateForm.RUN;
+                EXIT;
+              END;
+            END;
+
+            IF GenJnlLine.READPERMISSION THEN BEGIN
+              EMSetup.GET;
+              GenJnlLine.SETRANGE("Journal Template Name",EMSetup."Expense Template Name");
+              GenJnlLine.SETRANGE("Journal Batch Name",EMSetup."Expense Batch Name");
+              GenJnlLine.SETRANGE("Document No.",Mileage."Created Doc. ID");
+              IF GenJnlLine.FINDFIRST THEN BEGIN
+                GenJnlBatch.SETRANGE("Journal Template Name",EMSetup."Expense Template Name");
+                GenJnlBatch.SETRANGE(Name,EMSetup."Expense Batch Name");
+                GenJnlBatch.FINDFIRST;
+                GenJnlManagement.TemplateSelectionFromBatch(GenJnlBatch);
+
+                MESSAGE(STRSUBSTNO(Text002,Mileage.TABLECAPTION));
+                EXIT;
+              END;
+            END;
+          END;
+      END;
+
+      IF Mileage."Mileage Account Type" = Mileage."Mileage Account Type"::"Lessor Pay Type" THEN BEGIN
+        LessorIntegration.FilterPayEntryFromMileage(Mileage);
+        EXIT;
+      END;
+
+      IF Mileage."Reimbursement Method" = Mileage."Reimbursement Method"::"External System" THEN
+        MESSAGE(STRSUBSTNO(Text001,Mileage.TABLECAPTION) + '\\' +
+          STRSUBSTNO(Text003,Mileage.FIELDCAPTION("Reimbursement Method"),Mileage."Reimbursement Method"))
+      ELSE
+        MESSAGE(STRSUBSTNO(Text001,Mileage.TABLECAPTION));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

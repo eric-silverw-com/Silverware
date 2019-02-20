@@ -1,0 +1,258 @@
+OBJECT Codeunit 6086394 EM Match Bank Rec. Lines
+{
+  OBJECT-PROPERTIES
+  {
+    Date=05/10/17;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      MatchSummaryMsg@1000 : TextConst 'ENU=%1 reconciliation lines out of %2 are matched.\\';
+      ProgressBarMsg@1001 : TextConst 'ENU=Please wait while the operation is being completed.';
+      Relation@1003 : 'One-to-One,One-to-Many';
+      MatchLengthTreshold@1061 : Integer;
+      NormalizingFactor@1065 : Integer;
+
+    PROCEDURE MatchManually@1(VAR SelectedBankAccReconciliationL@1004 : Record 6086375;VAR SelectedBankTransaction@1003 : Record 6086330);
+    VAR
+      BankAccReconciliationLine@1006 : Record 6086375;
+      BankTransaction@1002 : Record 6086330;
+      BankAccEntrySetReconNo@1000 : Codeunit 6086393;
+    BEGIN
+      IF SelectedBankAccReconciliationL.FINDFIRST THEN BEGIN
+        BankAccReconciliationLine.GET(
+          SelectedBankAccReconciliationL."Bank Account Type",
+          SelectedBankAccReconciliationL."Bank Account No.",
+          SelectedBankAccReconciliationL."Statement No.",
+          SelectedBankAccReconciliationL."Statement Line No.");
+
+        IF BankAccReconciliationLine.Type <> BankAccReconciliationLine.Type::"Bank Transaction Entry" THEN
+          EXIT;
+
+        IF SelectedBankTransaction.FINDSET THEN
+          REPEAT
+            BankTransaction.GET(SelectedBankTransaction."Entry No.");
+            BankAccEntrySetReconNo.RemoveApplication(BankTransaction);
+            BankAccEntrySetReconNo.ApplyEntries(BankAccReconciliationLine,BankTransaction,Relation::"One-to-Many");
+          UNTIL SelectedBankTransaction.NEXT = 0;
+
+      END;
+    END;
+
+    PROCEDURE RemoveMatch@2(VAR SelectedBankAccReconLine@1001 : Record 6086375;VAR SelectedBankTransaction@1000 : Record 6086330);
+    VAR
+      BankTransaction@1006 : Record 6086330;
+      BankAccEntrySetReconNo@1005 : Codeunit 6086393;
+    BEGIN
+      IF SelectedBankAccReconLine.FINDSET THEN
+        REPEAT
+          // THE BANK TRANSACTIONS THAT ARE APPLIED TO THESE LINES
+          BankTransaction.SETRANGE("Bank Account Type",SelectedBankAccReconLine."Bank Account Type");
+          BankTransaction.SETRANGE("Bank Account No.",SelectedBankAccReconLine."Bank Account No.");
+          BankTransaction.SETRANGE("Statement No.",SelectedBankAccReconLine."Statement No.");
+          BankTransaction.SETRANGE("Statement Line No.",SelectedBankAccReconLine."Statement Line No.");
+          BankTransaction.SETRANGE("Statement Status",BankTransaction."Statement Status"::"Bank Transaction Applied");
+          BankTransaction.SETRANGE("Bank Statement Transaction",FALSE);
+          BankTransaction.SETRANGE(Reconciled,FALSE);
+          IF BankTransaction.FINDSET THEN
+            REPEAT
+              BankAccEntrySetReconNo.RemoveApplication(BankTransaction);
+            UNTIL BankTransaction.NEXT = 0;
+        UNTIL SelectedBankAccReconLine.NEXT = 0;
+
+      IF SelectedBankTransaction.FINDSET THEN
+        REPEAT
+          BankTransaction.GET(SelectedBankTransaction."Entry No.");
+          BankAccEntrySetReconNo.RemoveApplication(BankTransaction);
+        UNTIL SelectedBankTransaction.NEXT = 0;
+    END;
+
+    PROCEDURE MatchSingle@5(BankAccReconciliation@1003 : Record 6086374;DateRange@1008 : Integer;ExpType@6086300 : Code[20]);
+    VAR
+      TempBankStatMatchingBuffer@1000 : TEMPORARY Record 6086378;
+      BankTransaction@1005 : Record 6086330;
+      BankStatementTrans@1001 : Record 6086330;
+      EMReconLine@1006 : Record 6086375;
+      Window@1004 : Dialog;
+      Score@1002 : Decimal;
+    BEGIN
+      TempBankStatMatchingBuffer.DELETEALL;
+
+      Window.OPEN(ProgressBarMsg);
+
+      EMReconLine.SETRANGE("Bank Account Type",BankAccReconciliation."Bank Account Type");
+      EMReconLine.SETRANGE("Bank Account No.",BankAccReconciliation."Bank Account No.");
+      EMReconLine.SETRANGE("Statement No.",BankAccReconciliation."Statement No.");
+      EMReconLine.SETFILTER(Difference,'<>%1',0);
+      IF EMReconLine.FINDSET THEN
+        REPEAT
+          CLEAR(Score);
+
+          IF BankStatementTrans.GET(EMReconLine."Bank Transaction Entry No.") THEN BEGIN
+            IF BankStatementTrans."Transaction ID" <> '' THEN BEGIN
+              BankTransaction.RESET;
+              BankTransaction.SETCURRENTKEY("Transaction ID");
+              BankTransaction.SETRANGE("Transaction ID",BankStatementTrans."Transaction ID");
+              BankTransaction.SETRANGE("Bank Account Type",BankAccReconciliation."Bank Account Type");
+              BankTransaction.SETRANGE("Bank Account No.",BankAccReconciliation."Bank Account No.");
+              BankTransaction.SETRANGE("Bank Statement Transaction",FALSE);
+              BankTransaction.SETRANGE(Reconciled,FALSE);
+              IF ExpType <> '' THEN
+                BankTransaction.SETRANGE("Expense Type",ExpType);
+              IF BankTransaction.FINDFIRST THEN BEGIN
+                Score := 100;
+                TempBankStatMatchingBuffer.AddMatchCandidate(EMReconLine."Statement Line No.",BankTransaction."Entry No.",Score);
+              END;
+            END;
+
+            IF Score = 0 THEN BEGIN
+              BankTransaction.RESET;
+              BankTransaction.SETRANGE("Bank Account Type",BankAccReconciliation."Bank Account Type");
+              BankTransaction.SETRANGE("Bank Account No.",BankAccReconciliation."Bank Account No.");
+              BankTransaction.SETRANGE("Bank Statement Transaction",FALSE);
+              BankTransaction.SETRANGE(Reconciled,FALSE);
+              IF ExpType <> '' THEN
+                BankTransaction.SETRANGE("Expense Type",ExpType);
+              IF BankTransaction.FINDSET THEN
+                REPEAT
+                  CLEAR(Score);
+                  Score += GetScoreDecimal(40,BankTransaction."Bank-Currency Amount",BankStatementTrans."Bank-Currency Amount");
+
+                  IF Score <> 0 THEN BEGIN
+                    IF BankTransaction."Currency Code" = BankStatementTrans."Currency Code" THEN
+                      Score += 10;
+                    IF BankTransaction."Business Name" = BankStatementTrans."Business Name" THEN
+                      Score += 20;
+
+                    CASE TRUE OF
+                      (BankTransaction."Document Date" = BankStatementTrans."Document Date") AND (BankTransaction."Document Time" =
+                      BankStatementTrans."Document Time"):
+                        Score += 30;
+                      (BankTransaction."Document Date" = BankStatementTrans."Document Date") AND (BankTransaction."Document Time" <>
+                      BankStatementTrans."Document Time"):
+                        Score += 20;
+                      (ABS(BankTransaction."Document Date" - BankStatementTrans."Document Date") < DateRange) AND (BankTransaction.
+                      "Document Time" = BankStatementTrans."Document Time"):
+                        Score += 15;
+                      (ABS(BankTransaction."Document Date" - BankStatementTrans."Document Date") < DateRange) AND (BankTransaction.
+                      "Document Time" <> BankStatementTrans."Document Time"):
+                        Score += 5;
+                    END;
+                  END;
+
+                  IF Score > 10 THEN
+                    TempBankStatMatchingBuffer.AddMatchCandidate(EMReconLine."Statement Line No.",BankTransaction."Entry No.",Score);
+                UNTIL BankTransaction.NEXT = 0;
+            END;
+          END ELSE BEGIN
+            //TRANSACTIONS MANUALLY INSERTED
+            BankTransaction.RESET;
+            BankTransaction.SETRANGE("Bank Account Type",BankAccReconciliation."Bank Account Type");
+            BankTransaction.SETRANGE("Bank Account No.",BankAccReconciliation."Bank Account No.");
+            BankTransaction.SETRANGE("Bank Statement Transaction",FALSE);
+            BankTransaction.SETRANGE(Reconciled,FALSE);
+            IF ExpType <> '' THEN
+              BankTransaction.SETRANGE("Expense Type",ExpType);
+            IF BankTransaction.FINDSET THEN
+              REPEAT
+                CLEAR(Score);
+                Score := Score + GetScoreDecimal(40,BankTransaction.Amount,EMReconLine."Statement Amount");
+                IF BankTransaction."Business Name" = EMReconLine.Description THEN
+                  Score := Score + 20;
+
+                CASE TRUE OF
+                  EMReconLine."Transaction Date" = BankTransaction."Document Date":
+                    Score := 40;
+                  EMReconLine."Transaction Date" = BankTransaction."Posting Date":
+                    Score := 35;
+                  EMReconLine."Value Date" = BankTransaction."Document Date":
+                    Score := 10;
+                  EMReconLine."Value Date" = BankTransaction."Posting Date":
+                    Score := 5;
+                END;
+
+                IF Score > 10 THEN
+                  TempBankStatMatchingBuffer.AddMatchCandidate(EMReconLine."Statement Line No.",BankTransaction."Entry No.",Score);
+              UNTIL BankTransaction.NEXT = 0;
+          END;
+
+        UNTIL EMReconLine.NEXT = 0;
+
+      SaveOneToOneMatching(
+        TempBankStatMatchingBuffer,BankAccReconciliation."Bank Account Type",BankAccReconciliation."Bank Account No.",
+      BankAccReconciliation."Statement No.");
+
+      Window.CLOSE;
+
+      ShowMatchSummary(BankAccReconciliation);
+    END;
+
+    LOCAL PROCEDURE SaveOneToOneMatching@28(VAR TempBankStatMatchingBuffer@1000 : TEMPORARY Record 6086378;BankAccountType@1006 : 'G/L Account,,Vendor,Bank Account';BankAccountNo@1005 : Code[20];StatementNo@1001 : Code[20]);
+    VAR
+      BankTransaction@1004 : Record 6086330;
+      BankAccReconciliationLine@1003 : Record 6086375;
+      BankAccEntrySetReconNo@1002 : Codeunit 6086393;
+    BEGIN
+      TempBankStatMatchingBuffer.RESET;
+      TempBankStatMatchingBuffer.SETCURRENTKEY(Quality);
+      TempBankStatMatchingBuffer.ASCENDING(FALSE);
+
+      IF TempBankStatMatchingBuffer.FINDFIRST THEN
+        REPEAT
+          BankTransaction.GET(TempBankStatMatchingBuffer."Entry No.");
+          BankAccReconciliationLine.GET(BankAccountType,BankAccountNo,StatementNo,TempBankStatMatchingBuffer."Line No.");
+          BankAccEntrySetReconNo.ApplyEntries(BankAccReconciliationLine,BankTransaction,Relation::"One-to-One");
+        UNTIL TempBankStatMatchingBuffer.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE ShowMatchSummary@13(BankAccReconciliation@1000 : Record 6086374);
+    VAR
+      BankAccReconciliationLine@1001 : Record 6086375;
+      FinalText@1005 : Text[250];
+      TotalCount@1002 : Integer;
+      MatchedCount@1003 : Integer;
+    BEGIN
+      BankAccReconciliationLine.SETRANGE("Bank Account Type",BankAccReconciliation."Bank Account Type");
+      BankAccReconciliationLine.SETRANGE("Bank Account No.",BankAccReconciliation."Bank Account No.");
+      BankAccReconciliationLine.SETRANGE("Statement No.",BankAccReconciliation."Statement No.");
+      BankAccReconciliationLine.SETRANGE(Type,BankAccReconciliationLine.Type::"Bank Transaction Entry");
+      TotalCount := BankAccReconciliationLine.COUNT;
+
+      BankAccReconciliationLine.SETFILTER("Applied Entries",'<>%1',0);
+      MatchedCount := BankAccReconciliationLine.COUNT;
+
+      FinalText := STRSUBSTNO(MatchSummaryMsg,MatchedCount,TotalCount);
+      MESSAGE(FinalText);
+    END;
+
+    PROCEDURE GetScoreDecimal@8(AllocatedHeight@1000 : Integer;DecCompared@1001 : Decimal;DecToCompare@1002 : Decimal) : Decimal;
+    VAR
+      ErrorPct@1006 : Decimal;
+      DiffPct@1003 : Decimal;
+    BEGIN
+      IF DecCompared - DecToCompare = 0 THEN
+        EXIT(AllocatedHeight);
+
+      DecCompared := ABS(DecCompared);
+      DecToCompare := ABS(DecToCompare);
+
+      ErrorPct := (ABS(DecCompared - DecToCompare) / DecCompared) * 100;
+      IF ErrorPct > 100 THEN
+        EXIT(0); //Error more than double.
+
+      EXIT(AllocatedHeight * ((1 - ErrorPct) / 100));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

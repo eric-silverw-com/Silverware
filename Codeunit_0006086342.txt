@@ -1,0 +1,375 @@
+OBJECT Codeunit 6086342 Mileage Inbox-Check
+{
+  OBJECT-PROPERTIES
+  {
+    Date=06/18/18;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.06;
+  }
+  PROPERTIES
+  {
+    TableNo=6086353;
+    OnRun=VAR
+            GLSetup@1160040019 : Record 98;
+            EMDimInbox@1160040018 : Record 6086362;
+            EMSetup@1160040000 : Record 6086300;
+            EMAttachment@1160040008 : Record 6086359;
+            EMDim@1160040009 : Record 6086360;
+            EMAttachmentInbox@1160040004 : Record 6086363;
+            EMReminder@1160040007 : Record 6086364;
+            ExpHeader@1160040006 : Record 6086339;
+            ExpHeaderInbox@1160040003 : Record 6086341;
+            Vehicle@1160040017 : Record 6086337;
+            MileageReopen@1160040013 : Codeunit 6086340;
+            MilValidate@1160040012 : Codeunit 6086345;
+            MileageSendToUser@1160040011 : Codeunit 6086343;
+            EMApprovalsBridge@1160040010 : Codeunit 6086369;
+            FileManagement@1160040005 : Codeunit 6085584;
+            EmptyGuid@1160040001 : GUID;
+            IsNew@1160040002 : Boolean;
+            EMOnline@1160040014 : Codeunit 6086305;
+            Configuredfield@1160040015 : Record 6086346;
+            SettlementNo@1160040016 : Code[20];
+          BEGIN
+            EMSetup.GET;
+            EMSetup.TESTFIELD("Enable Mileage",TRUE);
+
+            IF "Mileage GUID" = EmptyGuid THEN
+              IsNew := TRUE
+            ELSE BEGIN
+              Mileage.SETCURRENTKEY("Mileage GUID");
+              Mileage.SETRANGE("Mileage GUID","Mileage GUID");
+              IF Mileage.FINDFIRST THEN
+                Mileage.TESTFIELD(Posted,FALSE)
+              ELSE
+                IsNew := TRUE;
+            END;
+
+            IF NOT IsNew THEN
+              IF Mileage.Posted OR NOT (Mileage.Status IN [Mileage.Status::Open,Mileage.Status::"Pending Expense User"]) THEN
+                ERROR(StatusErr,Mileage.TABLECAPTION,Mileage."Entry No.");
+
+            IF "Expense Header GUID" <> EmptyGuid THEN BEGIN
+              ExpHeader.SETCURRENTKEY("Exp. Header GUID");
+              ExpHeader.SETRANGE("Exp. Header GUID","Expense Header GUID");
+              IF NOT ExpHeader.FINDFIRST THEN BEGIN
+                ExpHeaderInbox.SETCURRENTKEY("Exp. Header GUID");
+                ExpHeaderInbox.SETRANGE("Exp. Header GUID","Expense Header GUID");
+                ExpHeaderInbox.SETFILTER(Status,'%1|%2',ExpHeaderInbox.Status::Error,ExpHeaderInbox.Status::Pending);
+                IF ExpHeaderInbox.FINDFIRST THEN
+                  ERROR(ProcessSettlement,ExpHeaderInbox.TABLECAPTION,ExpHeaderInbox.FIELDCAPTION("Entry No."),ExpHeaderInbox."Entry No.")
+                ELSE
+                  ERROR(SettlementNotFound);
+              END ELSE
+                IF NOT (ExpHeader.Status IN [ExpHeader.Status::Open,ExpHeader.Status::"Pending Expense User"]) THEN
+                  ERROR(SettlementStatusNotAllowed,ExpHeader."No.");
+
+              TESTFIELD("Continia User ID",ExpHeader."Continia User ID");
+              SettlementNo := ExpHeader."No.";
+            END;
+
+            Mileage.SetSuspendInboxCheck(TRUE);
+            IF IsNew THEN BEGIN
+              Mileage.INIT;
+              Mileage."Entry No." := Mileage.GetEntryNo;
+              Mileage.VALIDATE("Continia User ID","Continia User ID");
+              Mileage."Registration Date" := Rec."Registration Date";
+              Mileage.VALIDATE("Vehicle Code",Vehicle.GetUserVehicle("Continia User ID"));
+              Mileage."Date Created" := TODAY;
+              Mileage."Created by User ID" := USERID;
+              Mileage.INSERT;
+            END ELSE
+              EMReminder.ResetReminder(DATABASE::Mileage,0,'',Mileage."Entry No.",Mileage."Continia User ID");
+
+            IF SettlementNo <> '' THEN BEGIN
+              Mileage."Settlement No." := SettlementNo;
+              IF Mileage."Settlement Line No." = 0 THEN
+                Mileage."Settlement Line No." := Mileage.GetNextDocumentLineNo;
+            END ELSE BEGIN
+              Mileage."Settlement No." := '';
+              Mileage."Settlement Line No." := 0;
+            END;
+
+            Mileage."Mileage Completed" := "Mileage Completed";
+            Mileage."Continia Online Version No." := "Continia Online Version No.";
+            Mileage."Expense Header GUID" := "Expense Header GUID";
+
+            Mileage.VALIDATE(Description,Rec.Description);
+            Mileage.VALIDATE("Registration Date",Rec."Registration Date");
+            IF Rec."Vehicle Code" <> '' THEN
+              Mileage.VALIDATE("Vehicle Code",Rec."Vehicle Code");
+            Mileage.VALIDATE("Mileage GUID",Rec."Mileage GUID");
+            Mileage.VALIDATE("From Address",Rec."From Address");
+            Mileage.VALIDATE("To Address",Rec."To Address");
+            Mileage.VALIDATE("Total Distance",Rec."Total Distance");
+            Mileage.VALIDATE("Calculated Distance",Rec."Calculated Distance");
+            Mileage.VALIDATE("From Home",Rec."From Home");
+            Mileage.VALIDATE("To Home",Rec."To Home");
+            Mileage.VALIDATE("Travel Time",Rec."Travel Time");
+
+            IF EMOnline.ConfigFieldActive(Configuredfield.Type::Mileage,'JOBNO') THEN
+              Mileage.VALIDATE("Job No.",Rec."Job No.");
+            IF EMOnline.ConfigFieldActive(Configuredfield.Type::Mileage,'TASK') THEN
+              Mileage.VALIDATE("Job Task No.",Rec."Job Task No.");
+
+            IF EMOnline.ConfigFieldActive(Configuredfield.Type::Mileage,'BILLABLE') THEN
+              Mileage.VALIDATE(Billable,Billable);
+
+            Mileage."Mileage Completed" := "Mileage Completed";
+            Mileage."Continia Online Version No." := "Continia Online Version No.";
+
+            Mileage.SetSuspendInboxCheck(TRUE);
+            Mileage.SetSkipSendToExpUser(TRUE);
+            Mileage.MODIFY;
+
+            EMDim.SETCURRENTKEY("Table ID","Document Type","Document No.","Doc. Ref. No.");
+            EMDim.SETRANGE("Table ID",DATABASE::Mileage);
+            EMDim.SETRANGE("Document Type",0);
+            EMDim.SETRANGE("Document No.",'');
+            EMDim.SETRANGE("Doc. Ref. No.",Mileage."Entry No.");
+            IF EMDim.FINDFIRST THEN
+              REPEAT
+                IF (EMDim."Dimension Code" = '') OR
+                   ((EMDim."Dimension Code" <> '') AND IsConfiguredField(EMDim."Dimension Code"))
+                THEN
+                  EMDim.DELETE;
+              UNTIL EMDim.NEXT = 0;
+
+            CLEAR(Mileage."Global Dimension 1 Code");
+            CLEAR(Mileage."Global Dimension 2 Code");
+            Mileage.AddDefaultDim(0);
+            Mileage.MODIFY;
+
+            EMDimInbox.SETRANGE("Table ID",DATABASE::"Mileage Inbox");
+            EMDimInbox.SETRANGE("Document Type",0);
+            EMDimInbox.SETRANGE("Document No.",'');
+            EMDimInbox.SETRANGE("Doc. Ref. No.","Entry No.");
+            IF EMDimInbox.FINDSET THEN BEGIN
+              GLSetup.GET;
+              REPEAT
+                CLEAR(EMDim);
+                EMDim."Table ID" := DATABASE::Mileage;
+                EMDim."Document Type" := 0;
+                EMDim."Document No." := '';
+                EMDim."Doc. Ref. No." := Mileage."Entry No.";
+                IF EMDimInbox."Dimension Code" <> '' THEN BEGIN
+                  EMDim.VALIDATE("Dimension Code",EMDimInbox."Dimension Code");
+                  EMDim.VALIDATE("Dimension Value Code",EMDimInbox."Dimension Value Code");
+                END ELSE BEGIN
+                  EMDim.VALIDATE("Field Code",EMDimInbox."Field Code");
+                  EMDim.VALIDATE("Field Value",EMDimInbox."Field Value");
+                END;
+
+                IF NOT EMDim.INSERT(TRUE) THEN
+                  EMDim.MODIFY(TRUE);
+              UNTIL EMDimInbox.NEXT = 0;
+            END;
+
+            Mileage.GET(Mileage."Entry No.");
+
+            EMAttachment.SETRANGE("Table ID",DATABASE::Mileage);
+            EMAttachment.SETRANGE("Document Type",0);
+            EMAttachment.SETRANGE("Document No.",'');
+            EMAttachment.SETRANGE("Doc. Ref. No.",Mileage."Entry No.");
+            IF EMAttachment.FINDFIRST THEN
+              REPEAT
+                GlobalEMAttachmentTemp.COPY(EMAttachment);
+                GlobalEMAttachmentTemp.INSERT;
+              UNTIL EMAttachment.NEXT = 0;
+            IF EMAttachment.FINDFIRST THEN
+              REPEAT
+                EMAttachment.DELETE(FALSE); // don't delete the file
+              UNTIL EMAttachment.NEXT = 0;
+
+            IF "Mileage Entry No." <> Mileage."Entry No." THEN BEGIN
+              "Mileage Entry No." := Mileage."Entry No.";
+              MODIFY;
+            END;
+
+            IF "Mileage Entry No." <> 0 THEN BEGIN
+              Mileage.GET("Mileage Entry No.");
+
+              Mileage.Status := Mileage.Status::Open;
+              Mileage.MODIFY;
+
+              IF NOT "Mileage Completed" THEN BEGIN
+                IF RecChangedByNAVAfterImport(Mileage,EMDim,"Entry No.") THEN BEGIN
+                  IF OtherInboxEntryExists(Rec) THEN
+                    Mileage.ThrowInboxError;
+                  MileageSendToUser.UpdateRefWithoutFiles(Mileage)
+                END ELSE
+                  Mileage.Status := Mileage.Status::"Pending Expense User";
+                Mileage.MODIFY(TRUE);
+                MoveAttachFromInboxToMil("Entry No.","Mileage Entry No."); //NO ERROR FROM THIS POINT ON. THE FILES WILL BE DUPLICATED
+              END ELSE BEGIN
+                MoveAttachFromInboxToMil("Entry No.","Mileage Entry No."); //NO ERROR FROM THIS POINT ON. THE FILES WILL BE DUPLICATED
+                IF Mileage."Settlement No." = '' THEN BEGIN
+                  EMSetup.GET;
+                  MilValidate.CheckWithoutInboxValidation(Mileage);
+                  IF EMSetup."Auto Submit Mil. for Approval" THEN
+                    IF EMApprovalsBridge.IsApprovalsWorkflowEnabled(DATABASE::Mileage,FORMAT(Mileage."Entry No.")) THEN
+                      EMApprovalsBridge.SendNonGUIMilApprovalRequest(Mileage,FALSE);
+                END ELSE BEGIN
+                  Mileage.Status := ExpHeader.Status;
+                  Mileage.MODIFY;
+                END;
+              END;
+            END;
+
+            DeleteFiles(DATABASE::"Mileage Inbox",0,'',"Entry No.");
+            Mileage.SetSuspendInboxCheck(FALSE);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Mileage@1160040001 : Record 6086338;
+      GlobalEMAttachmentTemp@1160040005 : TEMPORARY Record 6086359;
+      StatusErr@1160040000 : TextConst 'ENU=The %1 %2 has incorrect status.Updates are not allowed.';
+      ProcessSettlement@1160040006 : TextConst 'ENU=The corresponding settlement needs to be processed first. Please check in %1 %2-%3.';
+      SettlementNotFound@1160040004 : TextConst 'ENU=The corresponding settlement was not received yet.';
+      SettlementStatusNotAllowed@1000 : TextConst 'ENU=Status must be Open or Pending Expense User for settlement %1';
+
+    PROCEDURE GetMileageEntryNo@1160040000() : Integer;
+    BEGIN
+      EXIT(Mileage."Entry No.");
+    END;
+
+    PROCEDURE DeleteFiles@1160040004(TableID@1160040007 : Integer;DocumentType@1160040006 : Integer;DocumentNo@1160040005 : Code[10];DocRefNo@1160040004 : Integer);
+    VAR
+      EMAttachmentInbox@1160040001 : Record 6086363;
+      FileManagement@1160040003 : Codeunit 6085584;
+    BEGIN
+      EMAttachmentInbox.RESET;
+      EMAttachmentInbox.SETRANGE("Table ID",TableID);
+      EMAttachmentInbox.SETRANGE("Document Type",DocumentType);
+      EMAttachmentInbox.SETRANGE("Document No.",DocumentNo);
+      EMAttachmentInbox.SETRANGE("Doc. Ref. No.",DocRefNo);
+      IF EMAttachmentInbox.FINDFIRST THEN
+        REPEAT
+          EMAttachmentInbox.ClearAttachment;
+        UNTIL EMAttachmentInbox.NEXT = 0;
+
+      //IT IS ASSUMED THAT THE GLOBAL TempMileageAttachment HAS BEEN FILLED in OnRun
+
+      GlobalEMAttachmentTemp.SETCURRENTKEY("Table ID","Document Type","Document No.","Doc. Ref. No.");
+      GlobalEMAttachmentTemp.SETRANGE("Table ID",TableID);
+      GlobalEMAttachmentTemp.SETRANGE("Document Type",DocumentType);
+      GlobalEMAttachmentTemp.SETRANGE("Document No.",'');
+      GlobalEMAttachmentTemp.SETRANGE("Doc. Ref. No.",DocRefNo);
+      IF GlobalEMAttachmentTemp.FINDFIRST THEN
+        REPEAT
+          EMAttachmentInbox.ClearAttachment;
+        UNTIL GlobalEMAttachmentTemp.NEXT = 0;
+    END;
+
+    PROCEDURE RecChangedByNAVAfterImport@1160040001(Mileage@1160040002 : Record 6086338;VAR EMDim@1160040003 : Record 6086360;InboxEntryNo@1160040000 : Integer) : Boolean;
+    VAR
+      MilInbox@1160040001 : Record 6086353;
+      EMDimInbox@1160040004 : Record 6086362;
+      DiffFound@1160040005 : Boolean;
+    BEGIN
+      //SOME INFORMATION COULD BE ADDED RIGHT AFTTER THE IMPORT
+      //IF THIS HAPPENS AND THE FIELDS ARE CONFIGURED, THE DOCUMENT NEEDS TO BE SENT BACK TO THE EXPENSE USER.
+
+      MilInbox.GET(InboxEntryNo);
+
+      IF MilInbox."Mileage Entry No." = 0 THEN
+        EXIT(FALSE);
+
+      //DIMENSIONS
+      EMDim.RESET;
+      EMDim.SETRANGE("Table ID",DATABASE::Mileage);
+      EMDim.SETRANGE("Document Type",0);
+      EMDim.SETRANGE("Document No.",'');
+      EMDim.SETRANGE("Doc. Ref. No.",Mileage."Entry No.");
+      IF EMDim.FINDSET THEN
+        REPEAT
+          IF EMDimInbox.GET(DATABASE::"Mileage Inbox",0,'',InboxEntryNo,EMDim."Dimension Code",EMDim."Field Code") THEN BEGIN
+            IF (EMDim."Dimension Value Code" <> EMDimInbox."Dimension Value Code") OR
+               (EMDim."Field Value" <> EMDimInbox."Field Value")
+            THEN
+              DiffFound := IsConfiguredField(EMDim."Dimension Code");
+          END ELSE
+            DiffFound := IsConfiguredField(EMDim."Dimension Code");
+
+          IF DiffFound THEN
+            IF EMDim."Dimension Code" <> '' THEN
+              EXIT(IsConfiguredField(EMDim."Dimension Code"))
+            ELSE
+              EXIT(IsConfiguredField(EMDim."Field Code"));
+        UNTIL EMDim.NEXT = 0;
+
+      EMDimInbox.SETRANGE("Table ID",DATABASE::"Mileage Inbox");
+      EMDimInbox.SETRANGE("Document Type",0);
+      EMDimInbox.SETRANGE("Document No.",'');
+      EMDimInbox.SETRANGE("Doc. Ref. No.",MilInbox."Entry No.");
+      IF EMDimInbox.FINDSET THEN
+        REPEAT
+          IF EMDim.GET(DATABASE::Mileage,0,'',Mileage."Entry No.",EMDimInbox."Dimension Code",EMDimInbox."Field Code") THEN BEGIN
+            IF (EMDim."Dimension Value Code" <> EMDimInbox."Dimension Value Code") OR
+               (EMDim."Field Value" <> EMDimInbox."Field Value")
+            THEN
+              DiffFound := IsConfiguredField(EMDimInbox."Dimension Code");
+          END ELSE
+            DiffFound := IsConfiguredField(EMDimInbox."Dimension Code");
+
+          IF DiffFound THEN
+            IF EMDimInbox."Dimension Code" <> '' THEN
+              EXIT(IsConfiguredField(EMDimInbox."Dimension Code"))
+            ELSE
+              EXIT(IsConfiguredField(EMDimInbox."Field Code"));
+
+        UNTIL EMDimInbox.NEXT = 0;
+    END;
+
+    PROCEDURE IsConfiguredField@1160040010(FldCode@1160040002 : Code[20]) : Boolean;
+    VAR
+      FieldType@1160040000 : Record 6086345;
+      ConfiguredFields@1160040001 : Record 6086346;
+    BEGIN
+      EXIT(ConfiguredFields.IsConfiguredFieldForTable(DATABASE::Mileage,FieldType.GetFieldFromDim(FldCode)));
+    END;
+
+    LOCAL PROCEDURE OtherInboxEntryExists@1(CurrMileageInbox@1001 : Record 6086353) : Boolean;
+    VAR
+      MileageInbox@1000 : Record 6086353;
+    BEGIN
+      MileageInbox.SETCURRENTKEY("Mileage GUID");
+      MileageInbox.SETRANGE("Mileage GUID",CurrMileageInbox."Mileage GUID");
+      MileageInbox.SETFILTER("Entry No.",'<>%1',CurrMileageInbox."Entry No.");
+      MileageInbox.SETFILTER(Status,'%1|%2',MileageInbox.Status::Pending,MileageInbox.Status::Error);
+      IF NOT MileageInbox.ISEMPTY THEN
+        EXIT(TRUE);
+    END;
+
+    PROCEDURE MoveAttachFromInboxToMil@1160040005(InboxEntryNo@1160040001 : Integer;MilEntryNo@1160040002 : Integer);
+    VAR
+      EMAttachmentInbox@1160040000 : Record 6086363;
+      EMAttachment@1160040004 : Record 6086359;
+    BEGIN
+      EMAttachmentInbox.RESET;
+      EMAttachmentInbox.SETRANGE("Table ID",DATABASE::"Mileage Inbox");
+      EMAttachmentInbox.SETRANGE("Document Type",0);
+      EMAttachmentInbox.SETRANGE("Document No.",'');
+      EMAttachmentInbox.SETRANGE("Doc. Ref. No.",InboxEntryNo);
+      IF EMAttachmentInbox.FINDFIRST THEN
+        REPEAT
+          EMAttachment."Table ID" := DATABASE::Mileage;
+          EMAttachment."Document Type" := 0;
+          EMAttachment."Document No." := '';
+          EMAttachment."Doc. Ref. No." := MilEntryNo;
+          EMAttachment."Entry No." := 0;
+          EMAttachment."File Name" := EMAttachmentInbox."File Name";
+          EMAttachment.INSERT(TRUE);
+
+          EMAttachment.SetAttachment(EMAttachmentInbox.GetAttachmentServerFileName);
+        UNTIL EMAttachmentInbox.NEXT = 0;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

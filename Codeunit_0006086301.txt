@@ -1,0 +1,243 @@
+OBJECT Codeunit 6086301 Split and Allocation Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=04/03/17;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60;
+  }
+  PROPERTIES
+  {
+    TableNo=6086320;
+    Permissions=TableData 355=rimd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ConfCreateNewExpPlural@1160040000 : TextConst 'ENU=Do you want to create %1 new Expenses based on the selected lines?';
+      ConfCreateNewExpSingular@1160040001 : TextConst 'ENU=Do you want to create a new Expense based on the selected line?';
+      ExpAllocated@1160040002 : TextConst 'ENU=This Expense has been allocated to one or more Expenses.';
+      ExpensesHandled@1160040005 : TextConst 'ENU=%1 new Expenses were created.';
+      ExpSplit@1160040004 : TextConst 'ENU=This Expense has been split from Expense %1.';
+      ExpSplited@1160040003 : TextConst 'ENU=This Expense is split into one or more Expenses.';
+
+    PROCEDURE InsertAllocationComment@1160040002(ExpenseEntryNo@1160040002 : Integer);
+    VAR
+      ExpCmt@1160040001 : Record 6086361;
+      ExpCmtManagement@1160040000 : Codeunit 6086323;
+    BEGIN
+      ExpCmtManagement.AddComment(DATABASE::Expense,0,'',ExpenseEntryNo,ExpCmt.Importance::Information,'ALLOCATED',ExpAllocated,FALSE);
+    END;
+
+    PROCEDURE RemoveAllocationComment@1160040006(ExpenseEntryNo@1160040002 : Integer);
+    VAR
+      EMCmt@1160040001 : Record 6086361;
+      ExpCmtManagement@1160040000 : Codeunit 6086323;
+    BEGIN
+      ExpCmtManagement.DeleteComment(DATABASE::Expense,0,'',ExpenseEntryNo,EMCmt.Importance::Information,'ALLOCATED',FALSE);
+    END;
+
+    PROCEDURE CreateNewExpenses@1160040000(VAR ExpenseAllocation@1160040001 : Record 6086321);
+    VAR
+      Expense@1160040003 : Record 6086320;
+      EMCmt@1160040005 : Record 6086361;
+      ExpCmtManagement@1160040004 : Codeunit 6086323;
+      TotalAmount@1160040002 : Decimal;
+      TotalRecs@1160040006 : Integer;
+      Confirmed@1160040000 : Boolean;
+    BEGIN
+      TotalRecs := ExpenseAllocation.COUNT;
+
+      IF TotalRecs = 1 THEN
+        Confirmed := CONFIRM(ConfCreateNewExpSingular)
+      ELSE
+        Confirmed := CONFIRM(ConfCreateNewExpPlural,FALSE,ExpenseAllocation.COUNT);
+      IF NOT Confirmed THEN
+        EXIT;
+
+      IF ExpenseAllocation.FINDSET THEN BEGIN
+        Expense.GET(ExpenseAllocation."Expense Entry No.");
+        Expense.TESTFIELD(Posted,FALSE);
+
+        REPEAT
+          TotalAmount += ExpenseAllocation.Amount;
+          SplitExpense(Expense,ExpenseAllocation);
+        UNTIL ExpenseAllocation.NEXT = 0;
+      END;
+
+      Expense.GET(Expense."Entry No.");
+      Expense.SupressAllocationCheck;
+      Expense.VALIDATE(Amount,Expense.Amount - TotalAmount);
+      Expense.MODIFY;
+
+      UpdateExpAllocationAmountPct(Expense.Amount,Expense."Entry No.");
+
+      ExpCmtManagement.AddComment(DATABASE::Expense,0,'',Expense."Entry No.",EMCmt.Importance::Information,'SPLIT',ExpSplited,FALSE);
+
+      MESSAGE(ExpensesHandled,TotalRecs);
+    END;
+
+    LOCAL PROCEDURE SplitExpense@1160040008(Expense@1160040001 : Record 6086320;VAR ExpenseAllocation@1160040000 : Record 6086321);
+    VAR
+      NewExpense@1160040003 : Record 6086320;
+      ExpenseAlllocationDimension@1160040009 : Record 6086357;
+      EMAttachment@1160040004 : Record 6086359;
+      NewEMAttachment@1160040007 : Record 6086359;
+      EMDim@1160040005 : Record 6086360;
+      NewEMDim@1160040008 : Record 6086360;
+      EMCmt@1160040010 : Record 6086361;
+      ExpValidate@1160040006 : Codeunit 6086321;
+      ExpCmtManagement@1160040002 : Codeunit 6086323;
+    BEGIN
+      Expense.TESTFIELD(Posted,FALSE);
+      Expense.TESTFIELD("Matched to Bank Transaction",FALSE);
+      Expense.TESTFIELD(Status,Expense.Status::Open);
+
+      NewExpense.TRANSFERFIELDS(ExpenseAllocation);
+      NewExpense."Entry No." := GetExpenseLastEntryNo + 1;
+      NewExpense."Date Created" := TODAY;
+      NewExpense.Status := NewExpense.Status::Open;
+      NewExpense."Currency Code" := Expense."Currency Code";
+      IF ExpenseAllocation."Original Expense Entry No." <> 0 THEN
+        NewExpense."Original Expense Entry No." := ExpenseAllocation."Original Expense Entry No."
+      ELSE
+        NewExpense."Original Expense Entry No." := ExpenseAllocation."Expense Entry No.";
+      NewExpense.VALIDATE(Amount,ExpenseAllocation.Amount);
+      CLEAR(NewExpense."Matched to Bank Transaction");
+      CLEAR(NewExpense.Posted);
+      NewExpense.INSERT;
+
+      EMAttachment.SETRANGE("Table ID",DATABASE::Expense);
+      EMAttachment.SETRANGE("Document Type",0);
+      EMAttachment.SETRANGE("Document No.",'');
+      EMAttachment.SETRANGE("Doc. Ref. No.",Expense."Entry No.");
+      IF EMAttachment.FINDSET THEN
+        REPEAT
+          NewEMAttachment := EMAttachment;
+          NewEMAttachment."Doc. Ref. No." := NewExpense."Entry No.";
+          NewEMAttachment.INSERT(TRUE);
+
+          IF EMAttachment.GetAttachmentServerFileName <> '' THEN
+            NewEMAttachment.SetAttachment(EMAttachment.GetAttachmentServerFileName);
+        UNTIL EMAttachment.NEXT = 0;
+
+      EMDim.SETCURRENTKEY("Table ID","Document Type","Document No.","Doc. Ref. No.");
+      EMDim.SETRANGE("Table ID",DATABASE::Expense);
+      EMDim.SETRANGE("Document Type",0);
+      EMDim.SETRANGE("Document No.",'');
+      EMDim.SETRANGE("Doc. Ref. No.",Expense."Entry No.");
+      EMDim.SETFILTER("Field Code",'<>%1','');
+      IF EMDim.FINDFIRST THEN
+        REPEAT
+          NewEMDim := EMDim;
+          NewEMDim."Doc. Ref. No." := NewExpense."Entry No.";
+          NewEMDim.INSERT;
+        UNTIL EMDim.NEXT = 0;
+
+      ExpenseAlllocationDimension.SETRANGE("Expense Allocation Entry No.",ExpenseAllocation."Entry No.");
+      IF ExpenseAlllocationDimension.FINDSET THEN
+        REPEAT
+          NewEMDim.INIT;
+          NewEMDim."Table ID" := DATABASE::Expense;
+          NewEMDim."Document Type" := 0;
+          NewEMDim."Document No." := '';
+          NewEMDim."Doc. Ref. No." := NewExpense."Entry No.";
+          NewEMDim."Dimension Code" := ExpenseAlllocationDimension."Dimension Code";
+          NewEMDim."Dimension Value Code" := ExpenseAlllocationDimension."Dimension Value Code";
+          NewEMDim.INSERT;
+        UNTIL ExpenseAlllocationDimension.NEXT = 0;
+
+      ExpenseAllocation.DELETE;
+
+      ExpCmtManagement.AddComment(DATABASE::Expense,0,'',NewExpense."Entry No.",EMCmt.Importance::Information,
+        'SPLIT',STRSUBSTNO(ExpSplit,Expense."Entry No."),FALSE);
+
+      ExpValidate.RUN(NewExpense);
+    END;
+
+    LOCAL PROCEDURE GetExpenseLastEntryNo@1160040013() : Integer;
+    VAR
+      Expense@1160040000 : Record 6086320;
+    BEGIN
+      IF Expense.FINDLAST THEN
+        EXIT(Expense."Entry No.")
+      ELSE
+        EXIT(1);
+    END;
+
+    LOCAL PROCEDURE UpdateExpAllocationAmountPct@1160040004(TotalAmount@1160040000 : Decimal;ExpEntryNo@1160040002 : Integer);
+    VAR
+      ExpenseAllocation@1160040001 : Record 6086321;
+    BEGIN
+      ExpenseAllocation.SETCURRENTKEY("Expense Entry No.");
+      ExpenseAllocation.SETRANGE("Expense Entry No.",ExpEntryNo);
+      IF ExpenseAllocation.FINDSET THEN
+        REPEAT
+          ExpenseAllocation."Amount %" := ExpenseAllocation.Amount / TotalAmount * 100;
+          ExpenseAllocation.MODIFY;
+        UNTIL ExpenseAllocation.NEXT = 0;
+    END;
+
+    PROCEDURE CopyExpDimToAllocationDim@1160040007(VAR Expense@1160040000 : Record 6086320;VAR ExpenseAllocation@1160040001 : Record 6086321);
+    VAR
+      EMDim@1160040002 : Record 6086360;
+    BEGIN
+      EMDim.SETCURRENTKEY("Table ID","Document Type","Document No.","Doc. Ref. No.");
+      EMDim.SETRANGE("Table ID",DATABASE::Expense);
+      EMDim.SETRANGE("Document Type",0);
+      EMDim.SETRANGE("Document No.",'');
+      EMDim.SETRANGE("Doc. Ref. No.",Expense."Entry No.");
+      EMDim.SETFILTER("Dimension Code",'<>%1','');
+      IF EMDim.FINDFIRST THEN
+        REPEAT
+          UpdateExpAllocDim(ExpenseAllocation."Entry No.",EMDim."Dimension Code",EMDim."Dimension Value Code",FALSE);
+        UNTIL EMDim.NEXT = 0;
+
+      ExpenseAllocation.VALIDATE("Global Dimension 1 Code");
+      ExpenseAllocation.VALIDATE("Global Dimension 2 Code");
+    END;
+
+    PROCEDURE UpdateExpAllocDim@1160040001(ExpAllocEntryNo@1160040000 : Integer;DimCode@1160040001 : Code[20];DimValueCode@1160040002 : Code[20];UpdateExpAllocationRec@1160040004 : Boolean);
+    VAR
+      GLSetup@1160040005 : Record 98;
+      ExpenseAllocation@1160040006 : Record 6086321;
+      ExpAllocationDim@1160040003 : Record 6086357;
+    BEGIN
+      IF UpdateExpAllocationRec THEN BEGIN
+        GLSetup.GET;
+        ExpenseAllocation.GET(ExpAllocEntryNo);
+
+        IF GLSetup."Global Dimension 1 Code" = DimCode THEN BEGIN
+          ExpenseAllocation."Global Dimension 1 Code" := DimValueCode;
+          ExpenseAllocation.MODIFY;
+        END ELSE
+          IF GLSetup."Global Dimension 2 Code" = DimCode THEN BEGIN
+            ExpenseAllocation."Global Dimension 2 Code" := DimValueCode;
+            ExpenseAllocation.MODIFY;
+          END;
+      END;
+
+      IF DimValueCode = '' THEN BEGIN
+        IF ExpAllocationDim.GET(ExpAllocEntryNo,DimCode) THEN
+          ExpAllocationDim.DELETE;
+        EXIT;
+      END;
+
+      IF NOT ExpAllocationDim.GET(ExpAllocEntryNo,DimCode) THEN BEGIN
+        ExpAllocationDim."Expense Allocation Entry No." := ExpAllocEntryNo;
+        ExpAllocationDim."Dimension Code" := DimCode;
+        ExpAllocationDim.INSERT;
+      END;
+
+      ExpAllocationDim."Dimension Value Code" := DimValueCode;
+      ExpAllocationDim.MODIFY;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

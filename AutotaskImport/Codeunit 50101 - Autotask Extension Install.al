@@ -12,24 +12,37 @@ codeunit 50101 "Autotask Install"
     var
         xAutoTaskImportLedger: RecordRef;
         AutoTaskImportLedger: RecordRef;
+        Customer: RecordRef;
         AllObject: Record AllObj;
-        AllField: Record Field;
+        AllFieldSrc: Record Field;
+        AllFieldDst: Record Field;
     begin
         AutotaskImportLedger.Open(Database::"Autotask Import Ledger");
         AllObject.SetRange("Object Type", AllObject."Object Type"::Table);
         AllObject.SetRange("Object ID", 50001);
         if not AllObject.IsEmpty() and AutoTaskImportLedger.IsEmpty() then begin
-            AllField.SetRange(TableNo, Database::"Autotask Import Ledger");
+            AllFieldDst.SetRange(TableNo, Database::"Autotask Import Ledger");
+            AllFieldSrc.SetRange(TableNo, 50001);
             xAutoTaskImportLedger.Open(50001);
             xAutoTaskImportLedger.FindSet();
             repeat
-                AllField.FindSet();
+                AllFieldSrc.FindSet();
+                AutoTaskImportLedger.Init();
                 repeat
-                    AutoTaskImportLedger.Init();
-                    AutoTaskImportLedger.Field(AllField."No.").Value := xAutoTaskImportLedger.Field(AllField."No.").Value;
-                until AllField.Next() = 0;
+                    AllFieldDst.SetRange(FieldName, AllFieldSrc.FieldName);
+                    AllFieldDst.FindFirst();
+                    AutoTaskImportLedger.Field(AllFieldDst."No.").Value := xAutoTaskImportLedger.Field(AllFieldSrc."No.").Value;
+                until AllFieldSrc.Next() = 0;
                 AutoTaskImportLedger.Insert()
             until xAutoTaskImportLedger.Next() = 0;
         end;
+
+        Customer.Open(Database::Customer);
+        Customer.FindSet();
+        repeat
+            Customer.Field(50100).Value := Customer.Field(50001).Value;
+            Customer.Modify();
+        until Customer.Next() = 0;
+
     end;
 }

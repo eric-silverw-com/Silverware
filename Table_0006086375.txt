@@ -1,0 +1,216 @@
+OBJECT Table 6086375 EM Bank Acc. Recon. Line
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/30/17;
+    Time=[ 1:00:00 AM];
+    Version List=EMW16.00.10.2.60.02;
+  }
+  PROPERTIES
+  {
+    OnInsert=BEGIN
+               EMBankAccRecon.GET("Bank Account Type","Bank Account No.","Statement No.");
+               Type := 0;
+               VALIDATE(Difference,0);
+             END;
+
+    OnModify=BEGIN
+               IF Rec."Statement Amount" <> xRec."Statement Amount" THEN
+                 RemoveApplication;
+             END;
+
+    OnDelete=BEGIN
+               RemoveApplication;
+             END;
+
+    OnRename=BEGIN
+               ERROR(Text000,TABLECAPTION);
+             END;
+
+    CaptionML=ENU=Bank Account Reconciliation Line;
+    PasteIsValid=No;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Bank Account Type   ;Option        ;CaptionML=ENU=Bank Account Type;
+                                                   OptionCaptionML=ENU=G/L Account,,Vendor,Bank Account;
+                                                   OptionString=G/L Account,,Vendor,Bank Account }
+    { 2   ;   ;Bank Account No.    ;Code20        ;TableRelation=IF (Bank Account Type=CONST(G/L Account)) "G/L Account"
+                                                                 ELSE IF (Bank Account Type=CONST(Bank Account)) "Bank Account"
+                                                                 ELSE IF (Bank Account Type=CONST(Vendor)) Vendor;
+                                                   CaptionML=ENU=Bank Account No. }
+    { 3   ;   ;Statement No.       ;Code20        ;TableRelation="EM Bank Acc. Reconciliation"."Statement No." WHERE (Bank Account Type=FIELD(Bank Account Type),
+                                                                                                                      Bank Account No.=FIELD(Bank Account No.));
+                                                   CaptionML=ENU=Statement No. }
+    { 4   ;   ;Statement Line No.  ;Integer       ;CaptionML=ENU=Statement Line No. }
+    { 6   ;   ;Transaction Date    ;Date          ;CaptionML=ENU=Transaction Date }
+    { 7   ;   ;Description         ;Text50        ;CaptionML=ENU=Description }
+    { 8   ;   ;Statement Amount    ;Decimal       ;OnValidate=BEGIN
+                                                                Difference := "Statement Amount" - "Applied Amount";
+                                                              END;
+
+                                                   CaptionML=ENU=Statement Amount;
+                                                   AutoFormatType=1;
+                                                   AutoFormatExpr=GetCurrencyCode }
+    { 9   ;   ;Difference          ;Decimal       ;OnValidate=BEGIN
+                                                                "Statement Amount" := "Applied Amount" + Difference;
+                                                              END;
+
+                                                   CaptionML=ENU=Difference;
+                                                   AutoFormatType=1;
+                                                   AutoFormatExpr=GetCurrencyCode }
+    { 10  ;   ;Applied Amount      ;Decimal       ;OnValidate=BEGIN
+                                                                Difference := "Statement Amount" - "Applied Amount";
+                                                              END;
+
+                                                   OnLookup=BEGIN
+                                                              DisplayApplication;
+                                                            END;
+
+                                                   CaptionML=ENU=Applied Amount;
+                                                   Editable=No;
+                                                   AutoFormatType=1;
+                                                   AutoFormatExpr=GetCurrencyCode }
+    { 11  ;   ;Type                ;Option        ;OnValidate=BEGIN
+                                                                IF ("Applied Amount" <> xRec."Applied Amount") AND
+                                                                   (Type <> 0)
+                                                                THEN
+                                                                  IF CONFIRM(Text001,FALSE) THEN BEGIN
+                                                                    RemoveApplication;
+                                                                    VALIDATE(Difference,0);
+                                                                    Type := 0;
+                                                                  END ELSE
+                                                                    ERROR(Text002);
+                                                              END;
+
+                                                   CaptionML=ENU=Type;
+                                                   OptionCaptionML=ENU=Bank Transaction Entry,Difference;
+                                                   OptionString=Bank Transaction Entry,Difference }
+    { 12  ;   ;Applied Entries     ;Integer       ;OnLookup=BEGIN
+                                                              DisplayApplication;
+                                                            END;
+
+                                                   CaptionML=ENU=Applied Entries;
+                                                   Editable=No }
+    { 13  ;   ;Value Date          ;Date          ;CaptionML=ENU=Value Date }
+    { 17  ;   ;Additional Transaction Info;Text100;CaptionML=ENU=Additional Transaction Info }
+    { 27  ;   ;Bank Transaction Entry No.;Integer ;OnLookup=BEGIN
+                                                              ShowStatementTransaction;
+                                                            END;
+
+                                                   CaptionML=ENU=Bank Transaction Entry No.;
+                                                   Editable=No }
+  }
+  KEYS
+  {
+    {    ;Bank Account Type,Bank Account No.,Statement No.,Statement Line No.;
+                                                   SumIndexFields=Statement Amount,Difference;
+                                                   MaintainSIFTIndex=No;
+                                                   Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=You cannot rename a %1.';
+      Text001@1001 : TextConst 'ENU=Delete application?';
+      Text002@1002 : TextConst 'ENU=Update canceled.';
+      EMBankAccRecon@1005 : Record 6086374;
+      EMBankAccSetStmtNo@1006 : Codeunit 6086393;
+
+    LOCAL PROCEDURE RemoveApplication@1();
+    VAR
+      BankTransaction@1001 : Record 6086330;
+    BEGIN
+      BankTransaction.SETCURRENTKEY("Bank Account Type","Bank Account No.");
+      BankTransaction.SETRANGE("Bank Account Type","Bank Account Type");
+      BankTransaction.SETRANGE("Bank Account No.","Bank Account No.");
+      BankTransaction.SETRANGE("Statement Status",BankTransaction."Statement Status"::"Bank Transaction Applied");
+      BankTransaction.SETRANGE("Statement No.","Statement No.");
+      BankTransaction.SETRANGE("Statement Line No.","Statement Line No.");
+      BankTransaction.SETRANGE("Bank Statement Transaction",FALSE);
+      BankTransaction.LOCKTABLE;
+
+      IF BankTransaction.FINDSET THEN
+        REPEAT
+          EMBankAccSetStmtNo.RemoveReconNo(BankTransaction,Rec);
+        UNTIL BankTransaction.NEXT = 0;
+
+      "Applied Entries" := 0;
+      VALIDATE("Applied Amount",0);
+      MODIFY;
+    END;
+
+    PROCEDURE DisplayApplication@2();
+    VAR
+      BankTransaction@1000 : Record 6086330;
+      BankTransactions@1160040000 : Page 6086332;
+    BEGIN
+      BankTransaction.SETCURRENTKEY("Bank Account Type","Bank Account No.");
+      BankTransaction.SETRANGE("Bank Account Type","Bank Account Type");
+      BankTransaction.SETRANGE("Bank Account No.","Bank Account No.");
+      BankTransaction.SETRANGE("Statement Status",BankTransaction."Statement Status"::"Bank Transaction Applied");
+      BankTransaction.SETRANGE("Statement No.","Statement No.");
+      BankTransaction.SETRANGE("Statement Line No.","Statement Line No.");
+      BankTransaction.SETRANGE("Bank Statement Transaction",FALSE);
+
+      BankTransactions.SetShowAll(TRUE);
+      BankTransactions.SETTABLEVIEW(BankTransaction);
+      BankTransactions.RUNMODAL;
+    END;
+
+    PROCEDURE GetCurrencyCode@1160040000() : Code[10];
+    VAR
+      ContiniaUserCreditCard@1160040000 : Record 6086311;
+    BEGIN
+      ContiniaUserCreditCard.GetAccountCurrencyCode("Bank Account Type","Bank Account No.");
+    END;
+
+    PROCEDURE FilterBankRecLines@20(BankAccRecon@1000 : Record 6086374);
+    BEGIN
+      RESET;
+      SETRANGE("Bank Account Type",BankAccRecon."Bank Account Type");
+      SETRANGE("Bank Account No.",BankAccRecon."Bank Account No.");
+      SETRANGE("Statement No.",BankAccRecon."Statement No.");
+    END;
+
+    PROCEDURE GetStyle@6() : Text[20];
+    BEGIN
+      IF IsApplied THEN
+        EXIT('Favorable');
+
+      EXIT('');
+    END;
+
+    PROCEDURE IsApplied@3() : Boolean;
+    VAR
+      BankTransaction@1000 : Record 6086330;
+    BEGIN
+      EXIT("Applied Entries" > 0);
+    END;
+
+    PROCEDURE LinesExist@19(BankAccRecon@1001 : Record 6086374) : Boolean;
+    BEGIN
+      FilterBankRecLines(BankAccRecon);
+      EXIT(FINDSET);
+    END;
+
+    PROCEDURE ShowStatementTransaction@7();
+    VAR
+      BankStatTrans@1000 : Record 6086330;
+      BankTransactions@1160040000 : Page 6086332;
+    BEGIN
+      BankStatTrans.SETRANGE("Entry No.","Bank Transaction Entry No.");
+
+      BankTransactions.SetShowAll(TRUE);
+      BankTransactions.SETTABLEVIEW(BankStatTrans);
+      BankTransactions.RUN;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+
