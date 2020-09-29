@@ -441,7 +441,7 @@ report 50107 "SWC Sales Invoice"
                                     end;
 
                                 DescriptionToPrint := Description + ' ' + "Description 2";
-                                if Type = 0 then begin
+                                if Type = Type::" " then begin
                                     "No." := '';
                                     "Unit of Measure" := '';
                                     Amount := 0;
@@ -487,7 +487,7 @@ report 50107 "SWC Sales Invoice"
 
                 trigger OnAfterGetRecord();
                 begin
-                    CurrReport.PAGENO := 1;
+                    //CurrReport.PAGENO := 1;
 
                     if CopyNo = NoLoops then begin
                         if not CurrReport.PREVIEW then
@@ -518,7 +518,7 @@ report 50107 "SWC Sales Invoice"
                         CompanyInformation."Phone No." := RespCenter."Phone No.";
                         CompanyInformation."Fax No." := RespCenter."Fax No.";
                     end;
-                CurrReport.LANGUAGE := Language.GetLanguageID("Language Code");
+                CurrReport.LANGUAGE := Language.GetLanguageIdOrDefault("Language Code");
 
                 if "Salesperson Code" = '' then
                     CLEAR(SalesPurchPerson)
@@ -783,7 +783,6 @@ report 50107 "SWC Sales Invoice"
         TempSalesInvoiceLine: Record "Sales Invoice Line" temporary;
         TempSalesInvoiceLineAsm: Record "Sales Invoice Line" temporary;
         RespCenter: Record "Responsibility Center";
-        Language: Record Language;
         TempSalesTaxAmtLine: Record "Sales Tax Amount Line" temporary;
         TaxArea: Record "Tax Area";
         Cust: Record Customer;
@@ -805,6 +804,7 @@ report 50107 "SWC Sales Invoice"
         OnLineNumber: Integer;
         HighestLineNo: Integer;
         SpacePointer: Integer;
+        Language: Codeunit Language;
         SalesInvPrinted: Codeunit "Sales Inv.-Printed";
         FormatAddress: Codeunit "Format Address";
         SalesTaxCalc: Codeunit "Sales Tax Calculate";
@@ -868,13 +868,11 @@ report 50107 "SWC Sales Invoice"
         DueUponReceiptTxt: Label 'Due Upon Receipt';
         DueDate: Date;
 
-    [Scope('Personalization')]
     procedure InitLogInteraction();
     begin
         LogInteraction := SegManagement.FindInteractTmplCode(4) <> '';
     end;
 
-    [Scope('Personalization')]
     procedure CollectAsmInformation(TempSalesInvoiceLine: Record "Sales Invoice Line" temporary);
     var
         ValueEntry: Record "Value Entry";
@@ -916,7 +914,6 @@ report 50107 "SWC Sales Invoice"
         until ValueEntry.NEXT = 0;
     end;
 
-    [Scope('Personalization')]
     procedure TreatAsmLineBuffer(PostedAsmLine: Record "Posted Assembly Line");
     begin
         CLEAR(TempPostedAsmLine);
@@ -935,7 +932,6 @@ report 50107 "SWC Sales Invoice"
         end;
     end;
 
-    [Scope('Personalization')]
     procedure GetUOMText(UOMCode: Code[10]): Text[10];
     var
         UnitOfMeasure: Record "Unit of Measure";
@@ -945,7 +941,6 @@ report 50107 "SWC Sales Invoice"
         exit(UnitOfMeasure.Description);
     end;
 
-    [Scope('Personalization')]
     procedure BlanksForIndent(): Text[10];
     begin
         exit(PADSTR('', 2, ' '));
@@ -975,7 +970,7 @@ report 50107 "SWC Sales Invoice"
                 TempLineFeeNoteOnReportHist.INSERT;
             until LineFeeNoteOnReportHist.NEXT = 0;
         end else begin
-            LineFeeNoteOnReportHist.SETRANGE("Language Code", Language.GetUserLanguage);
+            LineFeeNoteOnReportHist.SETRANGE("Language Code", Language.GetUserLanguageCode);
             if LineFeeNoteOnReportHist.FINDSET then
                 repeat
                     TempLineFeeNoteOnReportHist.INIT;

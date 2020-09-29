@@ -411,7 +411,7 @@ report 50106 "SWC Sales Order"
                                 else
                                     NEXT;
 
-                                if Type = 0 then begin
+                                if Type = Type::" " then begin
                                     "No." := '';
                                     "Unit of Measure" := '';
                                     "Line Amount" := 0;
@@ -461,7 +461,7 @@ report 50106 "SWC Sales Order"
 
                 trigger OnAfterGetRecord();
                 begin
-                    CurrReport.PAGENO := 1;
+                    // CurrReport.PAGENO := 1;
 
                     if CopyNo = NoLoops then begin
                         if not CurrReport.PREVIEW then
@@ -493,7 +493,7 @@ report 50106 "SWC Sales Order"
                         CompanyInformation."Fax No." := RespCenter."Fax No.";
                     end;
 
-                CurrReport.LANGUAGE := Language.GetLanguageID("Language Code");
+                CurrReport.LANGUAGE := Language.GetLanguageIDOrDefault("Language Code");
 
                 FormatDocumentFields("Sales Header");
 
@@ -704,12 +704,12 @@ report 50106 "SWC Sales Order"
         TempSalesLine: Record "Sales Line" temporary;
         TempSalesLineAsm: Record "Sales Line" temporary;
         RespCenter: Record "Responsibility Center";
-        Language: Record Language;
         TempSalesTaxAmtLine: Record "Sales Tax Amount Line" temporary;
         TaxArea: Record "Tax Area";
         Cust: Record Customer;
         AsmHeader: Record "Assembly Header";
         AsmLine: Record "Assembly Line";
+        Language: Codeunit Language;
         SalesPrinted: Codeunit "Sales-Printed";
         FormatAddress: Codeunit "Format Address";
         FormatDocument: Codeunit "Format Document";
@@ -784,7 +784,6 @@ report 50106 "SWC Sales Order"
         PaymentTermsDescr: Text[100];
         DueUponReceiptTxt: Label 'Due Upon Receipt';
 
-    [Scope('Personalization')]
     procedure GetUnitOfMeasureDescr(UOMCode: Code[10]): Text[10];
     var
         UnitOfMeasure: Record "Unit of Measure";
@@ -794,7 +793,6 @@ report 50106 "SWC Sales Order"
         exit(UnitOfMeasure.Description);
     end;
 
-    [Scope('Personalization')]
     procedure BlanksForIndent(): Text[10];
     begin
         exit(PADSTR('', 2, ' '));
