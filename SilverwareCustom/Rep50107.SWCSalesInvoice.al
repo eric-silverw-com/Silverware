@@ -34,7 +34,7 @@ report 50107 "SWC Sales Invoice"
                     trigger OnAfterGetRecord();
                     begin
                         with TempSalesInvoiceLine do begin
-                            INIT;
+                            INIT();
                             "Document No." := "Sales Invoice Header"."No.";
                             "Line No." := HighestLineNo + 10;
                             HighestLineNo := "Line No.";
@@ -896,7 +896,7 @@ report 50107 "SWC Sales Invoice"
             SETRANGE("Document Type", "Document Type"::"Sales Invoice");
             SETRANGE("Document Line No.", SalesInvoiceLine."Line No.");
             SETRANGE("Applies-to Entry", 0);
-            if not FINDSET then
+            if not FINDSET() then
                 exit;
         end;
         repeat
@@ -905,13 +905,13 @@ report 50107 "SWC Sales Invoice"
                     SalesShipmentLine.GET(ItemLedgerEntry."Document No.", ItemLedgerEntry."Document Line No.");
                     if SalesShipmentLine.AsmToShipmentExists(PostedAsmHeader) then begin
                         PostedAsmLine.SETRANGE("Document No.", PostedAsmHeader."No.");
-                        if PostedAsmLine.FINDSET then
+                        if PostedAsmLine.FINDSET() then
                             repeat
                                 TreatAsmLineBuffer(PostedAsmLine);
-                            until PostedAsmLine.NEXT = 0;
+                            until PostedAsmLine.NEXT() = 0;
                     end;
                 end;
-        until ValueEntry.NEXT = 0;
+        until ValueEntry.NEXT() = 0;
     end;
 
     procedure TreatAsmLineBuffer(PostedAsmLine: Record "Posted Assembly Line");
@@ -922,13 +922,13 @@ report 50107 "SWC Sales Invoice"
         TempPostedAsmLine.SETRANGE("Variant Code", PostedAsmLine."Variant Code");
         TempPostedAsmLine.SETRANGE(Description, PostedAsmLine.Description);
         TempPostedAsmLine.SETRANGE("Unit of Measure Code", PostedAsmLine."Unit of Measure Code");
-        if TempPostedAsmLine.FINDFIRST then begin
+        if TempPostedAsmLine.FINDFIRST() then begin
             TempPostedAsmLine.Quantity += PostedAsmLine.Quantity;
-            TempPostedAsmLine.MODIFY;
+            TempPostedAsmLine.MODIFY();
         end else begin
             CLEAR(TempPostedAsmLine);
             TempPostedAsmLine := PostedAsmLine;
-            TempPostedAsmLine.INSERT;
+            TempPostedAsmLine.INSERT();
         end;
     end;
 
@@ -952,10 +952,10 @@ report 50107 "SWC Sales Invoice"
         CustLedgerEntry: Record "Cust. Ledger Entry";
         Customer: Record Customer;
     begin
-        TempLineFeeNoteOnReportHist.DELETEALL;
+        TempLineFeeNoteOnReportHist.DELETEALL();
         CustLedgerEntry.SETRANGE("Document Type", CustLedgerEntry."Document Type"::Invoice);
         CustLedgerEntry.SETRANGE("Document No.", SalesInvoiceHeaderNo);
-        if not CustLedgerEntry.FINDFIRST then
+        if not CustLedgerEntry.FINDFIRST() then
             exit;
 
         if not Customer.GET(CustLedgerEntry."Customer No.") then
@@ -963,20 +963,20 @@ report 50107 "SWC Sales Invoice"
 
         LineFeeNoteOnReportHist.SETRANGE("Cust. Ledger Entry No", CustLedgerEntry."Entry No.");
         LineFeeNoteOnReportHist.SETRANGE("Language Code", Customer."Language Code");
-        if LineFeeNoteOnReportHist.FINDSET then begin
+        if LineFeeNoteOnReportHist.FINDSET() then begin
             repeat
-                TempLineFeeNoteOnReportHist.INIT;
+                TempLineFeeNoteOnReportHist.INIT();
                 TempLineFeeNoteOnReportHist.COPY(LineFeeNoteOnReportHist);
-                TempLineFeeNoteOnReportHist.INSERT;
-            until LineFeeNoteOnReportHist.NEXT = 0;
+                TempLineFeeNoteOnReportHist.INSERT();
+            until LineFeeNoteOnReportHist.NEXT() = 0;
         end else begin
-            LineFeeNoteOnReportHist.SETRANGE("Language Code", Language.GetUserLanguageCode);
+            LineFeeNoteOnReportHist.SETRANGE("Language Code", Language.GetUserLanguageCode());
             if LineFeeNoteOnReportHist.FINDSET then
                 repeat
-                    TempLineFeeNoteOnReportHist.INIT;
+                    TempLineFeeNoteOnReportHist.INIT();
                     TempLineFeeNoteOnReportHist.COPY(LineFeeNoteOnReportHist);
-                    TempLineFeeNoteOnReportHist.INSERT;
-                until LineFeeNoteOnReportHist.NEXT = 0;
+                    TempLineFeeNoteOnReportHist.INSERT();
+                until LineFeeNoteOnReportHist.NEXT() = 0;
         end;
     end;
 }
