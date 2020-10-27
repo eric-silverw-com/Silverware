@@ -108,46 +108,44 @@ xmlport 50100 "Autotask Import"
                     ResourceName: Text[50];
                     i: Integer;
                 begin
-                    with AutotaskImportJournal do begin
-                        EntryNo += 1;
-                        "Entry No." := EntryNo;
-                        if "Ticket Summary" = '' then
-                            "Ticket Summary" := DelStr(StrSubstNo('%1 - %2', ItemName1, ItemName2), 250);
+                    EntryNo += 1;
+                    AutotaskImportJournal."Entry No." := EntryNo;
+                    if AutotaskImportJournal."Ticket Summary" = '' then
+                        AutotaskImportJournal."Ticket Summary" := DelStr(StrSubstNo('%1 - %2', ItemName1, ItemName2), 250);
 
-                        Customer.SetRange("Autotask ID", "Client ID");
-                        Customer.SetRange("Global Dimension 1 Code", DimValCode);
-                        if Customer.FindFirst() then
-                            "Client No." := Customer."No.";
+                    Customer.SetRange("Autotask ID", AutotaskImportJournal."Client ID");
+                    Customer.SetRange("Global Dimension 1 Code", DimValCode);
+                    if Customer.FindFirst() then
+                        AutotaskImportJournal."Client No." := Customer."No.";
 
-                        // Set the Resource Type
-                        "Line Type" := "Line Type"::Item;
-                        if "Resource Type" = 'Labor' then begin
-                            "Line Type" := "Line Type"::Resource;
-                            ResourceName := DelChr(SelectStr(2, "Resource Name"), '<>', ' ') + ' ' + DelChr(SelectStr(1, "Resource Name"), '<>', ' ');
-                            Resource.SetRange(Name, ResourceName);
-                            if Resource.FindFirst() then
-                                "Line No." := Resource."No.";
-                        end;
-
-                        // Set the NAV description
-                        Description := DelStr("Ticket Summary", 50);
-                        if (StrLen("Ticket Summary") < 50) and (CopyStr("Ticket Summary", 51, 1) <> ' ') then begin
-                            i := 51;
-                            repeat
-                                i -= 1;
-                            until (CopyStr(Description, i, 1) = ' ') or (i = 1);
-                            if i > 1 then
-                                Description := DelChr(DelStr(Description, i), '<>', ' ');
-                        end;
-
-                        // Check for items
-                        if "Line Type" = "Line Type"::Item then begin
-                            Evaluate(Quantity, ItemQuantity);
-                            Rate := Amount / Quantity;
-                        end;
-
-                        "Import Date" := CurrentDateTime();
+                    // Set the Resource Type
+                    AutotaskImportJournal."Line Type" := AutotaskImportJournal."Line Type"::Item;
+                    if AutotaskImportJournal."Resource Type" = 'Labor' then begin
+                        AutotaskImportJournal."Line Type" := AutotaskImportJournal."Line Type"::Resource;
+                        ResourceName := DelChr(SelectStr(2, AutotaskImportJournal."Resource Name"), '<>', ' ') + ' ' + DelChr(SelectStr(1, AutotaskImportJournal."Resource Name"), '<>', ' ');
+                        Resource.SetRange(Name, ResourceName);
+                        if Resource.FindFirst() then
+                            AutotaskImportJournal."Line No." := Resource."No.";
                     end;
+
+                    // Set the NAV description
+                    AutotaskImportJournal.Description := DelStr(AutotaskImportJournal."Ticket Summary", 50);
+                    if (StrLen(AutotaskImportJournal."Ticket Summary") < 50) and (CopyStr(AutotaskImportJournal."Ticket Summary", 51, 1) <> ' ') then begin
+                        i := 51;
+                        repeat
+                            i -= 1;
+                        until (CopyStr(AutotaskImportJournal.Description, i, 1) = ' ') or (i = 1);
+                        if i > 1 then
+                            AutotaskImportJournal.Description := DelChr(DelStr(AutotaskImportJournal.Description, i), '<>', ' ');
+                    end;
+
+                    // Check for items
+                    if AutotaskImportJournal."Line Type" = AutotaskImportJournal."Line Type"::Item then begin
+                        Evaluate(AutotaskImportJournal.Quantity, ItemQuantity);
+                        AutotaskImportJournal.Rate := AutotaskImportJournal.Amount / AutotaskImportJournal.Quantity;
+                    end;
+
+                    AutotaskImportJournal."Import Date" := CurrentDateTime();
                 end;
             }
         }
@@ -163,7 +161,7 @@ xmlport 50100 "Autotask Import"
                 {
                     field(DimValCode; DimValCode)
                     {
-                        TableRelation = "Dimension Value".Code WHERE ("Global Dimension No." = const (1));
+                        TableRelation = "Dimension Value".Code WHERE("Global Dimension No." = const(1));
                         CaptionClass = '1,1,1';
                     }
                 }
@@ -173,9 +171,7 @@ xmlport 50100 "Autotask Import"
 
     trigger OnPreXMLPort()
     begin
-        with AutotaskImportJournal do begin
-            DeleteAll();
-        end;
+        AutotaskImportJournal.DeleteAll();
     end;
 
     var

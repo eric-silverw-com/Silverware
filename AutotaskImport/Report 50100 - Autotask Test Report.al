@@ -19,6 +19,8 @@ report 50100 "Autotask Test Report"
             column(Autotask_Import_Journal__Document_Date_; "Document Date") { }
             column(Autotask_Import_Journal__Line_Type_; "Line Type") { }
             column(Autotask_Import_Journal__Line_No__; "Line No.") { }
+            column(Autotask_Import_Journal__Invoice_ID_; "Invoice ID") { }
+            column(Autotask_Import_Journal_Description; Description) { }
         }
     }
 

@@ -4,7 +4,7 @@ pageextension 50100 "Autotask Customer Card" extends "Customer Card"
     {
         addlast(General)
         {
-            field("Autotask ID"; "Autotask ID")
+            field("Autotask ID"; Rec."Autotask ID")
             {
                 ApplicationArea = Basic, All;
             }
