@@ -33,12 +33,11 @@ report 50107 "SWC Sales Invoice"
 
                     trigger OnAfterGetRecord();
                     begin
-                        with TempSalesInvoiceLine do begin
-                            INIT();
-                            "Document No." := "Sales Invoice Header"."No.";
-                            "Line No." := HighestLineNo + 10;
-                            HighestLineNo := "Line No.";
-                        end;
+                        TempSalesInvoiceLine.INIT();
+                        TempSalesInvoiceLine."Document No." := "Sales Invoice Header"."No.";
+                        TempSalesInvoiceLine."Line No." := HighestLineNo + 10;
+                        HighestLineNo := TempSalesInvoiceLine."Line No.";
+
                         if STRLEN(Comment) <= MAXSTRLEN(TempSalesInvoiceLine.Description) then begin
                             TempSalesInvoiceLine.Description := Comment;
                             TempSalesInvoiceLine."Description 2" := '';
@@ -84,12 +83,11 @@ report 50107 "SWC Sales Invoice"
 
                 trigger OnAfterGetRecord();
                 begin
-                    with TempSalesInvoiceLine do begin
-                        INIT;
-                        "Document No." := "Sales Invoice Header"."No.";
-                        "Line No." := HighestLineNo + 1000;
-                        HighestLineNo := "Line No.";
-                    end;
+                    TempSalesInvoiceLine.INIT;
+                    TempSalesInvoiceLine."Document No." := "Sales Invoice Header"."No.";
+                    TempSalesInvoiceLine."Line No." := HighestLineNo + 1000;
+                    HighestLineNo := TempSalesInvoiceLine."Line No.";
+
                     if STRLEN(Comment) <= MAXSTRLEN(TempSalesInvoiceLine.Description) then begin
                         TempSalesInvoiceLine.Description := Comment;
                         TempSalesInvoiceLine."Description 2" := '';
@@ -108,12 +106,10 @@ report 50107 "SWC Sales Invoice"
 
                 trigger OnPreDataItem();
                 begin
-                    with TempSalesInvoiceLine do begin
-                        INIT;
-                        "Document No." := "Sales Invoice Header"."No.";
-                        "Line No." := HighestLineNo + 1000;
-                        HighestLineNo := "Line No.";
-                    end;
+                    TempSalesInvoiceLine.INIT();
+                    TempSalesInvoiceLine."Document No." := "Sales Invoice Header"."No.";
+                    TempSalesInvoiceLine."Line No." := HighestLineNo + 1000;
+                    HighestLineNo := TempSalesInvoiceLine."Line No.";
                     TempSalesInvoiceLine.INSERT;
                 end;
             }
@@ -419,59 +415,58 @@ report 50107 "SWC Sales Invoice"
                         begin
                             OnLineNumber := OnLineNumber + 1;
 
-                            with TempSalesInvoiceLine do begin
-                                if OnLineNumber = 1 then
-                                    FIND('-')
-                                else
-                                    NEXT;
+                            if OnLineNumber = 1 then
+                                TempSalesInvoiceLine.FIND('-')
+                            else
+                                TempSalesInvoiceLine.NEXT();
 
-                                OrderedQuantity := 0;
-                                if "Sales Invoice Header"."Order No." = '' then
-                                    OrderedQuantity := Quantity
-                                else
-                                    if OrderLine.GET(1, "Sales Invoice Header"."Order No.", "Line No.") then
-                                        OrderedQuantity := OrderLine.Quantity
-                                    else begin
-                                        ShipmentLine.SETRANGE("Order No.", "Sales Invoice Header"."Order No.");
-                                        ShipmentLine.SETRANGE("Order Line No.", "Line No.");
-                                        if ShipmentLine.FIND('-') then
-                                            repeat
-                                                OrderedQuantity := OrderedQuantity + ShipmentLine.Quantity;
-                                            until 0 = ShipmentLine.NEXT;
-                                    end;
-
-                                DescriptionToPrint := Description + ' ' + "Description 2";
-                                if Type = Type::" " then begin
-                                    "No." := '';
-                                    "Unit of Measure" := '';
-                                    Amount := 0;
-                                    "Amount Including VAT" := 0;
-                                    "Inv. Discount Amount" := 0;
-                                    Quantity := 0;
-                                end else
-                                    if Type = Type::"G/L Account" then
-                                        "No." := '';
-
-                                if "No." = '' then begin
-                                    HighDescriptionToPrint := DescriptionToPrint;
-                                    LowDescriptionToPrint := '';
-                                end else begin
-                                    HighDescriptionToPrint := '';
-                                    LowDescriptionToPrint := DescriptionToPrint;
+                            OrderedQuantity := 0;
+                            if "Sales Invoice Header"."Order No." = '' then
+                                OrderedQuantity := TempSalesInvoiceLine.Quantity
+                            else
+                                if OrderLine.GET(1, "Sales Invoice Header"."Order No.", TempSalesInvoiceLine."Line No.") then
+                                    OrderedQuantity := OrderLine.Quantity
+                                else begin
+                                    ShipmentLine.SETRANGE("Order No.", "Sales Invoice Header"."Order No.");
+                                    ShipmentLine.SETRANGE("Order Line No.", TempSalesInvoiceLine."Line No.");
+                                    if ShipmentLine.FIND('-') then
+                                        repeat
+                                            OrderedQuantity := OrderedQuantity + ShipmentLine.Quantity;
+                                        until 0 = ShipmentLine.NEXT;
                                 end;
 
-                                if Amount <> "Amount Including VAT" then
-                                    TaxLiable := Amount
-                                else
-                                    TaxLiable := 0;
+                            DescriptionToPrint := TempSalesInvoiceLine.Description + ' ' + TempSalesInvoiceLine."Description 2";
+                            if TempSalesInvoiceLine.Type = TempSalesInvoiceLine.Type::" " then begin
+                                TempSalesInvoiceLine."No." := '';
+                                TempSalesInvoiceLine."Unit of Measure" := '';
+                                TempSalesInvoiceLine.Amount := 0;
+                                TempSalesInvoiceLine."Amount Including VAT" := 0;
+                                TempSalesInvoiceLine."Inv. Discount Amount" := 0;
+                                TempSalesInvoiceLine.Quantity := 0;
+                            end else
+                                if TempSalesInvoiceLine.Type = TempSalesInvoiceLine.Type::"G/L Account" then
+                                    TempSalesInvoiceLine."No." := '';
 
-                                AmountExclInvDisc := Amount + "Inv. Discount Amount";
-
-                                if Quantity = 0 then
-                                    UnitPriceToPrint := 0 // so it won't print
-                                else
-                                    UnitPriceToPrint := ROUND(AmountExclInvDisc / Quantity, 0.00001);
+                            if TempSalesInvoiceLine."No." = '' then begin
+                                HighDescriptionToPrint := DescriptionToPrint;
+                                LowDescriptionToPrint := '';
+                            end else begin
+                                HighDescriptionToPrint := '';
+                                LowDescriptionToPrint := DescriptionToPrint;
                             end;
+
+                            if TempSalesInvoiceLine.Amount <> TempSalesInvoiceLine."Amount Including VAT" then
+                                TaxLiable := TempSalesInvoiceLine.Amount
+                            else
+                                TaxLiable := 0;
+
+                            AmountExclInvDisc := TempSalesInvoiceLine.Amount + TempSalesInvoiceLine."Inv. Discount Amount";
+
+                            if TempSalesInvoiceLine.Quantity = 0 then
+                                UnitPriceToPrint := 0 // so it won't print
+                            else
+                                UnitPriceToPrint := ROUND(AmountExclInvDisc / TempSalesInvoiceLine.Quantity, 0.00001);
+
 
                             CollectAsmInformation(TempSalesInvoiceLine);
                         end;
@@ -611,31 +606,31 @@ report 50107 "SWC Sales Invoice"
                     BrkIdx := 0;
                     PrevPrintOrder := 0;
                     PrevTaxPercent := 0;
-                    with TempSalesTaxAmtLine do begin
-                        RESET;
-                        SETCURRENTKEY("Print Order", "Tax Area Code for Key", "Tax Jurisdiction Code");
-                        if FIND('-') then
-                            repeat
-                                if ("Print Order" = 0) or
-                                   ("Print Order" <> PrevPrintOrder) or
-                                   ("Tax %" <> PrevTaxPercent)
-                                then begin
-                                    BrkIdx := BrkIdx + 1;
-                                    if BrkIdx > 1 then begin
-                                        if TaxArea."Country/Region" = TaxArea."Country/Region"::CA then
-                                            BreakdownTitle := Text006
-                                        else
-                                            BreakdownTitle := Text003;
-                                    end;
-                                    if BrkIdx > ARRAYLEN(BreakdownAmt) then begin
-                                        BrkIdx := BrkIdx - 1;
-                                        BreakdownLabel[BrkIdx] := Text004;
-                                    end else
-                                        BreakdownLabel[BrkIdx] := STRSUBSTNO("Print Description", "Tax %");
+
+                    TempSalesTaxAmtLine.RESET();
+                    TempSalesTaxAmtLine.SETCURRENTKEY("Print Order", "Tax Area Code for Key", "Tax Jurisdiction Code");
+                    if TempSalesTaxAmtLine.FIND('-') then
+                        repeat
+                            if (TempSalesTaxAmtLine."Print Order" = 0) or
+                                (TempSalesTaxAmtLine."Print Order" <> PrevPrintOrder) or
+                                (TempSalesTaxAmtLine."Tax %" <> PrevTaxPercent)
+                            then begin
+                                BrkIdx := BrkIdx + 1;
+                                if BrkIdx > 1 then begin
+                                    if TaxArea."Country/Region" = TaxArea."Country/Region"::CA then
+                                        BreakdownTitle := Text006
+                                    else
+                                        BreakdownTitle := Text003;
                                 end;
-                                BreakdownAmt[BrkIdx] := BreakdownAmt[BrkIdx] + "Tax Amount";
-                            until NEXT = 0;
-                    end;
+                                if BrkIdx > ARRAYLEN(BreakdownAmt) then begin
+                                    BrkIdx := BrkIdx - 1;
+                                    BreakdownLabel[BrkIdx] := Text004;
+                                end else
+                                    BreakdownLabel[BrkIdx] := STRSUBSTNO(TempSalesTaxAmtLine."Print Description", TempSalesTaxAmtLine."Tax %");
+                            end;
+                            BreakdownAmt[BrkIdx] := BreakdownAmt[BrkIdx] + TempSalesTaxAmtLine."Tax Amount";
+                        until NEXT = 0;
+
                     if BrkIdx = 1 then begin
                         CLEAR(BreakdownLabel);
                         CLEAR(BreakdownAmt);
@@ -890,15 +885,15 @@ report 50107 "SWC Sales Invoice"
         SalesInvoiceLine.GET(TempSalesInvoiceLineAsm."Document No.", TempSalesInvoiceLineAsm."Line No.");
         if SalesInvoiceLine.Type <> SalesInvoiceLine.Type::Item then
             exit;
-        with ValueEntry do begin
-            SETCURRENTKEY("Document No.");
-            SETRANGE("Document No.", SalesInvoiceLine."Document No.");
-            SETRANGE("Document Type", "Document Type"::"Sales Invoice");
-            SETRANGE("Document Line No.", SalesInvoiceLine."Line No.");
-            SETRANGE("Applies-to Entry", 0);
-            if not FINDSET() then
-                exit;
-        end;
+
+        ValueEntry.SETCURRENTKEY("Document No.");
+        ValueEntry.SETRANGE("Document No.", SalesInvoiceLine."Document No.");
+        ValueEntry.SETRANGE("Document Type", ValueEntry."Document Type"::"Sales Invoice");
+        ValueEntry.SETRANGE("Document Line No.", SalesInvoiceLine."Line No.");
+        ValueEntry.SETRANGE("Applies-to Entry", 0);
+        if not ValueEntry.FINDSET() then
+            exit;
+
         repeat
             if ItemLedgerEntry.GET(ValueEntry."Item Ledger Entry No.") then
                 if ItemLedgerEntry."Document Type" = ItemLedgerEntry."Document Type"::"Sales Shipment" then begin
